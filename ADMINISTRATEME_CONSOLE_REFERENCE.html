@@ -1,0 +1,3266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AdministrateMe Console Reference — Poopsy (Stice instance)</title>
+
+<!-- Design language fonts — PIB v5 system -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=DM+Sans:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!--
+  ============================================================================
+  ADMINISTRATEME CONSOLE REFERENCE — STICE INSTANCE MOCKUP
+  ============================================================================
+
+  NOTE TO CLAUDE CODE:
+
+  This file is a reference instance showing a populated AdministrateMe
+  deployment for the Stice family. Names and details in this file
+  (James, Laura, Charlie, Poopsy, 761 E Morningside Dr NE, Morningside
+  Elementary, Evolve Family Law, Dr. Dalton, Kate, Rob Smith, etc.)
+  MUST NOT appear in:
+
+    - platform/
+    - bootstrap/
+    - profiles/
+    - personas/
+    - integrations/
+    - tests/ (except tests/fixtures/, and only with a LEGACY_FIXTURE marker)
+
+  They are here to show you what the console looks like in use and
+  what the design language feels like. Port the *behaviors* and the
+  *visual patterns* to your implementation. The tenant-specific data
+  stays out of platform code (enforced by tests/unit/test_no_hardcoded_identity.py).
+
+  The design system below (PIB v5 style tokens: Fraunces + DM Sans +
+  JetBrains Mono, warm cream + blush + lavender + teal palette, 12px/8px
+  radii, pill badges, fadeUp animations) IS the platform design language.
+  Profile packs' views render against these tokens.
+
+  This file demonstrates these platform UI patterns:
+
+    1. Three view modes (carousel / compressed / child) — toggle top-right on Today
+    2. Reward toast with tier-matched border/emoji — click task checkbox
+    3. Observation mode banner — toggle in Settings > Observation
+    4. Quick-capture bar with prefix routing — type "grocery: milk" etc.
+    5. Party detail page — the CRM surface (click a party in CRM tab)
+    6. Inbox approval flow — approve a commitment proposal, watch it slide out
+    7. Calendar privacy filtering — Laura's privileged events show as "busy"
+    8. Kid scoreboard — Charlie's full-bleed scoreboard view
+    9. View-as selector — principal James viewing Laura's Today
+   10. Rate-limit toast — click submit too fast
+   11. Degraded mode banner — triggered by the "simulate degraded" button
+   12. Settings panes — Plaid, Reminders, Packs, Persona, Profiles, Observation
+
+  Everything is client-side mock data in the STICE_DATA object at the
+  bottom of this file. No backend calls. In the real console, these
+  views fetch from Python product APIs at :3333 (core), :3334 (comms),
+  :3335 (capture), :3336 (automation), as described in BUILD.md.
+  ============================================================================
+-->
+
+<style>
+/* ============================================================================
+   DESIGN SYSTEM — PIB v5 (the AdministrateMe default)
+   ============================================================================
+   Profile packs' compiled JSX views render against these tokens. Persona
+   themes override a small subset (--color-blush, --color-lavender,
+   --color-teal) but keep the structural tokens.
+*/
+
+:root {
+  /* Typography */
+  --font-head: 'Fraunces', ui-serif, Georgia, serif;
+  --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+
+  /* Palette — warm cream + blush base */
+  --color-bg: #FFFBF5;
+  --color-bg-alt: #FAF5EC;
+  --color-card: #FFFFFF;
+  --color-card-hover: #FFFDF8;
+  --color-text: #2D2926;
+  --color-text-dim: #6B6560;
+  --color-text-faint: #A09A93;
+  --color-border: #E8E0D6;
+  --color-border-strong: #D4C9B8;
+
+  /* Accent ramps */
+  --color-blush: #E8A0BF;
+  --color-blush-bg: #FCEFF5;
+  --color-blush-border: #D880A0;
+  --color-lavender: #B8A9C9;
+  --color-lavender-bg: #F3EEF8;
+  --color-lavender-border: #9E8CB4;
+  --color-teal: #8EC5C0;
+  --color-teal-bg: #E8F3F2;
+  --color-teal-border: #6FAAA5;
+
+  /* Semantic */
+  --color-success: #7FAE8C;
+  --color-success-bg: #EAF2ED;
+  --color-warn: #D9A55A;
+  --color-warn-bg: #FAEFD9;
+  --color-danger: #C97B6B;
+  --color-danger-bg: #F8EBE7;
+  --color-info: #7B9BB8;
+  --color-info-bg: #EAF0F6;
+
+  /* Reward tier colors */
+  --color-reward-done: #8EC5C0;       /* teal — workaday */
+  --color-reward-warm: #E8A0BF;       /* blush — warm celebration */
+  --color-reward-delight: #B8A9C9;    /* lavender — delight */
+  --color-reward-jackpot: #D9A55A;    /* amber — jackpot */
+
+  /* Layout */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --shadow-soft: 0 1px 2px rgba(45, 41, 38, 0.04), 0 2px 8px rgba(45, 41, 38, 0.04);
+  --shadow-float: 0 4px 12px rgba(45, 41, 38, 0.08), 0 8px 24px rgba(45, 41, 38, 0.06);
+  --shadow-toast: 0 10px 30px rgba(45, 41, 38, 0.12), 0 6px 12px rgba(45, 41, 38, 0.08);
+
+  /* Spacing rhythm */
+  --gap-xs: 4px;
+  --gap-sm: 8px;
+  --gap-md: 12px;
+  --gap-lg: 16px;
+  --gap-xl: 24px;
+  --gap-xxl: 32px;
+
+  /* Chrome dimensions */
+  --nav-height: 56px;
+  --header-height: 48px;
+  --banner-height: 36px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-head);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+h1 { font-size: 28px; line-height: 1.15; }
+h2 { font-size: 20px; line-height: 1.25; }
+h3 { font-size: 16px; line-height: 1.3; }
+h4 { font-size: 14px; line-height: 1.35; font-weight: 500; }
+
+code, .mono { font-family: var(--font-mono); font-size: 12px; }
+
+button {
+  font-family: var(--font-body);
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input, select, textarea {
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+/* ----- Main layout ----- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ----- Persona header ----- */
+
+.persona-header {
+  height: var(--header-height);
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gap-xl);
+  gap: var(--gap-lg);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.persona-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-family: var(--font-head);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.persona-emoji {
+  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--color-blush-bg);
+  border-radius: 50%;
+}
+
+.persona-sub {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--color-text-dim);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.header-spacer { flex: 1; }
+
+.view-as {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  padding: 4px 10px;
+  background: var(--color-lavender-bg);
+  border: 1px solid var(--color-lavender-border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-lavender-border);
+}
+
+.view-as select {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  color: inherit;
+  padding-right: 4px;
+}
+
+.header-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-faint);
+  letter-spacing: 0.02em;
+}
+
+/* ----- Observation banner ----- */
+
+.observation-banner {
+  height: var(--banner-height);
+  background: var(--color-warn-bg);
+  border-bottom: 1px solid var(--color-warn);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--gap-xl);
+  gap: var(--gap-sm);
+  font-size: 13px;
+  color: #8a6014;
+}
+.observation-banner.hidden { display: none; }
+.observation-banner .pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--color-warn);
+  color: #fff;
+  border-radius: 999px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.degraded-banner {
+  height: var(--banner-height);
+  background: var(--color-danger-bg);
+  border-bottom: 1px solid var(--color-danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--gap-xl);
+  gap: var(--gap-sm);
+  font-size: 13px;
+  color: #7a3b2e;
+}
+.degraded-banner.hidden { display: none; }
+.degraded-banner .pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--color-danger);
+  color: #fff;
+  border-radius: 999px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* ----- Quick capture bar ----- */
+
+.quick-capture {
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--gap-md) var(--gap-xl);
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  position: sticky;
+  top: var(--header-height);
+  z-index: 49;
+}
+.quick-capture.shifted { top: calc(var(--header-height) + var(--banner-height)); }
+.quick-capture.double-shifted { top: calc(var(--header-height) + var(--banner-height) * 2); }
+
+.capture-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-dim);
+  flex-shrink: 0;
+}
+
+.capture-input {
+  flex: 1;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-alt);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.capture-input:focus {
+  border-color: var(--color-blush-border);
+  background: var(--color-card);
+}
+.capture-input::placeholder { color: var(--color-text-faint); }
+
+.capture-hints {
+  display: flex;
+  gap: var(--gap-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-faint);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.capture-hints .hint {
+  padding: 2px 6px;
+  background: var(--color-bg-alt);
+  border-radius: var(--radius-sm);
+}
+
+/* ----- Nav tabs ----- */
+
+.nav-tabs {
+  height: var(--nav-height);
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gap-xl);
+  gap: var(--gap-xs);
+}
+
+.nav-tab {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-dim);
+  border-radius: var(--radius-md);
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+}
+.nav-tab:hover {
+  background: var(--color-bg-alt);
+  color: var(--color-text);
+}
+.nav-tab.active {
+  color: var(--color-text);
+  background: var(--color-blush-bg);
+}
+.nav-tab .tab-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: var(--color-blush);
+  color: white;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border-radius: 999px;
+  vertical-align: 1px;
+  font-weight: 500;
+}
+
+.nav-tab[data-hidden-for-child="true"] {
+  /* hidden when in child view mode */
+}
+
+/* ----- Page content wrapper ----- */
+
+.page-wrap {
+  flex: 1;
+  padding: var(--gap-xl);
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.page { display: none; }
+.page.active { display: block; animation: fadeUp 0.22s ease-out; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ----- Shared components ----- */
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--gap-md);
+  gap: var(--gap-md);
+}
+
+.card-title {
+  font-family: var(--font-head);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.card-sub {
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.6;
+}
+.pill.pill-blush { background: var(--color-blush-bg); color: var(--color-blush-border); }
+.pill.pill-lavender { background: var(--color-lavender-bg); color: var(--color-lavender-border); }
+.pill.pill-teal { background: var(--color-teal-bg); color: var(--color-teal-border); }
+.pill.pill-warn { background: var(--color-warn-bg); color: #8a6014; }
+.pill.pill-danger { background: var(--color-danger-bg); color: #7a3b2e; }
+.pill.pill-success { background: var(--color-success-bg); color: #2f6640; }
+.pill.pill-info { background: var(--color-info-bg); color: #3a5773; }
+.pill.pill-dim { background: var(--color-bg-alt); color: var(--color-text-dim); }
+.pill .pill-mono { font-family: var(--font-mono); font-size: 10px; margin-left: 4px; }
+
+.btn {
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+  color: var(--color-text);
+}
+.btn:hover { background: var(--color-bg-alt); border-color: var(--color-border-strong); }
+.btn:active { transform: scale(0.98); }
+.btn-primary {
+  background: var(--color-blush);
+  border-color: var(--color-blush-border);
+  color: white;
+}
+.btn-primary:hover { background: var(--color-blush-border); }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--color-text-dim); }
+.btn-ghost:hover { background: var(--color-bg-alt); color: var(--color-text); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger);
+  color: #7a3b2e;
+}
+
+.divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--gap-md) 0;
+}
+
+/* ----- Reward toast ----- */
+
+#toast-layer {
+  position: fixed;
+  top: calc(var(--header-height) + var(--banner-height) + 20px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gap-sm);
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--color-card);
+  border: 2px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  padding: 14px 22px;
+  box-shadow: var(--shadow-toast);
+  font-size: 15px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+  animation: toastPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  min-width: 280px;
+  max-width: 520px;
+  pointer-events: auto;
+}
+@keyframes toastPop {
+  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toastOut {
+  to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+}
+.toast.out { animation: toastOut 0.3s ease-in forwards; }
+
+.toast.tier-done {
+  border-color: var(--color-reward-done);
+  background: var(--color-teal-bg);
+}
+.toast.tier-warm {
+  border-color: var(--color-reward-warm);
+  background: var(--color-blush-bg);
+}
+.toast.tier-delight {
+  border-color: var(--color-reward-delight);
+  background: var(--color-lavender-bg);
+}
+.toast.tier-jackpot {
+  border-color: var(--color-reward-jackpot);
+  background: var(--color-warn-bg);
+}
+.toast.tier-ratelimit {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+.toast-icon {
+  font-size: 22px;
+  width: 32px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.toast-body { flex: 1; min-width: 0; }
+.toast-title { font-size: 14px; line-height: 1.3; }
+.toast-sub { font-size: 11px; color: var(--color-text-dim); margin-top: 2px; font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* ----- Zeigarnik tease ----- */
+
+.tease {
+  background: var(--color-lavender-bg);
+  border: 1px solid var(--color-lavender-border);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--color-lavender-border);
+  margin-top: var(--gap-md);
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  animation: fadeUp 0.3s;
+}
+
+/* ============================================================================
+   TODAY — CAROUSEL VIEW (adhd_executive profile)
+   ============================================================================ */
+
+.today-wrap {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: var(--gap-xl);
+}
+
+@media (max-width: 900px) {
+  .today-wrap { grid-template-columns: 1fr; }
+}
+
+.today-main { min-width: 0; }
+
+.today-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: var(--gap-xl);
+  gap: var(--gap-md);
+  flex-wrap: wrap;
+}
+
+.today-greet { font-size: 24px; font-family: var(--font-head); font-weight: 500; }
+.today-greet .day { color: var(--color-text-dim); font-size: 18px; margin-left: 8px; }
+
+.view-mode-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+.view-mode-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-text-dim);
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.view-mode-btn.active {
+  background: var(--color-blush-bg);
+  color: var(--color-blush-border);
+}
+
+/* Carousel card — one big task at a time */
+.carousel-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--gap-xxl);
+  box-shadow: var(--shadow-float);
+  position: relative;
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.carousel-time-pill {
+  position: absolute;
+  top: var(--gap-lg);
+  left: var(--gap-lg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  background: var(--color-bg-alt);
+  color: var(--color-text-dim);
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+
+.carousel-context {
+  font-size: 12px;
+  color: var(--color-text-dim);
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.carousel-title {
+  font-family: var(--font-head);
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.2;
+  margin-top: var(--gap-xxl);
+  margin-bottom: var(--gap-md);
+}
+
+.carousel-micro {
+  font-size: 15px;
+  color: var(--color-text-dim);
+  margin-bottom: var(--gap-xl);
+  font-style: italic;
+  border-left: 2px solid var(--color-blush);
+  padding-left: 12px;
+}
+
+.carousel-meta {
+  display: flex;
+  gap: var(--gap-sm);
+  margin-bottom: var(--gap-xl);
+  flex-wrap: wrap;
+}
+
+.carousel-actions {
+  display: flex;
+  gap: var(--gap-md);
+  margin-top: auto;
+}
+
+.carousel-complete {
+  padding: 12px 28px;
+  font-size: 15px;
+  background: var(--color-blush);
+  border: 1px solid var(--color-blush-border);
+  border-radius: var(--radius-lg);
+  color: white;
+  font-weight: 500;
+}
+.carousel-complete:hover { background: var(--color-blush-border); }
+
+/* Endowed progress dots */
+.progress-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: var(--gap-lg);
+  margin-bottom: var(--gap-xl);
+  padding: 10px 14px;
+  background: var(--color-teal-bg);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--color-teal-border);
+  font-family: var(--font-mono);
+}
+.progress-dot-row { display: inline-flex; gap: 4px; }
+.progress-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--color-teal-border);
+  opacity: 0.3;
+  transition: opacity 0.3s, transform 0.3s;
+}
+.progress-dot.filled { opacity: 1; transform: scale(1.1); }
+
+/* Nav arrows between tasks */
+.carousel-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--gap-lg);
+}
+.carousel-counter {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
+
+/* Compressed view — decision queue */
+.compressed-list {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.compressed-row {
+  display: grid;
+  grid-template-columns: 22px 120px 1fr auto;
+  gap: var(--gap-md);
+  padding: 11px var(--gap-lg);
+  border-bottom: 1px solid var(--color-border);
+  align-items: center;
+  transition: background 0.15s;
+}
+.compressed-row:last-child { border-bottom: none; }
+.compressed-row:hover { background: var(--color-card-hover); }
+.compressed-check {
+  width: 18px; height: 18px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.compressed-check:hover { border-color: var(--color-blush-border); background: var(--color-blush-bg); }
+.compressed-check.done {
+  background: var(--color-blush);
+  border-color: var(--color-blush-border);
+  position: relative;
+}
+.compressed-check.done::after {
+  content: '✓';
+  color: white;
+  font-size: 12px;
+  position: absolute;
+  top: -1px;
+  left: 3px;
+  font-weight: 700;
+}
+.compressed-row.is-done .compressed-label { text-decoration: line-through; color: var(--color-text-faint); }
+.compressed-time { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+.compressed-label { font-size: 14px; }
+.compressed-meta { display: flex; gap: 6px; }
+
+/* Today sidebar */
+.today-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-lg);
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-md);
+}
+
+.stat {
+  padding: var(--gap-md);
+  background: var(--color-bg-alt);
+  border-radius: var(--radius-md);
+}
+.stat-label { font-size: 11px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; font-family: var(--font-mono); }
+.stat-value { font-size: 22px; font-family: var(--font-head); font-weight: 500; }
+.stat-sub { font-size: 11px; color: var(--color-text-dim); font-family: var(--font-mono); }
+
+.energy-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+.energy-btn {
+  padding: 6px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-card);
+  font-size: 12px;
+  color: var(--color-text-dim);
+  text-align: center;
+}
+.energy-btn.active {
+  background: var(--color-blush-bg);
+  color: var(--color-blush-border);
+  border-color: var(--color-blush-border);
+}
+
+.schedule-item {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: var(--gap-sm);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  align-items: start;
+}
+.schedule-item:last-child { border-bottom: none; }
+.schedule-time { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); padding-top: 2px; }
+.schedule-title { font-size: 13px; }
+.schedule-sub { font-size: 11px; color: var(--color-text-dim); margin-top: 2px; }
+.schedule-item.privileged .schedule-title { color: var(--color-text-dim); font-style: italic; }
+.schedule-item.privileged .schedule-sub { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-faint); }
+
+/* Velocity bar */
+.velocity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-sm);
+}
+.velocity-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 6px;
+}
+.velocity-dots span {
+  width: 7px;
+  height: 7px;
+  background: var(--color-blush);
+  border-radius: 2px;
+  opacity: 0.35;
+}
+.velocity-dots span.done { opacity: 1; }
+
+/* ============================================================================
+   INBOX PAGE
+   ============================================================================ */
+
+.inbox-wrap { display: grid; grid-template-columns: 260px 1fr; gap: var(--gap-xl); }
+@media (max-width: 900px) { .inbox-wrap { grid-template-columns: 1fr; } }
+
+.inbox-filters { display: flex; flex-direction: column; gap: 4px; }
+.inbox-filter {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px;
+  color: var(--color-text-dim); cursor: pointer; transition: background 0.15s;
+}
+.inbox-filter:hover { background: var(--color-bg-alt); }
+.inbox-filter.active { background: var(--color-blush-bg); color: var(--color-blush-border); font-weight: 500; }
+.inbox-filter .count { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-faint); }
+.inbox-filter.active .count { color: var(--color-blush-border); }
+
+.inbox-items { display: flex; flex-direction: column; gap: var(--gap-md); }
+
+.inbox-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-md) var(--gap-lg);
+  transition: opacity 0.3s, transform 0.3s, background 0.15s;
+}
+.inbox-card.slide-out {
+  opacity: 0;
+  transform: translateX(30px);
+  pointer-events: none;
+}
+.inbox-card:hover { background: var(--color-card-hover); }
+
+.inbox-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.inbox-sender { font-weight: 500; font-size: 14px; }
+.inbox-time { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-faint); margin-left: auto; }
+.inbox-subject { font-size: 14px; color: var(--color-text); margin-bottom: 4px; }
+.inbox-snippet { font-size: 13px; color: var(--color-text-dim); line-height: 1.5; margin-bottom: var(--gap-sm); }
+.inbox-proposal {
+  margin-top: var(--gap-sm);
+  padding: var(--gap-sm) var(--gap-md);
+  background: var(--color-lavender-bg);
+  border: 1px solid var(--color-lavender-border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--color-lavender-border);
+}
+.inbox-proposal-title { font-weight: 500; margin-bottom: 2px; }
+.inbox-actions {
+  display: flex;
+  gap: var(--gap-sm);
+  margin-top: var(--gap-md);
+  flex-wrap: wrap;
+}
+.inbox-provenance {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-faint);
+  margin-top: 6px;
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================================
+   CRM PAGE
+   ============================================================================ */
+
+.crm-wrap { display: grid; grid-template-columns: 280px 1fr; gap: var(--gap-xl); }
+@media (max-width: 900px) { .crm-wrap { grid-template-columns: 1fr; } }
+
+.crm-search {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  width: 100%;
+  margin-bottom: var(--gap-md);
+  font-size: 13px;
+  background: var(--color-bg-alt);
+}
+.crm-search:focus { outline: none; border-color: var(--color-blush-border); background: var(--color-card); }
+
+.crm-list { display: flex; flex-direction: column; gap: 2px; }
+.crm-entry {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: var(--gap-sm);
+  padding: 8px var(--gap-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  align-items: center;
+  transition: background 0.15s;
+}
+.crm-entry:hover { background: var(--color-bg-alt); }
+.crm-entry.active { background: var(--color-blush-bg); }
+.crm-avatar {
+  width: 30px; height: 30px;
+  background: var(--color-lavender-bg);
+  border-radius: 50%;
+  color: var(--color-lavender-border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 500; font-family: var(--font-head);
+}
+.crm-entry.org .crm-avatar {
+  background: var(--color-teal-bg); color: var(--color-teal-border);
+  border-radius: var(--radius-sm);
+}
+.crm-entry.household .crm-avatar {
+  background: var(--color-blush-bg); color: var(--color-blush-border);
+  border-radius: var(--radius-md);
+}
+.crm-name { font-size: 13px; font-weight: 500; }
+.crm-sub { font-size: 11px; color: var(--color-text-dim); }
+.crm-tier {
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 1px 6px; border-radius: 999px;
+}
+.crm-tier.t1 { background: var(--color-blush); color: white; }
+.crm-tier.t2 { background: var(--color-blush-bg); color: var(--color-blush-border); }
+.crm-tier.t3 { background: var(--color-bg-alt); color: var(--color-text-dim); }
+.crm-tier.t4 { background: var(--color-bg-alt); color: var(--color-text-faint); }
+
+/* Party detail */
+.party-detail { background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; }
+.party-detail-head {
+  display: flex; gap: var(--gap-lg);
+  padding: var(--gap-xl); align-items: flex-start;
+  background: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+.party-detail-avatar {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--color-lavender-bg);
+  color: var(--color-lavender-border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-head); font-size: 22px; font-weight: 500;
+  flex-shrink: 0;
+}
+.party-detail-head h2 { margin-bottom: 4px; }
+.party-detail-summary { font-size: 13px; color: var(--color-text-dim); line-height: 1.6; margin-top: 8px; max-width: 560px; }
+.party-detail-provenance { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-faint); margin-top: 6px; }
+
+.party-sections { padding: var(--gap-xl); display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap-xl); }
+@media (max-width: 700px) { .party-sections { grid-template-columns: 1fr; } }
+
+.party-section h4 {
+  margin-bottom: var(--gap-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--color-text-dim);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.identifier {
+  display: flex; justify-content: space-between;
+  padding: 6px 0; border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+}
+.identifier:last-child { border: none; }
+.identifier .kind {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--color-text-faint);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+.interaction {
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  display: grid; grid-template-columns: 60px 1fr; gap: 10px;
+  margin-bottom: 4px; font-size: 13px;
+  transition: background 0.15s;
+}
+.interaction:hover { background: var(--color-bg-alt); }
+.interaction-date { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-faint); padding-top: 2px; }
+.interaction-body { font-size: 13px; }
+.interaction-meta { font-size: 11px; color: var(--color-text-dim); }
+
+.relationships .pill { margin-right: 6px; margin-bottom: 6px; }
+
+.crm-stat-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--gap-sm); margin-top: var(--gap-md); }
+
+/* ============================================================================
+   CAPTURE / TRIAGE
+   ============================================================================ */
+
+.capture-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap-xl); }
+@media (max-width: 800px) { .capture-wrap { grid-template-columns: 1fr; } }
+
+.triage-item {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-md) var(--gap-lg);
+  margin-bottom: var(--gap-sm);
+  transition: background 0.15s;
+}
+.triage-item:hover { background: var(--color-card-hover); }
+.triage-head {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--color-text-faint);
+  font-family: var(--font-mono); margin-bottom: 4px;
+  letter-spacing: 0.02em;
+}
+.triage-text { font-size: 14px; margin-bottom: var(--gap-sm); }
+.triage-routes {
+  display: flex; gap: var(--gap-xs); flex-wrap: wrap;
+}
+.triage-route {
+  padding: 4px 10px; font-size: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-alt);
+  color: var(--color-text-dim);
+  font-family: var(--font-body);
+}
+.triage-route:hover { background: var(--color-blush-bg); color: var(--color-blush-border); border-color: var(--color-blush-border); }
+
+/* ============================================================================
+   FINANCE
+   ============================================================================ */
+
+.finance-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--gap-md);
+  margin-bottom: var(--gap-xl);
+}
+@media (max-width: 900px) {
+  .finance-metrics { grid-template-columns: repeat(2, 1fr); }
+}
+
+.metric-card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-lg);
+}
+.metric-label { font-size: 11px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: var(--gap-xs); font-family: var(--font-mono); }
+.metric-value { font-family: var(--font-head); font-size: 24px; font-weight: 500; }
+.metric-sub { font-size: 12px; color: var(--color-text-dim); margin-top: 4px; }
+.metric-trend.up { color: var(--color-success); }
+.metric-trend.down { color: var(--color-danger); }
+
+.finance-body { display: grid; grid-template-columns: 2fr 1fr; gap: var(--gap-xl); }
+@media (max-width: 900px) { .finance-body { grid-template-columns: 1fr; } }
+
+.tx-table { font-size: 13px; width: 100%; }
+.tx-row { display: grid; grid-template-columns: 80px 1fr auto 90px; gap: var(--gap-sm); padding: 8px 0; border-bottom: 1px solid var(--color-border); align-items: center; }
+.tx-row:last-child { border-bottom: none; }
+.tx-date { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+.tx-name { font-weight: 500; }
+.tx-merchant-sub { font-size: 11px; color: var(--color-text-dim); }
+.tx-amount { font-family: var(--font-mono); font-size: 13px; font-weight: 500; text-align: right; }
+.tx-amount.debit { color: var(--color-text); }
+.tx-amount.credit { color: var(--color-success); }
+.tx-category { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 0.04em; text-align: right; }
+
+.budget-bar { height: 6px; background: var(--color-bg-alt); border-radius: 999px; overflow: hidden; margin-top: 4px; }
+.budget-bar-fill { height: 100%; background: var(--color-teal); border-radius: 999px; }
+.budget-bar-fill.over { background: var(--color-danger); }
+.budget-row { font-size: 13px; padding: var(--gap-sm) 0; border-bottom: 1px solid var(--color-border); }
+.budget-row:last-child { border-bottom: none; }
+.budget-row-head { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.budget-row-cat { font-weight: 500; }
+.budget-row-amt { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); }
+
+/* ============================================================================
+   CALENDAR — week view with privacy filtering
+   ============================================================================ */
+
+.cal-week {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.cal-week-head {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  background: var(--color-bg-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+.cal-week-head > div { padding: 10px 6px; text-align: center; font-size: 12px; font-weight: 500; border-right: 1px solid var(--color-border); }
+.cal-week-head > div:last-child { border-right: none; }
+.cal-day-num { font-family: var(--font-head); font-size: 18px; font-weight: 500; color: var(--color-text); }
+.cal-day-num.today { color: var(--color-blush-border); }
+.cal-day-label { font-size: 10px; color: var(--color-text-dim); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr);
+  height: 600px;
+  position: relative;
+  overflow: hidden;
+}
+.cal-hours { border-right: 1px solid var(--color-border); }
+.cal-hour-label {
+  height: 50px; border-bottom: 1px solid var(--color-border);
+  padding: 3px 6px; font-family: var(--font-mono); font-size: 10px;
+  color: var(--color-text-faint); text-align: right;
+}
+.cal-col {
+  border-right: 1px solid var(--color-border);
+  position: relative;
+}
+.cal-col:last-child { border-right: none; }
+.cal-col-hour { height: 50px; border-bottom: 1px solid var(--color-border); }
+
+.cal-event {
+  position: absolute;
+  left: 3px; right: 3px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow: hidden;
+  border-left: 3px solid;
+}
+.cal-event.ev-family { background: var(--color-blush-bg); border-left-color: var(--color-blush-border); color: var(--color-blush-border); }
+.cal-event.ev-work-public { background: var(--color-teal-bg); border-left-color: var(--color-teal-border); color: var(--color-teal-border); }
+.cal-event.ev-work-privileged {
+  background: var(--color-bg-alt); border-left-color: var(--color-text-faint);
+  color: var(--color-text-faint);
+  font-style: italic;
+}
+.cal-event.ev-work-privileged .ev-title::after {
+  content: ' ·';
+}
+.cal-event-time { font-family: var(--font-mono); font-size: 9px; opacity: 0.8; letter-spacing: 0.02em; }
+
+.cal-privacy-note {
+  margin-top: var(--gap-md); padding: var(--gap-md);
+  background: var(--color-info-bg); border-radius: var(--radius-md);
+  font-size: 12px; color: #3a5773;
+}
+
+/* ============================================================================
+   SCOREBOARD — full bleed kid view
+   ============================================================================ */
+
+.app.scoreboard-mode .persona-header,
+.app.scoreboard-mode .nav-tabs,
+.app.scoreboard-mode .quick-capture,
+.app.scoreboard-mode .observation-banner,
+.app.scoreboard-mode .degraded-banner {
+  display: none;
+}
+.app.scoreboard-mode .page-wrap {
+  max-width: none;
+  padding: 0;
+}
+
+.scoreboard {
+  background: linear-gradient(180deg, var(--color-blush-bg) 0%, var(--color-lavender-bg) 100%);
+  min-height: 100vh;
+  padding: 40px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.scoreboard-head {
+  display: flex; align-items: center; gap: var(--gap-lg); margin-bottom: 40px;
+}
+.scoreboard-avatar {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: white;
+  color: var(--color-blush-border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-head); font-size: 32px;
+  box-shadow: var(--shadow-soft);
+}
+.scoreboard-name {
+  font-family: var(--font-head); font-size: 36px; color: var(--color-blush-border);
+  font-weight: 500;
+}
+.scoreboard-greet {
+  font-size: 16px; color: var(--color-lavender-border); margin-top: 4px;
+}
+
+.scoreboard-stars {
+  background: white;
+  border-radius: var(--radius-xl);
+  padding: 28px 40px;
+  display: flex; gap: var(--gap-xl);
+  box-shadow: var(--shadow-float);
+  margin-bottom: 40px;
+  align-items: center;
+}
+.star-stat { text-align: center; }
+.star-count { font-family: var(--font-head); font-size: 52px; color: var(--color-blush-border); line-height: 1; font-weight: 500; }
+.star-label { font-size: 13px; color: var(--color-text-dim); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); }
+
+.chore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--gap-lg);
+  max-width: 880px; width: 100%;
+}
+.chore-card {
+  background: white; border-radius: var(--radius-lg);
+  padding: 20px; text-align: center;
+  box-shadow: var(--shadow-soft);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.chore-card.done { opacity: 0.6; }
+.chore-card:not(.done):hover { transform: translateY(-2px); box-shadow: var(--shadow-float); cursor: pointer; }
+.chore-emoji { font-size: 42px; margin-bottom: 10px; }
+.chore-title { font-family: var(--font-head); font-size: 18px; margin-bottom: 4px; }
+.chore-star { font-size: 22px; margin-top: 8px; color: var(--color-warn); }
+.chore-star.earned::after { content: ' ⭐'; }
+
+/* ============================================================================
+   SETTINGS PAGES
+   ============================================================================ */
+
+.settings-wrap { display: grid; grid-template-columns: 220px 1fr; gap: var(--gap-xl); }
+@media (max-width: 800px) { .settings-wrap { grid-template-columns: 1fr; } }
+
+.settings-nav { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-item {
+  padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px;
+  color: var(--color-text-dim); cursor: pointer; transition: background 0.15s;
+}
+.settings-nav-item:hover { background: var(--color-bg-alt); color: var(--color-text); }
+.settings-nav-item.active { background: var(--color-blush-bg); color: var(--color-blush-border); font-weight: 500; }
+
+.settings-pane { display: none; }
+.settings-pane.active { display: block; animation: fadeUp 0.2s; }
+
+.settings-row {
+  padding: var(--gap-md) 0;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--gap-lg);
+}
+.settings-row:last-child { border: none; }
+.settings-row-main { flex: 1; min-width: 0; }
+.settings-row-label { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.settings-row-desc { font-size: 12px; color: var(--color-text-dim); line-height: 1.5; }
+.settings-row-control { flex-shrink: 0; }
+
+.toggle {
+  width: 40px; height: 22px;
+  background: var(--color-border);
+  border-radius: 999px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle::after {
+  content: '';
+  width: 18px; height: 18px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px; left: 2px;
+  transition: left 0.2s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+.toggle.on { background: var(--color-blush); }
+.toggle.on::after { left: 20px; }
+
+.plaid-inst {
+  padding: var(--gap-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--gap-sm);
+}
+.plaid-inst-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 4px;
+}
+.plaid-inst-name { font-weight: 500; font-size: 14px; }
+.plaid-inst-meta { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-dim); letter-spacing: 0.02em; }
+.plaid-inst-accts { font-size: 12px; color: var(--color-text-dim); margin-top: 4px; }
+
+.pack-item {
+  padding: var(--gap-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--gap-sm);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--gap-md);
+  align-items: center;
+}
+.pack-item-title { font-size: 14px; font-weight: 500; }
+.pack-item-ver { font-family: var(--font-mono); font-size: 10px; color: var(--color-text-faint); margin-left: 8px; }
+.pack-item-desc { font-size: 12px; color: var(--color-text-dim); margin-top: 2px; }
+
+.suppressed-list { display: flex; flex-direction: column; gap: var(--gap-sm); }
+.suppressed-item {
+  padding: var(--gap-md);
+  background: var(--color-warn-bg);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+.suppressed-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.suppressed-what { font-weight: 500; }
+.suppressed-when { font-family: var(--font-mono); font-size: 11px; color: #8a6014; }
+.suppressed-payload {
+  font-family: var(--font-mono); font-size: 11px; color: #8a6014;
+  margin-top: 6px; background: rgba(255,255,255,0.4);
+  padding: 6px 8px; border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+}
+.suppressed-actions { display: flex; gap: 6px; margin-top: var(--gap-sm); }
+
+/* ============================================================================
+   CHAT PANE — on Today when carousel view is active
+   ============================================================================ */
+
+.chat-fab {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: var(--color-blush);
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-float);
+  cursor: pointer; z-index: 40;
+  transition: transform 0.15s, background 0.15s;
+}
+.chat-fab:hover { background: var(--color-blush-border); transform: scale(1.04); }
+.chat-panel {
+  position: fixed;
+  bottom: 88px; right: 24px;
+  width: 340px; height: 460px;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  display: none; flex-direction: column;
+  z-index: 40;
+}
+.chat-panel.open { display: flex; animation: fadeUp 0.2s; }
+.chat-head {
+  padding: var(--gap-md) var(--gap-lg);
+  border-bottom: 1px solid var(--color-border);
+  display: flex; align-items: center; gap: var(--gap-sm);
+}
+.chat-body {
+  flex: 1; overflow-y: auto;
+  padding: var(--gap-md) var(--gap-lg);
+  display: flex; flex-direction: column; gap: var(--gap-sm);
+}
+.chat-msg { max-width: 85%; padding: 8px 12px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.5; }
+.chat-msg.me { background: var(--color-blush-bg); color: var(--color-blush-border); align-self: flex-end; }
+.chat-msg.poopsy { background: var(--color-bg-alt); align-self: flex-start; }
+.chat-typing { align-self: flex-start; display: flex; gap: 4px; padding: 8px 12px; background: var(--color-bg-alt); border-radius: var(--radius-md); }
+.chat-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-faint); animation: bounce 1.2s infinite; }
+.chat-typing span:nth-child(2) { animation-delay: 0.15s; }
+.chat-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce { 0%,60%,100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+.chat-compose { padding: var(--gap-sm); border-top: 1px solid var(--color-border); display: flex; gap: 6px; }
+.chat-compose input { flex: 1; border: 1px solid var(--color-border); background: var(--color-bg-alt); border-radius: var(--radius-md); padding: 8px 10px; font-size: 13px; outline: none; }
+.chat-compose input:focus { background: var(--color-card); border-color: var(--color-blush-border); }
+
+</style>
+
+</head>
+<body>
+
+<div class="app">
+
+  <!-- Persona header — always visible -->
+  <header class="persona-header">
+    <div class="persona-identity">
+      <span class="persona-emoji">🌸</span>
+      <span>Poopsy</span>
+      <span class="persona-sub">· Stice household</span>
+    </div>
+    <div class="header-spacer"></div>
+    <div class="view-as" id="view-as-pill">
+      <span>Viewing as</span>
+      <select id="view-as-select">
+        <option value="james">James (me)</option>
+        <option value="laura">Laura</option>
+        <option value="charlie">Charlie (child view)</option>
+      </select>
+    </div>
+    <div class="header-meta">
+      <span id="clock">--:-- local</span>
+    </div>
+  </header>
+
+  <!-- Observation banner -->
+  <div class="observation-banner" id="observation-banner">
+    <span class="pill">Observation</span>
+    <span>Outbound actions are composed and logged, not sent. Review in Settings → Observation.</span>
+  </div>
+
+  <!-- Degraded banner -->
+  <div class="degraded-banner hidden" id="degraded-banner">
+    <span class="pill">Degraded</span>
+    <span>Backend partially unreachable. Showing last-known data; writes queued.</span>
+  </div>
+
+  <!-- Quick-capture bar -->
+  <div class="quick-capture double-shifted" id="quick-capture">
+    <div class="capture-icon" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+    </div>
+    <input class="capture-input" id="capture-input" placeholder="Capture anything — 'grocery: milk', 'call: Kate re kitchen', 'idea: …', 'recipe: …', or just a thought">
+    <div class="capture-hints">
+      <span class="hint">grocery:</span>
+      <span class="hint">call:</span>
+      <span class="hint">idea:</span>
+      <span class="hint">recipe:</span>
+    </div>
+  </div>
+
+  <!-- Nav tabs -->
+  <nav class="nav-tabs" id="nav-tabs">
+    <button class="nav-tab active" data-page="today">Today</button>
+    <button class="nav-tab" data-page="inbox" data-hidden-for-child="true">Inbox <span class="tab-badge" id="inbox-count">9</span></button>
+    <button class="nav-tab" data-page="crm" data-hidden-for-child="true">CRM</button>
+    <button class="nav-tab" data-page="capture" data-hidden-for-child="true">Capture</button>
+    <button class="nav-tab" data-page="finance" data-hidden-for-child="true">Finance</button>
+    <button class="nav-tab" data-page="calendar" data-hidden-for-child="true">Calendar</button>
+    <button class="nav-tab" data-page="scoreboard">Scoreboard</button>
+    <button class="nav-tab" data-page="settings" data-hidden-for-child="true">Settings</button>
+  </nav>
+
+  <!-- Page content wrap — pages appended in later passes -->
+  <main class="page-wrap" id="page-wrap">
+
+    <!-- TODAY -->
+    <section class="page active" id="page-today">
+      <div class="today-header">
+        <div>
+          <div class="today-greet" id="today-greet">Good morning, James.</div>
+          <div class="card-sub" id="today-sub">Six things on the plate today. Three of them are small.</div>
+        </div>
+        <div class="view-mode-toggle" id="view-mode-toggle">
+          <button class="view-mode-btn active" data-mode="carousel">Carousel</button>
+          <button class="view-mode-btn" data-mode="compressed">Compressed</button>
+        </div>
+      </div>
+
+      <div class="today-wrap">
+        <div class="today-main">
+          <div id="today-view-carousel">
+            <div class="carousel-card" id="carousel-card">
+              <div class="carousel-time-pill" id="car-time">now · 09:42</div>
+              <div style="margin-top: 28px;">
+                <div class="carousel-context" id="car-context">from inbox · kate</div>
+                <div class="carousel-title" id="car-title">Text Kate back about Saturday kitchen walk-through</div>
+                <div class="carousel-micro" id="car-micro">Micro: open iMessage, pick "yes 2pm" or "Sunday better," hit send. 90 seconds.</div>
+              </div>
+              <div class="carousel-meta" id="car-meta">
+                <span class="pill pill-blush">low energy</span>
+                <span class="pill pill-teal">tiny</span>
+                <span class="pill pill-dim">social</span>
+              </div>
+              <div class="progress-dots">
+                <span>Today's streak:</span>
+                <span class="progress-dot-row" id="progress-dots">
+                  <span class="progress-dot filled"></span>
+                  <span class="progress-dot filled"></span>
+                  <span class="progress-dot filled"></span>
+                  <span class="progress-dot"></span>
+                  <span class="progress-dot"></span>
+                </span>
+                <span style="margin-left: auto;">3 / 5 to unlock the 4-day streak</span>
+              </div>
+              <div class="carousel-actions">
+                <button class="carousel-complete" id="car-complete">Done</button>
+                <button class="btn btn-ghost" id="car-defer">Not now</button>
+                <button class="btn btn-ghost" id="car-snooze">Snooze 2h</button>
+              </div>
+              <div class="carousel-nav">
+                <button class="btn btn-sm btn-ghost" id="car-prev">← Previous</button>
+                <span class="carousel-counter" id="car-counter">1 of 6</span>
+                <button class="btn btn-sm btn-ghost" id="car-next">Next →</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="today-view-compressed" style="display: none;">
+            <div class="compressed-list" id="compressed-list"></div>
+          </div>
+        </div>
+
+        <aside class="today-sidebar">
+          <div class="card">
+            <h3 style="margin-bottom: 12px;">Today's glance</h3>
+            <div class="stat-row">
+              <div class="stat">
+                <div class="stat-label">Energy</div>
+                <div class="energy-buttons" id="energy-buttons">
+                  <button class="energy-btn" data-energy="low">Low</button>
+                  <button class="energy-btn active" data-energy="medium">Med</button>
+                  <button class="energy-btn" data-energy="high">High</button>
+                </div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">Velocity</div>
+                <div class="velocity">
+                  <span class="stat-value" id="velocity-num">3</span>
+                  <span class="velocity-dots" id="velocity-dots">
+                    <span class="done"></span><span class="done"></span><span class="done"></span>
+                    <span></span><span></span><span></span><span></span><span></span>
+                  </span>
+                </div>
+                <div class="stat-sub">day streak: 4</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title" style="font-size: 15px;">Schedule</div>
+              <span class="card-sub">4 events</span>
+            </div>
+            <div class="schedule-item">
+              <div class="schedule-time">09:00</div>
+              <div>
+                <div class="schedule-title">Laura: OB appointment</div>
+                <div class="schedule-sub">Emory, 32-week check-in</div>
+              </div>
+            </div>
+            <div class="schedule-item privileged">
+              <div class="schedule-time">11:00</div>
+              <div>
+                <div class="schedule-title">[busy]</div>
+                <div class="schedule-sub">privileged · Laura's calendar</div>
+              </div>
+            </div>
+            <div class="schedule-item">
+              <div class="schedule-time">15:30</div>
+              <div>
+                <div class="schedule-title">Charlie: T-ball practice</div>
+                <div class="schedule-sub">Grant Park, White Sox</div>
+              </div>
+            </div>
+            <div class="schedule-item">
+              <div class="schedule-time">17:00</div>
+              <div>
+                <div class="schedule-title">Dr. Dalton follow-up call</div>
+                <div class="schedule-sub">reschedule window</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title" style="font-size: 15px;">Waiting on</div>
+              <span class="card-sub">3</span>
+            </div>
+            <div style="font-size: 13px; color: var(--color-text-dim); display: flex; flex-direction: column; gap: 8px;">
+              <div><strong style="color: var(--color-text);">Reliable Restoration</strong> — blackwater scope revision · 5 days</div>
+              <div><strong style="color: var(--color-text);">USAA subrogation</strong> — adjuster callback · 3 days</div>
+              <div><strong style="color: var(--color-text);">Rob Smith</strong> — Fall T-ball signup confirm · 2 days</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- INBOX -->
+    <section class="page" id="page-inbox">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">Inbox</div>
+          <div class="card-sub">9 items across 3 channels. 2 need approval.</div>
+        </div>
+        <div class="view-mode-toggle">
+          <button class="view-mode-btn active">Unified</button>
+          <button class="view-mode-btn">By channel</button>
+        </div>
+      </div>
+      <div class="inbox-wrap">
+        <aside class="inbox-filters">
+          <div class="inbox-filter active" data-filter="all">All <span class="count">9</span></div>
+          <div class="inbox-filter" data-filter="approval">Needs approval <span class="count">2</span></div>
+          <div class="inbox-filter" data-filter="coparent">Coparent (Mike) <span class="count">1</span></div>
+          <div class="inbox-filter" data-filter="gmail">Gmail <span class="count">5</span></div>
+          <div class="inbox-filter" data-filter="imessage">iMessage <span class="count">3</span></div>
+          <div class="inbox-filter" data-filter="sms">SMS <span class="count">1</span></div>
+          <div style="height: 1px; background: var(--color-border); margin: 10px 0;"></div>
+          <div class="inbox-filter" data-filter="noise">Noise (auto-filed) <span class="count">14</span></div>
+          <div class="inbox-filter" data-filter="privileged">Privileged (Laura) <span class="count">—</span></div>
+        </aside>
+        <div class="inbox-items" id="inbox-items"></div>
+      </div>
+    </section>
+
+    <!-- CRM -->
+    <section class="page" id="page-crm">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">Relationships</div>
+          <div class="card-sub">People, organizations, and the household's connections.</div>
+        </div>
+        <div class="view-mode-toggle">
+          <button class="view-mode-btn active">All</button>
+          <button class="view-mode-btn">Overdue</button>
+          <button class="view-mode-btn">Birthdays</button>
+        </div>
+      </div>
+      <div class="crm-wrap">
+        <aside>
+          <input class="crm-search" placeholder="Search people, orgs, places..." />
+          <div class="crm-list" id="crm-list"></div>
+        </aside>
+        <div id="crm-detail-pane"></div>
+      </div>
+    </section>
+
+    <!-- CAPTURE -->
+    <section class="page" id="page-capture">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">Capture &amp; triage</div>
+          <div class="card-sub">Thoughts in, routed to the right place.</div>
+        </div>
+      </div>
+      <div class="capture-wrap">
+        <div>
+          <h3 style="margin-bottom: 12px;">Triage queue</h3>
+          <div class="card-sub" style="margin-bottom: 16px;">3 captures awaiting routing. Tap a route to commit.</div>
+          <div id="triage-list"></div>
+        </div>
+        <div>
+          <h3 style="margin-bottom: 12px;">Recent captures (routed)</h3>
+          <div id="routed-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FINANCE -->
+    <section class="page" id="page-finance">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">Household finance</div>
+          <div class="card-sub">Derived from Plaid + manual entries. Raw data in adminme-finance.xlsx.</div>
+        </div>
+        <div class="view-mode-toggle">
+          <button class="view-mode-btn active">This month</button>
+          <button class="view-mode-btn">YTD</button>
+          <button class="view-mode-btn">5-yr pro forma</button>
+        </div>
+      </div>
+      <div class="finance-metrics">
+        <div class="metric-card">
+          <div class="metric-label">Net worth</div>
+          <div class="metric-value" id="fin-networth">$—</div>
+          <div class="metric-sub"><span class="metric-trend up">↑ 2.1%</span> vs last month</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Spent this month</div>
+          <div class="metric-value" id="fin-spent">$—</div>
+          <div class="metric-sub">82% of budget · 6 days left</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Cash &amp; equivalents</div>
+          <div class="metric-value" id="fin-cash">$—</div>
+          <div class="metric-sub">3 accounts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Liabilities</div>
+          <div class="metric-value" id="fin-debt">$—</div>
+          <div class="metric-sub">mortgage · 1 card</div>
+        </div>
+      </div>
+      <div class="finance-body">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recent transactions</div>
+            <span class="card-sub">last 7 days · Plaid</span>
+          </div>
+          <div class="tx-table" id="tx-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Budget pace</div>
+            <span class="card-sub">April 2026</span>
+          </div>
+          <div id="budget-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section class="page" id="page-calendar">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">This week</div>
+          <div class="card-sub">Household calendar — privileged events show as "busy"; details owner-only.</div>
+        </div>
+        <div class="view-mode-toggle">
+          <button class="view-mode-btn active">Week</button>
+          <button class="view-mode-btn">Day</button>
+          <button class="view-mode-btn">Month</button>
+        </div>
+      </div>
+      <div class="cal-week" id="cal-week">
+        <div class="cal-week-head">
+          <div></div>
+          <div><div class="cal-day-label">Mon</div><div class="cal-day-num">20</div></div>
+          <div><div class="cal-day-label">Tue</div><div class="cal-day-num today">21</div></div>
+          <div><div class="cal-day-label">Wed</div><div class="cal-day-num">22</div></div>
+          <div><div class="cal-day-label">Thu</div><div class="cal-day-num">23</div></div>
+          <div><div class="cal-day-label">Fri</div><div class="cal-day-num">24</div></div>
+          <div><div class="cal-day-label">Sat</div><div class="cal-day-num">25</div></div>
+          <div><div class="cal-day-label">Sun</div><div class="cal-day-num">26</div></div>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+      </div>
+      <div class="cal-privacy-note">
+        <strong>Privacy filtering active.</strong> Laura's work calendar (Evolve Family Law) is ingested at <code>sensitivity: privileged</code>. Event titles appear as "busy" in James's view; only Laura sees content. Kid events on Mike's coparent calendar surface as AvailabilityBlocks without detail. Change in Settings → Calendar privacy.
+      </div>
+    </section>
+
+    <!-- SCOREBOARD -->
+    <section class="page" id="page-scoreboard">
+      <div class="scoreboard">
+        <div class="scoreboard-head">
+          <div class="scoreboard-avatar">C</div>
+          <div>
+            <div class="scoreboard-name">Charlie's day</div>
+            <div class="scoreboard-greet">Tuesday, April 21 · home after school</div>
+          </div>
+        </div>
+
+        <div class="scoreboard-stars">
+          <div class="star-stat">
+            <div class="star-count" id="star-today">3</div>
+            <div class="star-label">today</div>
+          </div>
+          <div class="star-stat">
+            <div class="star-count">11</div>
+            <div class="star-label">this week</div>
+          </div>
+          <div class="star-stat">
+            <div class="star-count">4</div>
+            <div class="star-label">day streak</div>
+          </div>
+        </div>
+
+        <div class="chore-grid" id="chore-grid"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page" id="page-settings">
+      <div class="today-header">
+        <div>
+          <div class="today-greet">Settings</div>
+          <div class="card-sub">Persona, profiles, integrations, observation mode.</div>
+        </div>
+      </div>
+      <div class="settings-wrap">
+        <aside class="settings-nav" id="settings-nav">
+          <div class="settings-nav-item active" data-pane="observation">Observation mode</div>
+          <div class="settings-nav-item" data-pane="persona">Persona (Poopsy)</div>
+          <div class="settings-nav-item" data-pane="members">Members &amp; profiles</div>
+          <div class="settings-nav-item" data-pane="plaid">Plaid</div>
+          <div class="settings-nav-item" data-pane="reminders">Apple Reminders</div>
+          <div class="settings-nav-item" data-pane="packs">Packs</div>
+          <div class="settings-nav-item" data-pane="governance">Governance &amp; authority</div>
+          <div class="settings-nav-item" data-pane="demo">Demo controls</div>
+        </aside>
+        <div>
+          <div class="settings-pane active" id="pane-observation">
+            <h3 style="margin-bottom: 4px;">Observation mode</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Outbound actions compose and record as events instead of firing externally. Recommended for the first 5-7 days of a new instance.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Active</div>
+                  <div class="settings-row-desc">While on, every outbound-capable action records an <code>observation.suppressed</code> event instead of firing. Reading and ingesting proceed normally.</div>
+                </div>
+                <div class="settings-row-control">
+                  <div class="toggle on" id="observation-toggle"></div>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Morning digest delivery</div>
+                  <div class="settings-row-desc">Compose daily 06:30. While observing, digest is visible in the Today pane but not sent to the member's preferred channel.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-warn">suppressed</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Reward dispatch</div>
+                  <div class="settings-row-desc">Tier sampling and template selection run; toast displays locally. External side effects (push notifications, channel sends) are suppressed.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-warn">local only</span>
+                </div>
+              </div>
+            </div>
+
+            <h4 style="margin-top: 28px; margin-bottom: 10px;">Recent suppressions (last 24h)</h4>
+            <div class="suppressed-list" id="suppressed-list"></div>
+          </div>
+
+          <div class="settings-pane" id="pane-persona">
+            <h3 style="margin-bottom: 4px;">Persona</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">The instance's assistant identity. One per instance. Changing switches voice, theme, and reward templates.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Active persona</div>
+                  <div class="settings-row-desc">Poopsy · warm_decisive · corny_disproportionate rewards · cream + blush palette</div>
+                </div>
+                <div class="settings-row-control">
+                  <button class="btn btn-sm">Change persona…</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Assistant phone number</div>
+                  <div class="settings-row-desc">Mint Mobile · (404) 555-0127 · used for SMS + iMessage via BlueBubbles</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-success">healthy</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Apple ID</div>
+                  <div class="settings-row-desc">poopsy.stice@icloud.com · signed in on Mac Mini · BlueBubbles bridge live</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-success">healthy</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Google Workspace</div>
+                  <div class="settings-row-desc">poopsy@stice.family · Gmail + Calendar + Drive + People · OAuth valid</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-success">healthy</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-members">
+            <h3 style="margin-bottom: 4px;">Members &amp; profile assignments</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Each member has one profile. Profile switch takes effect next page load.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">James Stice <span class="pill pill-blush" style="margin-left: 8px;">principal</span></div>
+                  <div class="settings-row-desc">Profile: <code>adhd_executive</code> · carousel view, variable_ratio rewards, paralysis detection 15-17 local, guilt filter on</div>
+                </div>
+                <div class="settings-row-control">
+                  <button class="btn btn-sm">Change…</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Laura Stice <span class="pill pill-blush" style="margin-left: 8px;">principal</span></div>
+                  <div class="settings-row-desc">Profile: <code>minimalist_parent</code> · compressed view, event_based rewards, max 2 proactive/day. Privileged ingest: Evolve Family Law calendar + work email.</div>
+                </div>
+                <div class="settings-row-control">
+                  <button class="btn btn-sm">Change…</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Charlie Stice <span class="pill pill-teal" style="margin-left: 8px;">child</span></div>
+                  <div class="settings-row-desc">Profile: <code>kid_scoreboard</code> · scoreboard-only view, star-driven chore rewards, no comms, age 7 tuning</div>
+                </div>
+                <div class="settings-row-control">
+                  <button class="btn btn-sm">Change…</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Baby girl Stice <span class="pill pill-dim" style="margin-left: 8px;">expected · May 2026</span></div>
+                  <div class="settings-row-desc">Profile: <code>ambient_entity</code> · data-model only, no views, no surfaces. Membership, recurrences, and medical artifacts will surface at birth.</div>
+                </div>
+                <div class="settings-row-control">
+                  <button class="btn btn-sm">Change…</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Mike <span class="pill pill-info" style="margin-left: 8px;">coparent · non-user</span></div>
+                  <div class="settings-row-desc">Party only; no profile, no agent binding. Phone in allowlist so his messages route to inbox. No autonomous outbound.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-dim">Party only</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-plaid">
+            <h3 style="margin-bottom: 4px;">Plaid</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Connected institutions. Tokens live in 1Password.</div>
+            <div class="plaid-inst">
+              <div class="plaid-inst-head">
+                <span class="plaid-inst-name">USAA</span>
+                <span class="pill pill-success">healthy · last sync 2h ago</span>
+              </div>
+              <div class="plaid-inst-meta">cursor: abc123f… · 4 accounts · 2,431 transactions lifetime</div>
+              <div class="plaid-inst-accts">Checking ...1847 · Savings ...9923 · Credit card ...0041 · Auto loan ...5512</div>
+            </div>
+            <div class="plaid-inst">
+              <div class="plaid-inst-head">
+                <span class="plaid-inst-name">Wells Fargo</span>
+                <span class="pill pill-success">healthy · last sync 2h ago</span>
+              </div>
+              <div class="plaid-inst-meta">cursor: 9ef331b… · 1 account · 1,203 transactions lifetime</div>
+              <div class="plaid-inst-accts">Mortgage ...3891 · 761 E Morningside</div>
+            </div>
+            <div class="plaid-inst">
+              <div class="plaid-inst-head">
+                <span class="plaid-inst-name">Fidelity</span>
+                <span class="pill pill-warn">link_expired · needs update</span>
+              </div>
+              <div class="plaid-inst-meta">last successful sync: 11 days ago</div>
+              <div class="plaid-inst-accts">Brokerage ...5538 · Roth IRA ...7712</div>
+              <div style="margin-top: 8px;"><button class="btn btn-sm btn-primary">Re-link Fidelity</button></div>
+            </div>
+            <div style="margin-top: 16px;">
+              <button class="btn">+ Add institution</button>
+              <button class="btn" style="margin-left: 8px;">Force sync all</button>
+            </div>
+            <div style="margin-top: 16px; padding: 12px; background: var(--color-warn-bg); border-radius: var(--radius-md); font-size: 12px; color: #8a6014;">
+              <strong>Sandbox mode active.</strong> All institutions currently using Plaid sandbox credentials. Run <code>adminme plaid go-live</code> after observation mode is off to switch to production.
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-reminders">
+            <h3 style="margin-bottom: 4px;">Apple Reminders</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Bidirectional sync between iCloud Reminders and AdministrateMe tasks/lists. Shared to <code>poopsy.stice@icloud.com</code>.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Family Grocery → grocery list</div>
+                  <div class="settings-row-desc">target: <code>list</code> · auto_commit · 17 items in sync · last change 34 min ago (James added milk)</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-success">synced</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">James Tasks → tasks</div>
+                  <div class="settings-row-desc">target: <code>tasks</code> · auto_commit: off · 4 items awaiting promotion in inbox</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-warn">4 pending</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Laura Tasks → tasks</div>
+                  <div class="settings-row-desc">target: <code>tasks</code> · auto_commit · 9 items in sync</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-success">synced</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Family Packing → list</div>
+                  <div class="settings-row-desc">target: <code>list</code> · used for trip packing; empty right now</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-dim">empty</span>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <h4 style="margin-bottom: 8px;">Never-sync rules</h4>
+              <div style="font-size: 12px; color: var(--color-text-dim); line-height: 1.6;">
+                Lists with substrings: <code>Work</code>, <code>Case</code>, <code>Client</code>, <code>Evolve</code>. Items tagged <code>#private</code>. Items owned by child or ambient members. Edit in <code>~/.adminme/config/reminders-list-mapping.yaml</code>.
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-packs">
+            <h3 style="margin-bottom: 4px;">Packs</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Installed profile, persona, adapter, pipeline, and skill packs.</div>
+            <h4 style="margin-bottom: 8px;">Profiles</h4>
+            <div class="pack-item">
+              <div>
+                <span class="pack-item-title">adhd_executive</span>
+                <span class="pack-item-ver">v1.4.2 · built-in</span>
+                <div class="pack-item-desc">Carousel view, variable_ratio rewards, fog-window paralysis. James.</div>
+              </div>
+              <button class="btn btn-sm">Configure</button>
+            </div>
+            <div class="pack-item">
+              <div>
+                <span class="pack-item-title">minimalist_parent</span>
+                <span class="pack-item-ver">v1.3.0 · built-in</span>
+                <div class="pack-item-desc">Compressed decision queue, event_based rewards, no paralysis. Laura.</div>
+              </div>
+              <button class="btn btn-sm">Configure</button>
+            </div>
+            <div class="pack-item">
+              <div>
+                <span class="pack-item-title">kid_scoreboard</span>
+                <span class="pack-item-ver">v1.2.1 · built-in</span>
+                <div class="pack-item-desc">Star scoreboard, child-warm rewards, no admin nav. Charlie.</div>
+              </div>
+              <button class="btn btn-sm">Configure</button>
+            </div>
+            <div class="pack-item">
+              <div>
+                <span class="pack-item-title">ambient_entity</span>
+                <span class="pack-item-ver">v1.0.0 · built-in</span>
+                <div class="pack-item-desc">Data-model only. Baby girl Stice.</div>
+              </div>
+              <button class="btn btn-sm">Configure</button>
+            </div>
+            <h4 style="margin-top: 20px; margin-bottom: 8px;">Personas</h4>
+            <div class="pack-item">
+              <div>
+                <span class="pack-item-title">poopsy</span>
+                <span class="pack-item-ver">v1.0.0 · built-in · active</span>
+                <div class="pack-item-desc">Warm, decisive, corny-disproportionate rewards. Cream + blush.</div>
+              </div>
+              <button class="btn btn-sm">Configure</button>
+            </div>
+            <h4 style="margin-top: 20px; margin-bottom: 8px;">Adapters (built-in)</h4>
+            <div style="font-size: 13px; color: var(--color-text-dim); line-height: 1.8;">
+              messaging: gmail_api · bluebubbles_adminme · apple_reminders · sms_twilio<br>
+              calendaring: google_calendar_api · caldav (iCloud)<br>
+              contacts: google_people · carddav<br>
+              documents: google_drive · local_folder<br>
+              financial: plaid · bank_csv_watcher<br>
+              telephony: ringcentral<br>
+              webhook: generic · ios_shortcuts
+            </div>
+            <div style="margin-top: 20px;">
+              <button class="btn">Browse registry…</button>
+              <button class="btn" style="margin-left: 8px;">Install from URL…</button>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-governance">
+            <h3 style="margin-bottom: 4px;">Governance &amp; authority</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Who can do what to whom. Source: <code>~/.adminme/config/authority.yaml</code>.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Mode 3 send (auto-send as principal)</div>
+                  <div class="settings-row-desc">Poopsy is never allowed to send as James or Laura. All drafts route to approval inbox.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-danger">hard refuse</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Outbound to opposing counsel</div>
+                  <div class="settings-row-desc">Hard refuse. Enforced at the final outbound filter — detection via Laura's case PartyTag.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-danger">hard refuse</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Coach role access to finance/health</div>
+                  <div class="settings-row-desc">Coach-role sessions strip financial_* and health_* columns before context builds.</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-danger">deny</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Rate limits: writes_per_minute</div>
+                  <div class="settings-row-desc">60/min across all principals · sliding window</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-dim">60/min</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Proactive per James per day</div>
+                  <div class="settings-row-desc">adhd_executive profile cap: 15/day including digest + rewards + paralysis + CRM nudges</div>
+                </div>
+                <div class="settings-row-control">
+                  <span class="pill pill-dim">15/day</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-pane" id="pane-demo">
+            <h3 style="margin-bottom: 4px;">Demo controls</h3>
+            <div class="card-sub" style="margin-bottom: 16px;">Triggers for the mock-data behaviors. Not present in the real console.</div>
+            <div class="card">
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Fire reward toast (tier done)</div>
+                  <div class="settings-row-desc">Simulates a workaday task completion reward.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="fireReward('done', 'Done. Onto the next.')">Fire</button></div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Fire reward toast (tier warm)</div>
+                  <div class="settings-row-desc">Warm celebration tier — ~25% draw.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="fireReward('warm', 'Hot take: that was great.')">Fire</button></div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Fire reward toast (tier delight)</div>
+                  <div class="settings-row-desc">Delight tier — ~10% draw.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="fireReward('delight', 'OK that was genuinely delightful.')">Fire</button></div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Fire reward toast (tier jackpot)</div>
+                  <div class="settings-row-desc">Jackpot — ~5% draw. Corny, disproportionate, over the top.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="fireReward('jackpot', 'JACKPOT. Ring the bell. Tell the neighbors.')">Fire</button></div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Fire rate-limit toast</div>
+                  <div class="settings-row-desc">Demonstrates the sliding-window limiter rejecting a write.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="fireRateLimit()">Fire</button></div>
+              </div>
+              <div class="settings-row">
+                <div class="settings-row-main">
+                  <div class="settings-row-label">Toggle degraded banner</div>
+                  <div class="settings-row-desc">Simulates a backend becoming partially unreachable.</div>
+                </div>
+                <div class="settings-row-control"><button class="btn btn-sm" onclick="setDegraded(!document.getElementById('degraded-banner').classList.contains('hidden') ? false : true)">Toggle</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+</div>
+
+<!-- Chat FAB (visible on all pages except scoreboard) -->
+<button class="chat-fab" id="chat-fab" title="Talk to Poopsy">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+  </svg>
+</button>
+<div class="chat-panel" id="chat-panel">
+  <div class="chat-head">
+    <span class="persona-emoji" style="background: var(--color-blush-bg);">🌸</span>
+    <div>
+      <div style="font-family: var(--font-head); font-size: 15px; font-weight: 500;">Poopsy</div>
+      <div style="font-size: 11px; color: var(--color-text-dim);">SSE · <code style="font-size: 10px;">sess-1745235782</code></div>
+    </div>
+    <button class="btn btn-sm btn-ghost" style="margin-left: auto;" onclick="document.getElementById('chat-panel').classList.remove('open')">×</button>
+  </div>
+  <div class="chat-body" id="chat-body">
+    <div class="chat-msg poopsy">Morning, James. Three things on the plate, all small. The kitchen-walk-through text to Kate is first up — 90 seconds.</div>
+    <div class="chat-msg me">what about the blackwater thing</div>
+    <div class="chat-msg poopsy">Reliable Restoration said they'd send the revised scope by Tuesday. That's today. No email yet — I'll nudge Rick at 3pm if nothing lands.</div>
+  </div>
+  <div class="chat-compose">
+    <input id="chat-input" placeholder="Ask Poopsy…">
+    <button class="btn btn-primary btn-sm" id="chat-send">Send</button>
+  </div>
+</div>
+
+<!-- Toast layer -->
+<div id="toast-layer" aria-live="polite" aria-atomic="true"></div>
+
+<!-- Mock data will be added in a later pass before the main script -->
+
+<script>
+/* ============================================================================
+   CORE CHROME + NAV LOGIC
+   ============================================================================
+*/
+
+// Live clock (Atlanta time; mock)
+function tickClock() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  document.getElementById('clock').textContent = `${hh}:${mm}:${ss} local`;
+}
+setInterval(tickClock, 1000);
+tickClock();
+
+// Observation banner toggle — hooked up by settings page
+window.setObservation = function(on) {
+  const banner = document.getElementById('observation-banner');
+  banner.classList.toggle('hidden', !on);
+  syncCaptureShift();
+};
+
+// Degraded banner toggle — for demo purposes
+window.setDegraded = function(on) {
+  const banner = document.getElementById('degraded-banner');
+  banner.classList.toggle('hidden', !on);
+  syncCaptureShift();
+};
+
+function syncCaptureShift() {
+  const obs = !document.getElementById('observation-banner').classList.contains('hidden');
+  const deg = !document.getElementById('degraded-banner').classList.contains('hidden');
+  const q = document.getElementById('quick-capture');
+  q.classList.remove('shifted', 'double-shifted');
+  if (obs && deg) q.classList.add('double-shifted');
+  else if (obs || deg) q.classList.add('shifted');
+}
+
+// View-as selector — switches which member's Today the principal is viewing
+document.getElementById('view-as-select').addEventListener('change', (e) => {
+  window.setViewAs(e.target.value);
+});
+
+// Nav tab switching
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const page = tab.dataset.page;
+    switchPage(page);
+  });
+});
+
+function switchPage(pageId) {
+  document.querySelectorAll('.nav-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.page === pageId);
+  });
+  document.querySelectorAll('.page').forEach(p => {
+    p.classList.toggle('active', p.id === `page-${pageId}`);
+  });
+  // Scoreboard is special — it hides all chrome for a fullscreen wall display
+  const app = document.querySelector('.app');
+  if (pageId === 'scoreboard') app.classList.add('scoreboard-mode');
+  else app.classList.remove('scoreboard-mode');
+}
+
+/* Reward toast dispatcher — fires on task completion.
+   tier: 'done' | 'warm' | 'delight' | 'jackpot'
+   In the real console this is called with the server's reward response. */
+window.fireReward = function(tier, message, sub) {
+  const layer = document.getElementById('toast-layer');
+  const icons = { done: '✓', warm: '🔥', delight: '💎', jackpot: '🎰' };
+  const el = document.createElement('div');
+  el.className = `toast tier-${tier}`;
+  el.innerHTML = `
+    <div class="toast-icon">${icons[tier] || '✓'}</div>
+    <div class="toast-body">
+      <div class="toast-title">${message}</div>
+      <div class="toast-sub">tier: ${tier}${sub ? ' · ' + sub : ''}</div>
+    </div>
+  `;
+  layer.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 320);
+  }, 3200);
+
+  // Zeigarnik tease — 60s later in production; 3s in demo
+  if (tier !== 'jackpot' && Math.random() < 0.3) {
+    setTimeout(() => {
+      const tease = document.createElement('div');
+      tease.className = 'toast tier-delight';
+      tease.innerHTML = `
+        <div class="toast-icon">◦</div>
+        <div class="toast-body">
+          <div class="toast-title">Momentum's on. Want the next one?</div>
+          <div class="toast-sub">zeigarnik tease · dismissable</div>
+        </div>
+      `;
+      layer.appendChild(tease);
+      setTimeout(() => { tease.classList.add('out'); setTimeout(() => tease.remove(), 320); }, 3800);
+    }, 3200);
+  }
+};
+
+/* Rate-limit toast — fires when the sliding-window limiter rejects a write */
+window.fireRateLimit = function() {
+  const layer = document.getElementById('toast-layer');
+  const el = document.createElement('div');
+  el.className = 'toast tier-ratelimit';
+  el.innerHTML = `
+    <div class="toast-icon">⏸</div>
+    <div class="toast-body">
+      <div class="toast-title">Slow down a sec — rate limit hit</div>
+      <div class="toast-sub">retry_after: 4s · source: writes_per_minute</div>
+    </div>
+  `;
+  layer.appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 3400);
+};
+
+/* Quick-capture submission handler */
+document.getElementById('capture-input').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const text = e.target.value.trim();
+  if (!text) return;
+  // Naive prefix routing demo — real routing is in the `classify_capture_intent` skill
+  const prefixes = { 'grocery:': 'list', 'call:': 'task', 'idea:': 'capture', 'recipe:': 'recipe' };
+  let route = 'capture';
+  for (const [p, r] of Object.entries(prefixes)) {
+    if (text.toLowerCase().startsWith(p)) { route = r; break; }
+  }
+  fireReward('done', `Captured to ${route}`, text.length > 40 ? text.slice(0, 40) + '…' : text);
+  e.target.value = '';
+});
+
+/* ============================================================================
+   STICE INSTANCE MOCK DATA
+   ============================================================================
+   This is seed data for the mockup — represents what would live in the
+   event log + projections after a completed bootstrap + a couple of weeks
+   of ingest. Claude Code: do NOT port these names/addresses/phones into
+   platform/; they're demo data, not platform data.
+*/
+
+const STICE_DATA = {
+
+  // --- Today stream for James (adhd_executive) ---
+  today_james: [
+    {
+      id: 't-001', kind: 'commitment', status: 'next',
+      time: 'now · 09:42',
+      context: 'from inbox · kate',
+      title: 'Text Kate back about Saturday kitchen walk-through',
+      micro: 'Micro: open iMessage, pick "yes 2pm" or "Sunday better," hit send. 90 seconds.',
+      meta: [['low energy', 'blush'], ['tiny', 'teal'], ['social', 'dim']],
+      source: 'commitment_extraction@v4 · conf 0.87'
+    },
+    {
+      id: 't-002', kind: 'task', status: 'next',
+      time: '10:30 · 20 min',
+      context: 'recurring · 30d lead',
+      title: 'Renew Charlie\'s passport — upload photos',
+      micro: 'Micro: AAA travel photo, drop into USPS portal, submit form DS-11. No appt needed under 16.',
+      meta: [['med energy', 'blush'], ['small', 'teal'], ['kids', 'dim']],
+      source: 'recurrence · passport_renewal'
+    },
+    {
+      id: 't-003', kind: 'commitment', status: 'next',
+      time: '12:00',
+      context: 'from captures · last night',
+      title: 'Pay Jorge for yard cleanup — $280 Venmo',
+      micro: 'Micro: open Venmo, search @jorge-santos-atl, paste 280, memo "4/19 cleanup + mulch."',
+      meta: [['low energy', 'blush'], ['tiny', 'teal'], ['money', 'dim']],
+      source: 'manual · voice-captured 4/19 21:14'
+    },
+    {
+      id: 't-004', kind: 'task', status: 'next',
+      time: '14:00 · 45 min',
+      context: 'active project · blackwater',
+      title: 'Review Reliable Restoration revised scope (if it lands)',
+      micro: 'Micro: skim for (a) drywall section cu-ft, (b) antimicrobial line item, (c) subrogation cc to USAA.',
+      meta: [['high energy', 'blush'], ['medium', 'teal'], ['home', 'dim']],
+      source: 'task · waiting_on'
+    },
+    {
+      id: 't-005', kind: 'commitment', status: 'pending',
+      time: '16:00',
+      context: 'from inbox · dr. dalton office',
+      title: 'Call Dr. Dalton\'s office re: reschedule',
+      micro: 'Micro: (404) 355-8900 ext 3. Ask to push the follow-up to the week of 5/5.',
+      meta: [['med energy', 'blush'], ['small', 'teal'], ['health', 'dim']],
+      source: 'commitment_extraction@v4 · conf 0.94'
+    },
+    {
+      id: 't-006', kind: 'task', status: 'next',
+      time: '17:30',
+      context: 'Charlie activity',
+      title: 'Pack cleats + water bottle for 15:30 T-ball',
+      micro: 'Micro: cleats are in the mudroom. Water bottle: fill, freeze half, top off.',
+      meta: [['low energy', 'blush'], ['tiny', 'teal'], ['kids', 'dim']],
+      source: 'recurrence · tball_practice'
+    }
+  ],
+
+  // --- Today stream for Laura (minimalist_parent) — compressed view mock ---
+  today_laura: [
+    { id: 'l-001', time: '09:00', label: 'OB: 32-week appointment (Emory)', meta: [['health', 'dim']] },
+    { id: 'l-002', time: '11:00', label: '[privileged]', meta: [['privileged', 'warn']] },
+    { id: 'l-003', time: '13:00', label: 'Review Evolve financial affidavit — Garrison case', meta: [['privileged', 'warn']] },
+    { id: 'l-004', time: '15:30', label: 'Pediatric follow-up form for Charlie — sign + return', meta: [['kids', 'dim']] },
+    { id: 'l-005', time: '17:00', label: 'Decide: baby girl name finalists', meta: [['family', 'blush']] },
+    { id: 'l-006', time: '19:00', label: 'Order groceries for the week (HT)', meta: [['home', 'dim']] }
+  ],
+
+  // --- Inbox items ---
+  inbox: [
+    {
+      id: 'i-001', channel: 'gmail', time: '09:22',
+      sender: 'Kate Sullivan', sender_party: 'p-kate',
+      subject: 'Kitchen walk-through Saturday?',
+      snippet: 'Hey! Any interest in swinging by Sat around 2? Want to pick your brain on the island layout before we commit. Wine on me.',
+      proposal: { title: 'Commitment proposal: reply to Kate', detail: 'Extracted kind=reply, urgency=this_week. Source interaction: gmail.received id gm-8841' },
+      sensitivity: 'normal',
+      skill: 'commitment_extraction@v4',
+      conf: 0.87
+    },
+    {
+      id: 'i-002', channel: 'gmail', time: '08:40',
+      sender: 'Morningside Elementary', sender_party: 'p-mside-elem',
+      subject: 'Field trip permission form — 2nd grade',
+      snippet: 'Please sign and return the attached permission form for the May 8 Zoo Atlanta trip by April 29. Payment of $18 due with form.',
+      proposal: { title: 'Tasks proposed (2): sign form, pay $18', detail: 'Routed to Laura (primary on school comms). Linked artifact: permission_form.pdf' },
+      artifact: 'permission_form.pdf',
+      skill: 'artifact_classification@v3',
+      conf: 0.96
+    },
+    {
+      id: 'i-003', channel: 'imessage', time: '08:12',
+      sender: 'Rob Smith (KW Intown)', sender_party: 'p-rob',
+      subject: '—',
+      snippet: 'Charlie is registered for Fall T-ball at Buckhead Baseball — sending the roster PDF over. Let me know if u want me to introduce u to coach Mark.',
+      proposal: null,
+      sensitivity: 'normal'
+    },
+    {
+      id: 'i-004', channel: 'gmail', time: 'yesterday',
+      sender: 'Dr. Booker Dalton (Digestive Healthcare of GA)', sender_party: 'p-dalton',
+      subject: 'Follow-up appointment re: imaging review',
+      snippet: 'Dr. Dalton would like to schedule a follow-up to discuss the April 9 imaging review. Please call the office at your earliest convenience.',
+      proposal: { title: 'Commitment proposal: call Dr. Dalton office', detail: 'owed_by: James · owed_to: Dalton practice · kind: appointment · conf 0.94' },
+      sensitivity: 'sensitive',
+      skill: 'commitment_extraction@v4',
+      conf: 0.94
+    },
+    {
+      id: 'i-005', channel: 'sms', time: 'yesterday',
+      sender: 'Mike (coparent)', sender_party: 'p-mike',
+      subject: '—',
+      snippet: 'Picking up C Friday at 4 instead of 5 if that works. Got a thing.',
+      proposal: null,
+      coparent: true,
+      note: 'Routed to inbox; no autonomous outbound. James reply manually.'
+    },
+    {
+      id: 'i-006', channel: 'gmail', time: 'yesterday',
+      sender: 'Reliable Restoration', sender_party: 'p-reliable',
+      subject: 'RE: blackwater scope revision — update',
+      snippet: 'Hi James — our PM Rick has the revised scope with the antimicrobial add. Expected to send over Tuesday by EOD.',
+      proposal: null,
+      sensitivity: 'normal'
+    },
+    {
+      id: 'i-007', channel: 'imessage', time: '2 days ago',
+      sender: 'Laura', sender_party: 'p-laura',
+      subject: '—',
+      snippet: 'dont forget to cancel the chimney sweep for 5/3 — were at charlotte that wknd',
+      proposal: { title: 'Task proposal: cancel chimney sweep 5/3', detail: 'Extracted kind=task, assignee=James. Source: imessage conversation with Laura' },
+      sensitivity: 'normal',
+      skill: 'commitment_extraction@v4',
+      conf: 0.78
+    },
+    {
+      id: 'i-008', channel: 'gmail', time: '3 days ago',
+      sender: 'USAA Claims', sender_party: 'p-usaa',
+      subject: 'Claim #4421-8XX status update',
+      snippet: 'Your subrogation inquiry has been routed to subrogation department. Adjuster assignment expected within 5 business days.',
+      proposal: null,
+      sensitivity: 'normal'
+    },
+    {
+      id: 'i-009', channel: 'imessage', time: '3 days ago',
+      sender: 'Coach Mark (T-ball)', sender_party: 'p-coach-mark',
+      subject: '—',
+      snippet: 'Practice Thurs moved to the upper field — north entrance. 5:30 sharp.',
+      proposal: null,
+      sensitivity: 'normal'
+    }
+  ],
+
+  // --- CRM parties ---
+  parties: [
+    { id: 'p-household-stice', kind: 'household', name: 'Stice household', sub: '4 members · 2 principals', tier: null, icon: 'S' },
+    { id: 'p-james', kind: 'person', name: 'James Stice', sub: 'principal · me', tier: 1, icon: 'JS' },
+    { id: 'p-laura', kind: 'person', name: 'Laura Stice', sub: 'principal · spouse', tier: 1, icon: 'LS' },
+    { id: 'p-charlie', kind: 'person', name: 'Charlie Stice', sub: 'child · 2nd grade', tier: 1, icon: 'CS' },
+    { id: 'p-kate', kind: 'person', name: 'Kate Sullivan', sub: 'close friend · 12y', tier: 2, icon: 'KS' },
+    { id: 'p-rob', kind: 'person', name: 'Rob Smith', sub: 'realtor · KW Intown', tier: 3, icon: 'RS' },
+    { id: 'p-mike', kind: 'person', name: 'Mike (coparent)', sub: 'Charlie\'s dad · non-user', tier: 3, icon: 'M' },
+    { id: 'p-dalton', kind: 'person', name: 'Dr. Booker Dalton', sub: 'service provider · GI · Digestive Healthcare of GA', tier: 3, icon: 'BD' },
+    { id: 'p-coach-mark', kind: 'person', name: 'Coach Mark', sub: 'Buckhead Baseball · service provider', tier: 3, icon: 'CM' },
+    { id: 'p-mside-elem', kind: 'organization', name: 'Morningside Elementary', sub: 'school · Charlie · 2nd grade', tier: 2, icon: 'ME' },
+    { id: 'p-evolve', kind: 'organization', name: 'Evolve Family Law', sub: 'employer · Laura · privileged', tier: null, icon: 'EF' },
+    { id: 'p-reliable', kind: 'organization', name: 'Reliable Restoration', sub: 'vendor · blackwater remediation · active', tier: 3, icon: 'RR' },
+    { id: 'p-morningside-plumbing', kind: 'organization', name: 'Morningside Plumbing Services', sub: 'vendor · emergency plumbing', tier: 4, icon: 'MP' },
+    { id: 'p-usaa', kind: 'organization', name: 'USAA', sub: 'vendor · insurance · auto + home + life', tier: 3, icon: 'US' },
+    { id: 'p-jorge', kind: 'person', name: 'Jorge Santos', sub: 'vendor · yard', tier: 4, icon: 'JS' },
+    { id: 'p-klein', kind: 'person', name: 'Tom & Dana Klein', sub: 'friends · hosting balance: 4 vs 1', tier: 3, icon: 'TK' }
+  ],
+
+  // --- Detail data for Kate ---
+  party_detail_kate: {
+    id: 'p-kate',
+    name: 'Kate Sullivan',
+    kind: 'person',
+    icon: 'KS',
+    summary: 'College friend, 12 years. Lives in Virginia-Highland with her husband Derek. Talks most weekends. Currently renovating kitchen — has been pinging you for structural opinions since March. You\'ve seen her 3x this year (last: brunch at her place, March 14).',
+    provenance: 'summary: summarize_relationship@v2 · computed 2026-04-19 03:12 · closeness: score_relationship_tier@v2 · tier 2 (close)',
+    identifiers: [
+      { kind: 'email', value: 'kate.sullivan.atl@gmail.com', verified: true, primary: true },
+      { kind: 'phone', value: '+1 404 555 0184', verified: true, primary: true },
+      { kind: 'imessage_handle', value: '+1 404 555 0184', verified: true },
+      { kind: 'email', value: 'ksullivan@keplerpartners.co', verified: true, sensitivity: 'normal' }
+    ],
+    relationships: [
+      { label: 'friend · close', direction: 'mutual', with: 'James Stice', since: '2013' },
+      { label: 'spouse', direction: 'a_to_b', with: 'Derek Sullivan (p-derek)' },
+      { label: 'colleague', direction: 'mutual', with: 'Laura Stice (via Evolve case, 2022)' }
+    ],
+    recent_interactions: [
+      { date: '4/21 09:22', channel: 'gmail', summary: 'Asked about Saturday kitchen walk-through (proposal: reply)' },
+      { date: '4/14 14:01', channel: 'imessage', summary: 'Sent a photo of tile samples from Design Galleria' },
+      { date: '4/04 21:40', channel: 'imessage', summary: 'Talked about the kitchen budget. You recommended pushing the island decision.' },
+      { date: '3/14 11:00', channel: 'calendar', summary: 'Brunch at Kate\'s place (hosting_them)' },
+      { date: '2/28 16:22', channel: 'gmail', summary: 'Forwarded a contractor recommendation (plumber)' }
+    ],
+    stats: [
+      { label: 'last contact', value: 'today' },
+      { label: 'contact gap', value: '—' },
+      { label: 'desired cadence', value: 'weekly' }
+    ],
+    hosting: 'balanced (6 hosted by us · 5 hosted by them · lifetime)',
+    commitments_open: 1,
+    linked_artifacts: 3
+  },
+
+  // --- Captures / triage queue ---
+  triage: [
+    { id: 'c-001', time: '4/20 21:14', channel: 'voice (iOS shortcut)', text: 'Pay Jorge for yard cleanup, two-eighty, Venmo', routed: false, suggested_routes: ['task', 'list', 'dismiss'] },
+    { id: 'c-002', time: '4/20 18:02', channel: 'quick-capture', text: 'Ask Rob about fall T-ball schedule — does Charlie go to Buckhead Baseball?', routed: false, suggested_routes: ['task', 'commitment', 'idea', 'dismiss'] },
+    { id: 'c-003', time: '4/19 22:30', channel: 'siri → reminders', text: 'Replace HVAC filter — upstairs', routed: false, suggested_routes: ['task', 'recurring', 'dismiss'] }
+  ],
+
+  triage_routed: [
+    { id: 'c-r001', time: '4/20 14:15', channel: 'quick-capture', text: 'grocery: milk, eggs, butter', routed: 'list:grocery', source_skill: 'classify_capture_intent@v2' },
+    { id: 'c-r002', time: '4/19 10:00', channel: 'voice', text: 'recipe: one-pan miso salmon w greens', routed: 'recipe', source_skill: 'extract_structured_from_capture@v3' },
+    { id: 'c-r003', time: '4/18 20:45', channel: 'quick-capture', text: 'idea: backyard batting cage EMT conduit design', routed: 'capture:idea', source_skill: 'classify_capture_intent@v2' }
+  ],
+
+  // --- Finance ---
+  finance: {
+    net_worth: 1423800,
+    spent_mtd: 9847,
+    cash: 78200,
+    debt: 712000,
+    tx: [
+      { date: '04/20', name: 'Home Depot', merchant_sub: '2221 Cheshire Bridge', amount: -182.44, category: 'home:supplies' },
+      { date: '04/20', name: 'Whole Foods', merchant_sub: 'Buckhead', amount: -127.83, category: 'food:grocery' },
+      { date: '04/19', name: 'Jorge Santos (Venmo)', merchant_sub: 'yard cleanup', amount: -280.00, category: 'home:service' },
+      { date: '04/19', name: 'Shell', merchant_sub: 'Piedmont Ave', amount: -62.01, category: 'auto:fuel' },
+      { date: '04/18', name: 'Kroger', merchant_sub: 'Morningside', amount: -84.19, category: 'food:grocery' },
+      { date: '04/18', name: 'Direct deposit · Evolve', merchant_sub: 'Laura payroll', amount: 4821.33, category: 'income:payroll' },
+      { date: '04/17', name: 'Southern Pest', merchant_sub: 'quarterly service', amount: -148.00, category: 'home:service' },
+      { date: '04/17', name: 'Morningside Pharmacy', merchant_sub: 'Charlie scrip', amount: -22.40, category: 'health:rx' }
+    ],
+    budget: [
+      { cat: 'food:grocery', spent: 621, budget: 900, pct: 69 },
+      { cat: 'food:dining', spent: 483, budget: 500, pct: 97 },
+      { cat: 'home:service', spent: 572, budget: 400, pct: 143, over: true },
+      { cat: 'auto:fuel', spent: 201, budget: 300, pct: 67 },
+      { cat: 'health:rx', spent: 94, budget: 200, pct: 47 },
+      { cat: 'kids:activities', spent: 245, budget: 250, pct: 98 }
+    ]
+  },
+
+  // --- Calendar (week of April 20, 2026) — events positioned by day (1-7) and hour-from-7am ---
+  calendar: [
+    // Mon 4/20
+    { day: 1, startHour: 9, endHour: 10, kind: 'work-public', title: 'Standup', sub: 'internal' },
+    { day: 1, startHour: 14, endHour: 15.5, kind: 'family', title: 'Charlie pickup', sub: 'Morningside Elem 14:50' },
+    { day: 1, startHour: 17, endHour: 18, kind: 'family', title: 'T-ball', sub: 'Grant Park' },
+    // Tue 4/21 (today)
+    { day: 2, startHour: 9, endHour: 10, kind: 'family', title: 'Laura OB', sub: 'Emory 32w' },
+    { day: 2, startHour: 11, endHour: 13, kind: 'work-privileged', title: '[busy]', sub: 'privileged' },
+    { day: 2, startHour: 15.5, endHour: 17, kind: 'family', title: 'Charlie T-ball', sub: 'Grant Park' },
+    { day: 2, startHour: 17, endHour: 17.5, kind: 'family', title: 'Dr. Dalton call', sub: 'reschedule' },
+    // Wed 4/22
+    { day: 3, startHour: 10, endHour: 12, kind: 'work-privileged', title: '[busy]', sub: 'privileged' },
+    { day: 3, startHour: 14, endHour: 15, kind: 'family', title: 'Charlie pickup', sub: 'Morningside Elem' },
+    // Thu 4/23
+    { day: 4, startHour: 9, endHour: 10.5, kind: 'work-public', title: 'Paralegal sync', sub: 'Laura · Stephanie · Sandy' },
+    { day: 4, startHour: 17.5, endHour: 18.5, kind: 'family', title: 'T-ball practice', sub: 'upper field' },
+    // Fri 4/24
+    { day: 5, startHour: 10, endHour: 12.5, kind: 'work-privileged', title: '[busy]', sub: 'privileged' },
+    { day: 5, startHour: 16, endHour: 18, kind: 'family', title: 'Charlie → Mike', sub: 'coparent handoff · busy block' },
+    // Sat 4/25
+    { day: 6, startHour: 14, endHour: 15.5, kind: 'family', title: 'Kate kitchen walk-through', sub: 'if confirmed' },
+    // Sun 4/26
+    { day: 7, startHour: 10, endHour: 12, kind: 'family', title: 'Buckhead Baseball info session', sub: 'fall T-ball' }
+  ],
+
+  // --- Kid scoreboard chores ---
+  chores: [
+    { id: 'ch-001', emoji: '🛏️', title: 'Make your bed', done: true, stars: 1 },
+    { id: 'ch-002', emoji: '🦷', title: 'Brush morning', done: true, stars: 1 },
+    { id: 'ch-003', emoji: '📚', title: 'Backpack packed', done: true, stars: 1 },
+    { id: 'ch-004', emoji: '🧦', title: 'Clothes in hamper', done: false, stars: 1 },
+    { id: 'ch-005', emoji: '🐟', title: 'Feed fish', done: false, stars: 1 },
+    { id: 'ch-006', emoji: '🍽️', title: 'Help clear dinner', done: false, stars: 2 },
+    { id: 'ch-007', emoji: '🦷', title: 'Brush evening', done: false, stars: 1 },
+    { id: 'ch-008', emoji: '📖', title: '10 min reading', done: false, stars: 2 }
+  ],
+
+  // --- Observation suppressions (recent 24h) ---
+  suppressed: [
+    {
+      when: '08:35',
+      what: 'Morning digest delivery (James)',
+      payload: 'channel: imessage · to: +1 404 555 0101 · body (80 chars): "morning. six on the plate today, three tiny. kitchen text to kate first…"'
+    },
+    {
+      when: '08:35',
+      what: 'Morning digest delivery (Laura)',
+      payload: 'channel: email · to: laura@stice.family · subject: "Tuesday glance — 6 items, 1 privileged block" · suppressed for observation review'
+    },
+    {
+      when: 'yesterday 17:03',
+      what: 'Reward notification (task-complete)',
+      payload: 'tier: warm · member: James · template: "hot take: that was great." · toast shown locally; channel push suppressed'
+    },
+    {
+      when: 'yesterday 15:02',
+      what: 'Paralysis detection outbound',
+      payload: 'channel: imessage · to: James · template: paralysis.one_tiny_thing · would have sent: "small one: just close the email tab and breathe. that\'s the whole task for 2 min."'
+    },
+    {
+      when: 'yesterday 09:00',
+      what: 'CRM gap nudge (Klein family hosting balance)',
+      payload: 'surface: inbox-only during observation · action: would suggest "reach out to Kleins — they\'ve had you 4x, you\'ve had them 1x since Sept"'
+    }
+  ]
+};
+
+/* ============================================================================
+   PAGE INITIALIZATION
+   ============================================================================ */
+
+/* --- Today page --- */
+let carouselIdx = 0;
+let viewMode = 'carousel';
+let currentMember = 'james';
+
+function renderCarousel() {
+  const item = STICE_DATA.today_james[carouselIdx];
+  if (!item) return;
+  document.getElementById('car-time').textContent = item.time;
+  document.getElementById('car-context').textContent = item.context;
+  document.getElementById('car-title').textContent = item.title;
+  document.getElementById('car-micro').textContent = item.micro;
+  const meta = document.getElementById('car-meta');
+  meta.innerHTML = item.meta.map(([label, cls]) => `<span class="pill pill-${cls}">${label}</span>`).join('');
+  document.getElementById('car-counter').textContent = `${carouselIdx + 1} of ${STICE_DATA.today_james.length}`;
+  // update dots
+  const dots = document.querySelectorAll('#progress-dots .progress-dot');
+  dots.forEach((d, i) => d.classList.toggle('filled', i < Math.min(carouselIdx + 1, 5)));
+}
+
+function renderCompressed() {
+  const list = document.getElementById('compressed-list');
+  const data = currentMember === 'laura' ? STICE_DATA.today_laura : STICE_DATA.today_james;
+  list.innerHTML = data.map(item => {
+    const label = item.label || item.title;
+    const metaPills = (item.meta || []).map(([l, c]) => `<span class="pill pill-${c}">${l}</span>`).join('');
+    return `
+      <div class="compressed-row" data-id="${item.id}">
+        <div class="compressed-check" data-id="${item.id}"></div>
+        <div class="compressed-time">${item.time}</div>
+        <div class="compressed-label">${label}</div>
+        <div class="compressed-meta">${metaPills}</div>
+      </div>
+    `;
+  }).join('');
+  list.querySelectorAll('.compressed-check').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const row = e.target.closest('.compressed-row');
+      e.target.classList.add('done');
+      row.classList.add('is-done');
+      fireReward(rollRewardTier(), rewardMessage(rewardTierSample()), `task ${e.target.dataset.id}`);
+    });
+  });
+}
+
+function rewardTierSample() { // for logging sub
+  const r = Math.random();
+  if (r < 0.05) return 'jackpot';
+  if (r < 0.15) return 'delight';
+  if (r < 0.40) return 'warm';
+  return 'done';
+}
+function rollRewardTier() { return rewardTierSample(); }
+function rewardMessage(tier) {
+  const pools = {
+    done: ['Done. Onto the next.', 'Clean. Next one\'s teed up.', 'That one\'s off the list.', 'Quick win banked.'],
+    warm: ['Hot take: that was great.', 'Brick by brick. Keep going.', 'You\'re warming up.', 'Feel that? That\'s momentum.'],
+    delight: ['OK that was genuinely delightful.', 'Chef\'s kiss. Moving on.', 'That\'s the good stuff.', 'Poetry in motion.'],
+    jackpot: ['JACKPOT. Ring the bell. Tell the neighbors.', 'This is the best day of your life and I\'ll hear no argument.', 'Gonna mount that one on the wall.', 'Somebody call the president.']
+  };
+  const pool = pools[tier] || pools.done;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// view-mode buttons
+document.querySelectorAll('#view-mode-toggle .view-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#view-mode-toggle .view-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+    viewMode = btn.dataset.mode;
+    document.getElementById('today-view-carousel').style.display = viewMode === 'carousel' ? '' : 'none';
+    document.getElementById('today-view-compressed').style.display = viewMode === 'compressed' ? '' : 'none';
+    if (viewMode === 'compressed') renderCompressed();
+  });
+});
+
+// carousel controls
+document.getElementById('car-prev').addEventListener('click', () => {
+  carouselIdx = (carouselIdx - 1 + STICE_DATA.today_james.length) % STICE_DATA.today_james.length;
+  renderCarousel();
+});
+document.getElementById('car-next').addEventListener('click', () => {
+  carouselIdx = (carouselIdx + 1) % STICE_DATA.today_james.length;
+  renderCarousel();
+});
+document.getElementById('car-complete').addEventListener('click', () => {
+  const tier = rollRewardTier();
+  const item = STICE_DATA.today_james[carouselIdx];
+  fireReward(tier, rewardMessage(tier), item.id);
+  carouselIdx = (carouselIdx + 1) % STICE_DATA.today_james.length;
+  setTimeout(renderCarousel, 400);
+});
+document.getElementById('car-defer').addEventListener('click', () => {
+  carouselIdx = (carouselIdx + 1) % STICE_DATA.today_james.length;
+  renderCarousel();
+});
+document.getElementById('car-snooze').addEventListener('click', () => {
+  fireReward('done', 'Snoozed 2h — pushed down the queue.', 'deterministic');
+  carouselIdx = (carouselIdx + 1) % STICE_DATA.today_james.length;
+  setTimeout(renderCarousel, 300);
+});
+
+// energy buttons
+document.querySelectorAll('#energy-buttons .energy-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#energy-buttons .energy-btn').forEach(b => b.classList.toggle('active', b === btn));
+  });
+});
+
+// view-as — switches the whole experience
+window.setViewAs = function(who) {
+  currentMember = who;
+  const greet = document.getElementById('today-greet');
+  const sub = document.getElementById('today-sub');
+  if (who === 'james') {
+    greet.textContent = 'Good morning, James.';
+    sub.textContent = 'Six things on the plate today. Three of them are small.';
+    document.querySelector('[data-mode="carousel"]').click();
+  } else if (who === 'laura') {
+    greet.textContent = 'Good morning, Laura.';
+    sub.textContent = 'Six today. One privileged block this morning.';
+    document.querySelector('[data-mode="compressed"]').click();
+  } else if (who === 'charlie') {
+    switchPage('scoreboard');
+  }
+};
+
+// --- Inbox ---
+function renderInbox() {
+  const items = document.getElementById('inbox-items');
+  items.innerHTML = STICE_DATA.inbox.map(item => {
+    const channelPill = {
+      gmail: 'pill-teal', imessage: 'pill-blush', sms: 'pill-lavender'
+    }[item.channel] || 'pill-dim';
+    const coparentNote = item.coparent ? `<div class="inbox-provenance">coparent · inbox-only · no autonomous outbound</div>` : '';
+    const proposal = item.proposal ? `
+      <div class="inbox-proposal">
+        <div class="inbox-proposal-title">${item.proposal.title}</div>
+        <div>${item.proposal.detail}</div>
+      </div>` : '';
+    const sens = item.sensitivity === 'sensitive' ? `<span class="pill pill-info">sensitive</span>` : '';
+    const skillNote = item.skill ? `<div class="inbox-provenance">${item.skill} · conf ${item.conf.toFixed(2)} · source_interaction: int-${item.id}</div>` : '';
+    const actions = item.proposal
+      ? `<div class="inbox-actions">
+           <button class="btn btn-sm btn-primary" data-action="approve" data-id="${item.id}">Approve</button>
+           <button class="btn btn-sm" data-action="edit" data-id="${item.id}">Edit</button>
+           <button class="btn btn-sm btn-ghost" data-action="dismiss" data-id="${item.id}">Dismiss</button>
+           <span style="margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-faint);">${item.skill}</span>
+         </div>`
+      : `<div class="inbox-actions">
+           <button class="btn btn-sm">Reply (draft)</button>
+           <button class="btn btn-sm">Archive</button>
+           <button class="btn btn-sm btn-ghost">Snooze</button>
+         </div>`;
+    return `
+      <div class="inbox-card" data-id="${item.id}">
+        <div class="inbox-card-head">
+          <span class="pill ${channelPill}">${item.channel}</span>
+          ${sens}
+          <span class="inbox-sender">${item.sender}</span>
+          <span class="inbox-time">${item.time}</span>
+        </div>
+        <div class="inbox-subject">${item.subject}</div>
+        <div class="inbox-snippet">${item.snippet}</div>
+        ${proposal}
+        ${skillNote}
+        ${coparentNote}
+        ${actions}
+      </div>
+    `;
+  }).join('');
+  items.querySelectorAll('[data-action="approve"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.target.dataset.id;
+      const card = document.querySelector(`.inbox-card[data-id="${id}"]`);
+      card.classList.add('slide-out');
+      fireReward('warm', 'Commitment confirmed. It\'s on the list.', `commitment.confirmed · source:${id}`);
+      setTimeout(() => card.remove(), 400);
+    });
+  });
+  items.querySelectorAll('[data-action="dismiss"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.target.dataset.id;
+      const card = document.querySelector(`.inbox-card[data-id="${id}"]`);
+      card.classList.add('slide-out');
+      setTimeout(() => card.remove(), 400);
+    });
+  });
+}
+
+// --- CRM ---
+function renderCRM() {
+  const list = document.getElementById('crm-list');
+  list.innerHTML = STICE_DATA.parties.map(p => `
+    <div class="crm-entry ${p.kind}" data-id="${p.id}">
+      <div class="crm-avatar">${p.icon}</div>
+      <div>
+        <div class="crm-name">${p.name}</div>
+        <div class="crm-sub">${p.sub}</div>
+      </div>
+      ${p.tier ? `<div class="crm-tier t${p.tier}">T${p.tier}</div>` : ''}
+    </div>
+  `).join('');
+  list.querySelectorAll('.crm-entry').forEach(el => {
+    el.addEventListener('click', () => {
+      list.querySelectorAll('.crm-entry').forEach(e => e.classList.remove('active'));
+      el.classList.add('active');
+      renderPartyDetail(el.dataset.id);
+    });
+  });
+  // auto-select Kate (most representative)
+  const kateEl = list.querySelector('[data-id="p-kate"]');
+  kateEl.classList.add('active');
+  renderPartyDetail('p-kate');
+}
+
+function renderPartyDetail(id) {
+  const pane = document.getElementById('crm-detail-pane');
+  if (id !== 'p-kate') {
+    pane.innerHTML = `
+      <div class="party-detail" style="padding: 40px; text-align: center; color: var(--color-text-dim);">
+        <div style="font-family: var(--font-head); font-size: 18px; margin-bottom: 8px;">${STICE_DATA.parties.find(p => p.id === id)?.name}</div>
+        <div style="font-size: 13px;">Full party detail page — in the real console this would populate from<br>
+          <code style="font-size: 11px;">GET /api/capture/parties/${id}</code>.<br><br>
+          Click Kate to see a populated example.</div>
+      </div>`;
+    return;
+  }
+  const k = STICE_DATA.party_detail_kate;
+  pane.innerHTML = `
+    <div class="party-detail">
+      <div class="party-detail-head">
+        <div class="party-detail-avatar">${k.icon}</div>
+        <div style="flex: 1;">
+          <h2>${k.name}</h2>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+            <span class="pill pill-blush">close · tier 2</span>
+            <span class="pill pill-dim">person</span>
+            <span class="pill pill-teal">${k.commitments_open} open commitment</span>
+            <span class="pill pill-info">${k.linked_artifacts} linked artifacts</span>
+          </div>
+          <div class="party-detail-summary">${k.summary}</div>
+          <div class="party-detail-provenance">${k.provenance}</div>
+        </div>
+        <div>
+          <button class="btn btn-sm">+ Note</button>
+          <button class="btn btn-sm" style="margin-left: 4px;">+ Commitment</button>
+        </div>
+      </div>
+
+      <div class="party-sections">
+        <div class="party-section">
+          <h4>Identifiers</h4>
+          ${k.identifiers.map(i => `
+            <div class="identifier">
+              <div>
+                <span class="kind">${i.kind}</span>
+                <div class="mono" style="margin-top: 2px;">${i.value}</div>
+              </div>
+              <div>
+                ${i.verified ? '<span class="pill pill-success">verified</span>' : ''}
+                ${i.primary ? '<span class="pill pill-blush">primary</span>' : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="party-section">
+          <h4>Stats &amp; cadence</h4>
+          <div class="crm-stat-row">
+            ${k.stats.map(s => `<div class="stat"><div class="stat-label">${s.label}</div><div class="stat-value" style="font-size: 15px;">${s.value}</div></div>`).join('')}
+          </div>
+          <div style="margin-top: var(--gap-md); font-size: 12px; color: var(--color-text-dim);">
+            <strong>Hosting:</strong> ${k.hosting}
+          </div>
+        </div>
+
+        <div class="party-section" style="grid-column: 1 / -1;">
+          <h4>Relationships</h4>
+          <div class="relationships">
+            ${k.relationships.map(r => `<span class="pill pill-lavender">${r.label} · ${r.with}</span>`).join('')}
+          </div>
+        </div>
+
+        <div class="party-section" style="grid-column: 1 / -1;">
+          <h4>Recent interactions</h4>
+          ${k.recent_interactions.map(i => `
+            <div class="interaction">
+              <div class="interaction-date">${i.date}</div>
+              <div>
+                <div class="interaction-body">${i.summary}</div>
+                <div class="interaction-meta">${i.channel}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// --- Capture / Triage ---
+function renderTriage() {
+  const tlist = document.getElementById('triage-list');
+  tlist.innerHTML = STICE_DATA.triage.map(c => `
+    <div class="triage-item" data-id="${c.id}">
+      <div class="triage-head">
+        <span>${c.channel}</span>
+        <span>${c.time}</span>
+      </div>
+      <div class="triage-text">${c.text}</div>
+      <div class="triage-routes">
+        ${c.suggested_routes.map(r => `<button class="triage-route" data-route="${r}" data-id="${c.id}">→ ${r}</button>`).join('')}
+      </div>
+    </div>
+  `).join('');
+  tlist.querySelectorAll('.triage-route').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const id = e.target.dataset.id;
+      const route = e.target.dataset.route;
+      const item = document.querySelector(`.triage-item[data-id="${id}"]`);
+      item.style.opacity = 0.3;
+      fireReward('done', `Routed to ${route}.`, 'classify_capture_intent@v2');
+    });
+  });
+
+  const rlist = document.getElementById('routed-list');
+  rlist.innerHTML = STICE_DATA.triage_routed.map(c => `
+    <div class="triage-item" style="opacity: 0.8;">
+      <div class="triage-head">
+        <span>${c.channel}</span>
+        <span>${c.time}</span>
+      </div>
+      <div class="triage-text">${c.text}</div>
+      <div class="triage-routes">
+        <span class="pill pill-teal">${c.routed}</span>
+        <span class="pill pill-dim" style="font-family: var(--font-mono); font-size: 10px;">${c.source_skill}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// --- Finance ---
+function fmt(n) { return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }); }
+function fmtCents(n) { return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' }); }
+function renderFinance() {
+  const f = STICE_DATA.finance;
+  document.getElementById('fin-networth').textContent = fmt(f.net_worth);
+  document.getElementById('fin-spent').textContent = fmt(f.spent_mtd);
+  document.getElementById('fin-cash').textContent = fmt(f.cash);
+  document.getElementById('fin-debt').textContent = fmt(f.debt);
+  document.getElementById('tx-list').innerHTML = f.tx.map(t => `
+    <div class="tx-row">
+      <div class="tx-date">${t.date}</div>
+      <div>
+        <div class="tx-name">${t.name}</div>
+        <div class="tx-merchant-sub">${t.merchant_sub}</div>
+      </div>
+      <div class="tx-amount ${t.amount > 0 ? 'credit' : 'debit'}">${fmtCents(t.amount)}</div>
+      <div class="tx-category">${t.category}</div>
+    </div>
+  `).join('');
+  document.getElementById('budget-list').innerHTML = f.budget.map(b => `
+    <div class="budget-row">
+      <div class="budget-row-head">
+        <span class="budget-row-cat">${b.cat}</span>
+        <span class="budget-row-amt">${fmt(b.spent)} / ${fmt(b.budget)}</span>
+      </div>
+      <div class="budget-bar"><div class="budget-bar-fill ${b.over ? 'over' : ''}" style="width: ${Math.min(b.pct, 100)}%;"></div></div>
+    </div>
+  `).join('');
+}
+
+// --- Calendar ---
+function renderCalendar() {
+  const grid = document.getElementById('cal-grid');
+  // hour rail
+  let html = '<div class="cal-hours">';
+  for (let h = 7; h < 19; h++) html += `<div class="cal-hour-label">${h > 12 ? h - 12 : h}${h >= 12 ? 'p' : 'a'}</div>`;
+  html += '</div>';
+  for (let d = 1; d <= 7; d++) {
+    html += '<div class="cal-col">';
+    for (let h = 7; h < 19; h++) html += '<div class="cal-col-hour"></div>';
+    // events
+    for (const ev of STICE_DATA.calendar) {
+      if (ev.day !== d) continue;
+      const startOffset = (ev.startHour - 7) * 50;
+      const height = (ev.endHour - ev.startHour) * 50 - 4;
+      html += `
+        <div class="cal-event ev-${ev.kind}" style="top: ${startOffset + 2}px; height: ${height}px;">
+          <div class="cal-event-time">${fmtHour(ev.startHour)}</div>
+          <div class="ev-title">${ev.title}</div>
+          <div style="font-size: 9px; opacity: 0.8;">${ev.sub}</div>
+        </div>`;
+    }
+    html += '</div>';
+  }
+  grid.innerHTML = html;
+}
+function fmtHour(h) {
+  const hour = Math.floor(h);
+  const min = Math.round((h - hour) * 60);
+  const h12 = hour > 12 ? hour - 12 : hour;
+  const ampm = hour >= 12 ? 'p' : 'a';
+  return `${h12}:${String(min).padStart(2, '0')}${ampm}`;
+}
+
+// --- Scoreboard ---
+function renderScoreboard() {
+  const grid = document.getElementById('chore-grid');
+  grid.innerHTML = STICE_DATA.chores.map(c => `
+    <div class="chore-card ${c.done ? 'done' : ''}" data-id="${c.id}">
+      <div class="chore-emoji">${c.emoji}</div>
+      <div class="chore-title">${c.title}</div>
+      <div class="chore-star ${c.done ? 'earned' : ''}">${c.stars} ⭐</div>
+    </div>
+  `).join('');
+  grid.querySelectorAll('.chore-card:not(.done)').forEach(el => {
+    el.addEventListener('click', () => {
+      el.classList.add('done');
+      el.querySelector('.chore-star').classList.add('earned');
+      const star = document.getElementById('star-today');
+      star.textContent = parseInt(star.textContent, 10) + 1;
+      fireReward('warm', 'Great job, Charlie! ⭐', 'child_warmth template');
+    });
+  });
+}
+
+// --- Settings ---
+function bindSettings() {
+  document.querySelectorAll('.settings-nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const pane = item.dataset.pane;
+      document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.toggle('active', i === item));
+      document.querySelectorAll('.settings-pane').forEach(p => p.classList.toggle('active', p.id === `pane-${pane}`));
+    });
+  });
+  // observation toggle
+  const toggle = document.getElementById('observation-toggle');
+  toggle.addEventListener('click', () => {
+    const isOn = toggle.classList.toggle('on');
+    setObservation(isOn);
+  });
+  // populate suppressed list
+  document.getElementById('suppressed-list').innerHTML = STICE_DATA.suppressed.map(s => `
+    <div class="suppressed-item">
+      <div class="suppressed-head">
+        <span class="suppressed-what">${s.what}</span>
+        <span class="suppressed-when">${s.when}</span>
+      </div>
+      <div class="suppressed-payload">${s.payload}</div>
+      <div class="suppressed-actions">
+        <button class="btn btn-sm">Approve &amp; send</button>
+        <button class="btn btn-sm btn-ghost">Dismiss</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// --- Chat FAB ---
+document.getElementById('chat-fab').addEventListener('click', () => {
+  document.getElementById('chat-panel').classList.toggle('open');
+});
+document.getElementById('chat-send').addEventListener('click', sendChat);
+document.getElementById('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const body = document.getElementById('chat-body');
+  const me = document.createElement('div');
+  me.className = 'chat-msg me';
+  me.textContent = text;
+  body.appendChild(me);
+  input.value = '';
+  // typing indicator
+  const typing = document.createElement('div');
+  typing.className = 'chat-typing';
+  typing.innerHTML = '<span></span><span></span><span></span>';
+  body.appendChild(typing);
+  body.scrollTop = body.scrollHeight;
+  setTimeout(() => {
+    typing.remove();
+    const reply = document.createElement('div');
+    reply.className = 'chat-msg poopsy';
+    reply.textContent = mockPoopsyReply(text);
+    body.appendChild(reply);
+    body.scrollTop = body.scrollHeight;
+  }, 900 + Math.random() * 600);
+}
+function mockPoopsyReply(text) {
+  const replies = [
+    'Got it. Parked that for you — you can see it on the Today carousel.',
+    'Yep. I\'ll queue it up. Want me to suggest a time block?',
+    'Looking. Hold on — checking the calendar.',
+    'Three options there. Want them by likelihood or by effort?',
+    'That\'s on Laura\'s calendar as privileged so I can only see the block, not the content. You want me to ask her directly?'
+  ];
+  return replies[Math.floor(Math.random() * replies.length)];
+}
+
+/* ============================================================================
+   BOOT
+   ============================================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  renderCarousel();
+  renderCompressed();
+  renderInbox();
+  renderCRM();
+  renderTriage();
+  renderFinance();
+  renderCalendar();
+  renderScoreboard();
+  bindSettings();
+});
+</script>
+
+</body>
+</html>
