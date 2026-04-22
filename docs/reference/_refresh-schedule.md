@@ -5,7 +5,7 @@ External APIs and frameworks evolve; this mirror ages. Cadence per section:
 | Section | Cadence | Source | Last refreshed |
 |---------|---------|--------|----------------|
 | openclaw | Quarterly | `openclaw/openclaw` | 2026-04-22 |
-| plaid | Quarterly | `plaid/plaid-openapi` + `plaid/plaid-python` | 2026-04-22 |
+| plaid | Quarterly | `plaid/plaid-openapi` + `plaid/plaid-python` + plaid.com/docs (manual clip) | 2026-04-22 |
 | bluebubbles | Semi-annually | `BlueBubblesApp/bluebubbles-docs` | 2026-04-22 |
 | google-gmail | Semi-annually | `googleapis/google-api-nodejs-client` (`src/apis/gmail/v1.ts`) | 2026-04-22 |
 | google-calendar | Semi-annually | `googleapis/google-api-nodejs-client` (`src/apis/calendar/v3.ts`) | 2026-04-22 |
@@ -14,9 +14,9 @@ External APIs and frameworks evolve; this mirror ages. Cadence per section:
 | sqlite-vec | Quarterly | `asg017/sqlite-vec` | 2026-04-22 |
 | sqlcipher | Yearly | `sqlcipher/sqlcipher` | 2026-04-22 |
 | caldav | Every 3 years (stable protocol) | `python-caldav/caldav` | 2026-04-22 |
-| apple-eventkit | Yearly (manual clip) | developer.apple.com | never — gap |
+| apple-eventkit | Yearly (manual clip) | developer.apple.com | 2026-04-22 |
 | apple-shortcuts | Yearly (manual clip) | support.apple.com | never — gap |
-| tailscale | Semi-annually (allowlist or manual) | tailscale.com | never — gap |
+| tailscale | Semi-annually (allowlist or manual) | tailscale.com | 2026-04-22 |
 
 ## Rationale for cadence choices
 

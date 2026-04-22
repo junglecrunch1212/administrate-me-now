@@ -1,55 +1,36 @@
-# Apple EventKit documentation — GAP
+# Apple EventKit documentation
 
-**Status:** NOT MIRRORED. Apple does not publish documentation source publicly, and `developer.apple.com` is not on the sandbox egress allowlist.
+**Purpose in this build:** AdministrateMe's Apple Reminders bidirectional adapter (BUILD.md "APPLE REMINDERS BIDIRECTIONAL — DETAILED SPEC", prompt 11) uses EventKit to interact with the Reminders database on the Mac Mini. This mirror covers `EKEventStore`, `EKReminder`, authorization flow, create/update, fetch-by-predicate, and change notifications.
 
-**Purpose in this build:** AdministrateMe's Apple Reminders bidirectional adapter (BUILD.md "APPLE REMINDERS BIDIRECTIONAL — DETAILED SPEC", prompt 11) needs EventKit concepts to interact with the Reminders database on the Mac Mini: `EKEventStore`, `EKReminder`, access-permission prompts, list enumeration, and create/update flows. The underlying Phase B implementation uses a Swift or JXA helper; the Python layer calls it via subprocess.
+**Source:** https://developer.apple.com/documentation/eventkit/ (clipped manually via Claude-in-Chrome; see `docs/reference/_manifests/2026-04-22-cowork-clips.md`).
 
-**Priority:** HIGH (prompt 11 depends on knowing the exact EventKit entry points).
+**Fetched:** 2026-04-22
 
-## Resolution: manual Chrome clip by the operator
+**License:** Apple developer documentation — reference only; not for redistribution.
 
-Apple's EventKit docs are only available at `developer.apple.com` and require a browser with a real UA. The operator clips these pages manually into this directory:
+**Method:** Manual Chrome clip via Claude Cowork (Apple does not publish doc source publicly; developer.apple.com is not on the sandbox egress allowlist).
 
-| # | URL | Target file | Priority |
-|---|-----|-------------|----------|
-| 1 | https://developer.apple.com/documentation/eventkit | `overview.md` | HIGH |
-| 2 | https://developer.apple.com/documentation/eventkit/ekreminder | `ekreminder.md` | HIGH |
-| 3 | https://developer.apple.com/documentation/eventkit/ekeventstore | `ekeventstore.md` | HIGH |
-| 4 | https://developer.apple.com/documentation/eventkit/accessing-the-event-store | `access.md` | HIGH |
-| 5 | https://developer.apple.com/documentation/eventkit/creating-reminders-and-alarms | `create.md` | MEDIUM |
-| 6 | https://developer.apple.com/documentation/eventkit/fetching-events-and-reminders | `fetch.md` | MEDIUM |
-| 7 | https://developer.apple.com/documentation/eventkit/responding-to-calendar-database-changes | `changes.md` | MEDIUM |
+## Files mirrored
 
-### Manual clipping procedure
+- `overview.md` — EventKit framework overview with full Topics list (Essentials, Events and reminders, Calendars, Recurrence, Alarms, Common objects, Virtual conferences, Errors).
+- `ekeventstore.md` — `EKEventStore` class reference: declaration, overview, topics (authorization, events, reminders, calendars, sources, notifications, predicates), and relationships.
+- `ekreminder.md` — `EKReminder` class reference: declaration, overview, topics (priority, completion, due date, start date, alarms), and relationships (inherits from `EKCalendarItem`).
+- `access.md` — Accessing the event store: permission flow for full vs. write-only access, required `Info.plist` usage-description keys, transition from iOS 16 legacy behavior.
+- `create.md` — Creating events and reminders. (Apple renamed this article's slug from `creating-reminders-and-alarms` to `creating-events-and-reminders`; redirect noted in file frontmatter.)
+- `fetch.md` — Retrieving events and reminders. (Slug renamed from `fetching-events-and-reminders` to `retrieving-events-and-reminders`.)
+- `changes.md` — Updating with notifications. (Slug renamed from `responding-to-calendar-database-changes` to `updating-with-notifications`.)
 
-1. Open each URL in Chrome with your normal session.
-2. Copy the main article content (skip navigation, footer, "was this helpful?" widget).
-3. Save as `<target-file>.md` in this directory with this header:
+## How to use for build questions
 
-   ```
-   ---
-   **Source:** <URL>
+- "How do I request reminders access?" → `access.md` + `ekeventstore.md` authorization section.
+- "What fields does `EKReminder` expose?" → `ekreminder.md` Topics section.
+- "How do I observe changes made outside my app?" → `changes.md`.
+- "What's the difference between write-only and full access?" → `access.md`.
 
-   **Fetched:** <today's date>
+## Downstream impact (cleared gap)
 
-   **License:** Apple developer documentation (permitted for reference; not redistributed here verbatim for external audiences)
+Resolves the HIGH-priority gap previously documented in `../_gaps.md`. Prompt 11 (Apple Reminders bidirectional adapter) can now proceed with complete EventKit context.
 
-   **Method:** Manual clip in Chrome (Apple docs not published on GitHub)
-   ---
-   ```
+## Refresh
 
-4. Commit the clipped files:
-   ```bash
-   git add docs/reference/apple-eventkit/
-   git commit -m "docs: manual clip of Apple EventKit reference"
-   ```
-
-Estimated effort: ~15 minutes for all 7 pages.
-
-## Alternative (informational only)
-
-The open-source Python package `pyobjc-framework-EventKit` has docstrings that mirror the Apple headers, but those docstrings are machine-translated from the Swift headers and lose context. They can be consulted as a fallback but are not a substitute for the official pages.
-
-## Downstream impact
-
-Until this is resolved, prompt 11's Apple Reminders adapter skeleton can be written against the contract described in `ADMINISTRATEME_BUILD.md` "APPLE REMINDERS BIDIRECTIONAL — DETAILED SPEC", but the exact Swift/JXA helper implementation waits for this gap to be filled.
+Yearly cadence via manual clip. Apple renames pages occasionally; if a URL returns 404 during refresh, check the canonical location via search at developer.apple.com.
