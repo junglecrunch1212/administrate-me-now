@@ -328,13 +328,13 @@ Every file you write belongs to exactly one layer. Layer violations are build fa
 - **OpenClaw gateway** — runs as a daemon (`ai.openclaw.gateway`) on loopback port 18789. Hosts the agent loop, channels (iMessage via BlueBubbles, Telegram, Discord), skill runner, slash-command dispatcher, session manager, plugins, standing orders, cron jobs, hooks. Workspace at `~/Chief`. SOUL.md compiled from the active AdministrateMe persona pack. Skills installed from AdministrateMe skill packs via `openclaw skill install <path>` or ClawHub.
 
 **Language split for AdministrateMe's own code:**
-- **Python 3.12+** for L1-L4 and L5's Python surfaces (product APIs, CLI, bootstrap wizard, daemons): event log, projections, adapters, pipelines, skill handlers, scheduler, event bus, API servers, ingest webhooks. AdministrateMe skill handlers are Python modules that OpenClaw's skill runner invokes via its standard handler contract.
-- **Node 24+** for the L5 console shell: Express at :3330 serving compiled JSX profile views, proxying to Python product APIs (:3333, :3334, :3335, :3336). Implements the console patterns specified in **CONSOLE_PATTERNS.md** (Tailscale identity resolution, authMember/viewMember split, guardedWrite, SSE chat, RateLimiter, degraded-mode UX, carousel/compressed/child view modes, reward toast). The console's SSE chat endpoint proxies into OpenClaw's gateway so the chat UX is identical to iMessage/Telegram/Discord.
+- **Python 3.11+** for L1-L4 and L5's Python surfaces (product APIs, CLI, bootstrap wizard, daemons): event log, projections, adapters, pipelines, skill handlers, scheduler, event bus, API servers, ingest webhooks. AdministrateMe skill handlers are Python modules that OpenClaw's skill runner invokes via its standard handler contract.
+- **Node 22+** for the L5 console shell: Express at :3330 serving compiled JSX profile views, proxying to Python product APIs (:3333, :3334, :3335, :3336). Implements the console patterns specified in **CONSOLE_PATTERNS.md** (Tailscale identity resolution, authMember/viewMember split, guardedWrite, SSE chat, RateLimiter, degraded-mode UX, carousel/compressed/child view modes, reward toast). The console's SSE chat endpoint proxies into OpenClaw's gateway so the chat UX is identical to iMessage/Telegram/Discord.
 
 **Python core deps:**
 - `pydantic>=2.6` — all boundary models; open-enum sentinel pattern for extensibility
 - `sqlalchemy>=2.0` + `alembic` — migrations and ORM (read side; the event log uses raw SQL for append performance)
-- `sqlcipher3` / `pysqlcipher3` — encrypted SQLite
+- `sqlcipher3-binary` — encrypted SQLite (bundled wheel; no system headers required; drop-in replacement for `pysqlcipher3` with identical API)
 - `sqlite-vec` — vector search extension for SQLite
 - `fastapi>=0.110` + `uvicorn` — product APIs
 - `apscheduler>=3.10` — cron/interval triggers for pipelines
@@ -2170,7 +2170,7 @@ Surfaces in `adminme audit privileged-access` — the tenant can verify no cross
 
 The bootstrap wizard takes a fresh machine from zero to a running AdministrateMe instance. Nine sections, resumable, idempotent. DIAGRAMS.md §10 has the state machine; here are the section-by-section contents:
 
-**Section 1: Environment preflight.** macOS version, user, FileVault on, Tailscale auth, Node 24+, Python 3.12+, **OpenClaw gateway installed and reachable on :18789** (install via `https://docs.openclaw.ai/install` if missing — wizard offers to run the installer), **OpenClaw workspace created at `~/Chief`** (initialized if missing), Homebrew, git, gh, rclone, LibreOffice (for xlsx formula recalc), 1Password CLI. Exit with clear message on any failure. On OpenClaw missing: wizard offers to bootstrap OpenClaw first — if the tenant accepts, the installer runs and the wizard rechecks; if the tenant declines, wizard exits.
+**Section 1: Environment preflight.** macOS version, user, FileVault on, Tailscale auth, Node 22+, Python 3.11+, **OpenClaw gateway installed and reachable on :18789** (install via `https://docs.openclaw.ai/install` if missing — wizard offers to run the installer), **OpenClaw workspace created at `~/Chief`** (initialized if missing), Homebrew, git, gh, rclone, LibreOffice (for xlsx formula recalc), 1Password CLI. Exit with clear message on any failure. On OpenClaw missing: wizard offers to bootstrap OpenClaw first — if the tenant accepts, the installer runs and the wizard rechecks; if the tenant declines, wizard exits.
 
 **Section 2: Name your assistant.** Name + emoji + voice preset (warm_decisive / precise_formal / playful_casual / quiet_minimal / custom) + reward style (corny_disproportionate / minimal / formal / kid_warm) + color palette (4 presets + custom). Writes `config/persona.yaml`, compiles the `SOUL.md` for OpenClaw from the selected persona pack (writing to `~/Chief/.openclaw/soul.md` or OpenClaw's equivalent — verify path in the OpenClaw docs), and triggers an OpenClaw reload so the assistant identity is live immediately.
 

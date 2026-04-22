@@ -28,7 +28,7 @@ Each section is a complete example as it would ship, including:
 
 4. **Pack paths follow the convention in BUILD.md.** Each pack is a directory with a `pack.yaml` at the root, language-appropriate source files (`adapter.py`, `pipeline.py`, `skill.md` + `handler.py`, etc.), and a `tests/` subdirectory.
 
-5. **All code below runs on Python 3.12+** (the platform's runtime) except profile-pack view code, which is JSX compiled at install time to a bundle that the Node console serves.
+5. **All code below runs on Python 3.11+** (the platform's runtime) except profile-pack view code, which is JSX compiled at install time to a bundle that the Node console serves.
 
 ---
 
@@ -67,7 +67,7 @@ pack:
 
 runtime:
   language: python
-  python_version: ">=3.12"
+  python_version: ">=3.11"
   entrypoint: adapter.py
   class: BlueBubblesAdapter
 
@@ -603,7 +603,7 @@ pack:
 
 runtime:
   language: python
-  python_version: ">=3.12"
+  python_version: ">=3.11"
   entrypoint: pipeline.py
   class: CommitmentExtractionPipeline
 
@@ -1051,7 +1051,7 @@ pack:
 
 runtime:
   language: python
-  python_version: ">=3.12"
+  python_version: ">=3.11"
   entrypoint: handler.py
   class: ClassifyThankYouCandidate
 

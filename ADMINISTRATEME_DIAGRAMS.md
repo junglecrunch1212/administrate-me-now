@@ -930,7 +930,7 @@ Every row in the log carries `correlation_id = c_m1_abc123`. One grep, full audi
      │                                                    │
      │   §1  Environment preflight                        │
      │       macOS version, user, FileVault,              │
-     │       Tailscale, Node 24+, Python 3.12+,           │
+     │       Tailscale, Node 22+, Python 3.11+,           │
      │       Homebrew, git, gh, rclone, LibreOffice,      │
      │       1Password CLI                                │
      │                                                    │
