@@ -128,15 +128,69 @@ Per BUILD.md §AUTHORITY, OBSERVATION, GOVERNANCE and the twelve patterns in CON
 
 ## 7. Packs
 
-(pending)
+Per BUILD.md §PROFILE PACKS / §PERSONA PACKS / §PACK REGISTRY, REFERENCE_EXAMPLES.md appendix, and DIAGRAMS.md §8. Packs are the only extension point for AdministrateMe; every customization (household-specific view, new adapter, new pipeline, new reward style) ships as a pack.
+
+**Six kinds** (one line each):
+- **adapter** — L1 translator from an external source to typed events (e.g. `plaid-transactions`, `gmail-api`, `apple-reminders`). Python; no JSX compile.
+- **pipeline** — L4 event subscriber that emits derived events / proposals / skill calls (e.g. `commitment_extraction`, `crm_surface`). Python; no JSX compile.
+- **skill** — L4 SKILL.md + schemas + optional `handler.py`. OpenClaw-format frontmatter + AdministrateMe input/output JSON schemas (per BUILD.md §L4-continued). Installed into OpenClaw via the skill-loader path or ClawHub.
+- **projection** — L3 pure-function handler + schema.sql. Plugin-namespaced table families.
+- **profile** — L5 bundle of JSX views + engines (rewards, paralysis, digest, whatnow, filters, surfaces) + tuning + prompts (`system_additions.md`, `voice_notes.md`) assigned per member. 5 built-in: `adhd_executive`, `minimalist_parent`, `power_user`, `kid_scoreboard`, `ambient_entity`.
+- **persona** — Agent identity (one per instance). `voice.md` + `reward_templates.yaml` + `paralysis_templates.yaml` + `digest_templates.yaml` + `signature.yaml` + `theme.css` + `boundaries.md`. Activation compiles these into `compiled/SOUL.md` which OpenClaw loads. 4 built-in: `poopsy`, `butler_classic`, `friendly_robot`, `quiet_assistant`. Persona changes recompile SOUL.md and restart OpenClaw.
+
+**Install lifecycle** (per DIAGRAMS.md §8 — 7 stages):
+
+1. **Validate manifest** — `pack.yaml` parses; required fields (`id`, `kind`, `version`, `min_platform`, `description`) present; `kind ∈ {adapter, pipeline, skill, projection, profile, persona}`; `id` unique.
+2. **Platform compat check** — `min_platform ≤ current`.
+3. **Resolve dependencies** — pipelines: all named skills installed + named projections exist; profiles: `skill_overrides` refer to installed skills; personas: theme tokens parseable.
+4. **Compile (if needed)** — profile packs: `esbuild` on `views/*.jsx` → `compiled/<view>.ssr.js` + `compiled/<view>.client.js` + CSS extract at **install time** (no runtime build server). Adapters/pipelines/skills/projections: no compile; Python runs direct.
+5. **Stage in fixture instance** — `tmpdir` clone of instance; install pack into tmpdir; run `tests/` against it. Any test failure rolls back with no log entry and exit non-zero.
+6. **Commit into live instance** — copy pack to `~/.adminme/packs/<kind>/<id>/`; INSERT into `installed_packs`; register event subscriptions (pipelines subscribe now); profile becomes assignable; persona becomes activatable; skill becomes callable.
+7. **Emit `pack.installed`** — atomic commit in the event log; payload includes `pack_id`, `version`, `installed_by`, `install_duration_ms`.
+
+Uninstall reverses 6→5→4 with safety checks: profile fails if assigned to any member (force flag emits `pack.force_uninstalled`); persona fails if active; skill fails if any pipeline depends on it; pipelines/adapters deactivate subscriptions before removal. Per REFERENCE_EXAMPLES.md appendix, every pack has `tests/fixtures/` so its contract can be exercised in isolation.
+
+**Registry** (v1, per BUILD.md §PACK REGISTRY). A public GitHub repo (e.g. `github.com/adminme/registry`) holding `packs.yaml` as the master index plus per-kind subdirectories of metadata pointing to git URLs or tarballs. Registry is index-only; packs live decentralized. CLI: `adminme pack {list|search|info|install|update|remove|publish}`.
+
+---
 
 ## 8. The console
 
-(pending)
+Per BUILD.md §L5 and the 12 patterns in CONSOLE_PATTERNS.md. The console lives at `adminme/console/` as a single **Node Express server on port `:3330`**, serving `shell.html` + compiled profile views, proxying to the four Python product APIs. Tailscale terminates TLS at the edge; primary auth is the `Tailscale-User-Login` header (per CONSOLE_PATTERNS.md §1). There is no login page — on the tailnet = authenticated. Dev-mode `X-ADMINME-Member` header is gated by `ADMINME_ENV=dev` AND loopback `remoteAddr` — both required. The console **never reads the event log directly** and never writes the projection SQLite directly; writes proxy to Python. Reads from projection SQLite are permitted via `better-sqlite3` opened readonly as a performance optimization only.
+
+**The 12 patterns** (per CONSOLE_PATTERNS.md pattern index; cite §N):
+
+1. **Tailscale identity resolution** (§1) — trust the header, resolve to `member_id` via the `party_tailscale_binding` projection.
+2. **Session model / authMember+viewMember** (§2) — built by `console/lib/session.js`; read data uses viewMember, writes use authMember, only principals can set view-as, ambient members have no surface.
+3. **guardedWrite three-layer** (§3) — `console/lib/guarded_write.js`; allowlist → governance → rate limit, in order; 403 / 202 held_for_review / 429; see §6 above.
+4. **RateLimiter sliding window** (§4) — `web_chat` (20/60s), `writes_per_minute` (60/60s), plus per-endpoint windows; 429 responses include `retry_after`.
+5. **SSE chat handler** (§5) — `/api/chat/stream` proxies to OpenClaw `:18789`; session id `sess-${Date.now()}`; AbortController propagates cancellation upstream.
+6. **Calendar privacy filter** (§6) — `console/lib/privacy_filter.js`; read-time allowlist-shaped redaction; child-tag filter on top; see §6 above.
+7. **HIDDEN_FOR_CHILD nav** (§7) — `console/lib/nav.js`; client-side nav filter + server-side `CHILD_BLOCKED_API_PREFIXES` middleware; see §6 above.
+8. **Reward toast dual-path** (§8) — completion endpoint returns `{reward_preview: {tier, message, sub}}` for immediate local toast; canonical `reward.ready` event fans out via SSE for cross-tab consistency.
+9. **Degraded-mode fallback** (§9) — two-TTL cache (fresh 60s, degraded 5min); `degraded-banner` + write queueing when backend unreachable.
+10. **HTTP bridge to Python APIs** (§10) — canonical `BridgeError` shape, automatic tenant header injection, correlation-ID propagation through every hop.
+11. **Observation mode enforcement** (§11) — final-outbound-filter pattern; `console/lib/observation.js` `outbound(ctx, actionFn)`; see §6 above.
+12. **Error handling + correlation IDs** (§12) — allowlist-only error codes in client responses, full context in logs.
+
+**Eight nav surfaces** (per CONSOLE_PATTERNS.md §7 `NAV_ITEMS`): `today`, `inbox`, `crm`, `capture`, `finance`, `calendar`, `scoreboard`, `settings`. Child role sees only `today` and `scoreboard`.
+
+**Three view modes** referenced by profile packs (per CONSOLE_PATTERNS.md §2 cross-references + BUILD.md §L5): `carousel` (ADHD profile — one task at a time, large dots, reward toast), `compressed` (minimalist_parent — decision queue, no animations), `child` (kid_scoreboard — HIDDEN_FOR_CHILD nav). **Flag in §11:** CONSOLE_PATTERNS.md names these modes but does not define them as a dedicated contract section — the definitions live across profile-pack view JSX (REFERENCE_EXAMPLES.md §6) and the rendered HTML in CONSOLE_REFERENCE.html.
+
+---
 
 ## 9. Python product APIs
 
-(pending)
+Per BUILD.md §L5-continued. Four FastAPI services, **each on its own loopback port**; only the Node console is tailnet-facing. The split is about code organization and deployment cadence, not data ownership — all four services share the event log and projections. Each product owns its own routers, skill usage, slash commands, and scheduled jobs. Proactive scheduled jobs register as **OpenClaw standing orders** at product boot so they share OpenClaw's approval, observation-mode, and rate-limit machinery; APScheduler inside each product is used only for internal non-user-facing schedules (cache refreshes, projection compaction, log rotation).
+
+- **Core — `:3333` — Chief of Staff.** Owns tasks, commitments, recurrences, scoreboard, what-now, rewards, paralysis, digests, custody brief, calendar playbook, emergency protocols. Routers: `/api/core/{tasks,commitments,recurrences,whatnow,digest,scoreboard,energy,today-stream,observation-mode,emergency}`. Slash commands: `/whatnow`, `/digest`, `/bill`, `/remind`, `/done`, `/skip`, `/standing`, `/observation`. Proactive jobs as OpenClaw standing orders: `morning_digest`, `paralysis_detection` (15:00 + 17:00 per ADHD member), `reminder_dispatch` (every 15 min), `weekly_review` (Sun 16:00), `velocity_celebration`, `overdue_nudge`, `custody_brief` (20:00), `scoreboard_rollover` (midnight).
+- **Comms — `:3334` — Unified Communications.** Owns inbox aggregation, propose/commit outbound, approval queue, per-member-per-channel access, batch windows. Routers: `/api/comms/{inbox,draft-queue,approve,send,channels,health,interactions/:party_id}`. Slash commands: `/inbox`, `/approve`, `/send`, `/snooze`, `/comms health`. **No scheduled jobs** — all work is event-driven; adapters poll on their own schedules and emit events; pipelines react.
+- **Capture — `:3335` — Working Memory + CRM Surfaces.** Owns quick-capture (natural-language prefix routing: `grocery:`, `call:`, `idea:`, `recipe:`), voice-note ingest, triage queue, recipes, CRM Parties/Places/Assets/Accounts views, semantic + structured search over Interactions/Artifacts/Parties. Routers: `/api/capture/{capture,voice,triage,recipes,parties,parties/:id,places,assets,accounts,search}`. Slash commands: `/capture`, `/triage`, `/recipe`, `/party`, `/birthdays`, `/thank`, `/hosted`. Proactive jobs: `relationship_summarization` (nightly 02:00), `closeness_scoring` (weekly Sun 04:00), `crm_surface` (daily 09:00 + on-demand), `graph_miner` (nightly 03:00 on `adminme-vault` if present), `recurrence_extraction` (daily 04:00).
+- **Automation — `:3336` — Ambient Signal Layer.** Owns Plaid integration surfaces, financial projections + dashboards, budget enforcement, subscription audit, Home Assistant bridge, Privacy.com monitoring. Routers: `/api/automation/{plaid/institutions,plaid/sync,plaid/go-live,money-flows,budget,balance-sheet,pro-forma,subscriptions,household-status,ha/*}`. Slash commands: `/budget`, `/worth`, `/forecast`, `/txn`, `/subs`, `/plaid`. Proactive jobs: Plaid transactions sync every 4h (live) or daily (observation); Plaid balance sync every 1h; Plaid investments+liabilities weekly Sun 05:00; uncategorized categorization nightly 04:30; subscription audit monthly 1st; budget pace check Mon/Thu 10:00; balance sheet rollup nightly 06:00.
+
+All four products share the **HTTP bridge pattern** (per CONSOLE_PATTERNS.md §10): tenant header injection, correlation-ID propagation on every hop, canonical `BridgeError` shape. The CRM (Parties + Identifiers + Memberships + Relationships + Interactions + Commitments + Artifacts) is spec'd as the **spine** of the entire system (per BUILD.md §THE CRM IS THE SPINE); it lives in the Capture product's surfaces but its data model is the platform's data model.
+
+---
 
 ## 10. Bootstrap wizard
 
