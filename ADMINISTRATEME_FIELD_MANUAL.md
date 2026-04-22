@@ -188,7 +188,7 @@ Then open `prompts/00-preflight.md`. That's the first prompt.
 
 In Claude Code, paste the preamble, press Enter (or add a blank line), paste prompt 00. Claude Code will:
 - Verify it has repo access.
-- Check its sandbox has the tools it needs (Python 3.12+, Node 24+, git, gh).
+- Check its sandbox has the tools it needs (Python 3.11+, Node 22+, git, gh).
 - Produce `docs/preflight-report.md`.
 - Commit to a branch and push.
 
@@ -231,7 +231,7 @@ Open Terminal. Paste each block, press Enter, wait.
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Core tooling
-brew install node@24 python@3.12 git gh 1password-cli
+brew install node@22 python@3.11 git gh 1password-cli
 
 # OpenClaw gateway
 brew install openclaw    # or follow docs/reference/openclaw/install/installer.md if not yet on Homebrew

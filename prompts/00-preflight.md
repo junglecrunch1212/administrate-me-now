@@ -31,7 +31,7 @@ Your job in **this** prompt is only to verify your own sandbox environment and t
 ## Objective
 
 Produce `docs/preflight-report.md` that verifies:
-1. Your sandbox has the tools needed to build AdministrateMe (Python 3.12+, Node 24+, Poetry, npm, git, gh).
+1. Your sandbox has the tools needed to build AdministrateMe (Python 3.11+, Node 22+, Poetry, npm, git, gh).
 2. The repo is accessible, the five artifact files are present, and there is no uncommitted drift that would confuse later prompts.
 
 The report either confirms all green (ready for prompt 00.5) or lists specific issues with clear remediation notes for the operator.
@@ -59,13 +59,12 @@ Environment: Claude Code sandbox (not Mac Mini)
 
 | Requirement | Version check | Result | Pass? |
 |-------------|--------------|--------|-------|
-| Python 3.12+ | `python3 --version` | ... | ✓/✗ |
-| Node 24+ | `node --version` | ... | ✓/✗ |
+| Python 3.11+ | `python3 --version` | ... | ✓/✗ |
+| Node 22+ | `node --version` | ... | ✓/✗ |
 | Poetry | `poetry --version` | ... | ✓/✗ |
 | npm | `npm --version` | ... | ✓/✗ |
 | git | `git --version` | ... | ✓/✗ |
 | gh (GitHub CLI) | `gh --version` | ... | ✓/✗ |
-| SQLCipher headers | `pkg-config --exists sqlcipher && echo ok` (Linux) or `brew list --versions sqlcipher` (macOS) | ... | ✓/✗ |
 
 ## Repository
 
@@ -116,7 +115,7 @@ For each ✗ above:
 - What is missing/wrong
 - How to fix (note whether Claude Code can do it or operator must)
 
-Special note for SQLCipher headers: `pysqlcipher3` (required by prompt 03) fails to build without the system SQLCipher development headers. If the check fails, the operator should install them before proceeding to prompt 02 — `apt install libsqlcipher-dev` (Debian/Ubuntu), `brew install sqlcipher` (macOS), or the equivalent for the sandbox distribution. Claude Code cannot install system packages itself in the sandbox.
+Note on encrypted SQLite: AdministrateMe uses `sqlcipher3-binary` (a pypi wheel that bundles SQLCipher). No system headers are required; the wheel installs cleanly via `poetry install` in any standard Python 3.11+ environment. This is a deliberate choice to keep the sandbox/CI/developer-laptop environment consistent without requiring `libsqlcipher-dev` or `brew install sqlcipher`.
 ```
 
 ## Verification

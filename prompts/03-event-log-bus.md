@@ -127,7 +127,7 @@ class EventLog:
 
 **Implementation notes:**
 
-- Use `aiosqlite` with SQLCipher via `pysqlcipher3`. If async SQLCipher is hard in pure Python, you may wrap sync SQLCipher calls in `asyncio.to_thread()` — call that decision out in a module comment.
+- Use `aiosqlite` with SQLCipher via `sqlcipher3-binary` (import as `sqlcipher3`). If async SQLCipher is hard in pure Python, you may wrap sync SQLCipher calls in `asyncio.to_thread()` — call that decision out in a module comment.
 - Event ID generation: `ev_` prefix + 14-char ULID-like time-sortable suffix. Deterministic: two events inserted in the same millisecond get different IDs (use a monotonic counter within a millisecond).
 - Encryption key: the `EventLog.__init__` receives raw bytes. A separate helper `adminme/lib/crypto.py::derive_event_log_key(op_ref: str) -> bytes` reads from 1Password. Stub that helper if 1Password CLI isn't wired up yet.
 - Migrations: table `_schema_version` tracks which migration has run. On init, run any pending. Each migration is a SQL file in `adminme/events/migrations/0001_initial.sql`, `0002_add_correlation_index.sql`, etc.

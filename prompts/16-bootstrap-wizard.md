@@ -45,7 +45,7 @@ Build the full bootstrap wizard as a Textual TUI, with all nine sections, resuma
 ### `bootstrap/install.sh`
 
 Thin shell wrapper that:
-1. Verifies Python 3.12+, Poetry, OpenClaw reachability.
+1. Verifies Python 3.11+, Poetry, OpenClaw reachability.
 2. Activates the virtualenv.
 3. Exports `ADMINME_INSTANCE_DIR` (default `~/.adminme`; `~/adminme-lab-data` in lab mode).
 4. Invokes `poetry run python -m bootstrap.wizard $@` with any flags passed through.

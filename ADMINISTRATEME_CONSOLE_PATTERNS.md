@@ -17,7 +17,7 @@ Each section is a self-contained pattern. Format:
 6. **Testing notes** — what your tests must cover.
 
 All code uses:
-- Node.js 24 LTS
+- Node.js 22 LTS
 - Express 4.x
 - Native `fetch` (Node 20+)
 - No TypeScript (the console is plain JS; TS lives in the `adminme/` Python side, where type discipline matters more)
