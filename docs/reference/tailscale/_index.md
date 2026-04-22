@@ -1,36 +1,35 @@
-# Tailscale documentation — PARTIAL GAP
+# Tailscale documentation
 
-**Status:** NOT MIRRORED. Tailscale does not publish KB docs source on GitHub, and `tailscale.com` is not on the sandbox egress allowlist.
+**Purpose in this build:** Tailscale is the tailnet connecting the Mac Mini, optional Vault VPS, and family devices. The Node console (L5) uses Tailscale identity headers for authentication (CONSOLE_PATTERNS.md §2). Tailscale Serve exposes the console on the tailnet; Funnel exposes Plaid webhook endpoints publicly.
 
-**Purpose in this build:** Tailscale is the tailnet that connects the Mac Mini, the optional Vault VPS, and family devices. The Node console (L5) uses Tailscale identity headers (`Tailscale-User-Login`, etc.) for authentication — CONSOLE_PATTERNS.md §2 documents the identity-resolution contract in detail and is authoritative for the build. Tailscale Serve / Funnel / webhooks are referenced during Phase B bootstrap for exposing the console to family members' devices and the Mac Mini's LAN.
+**Source:** https://tailscale.com/docs/features/ (the `/kb/` URLs referenced in the original gap doc have all redirected into `/docs/features/`).
 
-**Priority:** LOW to MEDIUM.
-- Identity-header contract: already documented in-repo at `ADMINISTRATEME_CONSOLE_PATTERNS.md` §2. Build is not blocked.
-- Serve / Funnel / TLS setup: referenced in Phase B bootstrap (prompt 16). Operator can cross-reference live docs at clip-time; Phase A prompts don't need the narrative.
+**Fetched:** 2026-04-22
 
-## Resolution options (either, or skip)
+**License:** Tailscale documentation — reference only; not for redistribution.
 
-### Option A — widen sandbox allowlist (preferred if available)
+**Method:** Manual Chrome clip via Claude Cowork (tailscale.com is not on the sandbox egress allowlist).
 
-If the operator has control of the sandbox allowlist (local Claude Code with editable `~/.claude/settings.json`, or hosted with permissions negotiable), adding `tailscale.com` lets Claude Code re-fetch the six KB pages below in a future 00.5 refresh. The content is static and the KB serves well-behaved HTML.
+## Files mirrored
 
-### Option B — manual clip
+- `serve.md` — Tailscale Serve: proxy local traffic to tailnet devices with HTTPS certs and identity headers.
+- `funnel.md` — Tailscale Funnel: expose a local service publicly via Funnel relay servers (TCP + TLS).
+- `acls.md` — Tailnet policy file: HuJSON sections (`acls`, `grants`, `groups`, `hosts`, `ipsets`, `tagOwners`, `autoApprovers`, `nodeAttr`, `postures`, `ssh`, `sshTests`, `tests`) plus network options.
+- `exit-nodes.md` — Exit nodes: route all internet traffic through a device, advertisement/approval, destination logging, expired-key fail-close behavior.
+- `webhooks.md` — Webhooks: setup, events table, payload schema, retry policy, HMAC-SHA256 `Tailscale-Webhook-Signature` verification.
+- `identity-headers.md` — Identity headers: `Tailscale-User-Login`, `Tailscale-User-Name`, `Tailscale-User-Profile-Pic`, `Tailscale-App-Capabilities`. (The standalone KB article has been retired; content now lives as a section inside the Serve page. Section clip with redirect note in frontmatter.)
 
-| URL | Target file | Priority |
-|-----|-------------|----------|
-| https://tailscale.com/kb/1086/identity-headers | `identity-headers.md` | MEDIUM (confirms CONSOLE_PATTERNS.md §2) |
-| https://tailscale.com/kb/1242/tailscale-serve | `serve.md` | MEDIUM (bootstrap wizard Section 7) |
-| https://tailscale.com/kb/1223/funnel | `funnel.md` | LOW |
-| https://tailscale.com/kb/1336/tailnet-policy-file | `acls.md` | LOW |
-| https://tailscale.com/kb/1103/exit-nodes | `exit-nodes.md` | LOW |
-| https://tailscale.com/kb/1185/webhooks | `webhooks.md` | LOW |
+## How to use for build questions
 
-Use the same manual clipping procedure described in `../apple-eventkit/_index.md`.
+- "What headers does Tailscale Serve inject?" → `identity-headers.md` (CONSOLE_PATTERNS.md §2 contract derives from this).
+- "How do I expose the Plaid webhook endpoint publicly?" → `funnel.md`.
+- "How do I restrict tailnet access to specific family devices?" → `acls.md`.
+- "How do webhook signatures work?" → `webhooks.md`.
 
-## Option C — skip entirely
+## Downstream impact (cleared gap)
 
-Phase A does not strictly require any Tailscale documentation beyond what's already in `ADMINISTRATEME_CONSOLE_PATTERNS.md`. Phase B bootstrap (prompt 16) can surface specific Tailscale CLI commands as needed; operator reads live docs at install time.
+Resolves the LOW-MEDIUM-priority gap previously documented in `../_gaps.md`. CONSOLE_PATTERNS.md §2 remains authoritative for the Phase A identity-resolution contract; this mirror is the source that CONSOLE_PATTERNS.md §2 was written against.
 
-## Downstream impact
+## Refresh
 
-None for Phase A code. Prompt 16 (bootstrap wizard) mentions Tailscale commands the operator will run; those commands can be referenced from upstream docs at operator install time.
+Semi-annual cadence via manual clip. Tailscale migrated from `/kb/<id>/` URLs to `/docs/features/` between 2024–2026; if URLs change again, update the canonical paths.

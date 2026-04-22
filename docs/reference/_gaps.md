@@ -31,7 +31,11 @@ Apple does not publish documentation source anywhere public. No combination of
 allowlist changes will help — only a real browser session reaches these pages
 reliably. The operator must clip manually.
 
-### apple-eventkit — HIGH priority
+### ~~apple-eventkit~~ — RESOLVED
+
+**FILLED 2026-04-22** via Cowork Chrome clip — see `apple-eventkit/` section. All 7 pages present. Three Apple slug renames noted in file frontmatter.
+
+~~Original gap:~~
 
 Prompt 11 (Apple Reminders bidirectional adapter) depends on these. Clip before
 running prompt 11, or the adapter implementation will be under-specified.
@@ -87,7 +91,11 @@ Optional: use a Chrome extension like "Markdown Web Clipper" for cleaner output.
 
 ---
 
-## Plaid narrative gaps — LOW priority
+## ~~Plaid narrative gaps~~ — RESOLVED
+
+**FILLED 2026-04-22** via Cowork Chrome clip — see `plaid/link-update-mode.md`, `plaid/errors-taxonomy.md`, `plaid/institutions-api.md`. Plaid section now fully mirrored.
+
+~~Original gap:~~
 
 The Plaid OpenAPI spec (`docs/reference/plaid/openapi.yaml`) covers every
 endpoint, request/response shape, product coverage, error code, and webhook
@@ -106,7 +114,11 @@ the OpenAPI spec for every specific.
 
 ---
 
-## Tailscale — LOW-MEDIUM priority
+## ~~Tailscale~~ — RESOLVED
+
+**FILLED 2026-04-22** via Cowork Chrome clip — see `tailscale/` section. All 6 pages present. Note: Tailscale migrated from `/kb/<id>/<slug>` URLs to `/docs/features/<slug>`; mirror reflects the new canonical paths.
+
+~~Original gap:~~
 
 See `tailscale/_index.md` for the six specific KB pages. The most relevant one
 (identity headers) has its contract duplicated into `ADMINISTRATEME_CONSOLE_PATTERNS.md`
