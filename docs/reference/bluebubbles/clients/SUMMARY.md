@@ -1,0 +1,32 @@
+---
+**Source:** https://github.com/BlueBubblesApp/bluebubbles-docs/blob/main/clients/SUMMARY.md
+
+**Fetched:** 2026-04-22
+
+**License:** Apache-2.0 (see licenses-legal.md in-repo)
+
+**Note:** Verbatim mirror for AdministrateMe docs/reference/ (prompt 00.5). Do not edit here.
+---
+
+# Table of contents
+
+* [Intro and Background](README.md)
+* [Build Yourself / Contribution Guide](build-yourself-contribution-guide.md)
+* [Desktop App Installation](desktop-app-installation.md)
+* [FAQ](https://bluebubbles.app/faq)
+* [Private API Setup](https://docs.bluebubbles.app/helper-bundle/installation)
+* [Supporting the Project](supporting-the-project.md)
+* [Licenses / Legal](licenses-legal.md)
+
+## Usage Guides
+
+* [Using BlueBubbles with Adguard](usage-guides/using-bluebubbles-with-adguard.md)
+* [Tasker Integration](usage-guides/tasker-integration.md)
+* [Automatic Updates for GitHub Android Releases](usage-guides/automatic-updates-for-github-android-releases.md)
+* [Using Unified Push for Notifications](usage-guides/using-unified-push-for-notifications.md)
+
+## For Developers <a href="#dev" id="dev"></a>
+
+* [Flutter](dev/flutter/README.md)
+  * [Image Insertion](dev/flutter/image-insertion.md)
+  * [ObjectBox](dev/flutter/objectbox.md)
