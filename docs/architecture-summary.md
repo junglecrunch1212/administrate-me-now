@@ -57,15 +57,74 @@ Per DIAGRAMS.md §2, one inbound iMessage flows through adapter → bus → extr
 
 ## 4. The 11 projections
 
-(pending)
+Per BUILD.md §L3 (§3.1–§3.11), each projection is a deterministic pure function from event subsets to a set of tables (or files). Each has a name, a version (bumped to trigger rebuild), a subscription list, a cursor, an idempotent `apply(event)`, and a `rebuild()` that truncates and replays from event 0. CLI: `adminme projections list|rebuild|lag`.
+
+| # | Name | Subscribes to | Key tables/files | Notable properties |
+|---|---|---|---|---|
+| 3.1 | `parties` | `contacts.*`, `messaging.received/sent`, `telephony.*`, `identity.*`, `party.created`, `relationship.added` | `parties`, `identifiers`, `memberships`, `relationships` | CRM core. `identifiers.value_normalized` is canonicalized (E.164 phones, lowercased emails) for exact-match merge. |
+| 3.2 | `interactions` | `messaging.*`, `telephony.*`, `calendar.event.concluded` | `interactions`, `interaction_participants`, `interaction_attachments` | Deduplicated touchpoints; aggregates multiple raw events per row (`raw_event_ids` JSON). Subject/summary lazy-LLM-extracted. |
+| 3.3 | `artifacts` | `documents.*`, adapter artifact events | `artifacts`, `artifact_links` (polymorphic) | OCR/text extraction; typed structured extraction per kind (invoice, contract, medical_record, school_form, prescription). |
+| 3.4 | `commitments` | `commitment.*` | `commitments` | Tracks propose→confirm→complete with full provenance (`source_interaction_id`, `source_skill@version`, `confirmed_by`, timestamps for proposed/confirmed/completed). Per BUILD.md §3.4. |
+| 3.5 | `tasks` | `task.*`, `reminder.*` | `tasks` | AdministrateMe-specific (not in Hearth). Household work vs. obligation-to-outside-party; ADHD neuroprosthetic (rewards, paralysis, whatnow) operates over Tasks + Commitments unified in the inbox. Rich fields: energy, effort, micro_script, waiting_on, goal_ref, life_event. |
+| 3.6 | `recurrences` | `recurrence.*` | `recurrences` | RFC 5545 RRULE strings, `next_occurrence`, `lead_time_days`, `trackable` flag (feeds scoreboard). |
+| 3.7 | `calendars` | `calendar.*` | `calendar_events`, `availability_blocks` | Privacy filter applied at read time (see §6); `privacy` field may be `open`/`privileged`/`redacted`. `availability_blocks` stores busy-free-only source calendars. |
+| 3.8 | `places_assets_accounts` | `place.*`, `asset.*`, `account.*`, association events | `places`, `place_associations`, `assets`, `asset_owners`, `accounts` | Three linked entity families in one projection. `accounts.login_vault_ref` is an `op://` / `1password://` pointer — never a raw credential. |
+| 3.9 | `money` | `financial.*`, `plaid.*`, `money_flow.*`, `assumption.*` | `money_flows` | Amounts stored as `amount_minor` (smallest currency unit) + ISO 4217 currency. Links to artifact, account, interaction. |
+| 3.10 | `vector_search` | `interactions.*`, `artifacts.*`, `parties.*` (non-privileged only) | `vector_index` virtual table via `sqlite-vec` | **Excludes privileged content** — `sensitivity='privileged'` is never embedded; privileged rows cannot enter cross-party semantic search. |
+| 3.11 | `xlsx_workbooks` | all forward-trigger event families (tasks, recurrences, commitments, parties, list_items, money_flows, accounts, assumptions, plaid.sync, etc.) | `~/.adminme/projections/adminme-ops.xlsx`, `adminme-finance.xlsx` + sidecar `.xlsx-state/<workbook>/<sheet>.json` | **Bidirectional.** Forward daemon (`xlsx_sync/forward.py`) debounces 5s on event bursts and regenerates; reverse daemon (`xlsx_sync/reverse.py`) watches via `watchdog` and emits events on human edits. Derived cells silently ignored on reverse (UX not security). Lock contention resolved by skipping the reverse cycle. Computed values, not Excel formulas, for reproducibility + audit + round-trip safety. |
+
+Per BUILD.md §L3-continued, there is no global DB connection — all reads/writes go through `Session(current_user, requested_scopes)` which auto-adds scope predicates. Privileged events never enter `vector_search`, are never summarized by LLM skills, never appear in cross-owner projections, and never appear in coach or `-kids` agent sessions. Sensitivity floor is enforced at the adapter level.
+
+---
 
 ## 5. Pipelines
 
-(pending)
+Per BUILD.md §L4, pipelines subscribe to events and produce derived events, proposals, or skill calls. Pipelines never write projections directly — they emit events, and projections consume those. Each pipeline lives in `adminme/pipelines/<namespace>/<name>/` with a `pipeline.yaml` manifest, `handler.py`, and `tests/`; plugin pipelines register via the `adminme.pipelines` entry point. Independently enable-able via `config/pipelines.yaml`.
+
+Two trigger mechanisms, chosen per pipeline (per BUILD.md §L4):
+
+- **Reactive, event-subscription pipelines** run inside the AdministrateMe pipeline runner — pure AdministrateMe-layer code that subscribes via `triggers.events` in the manifest. Skills (when needed) go through the skill runner wrapper described below.
+- **Proactive, scheduled pipelines** are registered as **OpenClaw standing orders** at product boot. OpenClaw handles the scheduling primitive, approval gating via `exec-approvals`, and channel delivery — giving proactive behaviors the same session/rate-limit/observation-mode context as an interactive chat turn. See §11 for the open question about exactly how this registration is done.
+
+**Reactive pipelines** (one line each):
+- `identity_resolution` — on new identifiers, exact-match or Levenshtein-similarity merge suggestions (never auto-merge above threshold; always human-confirmed).
+- `noise_filtering` — classify inbound messages as noise/transactional/personal/professional/promotional via `classify_message_nature@v2`.
+- `commitment_extraction` — scan interactions for implied obligations; output `CommitmentProposed` events for human approval.
+- `thank_you_detection` — specialization of commitment extraction for gratitude; owner-scoped thank-you commitments.
+- `recurrence_extraction` — birthdays from contacts, anniversaries from notes, renewals from parsed docs, service intervals from manuals — all as `recurrence.proposed`.
+- `artifact_classification` — OCR → classify → typed structured extraction per kind (invoice, contract, medical_record, school_form, etc.).
+- `relationship_summarization` — nightly 3-sentence Party summaries over a rolling 90-day window; writes to `Party.attributes`.
+- `closeness_scoring` — nightly Party tier (1–5) from interaction frequency, mutuality, explicit labels, time-since-last-contact.
+- `reminder_dispatch` — every 15 min; queries commitments/recurrences/tasks due within lead time; emits `reminder.surfaceable` (observation-mode aware).
+
+**Proactive pipelines** (registered as OpenClaw standing orders; one line each):
+- `morning_digest` — per-member at ~06:30 local; validation-guarded (any fabricated id zeroes the message with a sentinel).
+- `reward_dispatch` — on `task.completed`/`commitment.completed`; reads profile reward mode (variable_ratio / event_based / child_warmth); picks persona template; emits `adminme.reward.dispatched`.
+- `paralysis_detection` — per ADHD-profile member at 15:00 and 17:00 local; deterministic (never invokes LLM); uses persona `paralysis_templates.yaml`.
+- `whatnow_ranking` — on-demand via `/whatnow`; pure deterministic scoring over tasks + commitments (energy, effort, location, urgency, endowed-progress); per-profile K (carousel=1, compressed=5, power=10).
+- `scoreboard_projection` — maintains streaks, completion rates, grace tokens per member; feeds wall displays + kid scoreboard.
+- `custody_brief` — 20:00 local daily if a coparent Relationship exists; compose via `compose_custody_brief@v1`.
+- `crm_surface` — weekly + on-demand; emits `crm.gap_detected`, `crm.birthday_upcoming`, `crm.hosting_imbalance`.
+- `graph_miner` — nightly 03:00 on `adminme-vault` if present else on hub; proposes parties, interactions, commitments, money flows from captures — all proposals, never auto-committed.
+
+**Skill runner wrapper** (per BUILD.md §L4-continued, "THE SKILL RUNNER (LAYERED ON OPENCLAW)"). AdministrateMe **does not run its own LLM loop**. Every skill call flows through OpenClaw's skill runner. The AdministrateMe wrapper (`await run_skill(skill_id, inputs, ctx)`): validates inputs against `input.schema.json` → checks sensitivity (refuses privileged inputs unless skill declares `sensitivity_required: privileged`) → checks `context_scopes_required` ⊆ Session scopes → invokes `POST http://127.0.0.1:18789/skills/invoke` with `{skill_name, inputs, correlation_id, session_context, dmScope}` → optional `handler.py` `post_process` → validates output against `output.schema.json` → emits `skill.call.recorded` with full provenance (skill name, version, `openclaw_invocation_id`, inputs, outputs, provider, token counts, cost, duration, correlation_id) → returns validated output. **AdministrateMe does NOT talk directly to Anthropic / OpenAI / Ollama** — OpenClaw is the only LLM client on the host; OpenClaw owns provider routing, retries, token accounting, and cache policy. Every skill call is replayable via `adminme skill replay <skill_name> --since <ts>`, which re-runs and emits new records with `causation_id` pointing to the old call.
+
+---
 
 ## 6. Security + privacy model
 
-(pending)
+Per BUILD.md §AUTHORITY, OBSERVATION, GOVERNANCE and the twelve patterns in CONSOLE_PATTERNS.md, security lives at the intersection of the console (Node at `:3330`), the Python APIs (loopback), and the event log.
+
+- **`guardedWrite` three layers** (per CONSOLE_PATTERNS.md §3 + BUILD.md §AUTHORITY). Every console write — and every pipeline write that routes through the HTTP bridge — passes through `console/lib/guarded_write.js` in strict order: (1) **agent allowlist** (is this agent even permitted to *attempt* this action?), (2) **governance `action_gate`** from `config/governance.yaml` / `config/authority.yaml` — values `allow` / `review` / `deny` / `hard_refuse`; `hard_refuse` items (send_as_principal, auto-answer unknown coparent, reference privileged medical/legal in outbound) are never overridable, and `review` holds the payload in a review queue and returns 202 `held_for_review` via a `review_request` event; (3) **sliding-window rate limit** keyed by `${tenantId}:${scope}:${action}`. Short-circuits on the first denial; the denial layer (`allowlist` / `governance` / `rate_limit`) is recorded on the denial event.
+- **authMember vs viewMember** (per CONSOLE_PATTERNS.md §2 and DIAGRAMS.md §4). **authMember** governs what you can do; **viewMember** governs whose data you are reading. The split matters when a principal view-as'es another principal: data is B's, privacy filtering is "what can authMember=A see of B's data?". Writes always use authMember (never viewMember). Children cannot view-as (enforced server-side regardless of UI); ambient entities cannot be viewed-as (no surface). Two-member commitments capture both ids separately (`approved_by=A`, `owner=B`) — do not collapse.
+- **Scope enforcement sites** (per DIAGRAMS.md §5 + BUILD.md §L3-continued). There is no global DB connection. All reads/writes go through `Session(current_user, requested_scopes)`. Enforcement is defense-in-depth across: session construction, projection queries (auto-added `WHERE visibility_scope IN (allowed_scopes) AND (sensitivity != 'privileged' OR owner_scope = current_user)`), privacy filter at read, nav middleware (HIDDEN_FOR_CHILD), `guardedWrite`, the outbound filter (observation), and the observation-mode wrapper. Every projection test includes a canary: reading outside scope raises `ScopeViolation`. Static analysis rule: no code imports `sqlalchemy.orm.Session` directly.
+- **Observation mode** (per CONSOLE_PATTERNS.md §11 and DIAGRAMS.md §9). Enforced at the **final outbound filter** — not at the policy layer and not at the action-decision layer. All internal logic (pipelines, skill calls, projection updates, local console UI, reward previews) runs normally; only the external side effect is suppressed and recorded as `observation.suppressed` with the full would-have-been payload. Per-tenant (not per-agent). **Default ON for new instances** — the bootstrap wizard ends with observation enabled; the principal opts out explicitly after review. Env var `ADMINME_OBSERVATION_MODE`, runtime override in `config/runtime.yaml` via `adminme observation on|off`, persisted in `tenant_config`.
+- **HIDDEN_FOR_CHILD** (per CONSOLE_PATTERNS.md §7). Two-part enforcement: a **client-side nav filter** (canonical list in `console/lib/nav.js` — Inbox, CRM, Capture, Finance, Calendar, Settings hidden for child role; Today + Scoreboard always visible) plus a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES` covers `/api/inbox`, `/api/crm`, `/api/capture`, `/api/finance`, `/api/calendar`, `/api/settings`, `/api/tasks`, `/api/chat`, `/api/tools`). Client-side is UX; server-side is security. The two arrays are deliberately independent (e.g. `/api/chat` is server-blocked but has no nav entry because chat is a FAB). Child sees schedule only via `/api/scoreboard/schedule`, chores only via `/api/scoreboard/chores`.
+- **Calendar privacy filter** (per CONSOLE_PATTERNS.md §6). Applied at **read time**, not ingest time — events remain intact in the `calendars` projection; only the view is censored. Sensitivity levels: `normal` (all household), `sensitive` (principals + owner), `privileged` (owner only; non-owners get opaque `[busy]` blocks with time/duration and an optional first-name owner hint). `redactToBusy` is allowlist-shaped (start empty, add back what's safe) so new fields on the Event type don't accidentally leak. Children get a **second layer**: events tagged `finance`, `health`, `legal`, or `adult_only` are dropped regardless of sensitivity.
+- **Privileged-access log.** Every read of a `sensitivity=privileged` record by anything other than its owner is logged with actor identity, target event/row, call stack, and timestamp. Surfaces in `adminme audit privileged-access` so the tenant can verify no cross-contamination. Adapters configured as privileged (e.g. a law-practice email account) have a hardcoded sensitivity floor at the adapter level; the config loader rejects any configuration that would lower it.
+- **Rate limits** (per BUILD.md §AUTHORITY rate_limits). Proactive-per-member-per-day varies by profile (adhd_executive=15, minimalist_parent=3, power_user=25, kid_scoreboard=0). Global `writes_per_minute=60`, `skill_calls_per_hour=200`. Plus per-action sliding windows in `config/governance.yaml` (e.g. `web_chat`: 20 calls per 60s).
+
+---
 
 ## 7. Packs
 
