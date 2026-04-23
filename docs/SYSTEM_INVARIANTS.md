@@ -145,23 +145,64 @@ AdministrateMe and OpenClaw are two independent systems that meet at exactly fou
 
 ## Section 9: Console is a rendering + authorization layer
 
-_(pending)_
+The Node console at `:3330` is an HTTP edge: it authenticates, authorizes, proxies, and renders — it does not own data, does not host pipelines, and does not own long-lived state. [arch §8, BUILD.md §L5, CONSOLE_PATTERNS.md §§1/2/3/10]
+
+1. The Node console at `:3330` is the **only tailnet-facing surface** on the host; Python product APIs (`:3333–:3336`) bind to loopback only. [arch §8, arch §9]
+2. The Node console **never reads the event log directly** — all event-derived reads pass through Python product APIs over the HTTP bridge. [arch §8]
+3. The Node console **never writes to projection SQLite directly**; writes proxy to the Python product APIs through the HTTP bridge with tenant header injection and correlation-ID propagation. [arch §8, CONSOLE_PATTERNS.md §10]
+4. The Node console MAY read projection SQLite read-only via `better-sqlite3` opened in readonly mode, as a performance optimization for UI rendering; that is the only direct DB access the console has, and it is strictly read-only. [arch §8]
+5. The console resolves `authMember` from the `Tailscale-User-Login` header and the `party_tailscale_binding` projection; it does not implement its own auth, and there is no login page — on the tailnet = authenticated. [arch §8, CONSOLE_PATTERNS.md §1]
+6. The dev-mode `X-ADMINME-Member` header requires **both** `ADMINME_ENV=dev` AND a loopback `remoteAddr`; either condition failing rejects the header. [arch §8, CONSOLE_PATTERNS.md §1]
+7. SSE chat at `/api/chat/stream` is a pass-through proxy to OpenClaw on `:18789`; the console adds `correlation_id` and rate-limits under `web_chat` before opening the upstream connection, and `AbortController` propagates cancellation upstream. [arch §8, CONSOLE_PATTERNS.md §5]
 
 ## Section 10: xlsx is a bidirectional projection
 
-_(pending)_
+`xlsx_workbooks` is the only projection in the system that is bidirectional and the only projection that writes to disk files rather than SQLite tables; its bidirectionality is carefully bounded. [arch §4 table row 3.11, BUILD.md §3.11]
+
+1. `xlsx_workbooks` is the **only bidirectional projection**: the forward daemon (`xlsx_sync/forward.py`) regenerates the workbook from events, and the reverse daemon (`xlsx_sync/reverse.py`) watches via `watchdog` and emits events on human edits. [arch §4 table row 3.11]
+2. Sidecar state at `~/.adminme/projections/.xlsx-state/<workbook>/<sheet>.json` records what the workbook currently represents; the forward daemon writes it in the same lock as the xlsx write, and the reverse daemon reads it to tell a user edit from a forward-regeneration. [arch §4 table row 3.11]
+3. Derived cells (columns tagged `[derived]` in the header row) are never accepted from the reverse projector; edits to them are silently dropped (UX clarity, not a security boundary — the event log remains the source of truth). [arch §4 table row 3.11]
+4. Plaid-sourced transaction fields `date`, `account_last4`, `merchant_name`, `amount`, and `plaid_category` are protected on reverse; principals may edit `assigned_category`, `notes`, `memo` — edits to protected fields are dropped. [arch §4 table row 3.11, BUILD.md §3.11]
+5. xlsx writes are debounced: **5s forward** on event bursts, **2s reverse** on file edits — enough to coalesce typical edit storms without producing noticeable lag. [arch §4 table row 3.11]
+6. Forward regeneration writes **computed values**, not Excel formulas, so the workbook is reproducible across devices, auditable, and safe to round-trip through LibreOffice during bootstrap. [arch §4 table row 3.11]
+7. A forward-write triggering a spurious reverse-detect is a **bug**, not an expected cycle; the fix is sidecar determinism plus lock ordering (the reverse daemon skips cycles when it sees the forward lock held). [arch §4 table row 3.11]
+8. If the workbook is deleted or corrupted, `adminme projection rebuild xlsx_workbooks` regenerates it fully from the event log — the xlsx file carries no state that is not recoverable. [arch §4 table row 3.11]
 
 ## Section 11: Bootstrap is a one-time, resumable operation
 
-_(pending)_
+The bootstrap wizard is a textual/Rich TUI that runs once per instance and leaves `~/.adminme/` in its canonical shape; it is resumable but not a routine administrative surface. [arch §10, BUILD.md §BOOTSTRAP WIZARD]
+
+1. Bootstrap runs **once per instance** and produces `~/.adminme/` in its canonical shape; after completion, the ongoing administrative surface is the console and the `adminme` CLI, not the wizard. [arch §10]
+2. Bootstrap is **resumable** via encrypted `~/.adminme/bootstrap-answers.yaml.enc` AND the event log; re-running `adminme bootstrap` reads the answers file and jumps to the first incomplete section. [arch §10]
+3. Successfully completed sections are **idempotent on re-run**: events are already in the log, config files are not rewritten from stale answers, and no user-visible side effect repeats. [arch §10]
+4. Observation mode is **enabled by default** at the end of §9 of the wizard; the tenant must explicitly opt out after reviewing the suppressed-action log. [arch §6, arch §10]
+5. Only **§1 Environment preflight** aborts on failure; all later sections create inbox tasks for skipped sub-items rather than blocking wizard progress — incomplete setup is always resolvable via the normal task flow. [arch §10]
 
 ## Section 12: Tenant isolation
 
-_(pending)_
+AdministrateMe is single-tenant by deployment and multi-tenant by codebase; the codebase must be entirely free of any specific tenant's identity. [BUILD.md §CRITICAL OPERATING RULES rules 4/17/18, BUILD.md §FINAL CHECKS]
+
+1. AdministrateMe instances are **single-tenant by deployment** (one instance per household) but **multi-tenant at the code level**; every event, projection row, and config value carries `tenant_id`. [BUILD.md §CRITICAL OPERATING RULES rule 17, BUILD.md §FINAL CHECKS]
+2. Two instances on the same machine, selected by distinct `ADMINME_INSTANCE_DIR` values, must be **fully independent** — no shared event log, projection DB, config directory, xlsx workbook, or sidecar state. [BUILD.md §CRITICAL OPERATING RULES rule 17, arch §10]
+3. `tenant_id` is assigned at bootstrap time and is **immutable thereafter**; changing it would invalidate every foreign-key-like reference in the projections and the log. [BUILD.md §CRITICAL OPERATING RULES rule 17]
+4. No family name, person's name, address, phone number, email, account number, or medical detail appears anywhere in platform code; tenant data lives **only** in the instance directory — code files, test fixtures (except those explicitly marked as such), and documentation files in the repo are all tenant-identity-free. [BUILD.md §CRITICAL OPERATING RULES rule 4, BUILD.md §FINAL CHECKS]
+5. A static identity-scan test (`tests/unit/test_no_hardcoded_identity.py`) fails CI if hardcoded tenant data appears in `adminme/`, `bootstrap/`, `profiles/`, `personas/`, `integrations/`, or `tests/` (except fixtures flagged `# fixture:tenant_data:ok`). [BUILD.md §CRITICAL OPERATING RULES rule 4, BUILD.md §FINAL CHECKS]
+6. Every schema change ships a numbered migration; migrations are idempotent; existing tenants can always upgrade without data loss. [BUILD.md §CRITICAL OPERATING RULES rule 18]
 
 ## Section 13: Explicit non-connections (things that look related but aren't)
 
-_(pending)_
+This section names pairs of concepts that sound related but are deliberately independent in this system; getting any of these wrong produces a subtle class of bug that is hard to reverse once data has flowed.
+
+1. `commitment.confirmed` and `task.completed` are **different events with different semantics**; a task's completion does not necessarily fulfill a commitment — commitment fulfillment depends on the commitment's own conditions, which may require multiple tasks or explicit confirmation. [arch §4 table row 3.4]
+2. A `calendar.event_added` event from an external source does **not** automatically create a commitment, task, or recurrence; the calendar projection is independent of the domain projections until a pipeline explicitly bridges them (e.g. a pipeline proposing a task from a detected appointment). [arch §4 table rows 3.4/3.5/3.6/3.7]
+3. `noise.filtered` does **not** delete the originating event; the underlying `messaging.received` (or equivalent) is still in the log, just flagged downstream as noise for ranking purposes. [arch §3, arch §5]
+4. `identity.merge_suggested` does **not** auto-merge parties; merging requires explicit operator confirmation, and only after confirmation does a `party.merged` event land in the log. [arch §5]
+5. The `xlsx_workbooks` projection is the **only** projection that writes to disk files; all other projections write to SQLite tables only, and a projection writing to disk outside that seam is a bug. [arch §4, arch §4 table row 3.11]
+6. The console is **not** a pipeline host; proactive behaviors run inside the Python products (registered as OpenClaw standing orders), not inside the Node console process — the console renders, it does not schedule. [arch §8, arch §9]
+7. Morning digest composition does **not** read projections directly; it reads via Python product APIs over HTTP, like any other caller — even though digest and projections may live in the same process, the boundary is kept explicit. [arch §9]
+8. The `vector_search` projection does **not** include privileged content; `sensitivity='privileged'` rows are never embedded, and privileged content cannot enter cross-party semantic search under any circumstance. [arch §4 table row 3.10, arch §6]
+9. Slash commands are **not** the same as REST endpoints — slash commands are registered with OpenClaw; REST endpoints live inside Python products; a slash-command handler usually calls a REST endpoint to do its work, but the two surfaces are wired independently and authorized independently. [arch §2, arch §9]
+10. The `tasks` projection is AdministrateMe-specific (not inherited from Hearth); the `commitments` projection is Hearth-inherited — conflating the two would tie AdministrateMe-specific code into the Hearth upstream. [arch §4 table rows 3.4/3.5]
 
 ## Section 14: Proactive-behavior scheduling boundary
 
