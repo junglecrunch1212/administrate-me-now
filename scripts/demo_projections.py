@@ -21,11 +21,15 @@ from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.artifacts.queries import list_recent
+from adminme.projections.commitments import CommitmentsProjection
+from adminme.projections.commitments.queries import pending_approval
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.queries import recent_with
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import all_parties, list_household_members
 from adminme.projections.runner import ProjectionRunner
+from adminme.projections.tasks import TasksProjection
+from adminme.projections.tasks.queries import open_for_member
 
 TEST_KEY = b"s" * 32
 
@@ -64,6 +68,8 @@ async def main() -> None:
         runner.register(PartiesProjection())
         runner.register(InteractionsProjection())
         runner.register(ArtifactsProjection())
+        runner.register(CommitmentsProjection())
+        runner.register(TasksProjection())
         await runner.start()
 
         # 1 household + 3 members + 2 external parties
@@ -150,6 +156,78 @@ async def main() -> None:
                 )
             )
 
+        # 3 commitments (one pending, one confirmed, one completed)
+        for i, cid in enumerate(["c1", "c2", "c3"]):
+            await log.append(
+                _env(
+                    "commitment.proposed",
+                    {
+                        "commitment_id": cid,
+                        "kind": "reply",
+                        "owed_by_member_id": "m1",
+                        "owed_to_party_id": "x1",
+                        "text_summary": f"Demo commitment {i + 1}",
+                        "confidence": 0.85,
+                        "strength": "confident",
+                        "source_interaction_id": "demo-ix",
+                    },
+                )
+            )
+        await log.append(
+            _env(
+                "commitment.confirmed",
+                {
+                    "commitment_id": "c2",
+                    "confirmed_by_member_id": "m1",
+                    "confirmed_at": "2026-04-11T09:00:00Z",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "commitment.completed",
+                {
+                    "commitment_id": "c3",
+                    "completed_at": "2026-04-12T15:00:00Z",
+                    "completed_by_party_id": "m1",
+                },
+            )
+        )
+
+        # 5 tasks (mix of inbox / next / in_progress)
+        task_specs = [
+            ("d-t1", "m1", "inbox", None),
+            ("d-t2", "m1", "next", "2026-04-25"),
+            ("d-t3", "m2", "in_progress", "2026-04-24"),
+            ("d-t4", None, "inbox", None),
+            ("d-t5", "m2", "inbox", "2026-04-26"),
+        ]
+        for tid, owner, status, due in task_specs:
+            await log.append(
+                _env(
+                    "task.created",
+                    {
+                        "task_id": tid,
+                        "title": f"Demo task {tid}",
+                        "owner_member_id": owner,
+                        "due": due,
+                    },
+                )
+            )
+            if status != "inbox":
+                await log.append(
+                    _env(
+                        "task.updated",
+                        {
+                            "task_id": tid,
+                            "updated_at": "2026-04-12T00:00:00Z",
+                            "previous_status": "inbox",
+                            "new_status": status,
+                            "field_updates": {},
+                        },
+                    )
+                )
+
         latest = await log.latest_event_id()
         assert latest is not None
         await bus.notify(latest)
@@ -161,6 +239,8 @@ async def main() -> None:
                 "projection:parties",
                 "projection:interactions",
                 "projection:artifacts",
+                "projection:commitments",
+                "projection:tasks",
             ):
                 s = await bus.subscriber_status(sid)
                 if s["lag_count"] > 0:
@@ -207,6 +287,21 @@ async def main() -> None:
         print(f"\nArtifacts ({len(arts)}):")
         for a in arts:
             print(f"  {a['artifact_id']}  {a['title']}  {a['sha256'][:12]}...")
+
+        conn_c = runner.connection("commitments")
+        pending = pending_approval(conn_c, tenant_id="tenant-demo")
+        print(f"\nPending commitments ({len(pending)}):")
+        for c in pending:
+            print(
+                f"  {c['commitment_id']}  {c['kind']:<10} "
+                f"{c['owed_by_party']}→{c['owed_to_party']}  {c['description']}"
+            )
+
+        conn_t = runner.connection("tasks")
+        open_t = open_for_member(conn_t, tenant_id="tenant-demo", member_party_id="m1")
+        print(f"\nOpen tasks for m1 ({len(open_t)}):")
+        for t in open_t:
+            print(f"  {t['task_id']:<6} {t['status']:<12} {t['title']}")
 
         await runner.stop()
         await log.close()
