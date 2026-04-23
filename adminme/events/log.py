@@ -3,37 +3,37 @@ L2 Event Log — append-only SQLCipher-backed event storage.
 
 Per ADMINISTRATEME_BUILD.md §"L2: THE EVENT LOG" and SYSTEM_INVARIANTS.md §1.
 
-Prompt 03 scope: storage, ordering, retrieval. Typed-payload validation lands
-in prompt 04 (see `adminme/events/registry.py`); here events are opaque dicts
-with a `type` string at minimum.
-
-Schema (MVP; see migrations/0001_initial.sql — BUILD.md §L2 lists the full
-column set that prompt 04 grows into):
-
-    events (
-        event_id        TEXT PRIMARY KEY,     -- "ev_" + 14-char Crockford base32
-        event_at_ms     INTEGER NOT NULL,     -- insertion time, ms since epoch
-        tenant_id       TEXT NOT NULL,
-        owner_scope     TEXT NOT NULL,        -- partition key (indexed, not physical)
-        type            TEXT NOT NULL,
-        version         INTEGER NOT NULL,     -- schema version (prompt 04 validates)
-        correlation_id  TEXT,
-        source          TEXT,                 -- JSON
-        payload         TEXT NOT NULL         -- JSON
-    )
+Schema (prompt 04, full shape — see migrations/0002_full_envelope.sql and
+DECISIONS.md §D16): 15 columns matching BUILD.md §L2. The legacy `version`
+and `source` columns from the 0001 MVP persist but are not read by new code;
+canonical access is via the ``EventEnvelope`` model's fields.
 
 Partitioning: per SYSTEM_INVARIANTS.md §1 invariant 6, `owner_scope` is an
 indexed column — not a physical partition — at v1.
 
 Append-only: enforced by BEFORE UPDATE / BEFORE DELETE triggers in migration
-0001 in addition to the code-level rule that only `append()` / `append_batch()`
-write (per BUILD.md §L2 and SYSTEM_INVARIANTS.md §1 invariant 2).
+0001 (preserved through 0002) in addition to the code-level rule that only
+``append()`` / ``append_batch()`` write (SYSTEM_INVARIANTS.md §1 invariant 2).
 
-Async model: `sqlcipher3-binary` is a synchronous DB-API driver and there is
-no drop-in async SQLCipher for Python today. We keep a single writer
-connection guarded by an `asyncio.Lock` and dispatch every DB call via
-`asyncio.to_thread`. Reads and writes therefore run off the event loop
-without blocking other coroutines.
+Payload validation: per SYSTEM_INVARIANTS.md §1 invariants 3 + 9 and D7,
+``append()`` validates the payload against the Pydantic model registered for
+``(envelope.type, envelope.schema_version)`` before the insert. Unknown
+schemas raise ``EventValidationError`` unless
+``ADMINME_ALLOW_UNKNOWN_SCHEMAS=1`` is set in the environment, in which case
+a warning is logged and the write proceeds (useful for tests and for draft
+schema development).
+
+Async model: ``sqlcipher3-binary`` is a synchronous DB-API driver and there
+is no drop-in async SQLCipher for Python today (D14). We keep a single
+writer connection guarded by an ``asyncio.Lock`` and dispatch every DB call
+via ``asyncio.to_thread``. Reads and writes therefore run off the event
+loop without blocking other coroutines.
+
+Signature: ``append(envelope, *, correlation_id=None, causation_id=None)``
+per D8 addition 2 — correlation_id and causation_id are explicit keyword
+arguments at every call site, never dict-squatted into the envelope
+silently. Passing ``None`` is fine when genuinely unknown; the kwargs
+override whatever the envelope carries.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ from __future__ import annotations
 import asyncio
 import importlib.resources
 import json
+import logging
+import os
 import secrets
 import threading
 import time
@@ -50,13 +52,23 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.events.envelope import EventEnvelope
+from adminme.events.registry import (
+    EventValidationError,
+    SchemaNotFound,
+    ensure_autoloaded,
+    registry,
+)
+
+_log = logging.getLogger(__name__)
+
 EVENT_ID_PREFIX = "ev_"
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _MS_CHARS = 10  # 50 bits of timestamp (plenty through year 37000+)
 _CTR_CHARS = 4  # 20 bits (1M events per ms before overflow)
 _CTR_MAX = 1 << (5 * _CTR_CHARS)
 
-_REQUIRED_APPEND_FIELDS = ("type", "tenant_id", "owner_scope", "payload")
+_ALLOW_UNKNOWN_ENV = "ADMINME_ALLOW_UNKNOWN_SCHEMAS"
 
 
 class EventLogError(RuntimeError):
@@ -68,7 +80,9 @@ class CursorNotFound(EventLogError):
 
 
 class AppendValidationError(EventLogError):
-    """An event dict is missing required fields or has an invalid field type."""
+    """An envelope failed validation before insertion — missing required
+    fields, schema not registered (strict mode), or payload rejected by the
+    registered Pydantic model."""
 
 
 def _encode_crockford(value: int, length: int) -> str:
@@ -148,6 +162,7 @@ class EventLog:
         self._id_gen = _EventIdGenerator()
         self._closed = False
         self._migrate()
+        ensure_autoloaded()
 
     # ------------------------------------------------------------------
     # connection management
@@ -202,73 +217,120 @@ class EventLog:
     # ------------------------------------------------------------------
     # writes
     # ------------------------------------------------------------------
-    async def append(self, event: dict[str, Any]) -> str:
-        ids = await self.append_batch([event])
+    async def append(
+        self,
+        envelope: EventEnvelope,
+        *,
+        correlation_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> str:
+        ids = await self.append_batch(
+            [envelope],
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+        )
         return ids[0]
 
-    async def append_batch(self, events: list[dict[str, Any]]) -> list[str]:
-        if not events:
+    async def append_batch(
+        self,
+        envelopes: list[EventEnvelope],
+        *,
+        correlation_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> list[str]:
+        if not envelopes:
             return []
         prepared: list[tuple[tuple[Any, ...], str]] = []
-        for ev in events:
-            row, event_id = self._prepare_row(ev)
+        for env in envelopes:
+            row, event_id = self._prepare_row(
+                env,
+                correlation_id=correlation_id,
+                causation_id=causation_id,
+            )
             prepared.append((row, event_id))
 
         async with self._lock:
             await asyncio.to_thread(self._insert_rows, [r for r, _ in prepared])
         return [eid for _, eid in prepared]
 
-    def _prepare_row(self, event: dict[str, Any]) -> tuple[tuple[Any, ...], str]:
-        for field in _REQUIRED_APPEND_FIELDS:
-            if field not in event:
-                raise AppendValidationError(f"event missing required field: {field}")
-        type_ = event["type"]
-        if not isinstance(type_, str) or not type_:
-            raise AppendValidationError("event.type must be a non-empty string")
-        tenant_id = event["tenant_id"]
-        if not isinstance(tenant_id, str) or not tenant_id:
-            raise AppendValidationError("event.tenant_id must be a non-empty string")
-        owner_scope = event["owner_scope"]
-        if not isinstance(owner_scope, str) or not owner_scope:
-            raise AppendValidationError("event.owner_scope must be a non-empty string")
-        payload = event["payload"]
+    def _prepare_row(
+        self,
+        envelope: EventEnvelope,
+        *,
+        correlation_id: str | None,
+        causation_id: str | None,
+    ) -> tuple[tuple[Any, ...], str]:
+        if not isinstance(envelope, EventEnvelope):
+            raise AppendValidationError(
+                f"append() requires an EventEnvelope, got {type(envelope).__name__}"
+            )
+
+        # kwargs override envelope-carried values per D8 addition 2
+        effective_correlation = (
+            correlation_id if correlation_id is not None else envelope.correlation_id
+        )
+        effective_causation = (
+            causation_id if causation_id is not None else envelope.causation_id
+        )
+
+        # Validate payload against registered schema
         try:
-            payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=False)
+            registry.validate(envelope.type, envelope.schema_version, envelope.payload)
+        except SchemaNotFound:
+            if os.environ.get(_ALLOW_UNKNOWN_ENV) == "1":
+                _log.warning(
+                    "append: no schema registered for %s v%d; proceeding because "
+                    "%s=1",
+                    envelope.type,
+                    envelope.schema_version,
+                    _ALLOW_UNKNOWN_ENV,
+                )
+            else:
+                raise AppendValidationError(
+                    f"no schema registered for {envelope.type!r} "
+                    f"v{envelope.schema_version} (set {_ALLOW_UNKNOWN_ENV}=1 "
+                    f"to allow unknown schemas)"
+                )
+        except EventValidationError as exc:
+            raise AppendValidationError(str(exc)) from exc
+
+        try:
+            payload_json = json.dumps(
+                envelope.payload, separators=(",", ":"), sort_keys=False
+            )
         except (TypeError, ValueError) as exc:
-            raise AppendValidationError(f"payload is not JSON-serializable: {exc}") from exc
+            raise AppendValidationError(
+                f"payload is not JSON-serializable: {exc}"
+            ) from exc
 
-        version = int(event.get("version", 1))
-        correlation_id = event.get("correlation_id")
-        if correlation_id is not None and not isinstance(correlation_id, str):
-            raise AppendValidationError("correlation_id must be str or None")
-        source = event.get("source")
-        if source is None:
-            source_json: str | None = None
-        else:
-            try:
-                source_json = json.dumps(source, separators=(",", ":"))
-            except (TypeError, ValueError) as exc:
-                raise AppendValidationError(f"source is not JSON-serializable: {exc}") from exc
-
-        event_at_ms = int(event.get("event_at_ms") or time.time() * 1000)
-        supplied_id = event.get("event_id")
-        if supplied_id is not None:
-            if not isinstance(supplied_id, str) or not supplied_id:
-                raise AppendValidationError("event_id must be a non-empty string")
-            event_id = supplied_id
+        event_at_ms = int(envelope.event_at_ms or time.time() * 1000)
+        if envelope.event_id:
+            event_id = envelope.event_id
         else:
             event_id, event_at_ms = self._id_gen.mint(event_at_ms)
+
+        recorded_at = envelope.recorded_at or EventEnvelope.now_utc_iso()
 
         row = (
             event_id,
             event_at_ms,
-            tenant_id,
-            owner_scope,
-            type_,
-            version,
-            correlation_id,
-            source_json,
+            envelope.tenant_id,
+            envelope.owner_scope,
+            envelope.type,
+            envelope.schema_version,      # legacy `version` column (mirror)
+            envelope.schema_version,      # canonical schema_version column
+            envelope.occurred_at,
+            recorded_at,
+            envelope.source_adapter,
+            envelope.source_account_id,
+            envelope.visibility_scope,
+            envelope.sensitivity,
+            effective_correlation,
+            effective_causation,
+            None,                          # legacy `source` column — unused
             payload_json,
+            envelope.raw_ref,
+            envelope.actor_identity,
         )
         return row, event_id
 
@@ -279,8 +341,11 @@ class EventLog:
             cur.executemany(
                 "INSERT INTO events"
                 "  (event_id, event_at_ms, tenant_id, owner_scope, type, version,"
-                "   correlation_id, source, payload)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "   schema_version, occurred_at, recorded_at, source_adapter,"
+                "   source_account_id, visibility_scope, sensitivity,"
+                "   correlation_id, causation_id, source, payload,"
+                "   raw_ref, actor_identity)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
             cur.execute("COMMIT")

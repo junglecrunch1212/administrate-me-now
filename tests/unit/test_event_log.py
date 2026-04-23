@@ -1,26 +1,46 @@
 """
-Unit tests for adminme.events.log.EventLog (prompt 03).
+Unit tests for adminme.events.log.EventLog (prompt 03, updated for prompt 04).
 
 Covers prompt-03 deliverables: append/read/filter/persistence/encryption/
-id-ordering semantics. Typed-payload validation is prompt 04 and out of scope.
+id-ordering semantics. Prompt 04 shifted ``append`` to take an
+``EventEnvelope`` and wired schema validation; the ``_event`` fixture below
+now builds envelopes, and test payloads register via the schema registry
+at module import.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
 import sqlcipher3
+from pydantic import BaseModel
 
+from adminme.events.envelope import EventEnvelope
 from adminme.events.log import (
     AppendValidationError,
     CursorNotFound,
     EventLog,
     new_correlation_id,
 )
+from adminme.events.registry import registry
 
 TEST_KEY = b"k" * 32
+
+
+class _TestEventPayloadV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    i: int
+
+
+# Register the payload shape used by _event() so validation passes. Tests
+# that intentionally use the unknown-schema path set ADMINME_ALLOW_UNKNOWN_SCHEMAS
+# directly.
+for _name in ("test.event", "foo", "bar"):
+    if registry.get(_name, 1) is None:
+        registry.register(_name, 1, _TestEventPayloadV1)
 
 
 def _event(
@@ -30,15 +50,23 @@ def _event(
     owner_scope: str = "shared:household",
     tenant_id: str = "tenant-a",
     correlation_id: str | None = None,
-) -> dict:
-    return {
-        "type": type,
-        "tenant_id": tenant_id,
-        "owner_scope": owner_scope,
-        "version": 1,
-        "correlation_id": correlation_id,
-        "payload": {"i": i},
-    }
+    event_at_ms: int | None = None,
+    event_id: str = "",
+) -> EventEnvelope:
+    return EventEnvelope(
+        event_id=event_id,
+        event_at_ms=event_at_ms if event_at_ms is not None else int(time.time() * 1000),
+        tenant_id=tenant_id,
+        type=type,
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="test:inproc",
+        source_account_id="test-account",
+        owner_scope=owner_scope,
+        visibility_scope=owner_scope,
+        correlation_id=correlation_id,
+        payload={"i": i},
+    )
 
 
 async def _collect(log: EventLog, **kwargs) -> list[dict]:
@@ -83,8 +111,7 @@ async def test_append_many_preserves_order(log: EventLog) -> None:
 
 async def test_append_with_explicit_event_id(log: EventLog) -> None:
     custom_id = "ev_99999999999999"
-    ev = _event(7)
-    ev["event_id"] = custom_id
+    ev = _event(7, event_id=custom_id)
     returned = await log.append(ev)
     assert returned == custom_id
     got = await log.get(custom_id)
@@ -176,7 +203,7 @@ async def test_encryption_rejects_bad_key(tmp_path: Path) -> None:
 
 async def test_event_ids_unique_within_same_ms(log: EventLog) -> None:
     ids = [
-        await log.append({**_event(i), "event_at_ms": 1_700_000_000_000})
+        await log.append(_event(i, event_at_ms=1_700_000_000_000))
         for i in range(200)
     ]
     assert len(set(ids)) == len(ids)
@@ -193,14 +220,25 @@ async def test_latest_event_id(log: EventLog) -> None:
 
 
 async def test_missing_required_fields_raises(log: EventLog) -> None:
-    with pytest.raises(AppendValidationError):
-        await log.append({"tenant_id": "t", "owner_scope": "s", "payload": {}})
-    with pytest.raises(AppendValidationError):
-        await log.append({"type": "t", "owner_scope": "s", "payload": {}})
-    with pytest.raises(AppendValidationError):
-        await log.append({"type": "t", "tenant_id": "t", "payload": {}})
-    with pytest.raises(AppendValidationError):
-        await log.append({"type": "t", "tenant_id": "t", "owner_scope": "s"})
+    # EventEnvelope construction itself rejects missing fields — exercise both
+    # that path and the log-layer type guard against non-envelope arguments.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        EventEnvelope(  # type: ignore[call-arg]
+            event_at_ms=1,
+            tenant_id="t",
+            type="test.event",
+            # missing schema_version
+            occurred_at=EventEnvelope.now_utc_iso(),
+            source_adapter="a",
+            source_account_id="b",
+            owner_scope="s",
+            visibility_scope="s",
+            payload={"i": 0},
+        )
+    with pytest.raises(AppendValidationError, match="EventEnvelope"):
+        await log.append({"not": "an envelope"})  # type: ignore[arg-type]
 
 
 async def test_append_only_trigger_refuses_delete_and_update(log: EventLog) -> None:

@@ -15,20 +15,39 @@ from pathlib import Path
 # Allow `poetry run python scripts/demo_event_log.py` without an installed adminme.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pydantic import BaseModel  # noqa: E402
+
 from adminme.events.bus import EventBus  # noqa: E402
-from adminme.events.log import EventLog  # noqa: E402
+from adminme.events.envelope import EventEnvelope  # noqa: E402
+from adminme.events.log import AppendValidationError, EventLog  # noqa: E402, F401
+from adminme.events.registry import registry  # noqa: E402
 
 KEY = b"demo-demo-demo-demo-demo-demo-aa"  # 32 bytes for sandbox demo only
 
 
-def _make_event(i: int) -> dict:
-    return {
-        "type": "demo.event",
-        "tenant_id": "demo-tenant",
-        "owner_scope": "shared:household",
-        "version": 1,
-        "payload": {"i": i, "message": f"event number {i}"},
-    }
+class _DemoEventPayload(BaseModel):
+    model_config = {"extra": "forbid"}
+    i: int
+    message: str
+
+
+if registry.get("demo.event", 1) is None:
+    registry.register("demo.event", 1, _DemoEventPayload)
+
+
+def _make_event(i: int) -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id="demo-tenant",
+        type="demo.event",
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="demo:inproc",
+        source_account_id="demo-account",
+        owner_scope="shared:household",
+        visibility_scope="shared:household",
+        payload={"i": i, "message": f"event number {i}"},
+    )
 
 
 async def _wait_until(predicate, timeout: float = 5.0) -> None:

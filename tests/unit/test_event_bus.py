@@ -1,31 +1,62 @@
 """
-Unit tests for adminme.events.bus.EventBus (prompt 03).
+Unit tests for adminme.events.bus.EventBus (prompt 03, updated for prompt 04).
 
 Covers fan-out, filtering, per-subscriber checkpoints, retry on failure,
-degraded state, and persistence across restart.
+degraded state, and persistence across restart. Prompt 04 shifted
+``append`` to take an ``EventEnvelope``; the ``_event`` helper here builds
+envelopes, and the test payload shape is registered via the schema
+registry at module import (shared with test_event_log.py).
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from adminme.events.bus import EventBus, LAG_WARN_THRESHOLD
+from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.registry import registry
 
 TEST_KEY = b"k" * 32
 
 
-def _event(i: int = 0, *, type: str = "test.event") -> dict:
-    return {
-        "type": type,
-        "tenant_id": "tenant-a",
-        "owner_scope": "shared:household",
-        "version": 1,
-        "payload": {"i": i},
-    }
+class _BusTestPayloadV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    i: int
+
+
+for _name in (
+    "test.event",
+    "foo",
+    "bar",
+    "t0",
+    "t1",
+    "t2",
+    "t3",
+    "t4",
+):
+    if registry.get(_name, 1) is None:
+        registry.register(_name, 1, _BusTestPayloadV1)
+
+
+def _event(i: int = 0, *, type: str = "test.event") -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id="tenant-a",
+        type=type,
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="test:bus",
+        source_account_id="test-account",
+        owner_scope="shared:household",
+        visibility_scope="shared:household",
+        payload={"i": i},
+    )
 
 
 async def _wait_for(predicate, timeout: float = 3.0, interval: float = 0.01) -> None:
