@@ -1,0 +1,102 @@
+# ============================================================================
+# Instance data — NEVER commit tenant data. The instance directory lives
+# OUTSIDE the repo checkout (resolved via InstanceConfig per §15/D15), but
+# if someone accidentally creates these paths inside the repo, catch them.
+# ============================================================================
+.adminme/
+adminme-lab-data/
+~/.adminme/
+~/adminme-lab-data/
+
+# SQLite / SQLCipher
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Env + secrets — never in git
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+credentials.*
+*.p12
+*.pfx
+
+# Tenant-shaped files the wizard writes
+bootstrap-answers.yaml.enc
+plugin-secrets.yaml.enc
+
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ============================================================================
+# Node
+# ============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+.pnp.*
+
+# Compiled profile pack artifacts
+console/static/compiled/
+packs/profiles/*/compiled/
+
+# ============================================================================
+# IDE / editor
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ============================================================================
+# macOS
+# ============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ============================================================================
+# Misc build / temp
+# ============================================================================
+*.log
+.DS_Store
+tmp/
+*.tmp

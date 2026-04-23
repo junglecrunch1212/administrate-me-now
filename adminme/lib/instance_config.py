@@ -2,9 +2,9 @@
 InstanceConfig — the single source of truth for instance-directory paths.
 
 Per SYSTEM_INVARIANTS.md §15 and DECISIONS.md §D15: no module under adminme/
-hardcodes ~/.adminme/ or any subpath of it. All instance-directory paths
-resolve through an InstanceConfig object populated at service-start time from
-config files in the instance directory.
+hardcodes an instance-directory path literal or any subpath of it. All
+instance-directory paths resolve through an InstanceConfig object populated
+at service-start time from config files in the instance directory.
 
 This module will expose (in a later prompt — likely prompt 03 alongside the
 event log, since the event log is the first module that needs resolved paths):

@@ -12,6 +12,30 @@ When you're ready to start the build, open `prompts/PROMPT_SEQUENCE.md` and foll
 
 Read the universal preamble at the bottom of `prompts/PROMPT_SEQUENCE.md` first. Then read the specific prompt you've been handed. Then do the work.
 
+## Constitutional reference (read first, cite in every commit)
+
+Every phase prompt (02–19) treats the files below as binding. If code being
+written would violate one, stop and flag it.
+
+- [`docs/SYSTEM_INVARIANTS.md`](docs/SYSTEM_INVARIANTS.md) — 15 numbered
+  sections of cross-cutting invariants + 8 proposed invariants resolved in
+  DECISIONS.md. Cite as `[§N]`.
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — append-only resolutions to
+  SYSTEM_INVARIANTS.md §16 ambiguities + additional decisions (Hearth,
+  platform versions, skill-pack shape, doc versioning). Cite as `[DN]`.
+- [`docs/architecture-summary.md`](docs/architecture-summary.md) — the
+  five-layer model, OpenClaw fit, event log, 11 projections, 17 pipelines,
+  security + privacy, 6 pack kinds, console, Python product APIs, bootstrap.
+  Cite as `[arch §N]`.
+- [`docs/openclaw-cheatsheet.md`](docs/openclaw-cheatsheet.md) — 8 Q&As on
+  OpenClaw's skill / slash / standing-order / plugin surfaces. Cite as
+  `[cheatsheet Qn]`.
+- [`docs/reference/_manifest.yaml`](docs/reference/_manifest.yaml) — git-
+  commit-pinned manifest of mirrored external docs (OpenClaw, Plaid,
+  BlueBubbles, Google APIs, Textual, SQLCipher, etc.). Cite external docs
+  from the local mirror under `docs/reference/<section>/`, never via
+  WebFetch.
+
 ## The documents in this repo
 
 ### Specification (read as reference material)

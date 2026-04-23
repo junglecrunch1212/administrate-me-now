@@ -7,9 +7,10 @@ This module will expose:
 - SQLCipher master-key derivation from the instance's secret store (1Password
   service account reference resolved at service-start time, never a raw
   credential in config).
-- Fernet key derivation for at-rest artifact encryption at
-  `~/.adminme/data/artifacts/<yyyy>/<mm>/<sha256>.<ext>` (§1 invariant 7),
-  keyed from the SQLCipher master key.
+- Fernet key derivation for at-rest artifact encryption of oversized
+  payloads (§1 invariant 7), keyed from the SQLCipher master key. The
+  artifact directory layout (`data/artifacts/<yyyy>/<mm>/<sha256>.<ext>`
+  under the instance directory) is resolved via InstanceConfig.
 - Path resolution for the artifact and raw-event sidecar directories
   resolves through `adminme.lib.instance_config` (never hardcoded per
   §15/D15).
