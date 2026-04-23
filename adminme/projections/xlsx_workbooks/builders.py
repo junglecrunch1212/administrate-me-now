@@ -15,9 +15,12 @@ from openpyxl import Workbook
 
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets import (
+    accounts as accounts_sheet,
     commitments as commitments_sheet,
+    metadata_finance,
     metadata_ops,
     people as people_sheet,
+    raw_data as raw_data_sheet,
     recurrences as recurrences_sheet,
     tasks as tasks_sheet,
 )
@@ -74,5 +77,37 @@ def build_finance_workbook(
     tenant_id: str,
     last_event_id: str,
 ) -> None:
-    """Regenerate adminme-finance.xlsx. Implemented in phase 07b-3."""
-    raise NotImplementedError("build_finance_workbook lands in phase 07b-3")
+    """Regenerate adminme-finance.xlsx atomically at ``path``.
+
+    Sheets built: Raw Data, Accounts, Metadata. Per the 07b prompt,
+    Assumptions / Dashboard / Balance Sheet / 5-Year Pro Forma / Budget
+    vs Actual are deferred — they depend on unregistered event types or
+    derived-math pipelines landing in prompt 10c+.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    default = wb.active
+    if default is not None:
+        wb.remove(default)
+
+    raw_ws = wb.create_sheet("Raw Data")
+    raw_data_sheet.build(raw_ws, ctx, tenant_id=tenant_id)
+
+    accounts_ws = wb.create_sheet("Accounts")
+    accounts_sheet.build(accounts_ws, ctx, tenant_id=tenant_id)
+
+    metadata_ws = wb.create_sheet("Metadata")
+    metadata_finance.build(
+        metadata_ws, ctx, tenant_id=tenant_id, last_event_id=last_event_id
+    )
+
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        wb.save(str(tmp))
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
