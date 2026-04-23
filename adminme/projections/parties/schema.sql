@@ -1,0 +1,15 @@
+-- Parties projection schema — CRM spine.
+--
+-- Implemented in prompt 05 per ADMINISTRATEME_BUILD.md §3.1 and
+-- SYSTEM_INVARIANTS.md §3.
+--
+-- Tables produced: parties, identifiers, memberships, relationships.
+--
+-- Rules:
+-- - (tenant_id, party_id) is the unique identity — no cross-tenant identity
+--   resolution (§3 invariant 2, §12 tenant isolation).
+-- - identifiers.value_normalized is canonicalized (E.164 phones, lowercased
+--   emails) for exact-match merge.
+-- - No hardcoded tenant data in this schema (§12 invariant 4).
+--
+-- Do not implement in this scaffolding prompt. Prompt 05 will fill in.

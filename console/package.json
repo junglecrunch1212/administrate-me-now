@@ -1,0 +1,30 @@
+{
+  "name": "@adminme/console",
+  "version": "0.1.0",
+  "description": "AdministrateMe Node console shell — Express at :3330; tailnet-facing HTTP edge. See docs/SYSTEM_INVARIANTS.md §9 and ADMINISTRATEME_CONSOLE_PATTERNS.md.",
+  "private": true,
+  "type": "commonjs",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "engines": {
+    "node": ">=22.0.0 <23"
+  },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"tests added by prompt 14a\" && exit 0",
+    "build:profiles": "node scripts/compile-profiles.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.4.0",
+    "better-sqlite3": "^11.3.0",
+    "node-fetch": "^3.3.2",
+    "http-proxy-middleware": "^3.0.0",
+    "js-yaml": "^4.1.0",
+    "jsdom": "^25.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "vitest": "^2.1.0"
+  }
+}
