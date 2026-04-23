@@ -115,6 +115,47 @@ No variations. A skill pack that adds or omits files outside this contract fails
 
 Without this pin, "per OpenClaw docs" becomes "per whatever version of the OpenClaw docs was in the mirror the day the code was written" — unacceptable for a 10-year system.
 
+### D13 — SQLCipher binding
+
+**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** divergence between prompt 02 / prompt 03 spec text (`pysqlcipher3`) and what actually works.
+
+The SQLCipher binding is **`sqlcipher3-binary`**, not `pysqlcipher3`. Import name is `sqlcipher3`. ADMINISTRATEME_BUILD.md §STACK already specifies this — it is a bundled wheel requiring no system SQLCipher headers and is a drop-in replacement for `pysqlcipher3` with an identical API. `pysqlcipher3` requires `libsqlcipher-dev` on the build machine and fails to install in a vanilla sandbox.
+
+Every prompt that references SQLCipher must use `sqlcipher3-binary` in `pyproject.toml` and `import sqlcipher3` in Python. If a prompt's text says `pysqlcipher3`, ignore the prompt text and use `sqlcipher3-binary` — flag the divergence in the commit message, do not silently ignore it.
+
+### D14 — Event log async model
+
+**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** seam left open by architecture-summary.md §3 ("In-process event bus. Asyncio queues with durable per-subscriber offsets") and BUILD.md §L2 not specifying the sync-vs-async shape of the SQLCipher connection.
+
+The EventLog exposes an async API (`async def append`, `async def read_since`, etc.) implemented over a **synchronous SQLCipher connection dispatched through `asyncio.to_thread`** and guarded by an `asyncio.Lock` for writes. Rationale: there is no drop-in async SQLCipher driver for Python in 2026; `aiosqlite` does not support SQLCipher, and `sqlcipher3-binary` is DB-API sync-only. Wrapping sync calls in `to_thread` keeps the event loop responsive without pulling in a new C extension or process model.
+
+Later prompts (projections, pipelines, product APIs) use the same pattern: async public API, sync DB driver, `to_thread` boundary. Any prompt proposing `aiosqlite + sqlcipher` or a persistent background thread pool should be rejected — neither is necessary and both add complexity without benefit.
+
+### D15 — Instance-path resolution discipline (formalization)
+
+**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** citation bug in prompt 02. Formalizes SYSTEM_INVARIANTS.md §15 as a numbered decision so later prompts can cite `[D15]` alongside `[§15]`.
+
+Restates §15 in decision form:
+
+- No module under `adminme/`, `bootstrap/`, `profiles/`, `personas/`, or `integrations/` hardcodes a literal instance-directory path (e.g. `~/.adminme/`, `.adminme/`, `~/adminme-lab-data/`) as a runtime string literal. Docstrings explaining the conceptual layout are exempt — only string literals used at runtime count.
+- All instance-directory paths resolve through `adminme.lib.instance_config.InstanceConfig`, constructed at service-start time.
+- Tests pass an isolated tmp path to `InstanceConfig`; production code resolves through the real config; the bootstrap wizard populates a fresh instance directory. Three callers, one contract.
+- The grep-based canary at `tests/unit/test_no_hardcoded_instance_path.py` enforces this at CI time (currently stubbed; implementation lands in the prompt that builds the full `InstanceConfig` behavior).
+
+Prompt 02 cited `[§15/D15]` prospectively; D15 is now the decision that citation points to. All future prompts cite `[D15]` alongside `[§15]` when discussing instance-path discipline.
+
+### D16 — Event log MVP schema vs BUILD.md §L2 full schema
+
+**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** gap between prompt 03's 9-column MVP schema and ADMINISTRATEME_BUILD.md §L2's 15-column full schema.
+
+Prompt 03 shipped an MVP `events` schema with these columns: `event_id`, `event_at_ms`, `tenant_id`, `owner_scope`, `type`, `version`, `correlation_id`, `source`, `payload`. BUILD.md §L2 specifies these additional columns: `occurred_at`, `recorded_at`, `source_adapter`, `source_account_id`, `visibility_scope`, `sensitivity`, `causation_id`, `raw_ref`, `actor_identity`. This is not a contradiction — the seam was intentional. Prompt 03's job was storage + retrieval; prompt 04's job is typed envelope + payload validation; the richer columns surface naturally once the envelope exists.
+
+Prompt 04 migrates the schema to the full BUILD.md §L2 shape via a new migration file (`0002_full_envelope.sql`). The migration is additive — all new columns are NOT NULL with DEFAULT where BUILD.md allows, NULL-able otherwise — and the existing triggers continue to enforce append-only. No events recorded by prompt 03 are invalidated; the migration back-fills them with defaults (prompt-03 test fixtures are hermetic tmp-dirs, so this only matters at all if someone kept a dev event log across phases).
+
+Additionally, `event_id` is **TEXT** (prompt 03's 17-char Crockford base32 string), not BLOB as SYSTEM_INVARIANTS.md §1 invariant 5 hinted ("ULID, 16 bytes"). Rationale: TEXT is sortable, debug-friendly, SQLite-idiomatic, and interoperable with the JSON API surface. SYSTEM_INVARIANTS.md §1 invariant 5 is corrected by this decision — the invariant's intent was "opaque time-sortable identifier," and a Crockford-encoded ULID in TEXT is equivalent. Future readers of §1 should read it as "event_id — time-sortable identifier, TEXT column, 17 chars of `ev_` + Crockford base32."
+
+The BUILD.md §L2 `append()` signature uses keyword-only `correlation_id` and `causation_id` per D8 addition 2. Prompt 03's `append(event: dict)` accepts them as optional dict fields instead. Prompt 04 shifts the signature to `append(envelope: EventEnvelope, *, correlation_id: str | None = None, causation_id: str | None = None)` as part of the typed-envelope rollout. This is a breaking change for the two prompt-03 demo files; prompt 04 updates them.
+
 ---
 
 ## How to use this file
