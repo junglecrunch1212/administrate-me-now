@@ -45,7 +45,7 @@ Before prompt 00, Claude Code needs:
    - `ADMINISTRATEME_CONSOLE_PATTERNS.md`
    - `ADMINISTRATEME_REFERENCE_EXAMPLES.md`
    - `ADMINISTRATEME_DIAGRAMS.md`
-3. Claude Code's sandbox has Python 3.12+, Node 24+, Poetry, npm, git, gh.
+3. Claude Code's sandbox has Python 3.11+, Node 22+, Poetry, npm, git, gh.
 4. Claude Code is authenticated to GitHub with push access to the repo (either via PR workflow on branches, or direct push to main — prompt 00 verifies).
 
 **Phase B prerequisites** (for the operator, not Claude Code — verified on the Mac Mini during bootstrap):
