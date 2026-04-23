@@ -206,12 +206,32 @@ This section names pairs of concepts that sound related but are deliberately ind
 
 ## Section 14: Proactive-behavior scheduling boundary
 
-_(pending)_
+User-visible proactive behavior fires via OpenClaw standing orders — so it shares OpenClaw's approval gating, observation-mode enforcement, and rate-limit machinery with interactive chat turns. APScheduler inside each Python product is used ONLY for internal Python-only schedules. [arch §5, arch §9, BUILD.md §L5-continued]
+
+1. All user-visible proactive behaviors fire via **OpenClaw standing orders** — not APScheduler — so each one is subject to the same approval gating, observation-mode enforcement, and rate-limit machinery as an interactive chat turn. [arch §5, arch §9]
+2. The proactive behaviors in scope are: `morning_digest`, `paralysis_detection`, `reminder_dispatch`, `reward_dispatch`, `custody_brief`, `crm_surface`, `scoreboard_projection`, `graph_miner`. Adding a ninth requires an ADR and the new entry MUST be registered as an OpenClaw standing order. [arch §5, arch §9]
+3. APScheduler is reserved for **internal, non-user-facing schedules**: adapter polling cadences, bus heartbeat, xlsx forward/reverse watchers, cache refreshes, projection compaction, log rotation. No proactive user-visible behavior may be implemented as an APScheduler job. [arch §5, arch §9]
+4. Anything that could surface to a principal goes through an OpenClaw standing order so it shares the approval, observation-mode, and rate-limit machinery; putting such a behavior in APScheduler bypasses three of AdministrateMe's core safeguards and is a violation. [arch §5, arch §6, arch §9]
 
 ## Section 15: Instance-path resolution discipline
 
-_(pending)_
+No module under `adminme/` hardcodes the string `~/.adminme/` or any subpath of it. All instance-directory paths come from an `InstanceConfig` object populated at service-start time from the config files in the instance directory. [BUILD.md §CRITICAL OPERATING RULES rule 4, BUILD.md §CRITICAL OPERATING RULES rule 17, BUILD.md §FINAL CHECKS]
+
+1. **No module under `adminme/` hardcodes `~/.adminme/`** or any subpath of it; the string does not appear outside explicitly-marked bootstrap or documentation code. [BUILD.md §CRITICAL OPERATING RULES rule 4, BUILD.md §CRITICAL OPERATING RULES rule 17]
+2. All instance-directory paths resolve through an **`InstanceConfig`** object, constructed at service-start time from the config files in the instance directory; production code reads paths off the `InstanceConfig`, not off environment variables directly, and not off string literals. [BUILD.md §CRITICAL OPERATING RULES rule 17]
+3. Tests pass an isolated tmp path to `InstanceConfig`; production code resolves through the real config; the bootstrap wizard populates `~/.adminme/` on a fresh instance — these three callers use the same `InstanceConfig` contract. [BUILD.md §CRITICAL OPERATING RULES rule 17, arch §10]
+4. A **grep-based canary test** fails CI if `~/.adminme` or `.adminme/` appears as a string literal in a non-fixture module under `adminme/`, `bootstrap/`, `profiles/`, `personas/`, or `integrations/`. [BUILD.md §CRITICAL OPERATING RULES rule 4, BUILD.md §FINAL CHECKS]
+5. Consequence: two instances on the same machine selected via distinct `ADMINME_INSTANCE_DIR` values work correctly without code changes — this is the concrete mechanism behind §12 tenant isolation; if `InstanceConfig` is bypassed anywhere, tenant isolation silently breaks. [BUILD.md §CRITICAL OPERATING RULES rule 17, BUILD.md §FINAL CHECKS]
 
 ## Section 16: Proposed invariants (operator review)
 
-_(pending)_
+The invariants below are suspected true from a careful reading of the specs, but the specs do not state them precisely enough to commit to §§1–§15. Each is stated as a concrete one-sentence invariant and cites where the ambiguity lives. Operator: confirm or reject each before prompt 02 begins.
+
+1. _Proposed:_ Proactive pipelines register with OpenClaw by writing prose programs into the workspace `AGENTS.md` plus `openclaw cron add` invocations at bootstrap §8; there is no programmatic plugin-hook path and no typed registration API. [cheatsheet Q3, arch §11 item 1, BUILD.md §L4 "Scheduled/proactive pipelines"] _Operator: confirm or reject._
+2. _Proposed:_ The Node console hosts exactly one `Bus` class that handles all four SSE-ish fan-out mechanisms (chat stream proxy, reward toast fan-out, degraded-mode notifications, general event fan-out) against the in-process event bus; the four are facets of one object, not four independent components. [arch §11 item 2, CONSOLE_PATTERNS.md §§5/8/9, BUILD.md §L2] _Operator: confirm or reject._
+3. _Proposed:_ Each profile pack's view mode (`carousel` / `compressed` / `child`) is a JSX component signature that the profile pack must implement against a shell-defined protocol; the mode is not a data-shape contract negotiated with a backend and not an API parameter. [arch §11 item 3, CONSOLE_PATTERNS.md §2, REFERENCE_EXAMPLES.md §6] _Operator: confirm or reject._
+4. _Proposed:_ CRM-adjacent surfaces belong in the **Capture** product (because the CRM UI lives there); Core calls Capture's APIs when it needs CRM data for ranking, digest, or custody_brief — there is no cross-product "parties" API family. [arch §11 item 4, arch §9, BUILD.md §THE CRM IS THE SPINE] _Operator: confirm or reject._
+5. _Proposed:_ The forward xlsx projector runs **unconditionally** regardless of observation mode, because the workbook is a purely local artifact and observation mode gates external side effects only; the tenant sees updates in the workbook during observation period as part of verifying the system is working. [arch §11 item 5, arch §6, BUILD.md §3.11] _Operator: confirm or reject._
+6. _Proposed:_ The `openclaw-memory-bridge` plugin emits events into AdministrateMe by calling an HTTP endpoint on one of the Python product APIs (most likely Comms `:3334`), not by writing into the AdministrateMe SQLCipher database directly — because the plugin runs inside OpenClaw and does not carry the AdministrateMe SQLCipher master key. [arch §11 item 6, arch §2, BUILD.md §OPENCLAW IS THE ASSISTANT SUBSTRATE] _Operator: confirm or reject._
+7. _Proposed:_ `schema_version` on events is a **monotonically increasing integer per `event_type`** (not semver, not a string); upcasters form a chain from `v1→v2→v3` such that an old event can always be decoded by composing upcasters in order. [arch §3, BUILD.md §CRITICAL OPERATING RULES rule 18] _Operator: confirm or reject._
+8. _Proposed:_ The `correlation_id` on an event is set by the **originating adapter or surface** (the first entry point of a logical operation) and preserved unchanged through every derived event; the `causation_id` is set to the event id of the immediate parent. Neither is ever overwritten downstream. [arch §3, DIAGRAMS.md §2] _Operator: confirm or reject._
