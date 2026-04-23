@@ -16,7 +16,7 @@ returns 2.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -69,6 +69,108 @@ class TaskCompletedV1(BaseModel):
     note: str | None = None
 
 
+class CommitmentCompletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    completed_at: str = Field(min_length=1)
+    completed_by_party_id: str = Field(min_length=1)
+    completion_note: str | None = None
+
+
+class CommitmentDismissedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    dismissed_at: str = Field(min_length=1)
+    dismissed_by_party_id: str = Field(min_length=1)
+    reason: str | None = None
+
+
+class CommitmentEditedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    edited_at: str = Field(min_length=1)
+    edited_by_party_id: str = Field(min_length=1)
+    field_updates: dict[str, Any]
+
+
+class CommitmentSnoozedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    snoozed_at: str = Field(min_length=1)
+    snoozed_until: str = Field(min_length=1)
+    snoozed_by_party_id: str = Field(min_length=1)
+
+
+class CommitmentCancelledV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    cancelled_at: str = Field(min_length=1)
+    cancelled_by_party_id: str = Field(min_length=1)
+    reason: str | None = None
+
+
+class CommitmentDelegatedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    delegated_at: str = Field(min_length=1)
+    delegated_by_party_id: str = Field(min_length=1)
+    delegated_to_party_id: str = Field(min_length=1)
+
+
+class CommitmentExpiredV1(BaseModel):
+    """Emitted by prompt-10c's timer pipeline — 14-day stale-proposal sweep.
+    Prompt 06 only registers the type; no pipeline emits it yet."""
+
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    expired_at: str = Field(min_length=1)
+
+
+class TaskUpdatedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+    updated_by_party_id: str | None = None
+    previous_status: str | None = None
+    new_status: str | None = None
+    field_updates: dict[str, Any]
+
+
+class TaskDeletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    deleted_at: str = Field(min_length=1)
+    deleted_by_party_id: str = Field(min_length=1)
+
+
+class RecurrenceAddedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    linked_kind: Literal["party", "asset", "account", "household"]
+    linked_id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    rrule: str = Field(min_length=1)
+    next_occurrence: str = Field(min_length=1)
+    lead_time_days: int = Field(default=0, ge=0)
+    trackable: bool = False
+    notes: str | None = None
+
+
+class RecurrenceCompletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    completed_at: str = Field(min_length=1)
+    completed_by_party_id: str | None = None
+    occurrence_date: str | None = None
+
+
+class RecurrenceUpdatedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+    field_updates: dict[str, Any]
+
+
 class SkillCallRecordedV2(BaseModel):
     """First version actually emitted. v1 is reserved — see module docstring."""
 
@@ -87,6 +189,18 @@ class SkillCallRecordedV2(BaseModel):
 
 registry.register("commitment.proposed", 1, CommitmentProposedV1)
 registry.register("commitment.confirmed", 1, CommitmentConfirmedV1)
+registry.register("commitment.completed", 1, CommitmentCompletedV1)
+registry.register("commitment.dismissed", 1, CommitmentDismissedV1)
+registry.register("commitment.edited", 1, CommitmentEditedV1)
+registry.register("commitment.snoozed", 1, CommitmentSnoozedV1)
+registry.register("commitment.cancelled", 1, CommitmentCancelledV1)
+registry.register("commitment.delegated", 1, CommitmentDelegatedV1)
+registry.register("commitment.expired", 1, CommitmentExpiredV1)
 registry.register("task.created", 1, TaskCreatedV1)
 registry.register("task.completed", 1, TaskCompletedV1)
+registry.register("task.updated", 1, TaskUpdatedV1)
+registry.register("task.deleted", 1, TaskDeletedV1)
+registry.register("recurrence.added", 1, RecurrenceAddedV1)
+registry.register("recurrence.completed", 1, RecurrenceCompletedV1)
+registry.register("recurrence.updated", 1, RecurrenceUpdatedV1)
 registry.register("skill.call.recorded", 2, SkillCallRecordedV2)

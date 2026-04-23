@@ -60,6 +60,23 @@ class CalendarEventAddedV1(BaseModel):
     body: str | None = None
 
 
+class CalendarEventUpdatedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    calendar_event_id: str = Field(min_length=1)
+    calendar_source: str = Field(min_length=1)
+    external_uid: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+    field_updates: dict[str, Any]
+
+
+class CalendarEventDeletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    calendar_event_id: str = Field(min_length=1)
+    calendar_source: str = Field(min_length=1)
+    external_uid: str = Field(min_length=1)
+    deleted_at: str = Field(min_length=1)
+
+
 class ArtifactReceivedV1(BaseModel):
     model_config = {"extra": "forbid"}
     source: str = Field(min_length=1)
@@ -76,4 +93,6 @@ registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)
+registry.register("calendar.event_updated", 1, CalendarEventUpdatedV1)
+registry.register("calendar.event_deleted", 1, CalendarEventDeletedV1)
 registry.register("artifact.received", 1, ArtifactReceivedV1)
