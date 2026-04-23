@@ -70,19 +70,78 @@ Commitments, tasks, and recurrences are three distinct projections with three di
 
 ## Section 5: Calendar and its relationship to tasks/recurrences
 
-_(pending)_
+The `calendars` projection is effectively read-only from AdministrateMe's perspective — external calendar providers own the authoritative state; AdministrateMe ingests, merges at read time, and filters at read time. [arch §4 table row 3.7, arch §6]
+
+1. The `calendars` projection is populated by external adapters (Google Calendar, iCloud CalDAV, etc.); AdministrateMe does **not** write back to external calendars unless an adapter is explicitly configured for bidirectional sync. [arch §4 table row 3.7, arch §5]
+2. Calendar events flow external → internal; modifications made inside AdministrateMe surfaces (if any) do not round-trip back to the external provider by default. [arch §4 table row 3.7]
+3. A task or recurrence carrying a `scheduled_at` timestamp does **not** create a calendar event; `scheduled_at` is an internal time hint consumed by whatnow/digest/reminder_dispatch and surfaced in internal views — it never becomes a row in `calendar_events`. [arch §4 table row 3.6, arch §5]
+4. Calendar queries and task queries overlap semantically but are backed by different projections with different schemas; surfaces that present a unified day view (e.g. Today, digest) must merge them **at read time**, never by joining at write time or by copying events between projections. [arch §4, arch §9]
+5. Privacy filtering on calendar events is applied at **read time**, not at ingest; events remain intact in the projection with their original sensitivity, and only the rendered view is redacted. `redactToBusy` is allowlist-shaped so new `Event` fields do not accidentally leak. [arch §6, CONSOLE_PATTERNS.md §6]
+6. Private calendar events owned by other members are rendered as opaque `[busy]` blocks (time + duration only, optional first-name owner hint) when queried by a non-owner; events tagged `finance`, `health`, `legal`, or `adult_only` are dropped entirely for children regardless of sensitivity. [arch §6, CONSOLE_PATTERNS.md §6]
 
 ## Section 6: Security — session, scope, governance, observation
 
-_(pending)_
+Security is defense-in-depth across the session layer, scope enforcement at every projection query, `guardedWrite` at the HTTP write boundary, privacy filtering at read, child-role nav/API enforcement, observation mode at the outbound filter, and the privileged-access log. No single layer is load-bearing alone. [arch §6, BUILD.md §AUTHORITY, BUILD.md §OBSERVATION, BUILD.md §GOVERNANCE, BUILD.md §L3-continued, CONSOLE_PATTERNS.md §§2/3/6/7/11, DIAGRAMS.md §§3/4/5/9]
+
+**Session + scope:**
+
+1. Every read and every write happens under a `Session(current_user, requested_scopes)` object; there is no global DB connection and no code imports `sqlalchemy.orm.Session` directly. [arch §6, BUILD.md §L3-continued]
+2. Sessions carry **both** an `authMember` (governs what you can do) and a `viewMember` (governs whose data you are reading); only principals may set view-as, ambient entities cannot be viewed-as, and children cannot view-as. [arch §6, CONSOLE_PATTERNS.md §2, DIAGRAMS.md §4]
+3. Writes always use `authMember`; `viewMember` never authorizes a write — a principal viewing-as another principal still writes under their own identity, and two-member commitments record both ids separately (`approved_by=A`, `owner=B`). [arch §6, CONSOLE_PATTERNS.md §2]
+4. Scope predicates are auto-appended to every projection query (`WHERE visibility_scope IN (allowed_scopes) AND (sensitivity != 'privileged' OR owner_scope = current_user)`); every projection test ships a canary that expects `ScopeViolation` on out-of-scope reads. [arch §6, DIAGRAMS.md §5]
+
+**guardedWrite — three layers, in order:**
+
+5. Every console-originated write (and every pipeline write that routes through the HTTP bridge) passes through `console/lib/guarded_write.js`, in strict order: (1) **agent allowlist** (is this agent even permitted to attempt this action?), (2) **governance `action_gate`** (`allow` / `review` / `deny` / `hard_refuse`), (3) **sliding-window rate limit** keyed by `${tenantId}:${scope}:${action}`. [arch §6, CONSOLE_PATTERNS.md §3]
+6. The first layer to refuse short-circuits; the denial event records which layer refused (`allowlist` / `governance` / `rate_limit`) so audit can attribute causes unambiguously. [arch §6, CONSOLE_PATTERNS.md §3]
+7. `hard_refuse` gates are **never overridable** — send_as_principal, auto-answer unknown coparent, and reference-privileged-medical/legal-in-outbound all land in this bucket. [arch §6, BUILD.md §GOVERNANCE]
+8. `review` gates emit a `review_request` event and return 202 `held_for_review` instead of firing; the action executes later only after an explicit operator approval. [arch §6, CONSOLE_PATTERNS.md §3]
+
+**Privacy + privileged:**
+
+9. Events marked `sensitivity='privileged'` are never embedded into `vector_search`, never summarized by LLM skills, never appear in cross-owner projections, and never appear in coach or `-kids` agent sessions. [arch §4 table row 3.10, arch §6, BUILD.md §L3-continued]
+10. Adapters configured as privileged (e.g. a law-practice email account) have a hardcoded sensitivity floor at the adapter level; the config loader rejects any configuration that would lower it. [arch §6]
+11. Every non-owner read of a `sensitivity='privileged'` record is logged to the privileged-access log with actor identity, target event/row, call stack, and timestamp, surfaced via `adminme audit privileged-access`. [arch §6]
+12. Identity-first privacy is the primary boundary (privileged content never enters the assistant's accounts or the `vector_search` projection); session scope is secondary; event-level sensitivity is tertiary — all three must be present, none alone is sufficient. [arch §6]
+
+**Observation mode:**
+
+13. Observation mode is enforced at the **final outbound filter**, not at the policy layer and not at the action-decision layer — all internal logic (pipelines, skill calls, projection updates, console UI, reward previews) runs normally, and only the external side effect is suppressed. [arch §6, CONSOLE_PATTERNS.md §11, DIAGRAMS.md §9]
+14. Every outbound-capable action (L5 surfaces, L4 pipelines, L1 adapters that can send) calls `outbound(ctx, actionFn)`; emitting `external.sent` anywhere else is a bug. [arch §6, CONSOLE_PATTERNS.md §11]
+15. Observation mode is **per-tenant**, not per-agent or per-skill; the scope of the suppression is the whole instance, not a specific channel or persona. [arch §6]
+16. Observation is **default-on for new instances** — bootstrap §9 ends with observation enabled; the principal opts out explicitly only after reviewing the suppressed-action log. Suppressed actions emit `observation.suppressed` with the full would-have-sent payload for tenant review. [arch §6, arch §10, CONSOLE_PATTERNS.md §11]
+
+**HIDDEN_FOR_CHILD:**
+
+17. Admin surfaces are enforced two ways for child sessions: a **client-side nav filter** (canonical list in `console/lib/nav.js`) AND a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES`); client-side is UX, server-side is security, and the two arrays are deliberately independent. [arch §6, CONSOLE_PATTERNS.md §7]
+18. Child sessions see only `today` and `scoreboard` in the nav; `/api/inbox`, `/api/crm`, `/api/capture`, `/api/finance`, `/api/calendar`, `/api/settings`, `/api/tasks`, `/api/chat`, and `/api/tools` all return 403 for children regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7]
 
 ## Section 7: Pipelines — reactive and proactive
 
-_(pending)_
+Pipelines at L4 turn events into derived events, proposals, and skill calls; they never write projections directly. The reactive/proactive split is a scheduling question, not a capability question — both kinds emit the same kinds of events. [arch §5, BUILD.md §L4]
+
+1. **Reactive pipelines** run in-process inside the AdministrateMe `PipelineRunner`; they subscribe to the event bus via `triggers.events` in their `pipeline.yaml` manifest. [arch §5, BUILD.md §L4]
+2. **Proactive pipelines** are registered as **OpenClaw standing orders** at product boot; OpenClaw owns the scheduling primitive, and the pipeline's handler is reached via a Python-product HTTP endpoint the standing order invokes. [arch §5, arch §9]
+3. No pipeline writes directly to a projection table or to an xlsx file; pipelines emit events, projections consume them — a pipeline touching a projection cursor or projection row is a bug. [arch §4, arch §5]
+4. Pipelines invoke skills **only** through `await run_skill(skill_id, inputs, ctx)`, which wraps `POST http://127.0.0.1:18789/skills/invoke`; pipelines **never** import `anthropic` / `openai` / any provider SDK and never talk to a provider directly. [arch §5, arch §2, BUILD.md §L4-continued]
+5. Every skill call emits `skill.call.recorded` with full provenance — skill name, version, `openclaw_invocation_id`, inputs, outputs, provider, token counts, cost, duration, `correlation_id` — so every piece of LLM-derived state in the system is traceable to a replayable call. [arch §5]
+6. The skill wrapper validates inputs against `input.schema.json`, checks that the skill's `sensitivity_required` is satisfied (refusing privileged inputs unless the skill declares it), checks that `context_scopes_required ⊆ Session.requested_scopes`, then invokes; outputs are validated against `output.schema.json` before return. [arch §5, BUILD.md §L4-continued]
+7. A pipeline failure on one event does **not** halt the bus; the runner records the failure, retries per policy, and continues processing — one bad event cannot stop the stream. [arch §3, arch §5]
+8. Skill calls are replayable: `adminme skill replay <skill_name> --since <ts>` re-runs the call and emits a new `skill.call.recorded` with `causation_id` pointing to the original call. [arch §5]
+9. AdministrateMe does **NOT** talk directly to Anthropic / OpenAI / Ollama; OpenClaw is the only LLM client on the host, owns provider routing, retries, token accounting, and cache policy. [arch §2, arch §5, BUILD.md §L4-continued]
 
 ## Section 8: OpenClaw boundaries
 
-_(pending)_
+AdministrateMe and OpenClaw are two independent systems that meet at exactly four documented seams; every other putative interaction between them is a violation. [arch §2, cheatsheet Q1, cheatsheet Q2, cheatsheet Q3, cheatsheet Q4]
+
+1. The two systems meet at exactly **four seams**: skills, slash commands, standing orders, and channel plugins. Any other integration path is a violation and requires an ADR. [arch §2]
+2. **OpenClaw owns all LLM provider contact**; AdministrateMe never imports the `anthropic` or `openai` SDK and never opens a socket to `api.anthropic.com` / `api.openai.com` / any provider API. [arch §2, arch §5]
+3. **OpenClaw owns all channel transport** (iMessage via BlueBubbles, Telegram, Discord, web); AdministrateMe receives inbound through the `openclaw-memory-bridge` plugin rather than opening its own connections to those services. [arch §2, cheatsheet Q4]
+4. The `openclaw-memory-bridge` plugin is **one-way** (OpenClaw → AdministrateMe) — it emits `messaging.received` and `conversation.turn.recorded` events into the AdministrateMe event log; it does not read back. [arch §2, arch §3]
+5. When AdministrateMe's `outbound()` wants to send on a channel, it calls OpenClaw's channel-send API via the channel bridge plugin; AdministrateMe does **not** open transports to BlueBubbles / Telegram / Discord / web directly. [arch §2]
+6. Slash-command handlers live in **AdministrateMe** as HTTP endpoints inside the Python product APIs; OpenClaw dispatches to them when a user types the command, but the business logic is AdministrateMe's. [arch §2, arch §9, cheatsheet Q2]
+7. OpenClaw's approval gates (tool-execution boundary, host-local, after tool policy and before exec) and AdministrateMe's `guardedWrite` (HTTP API boundary inside the Node console) are **independent** gates — both must pass and neither substitutes for the other. [arch §2, cheatsheet Q7]
+8. OpenClaw memory stays in `~/.openclaw/`; AdministrateMe event log stays in `~/.adminme/`; the two systems **never share a database** and there is no shared SQLite file or symlink between them. [arch §2, cheatsheet Q8]
 
 ## Section 9: Console is a rendering + authorization layer
 
