@@ -231,7 +231,9 @@ class EventBus:
         state = self._subscribers.get(subscriber_id)
         if state is None:
             raise KeyError(subscriber_id)
-        lag = await self._log.count_since(state.checkpoint)
+        lag = await self._log.count_since(
+            state.checkpoint, types=state.types_filter
+        )
         return {
             "checkpoint_event_id": state.checkpoint,
             "lag_count": lag,
@@ -297,7 +299,9 @@ class EventBus:
                 await self._persist_state(state)
 
             # drained; warn on lag (events mismatched by filter still count as lag)
-            lag = await self._log.count_since(state.checkpoint)
+            lag = await self._log.count_since(
+            state.checkpoint, types=state.types_filter
+        )
             if lag > LAG_WARN_THRESHOLD and not state.lag_warned:
                 _log.warning(
                     "subscriber %s lag=%d exceeds threshold=%d",

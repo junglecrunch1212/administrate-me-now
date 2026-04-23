@@ -481,18 +481,37 @@ class EventLog:
         cur = self._conn.cursor()
         return int(cur.execute("SELECT count(*) FROM events").fetchone()[0])
 
-    async def count_since(self, cursor: str | None) -> int:
-        return await asyncio.to_thread(self._count_since, cursor)
-
-    def _count_since(self, cursor: str | None) -> int:
-        cur = self._conn.cursor()
-        if cursor is None:
-            return int(cur.execute("SELECT count(*) FROM events").fetchone()[0])
-        return int(
-            cur.execute(
-                "SELECT count(*) FROM events WHERE event_id > ?", (cursor,)
-            ).fetchone()[0]
+    async def count_since(
+        self,
+        cursor: str | None,
+        *,
+        types: list[str] | None = None,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._count_since,
+            cursor,
+            tuple(types) if types else None,
         )
+
+    def _count_since(
+        self,
+        cursor: str | None,
+        types: tuple[str, ...] | None,
+    ) -> int:
+        cur = self._conn.cursor()
+        where: list[str] = []
+        params: list[Any] = []
+        if cursor is not None:
+            where.append("event_id > ?")
+            params.append(cursor)
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            where.append(f"type IN ({placeholders})")
+            params.extend(types)
+        sql = "SELECT count(*) FROM events"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return int(cur.execute(sql, params).fetchone()[0])
 
 
 _SELECT_COLUMNS = (
