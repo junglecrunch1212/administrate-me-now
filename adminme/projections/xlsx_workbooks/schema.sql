@@ -1,0 +1,17 @@
+-- xlsx_workbooks projection schema.
+--
+-- xlsx_workbooks is unusual — its derived state lives in two .xlsx files
+-- on disk (adminme-ops.xlsx, adminme-finance.xlsx), NOT in a SQLite
+-- database. Per [§13.5]: xlsx_workbooks is the only projection allowed
+-- to write to disk files.
+--
+-- However, the ProjectionRunner's open-connection machinery still wants
+-- to create a tiny DB for this projection's schema_path. We provide an
+-- empty schema here so the runner can stamp _projection_meta and the
+-- projection otherwise ignores the connection.
+--
+-- If/when this projection needs SQLite-backed state (e.g. the reverse
+-- daemon's sidecar state — TBD in prompt 07c), it lands here as a new
+-- migration.
+
+-- Intentionally empty. See module docstring.
