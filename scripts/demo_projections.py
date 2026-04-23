@@ -41,6 +41,11 @@ from adminme.projections.recurrences.queries import all_active as all_recurrence
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
 from adminme.projections.tasks.queries import open_for_member
+from adminme.projections.vector_search import VectorSearchProjection
+from adminme.projections.vector_search.queries import (
+    count_embeddings,
+    nearest,
+)
 
 TEST_KEY = b"s" * 32
 
@@ -85,6 +90,7 @@ async def main() -> None:
         runner.register(CalendarsProjection())
         runner.register(PlacesAssetsAccountsProjection())
         runner.register(MoneyProjection())
+        runner.register(VectorSearchProjection())
         await runner.start()
 
         # 1 household + 3 members + 2 external parties
@@ -455,6 +461,37 @@ async def main() -> None:
             )
         )
 
+        # 3 embeddings (for interaction, artifact, party notes)
+        import hashlib as _hashlib
+        def _fake_emb(txt: str, dim: int = 1536) -> list[float]:
+            h = _hashlib.sha256(txt.encode()).digest()
+            fs = [(h[i % 32] - 127.5) / 127.5 for i in range(dim)]
+            mag = sum(f * f for f in fs) ** 0.5
+            return [f / mag for f in fs]
+
+        for eid, link_kind, link_id, txt in [
+            ("emb-ix", "interaction", "ix-demo", "demo interaction summary"),
+            ("emb-art", "artifact", "art-demo", "demo artifact extract"),
+            ("emb-pn", "party_notes", "m1", "demo party notes"),
+        ]:
+            await log.append(
+                _env(
+                    "embedding.generated",
+                    {
+                        "embedding_id": eid,
+                        "linked_kind": link_kind,
+                        "linked_id": link_id,
+                        "embedding_dimensions": 1536,
+                        "embedding": _fake_emb(txt),
+                        "model_name": "text-embedding-3-small",
+                        "sensitivity": "normal",
+                        "source_text_sha256": _hashlib.sha256(
+                            txt.encode()
+                        ).hexdigest(),
+                    },
+                )
+            )
+
         latest = await log.latest_event_id()
         assert latest is not None
         await bus.notify(latest)
@@ -472,6 +509,7 @@ async def main() -> None:
                 "projection:calendars",
                 "projection:places_assets_accounts",
                 "projection:money",
+                "projection:vector_search",
             ):
                 s = await bus.subscriber_status(sid)
                 if s["lag_count"] > 0:
@@ -581,6 +619,22 @@ async def main() -> None:
         print(f"\nMoney flow totals since 2026-01-01 (sum={total_sum}):")
         for cat, total in sorted(totals.items()):
             print(f"  {cat:<12} {total}")
+
+        conn_vs = runner.connection("vector_search")
+        n_embeddings = count_embeddings(conn_vs, tenant_id="tenant-demo")
+        print(f"\nVector index embeddings: {n_embeddings}")
+        near = nearest(
+            conn_vs,
+            tenant_id="tenant-demo",
+            query_vector=_fake_emb("demo interaction summary"),
+            k=3,
+        )
+        print(f"Nearest to 'demo interaction summary' ({len(near)}):")
+        for n in near:
+            print(
+                f"  {n['embedding_id']:<10} {n['linked_kind']:<12} "
+                f"{n['linked_id']:<10} dist={n['distance']:.4f}"
+            )
 
         await runner.stop()
         await log.close()

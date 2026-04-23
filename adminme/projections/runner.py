@@ -269,6 +269,10 @@ class ProjectionRunner:
         # Touch the DB to surface bad-key errors eagerly.
         conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
 
+        # Per-projection hook for extension loading (e.g. sqlite-vec's
+        # vec0) or extra PRAGMAs. Default no-op.
+        projection.on_connection_opened(conn)
+
         schema_sql = self._read_schema(projection)
         cur = conn.cursor()
         cur.executescript(schema_sql)

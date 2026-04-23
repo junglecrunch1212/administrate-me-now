@@ -45,3 +45,10 @@ class Projection(ABC):
         """Optional hook called after a batch of events has been applied.
         Default: no-op."""
         return None
+
+    def on_connection_opened(self, conn: Any) -> None:
+        """Optional hook called once per connection, after PRAGMA key is set
+        and before schema.sql is executed. Default: no-op. Override for
+        projections that need extension loading (sqlite-vec's vec0) or
+        PRAGMAs beyond the defaults."""
+        return None
