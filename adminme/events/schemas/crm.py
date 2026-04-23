@@ -59,7 +59,26 @@ class RelationshipAddedV1(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+class PartyMergedV1(BaseModel):
+    """Party identity merge — emitted by the ``identity_resolution`` pipeline
+    (prompt 10b) after a human-approved merge suggestion. Registered here
+    so the ``parties`` projection has a stable shape to react to when
+    prompt 10b wires the subscription.
+
+    Prompt 05 does NOT subscribe to this type — merge handling lands in
+    prompt 10b.
+    """
+
+    model_config = {"extra": "forbid"}
+    surviving_party_id: str = Field(min_length=1)
+    merged_party_id: str = Field(min_length=1)
+    merged_at: str = Field(min_length=1)
+    merged_by_member_id: str | None = None
+    rationale: str | None = None
+
+
 registry.register("party.created", 1, PartyCreatedV1)
 registry.register("identifier.added", 1, IdentifierAddedV1)
 registry.register("membership.added", 1, MembershipAddedV1)
 registry.register("relationship.added", 1, RelationshipAddedV1)
+registry.register("party.merged", 1, PartyMergedV1)

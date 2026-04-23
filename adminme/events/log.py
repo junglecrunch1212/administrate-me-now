@@ -48,7 +48,7 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sqlcipher3
 
@@ -59,6 +59,9 @@ from adminme.events.registry import (
     ensure_autoloaded,
     registry,
 )
+
+if TYPE_CHECKING:
+    from adminme.lib.instance_config import InstanceConfig
 
 _log = logging.getLogger(__name__)
 
@@ -153,8 +156,22 @@ class EventLog:
         (2, "0002_full_envelope.sql"),
     )
 
-    def __init__(self, db_path: Path, encryption_key: bytes) -> None:
-        self._db_path = Path(db_path)
+    def __init__(
+        self,
+        db_path: "Path | InstanceConfig",
+        encryption_key: bytes,
+    ) -> None:
+        # Prompt 05: EventLog now accepts an InstanceConfig and derives its
+        # own path per §15/D15. Raw paths are still accepted for tests and
+        # legacy callers — this keeps prompt-03/04 test fixtures working
+        # without forcing a flag-day rewrite.
+        from adminme.lib.instance_config import InstanceConfig as _InstanceConfig
+
+        if isinstance(db_path, _InstanceConfig):
+            resolved: Path = db_path.event_log_path
+        else:
+            resolved = Path(db_path)
+        self._db_path = resolved
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._key_pragma = _format_key(encryption_key)
         self._conn = self._open_connection()
@@ -464,18 +481,37 @@ class EventLog:
         cur = self._conn.cursor()
         return int(cur.execute("SELECT count(*) FROM events").fetchone()[0])
 
-    async def count_since(self, cursor: str | None) -> int:
-        return await asyncio.to_thread(self._count_since, cursor)
-
-    def _count_since(self, cursor: str | None) -> int:
-        cur = self._conn.cursor()
-        if cursor is None:
-            return int(cur.execute("SELECT count(*) FROM events").fetchone()[0])
-        return int(
-            cur.execute(
-                "SELECT count(*) FROM events WHERE event_id > ?", (cursor,)
-            ).fetchone()[0]
+    async def count_since(
+        self,
+        cursor: str | None,
+        *,
+        types: list[str] | None = None,
+    ) -> int:
+        return await asyncio.to_thread(
+            self._count_since,
+            cursor,
+            tuple(types) if types else None,
         )
+
+    def _count_since(
+        self,
+        cursor: str | None,
+        types: tuple[str, ...] | None,
+    ) -> int:
+        cur = self._conn.cursor()
+        where: list[str] = []
+        params: list[Any] = []
+        if cursor is not None:
+            where.append("event_id > ?")
+            params.append(cursor)
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            where.append(f"type IN ({placeholders})")
+            params.extend(types)
+        sql = "SELECT count(*) FROM events"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        return int(cur.execute(sql, params).fetchone()[0])
 
 
 _SELECT_COLUMNS = (

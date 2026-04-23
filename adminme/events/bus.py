@@ -209,11 +209,31 @@ class EventBus:
                 )
         state.trigger.set()
 
+    async def set_checkpoint(
+        self,
+        subscriber_id: str,
+        event_id: str | None,
+    ) -> None:
+        """Forcibly move a subscriber's checkpoint to ``event_id`` (or NULL).
+
+        Used by ProjectionRunner.rebuild(): after inline-replaying the whole
+        log into a freshly-recreated projection DB, we advance the bus
+        checkpoint to the latest event so the live worker does not
+        re-apply every event it was going to deliver.
+        """
+        state = self._subscribers.get(subscriber_id)
+        if state is None:
+            raise KeyError(subscriber_id)
+        state.checkpoint = event_id
+        await self._persist_state(state)
+
     async def subscriber_status(self, subscriber_id: str) -> dict[str, Any]:
         state = self._subscribers.get(subscriber_id)
         if state is None:
             raise KeyError(subscriber_id)
-        lag = await self._log.count_since(state.checkpoint)
+        lag = await self._log.count_since(
+            state.checkpoint, types=state.types_filter
+        )
         return {
             "checkpoint_event_id": state.checkpoint,
             "lag_count": lag,
@@ -279,7 +299,9 @@ class EventBus:
                 await self._persist_state(state)
 
             # drained; warn on lag (events mismatched by filter still count as lag)
-            lag = await self._log.count_since(state.checkpoint)
+            lag = await self._log.count_since(
+            state.checkpoint, types=state.types_filter
+        )
             if lag > LAG_WARN_THRESHOLD and not state.lag_warned:
                 _log.warning(
                     "subscriber %s lag=%d exceeds threshold=%d",
