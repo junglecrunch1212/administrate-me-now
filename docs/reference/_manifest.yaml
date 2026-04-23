@@ -1,0 +1,82 @@
+# docs/reference/_manifest.yaml
+#
+# Version pin for the mirrored external documentation under docs/reference/.
+# Each entry records the upstream source, the git commit SHA that was mirrored,
+# and the date of the mirror. When an upstream doc changes in a way that
+# affects an AdministrateMe invariant, a dedicated phase prompt updates both
+# this manifest AND the affected invariants in the same commit.
+#
+# See docs/DECISIONS.md §D12 for the policy.
+
+mirrored_at: "2026-04-22"
+mirrored_by: "prompts/00.5 + 00.5b"
+format_version: 1
+
+sources:
+  openclaw:
+    upstream_repo: "openclaw/openclaw"
+    upstream_path: "docs/"
+    source_commit: "unknown"  # backfill from the prompt 00.5 run if needed
+    local_path: "docs/reference/openclaw/"
+    notes: "Primary OpenClaw documentation — source of the cheatsheet and all OpenClaw-boundary invariants."
+
+  plaid:
+    upstream_repo: "plaid/plaid-openapi"
+    upstream_path: "/"
+    source_commit: "unknown"
+    local_path: "docs/reference/plaid/"
+    notes: "OpenAPI spec — narrative UX docs are a documented gap (see _gaps.md)."
+
+  bluebubbles:
+    upstream_repo: "BlueBubblesApp/bluebubbles-docs"
+    upstream_path: "/"
+    source_commit: "unknown"
+    local_path: "docs/reference/bluebubbles/"
+    notes: "BlueBubbles server, API, and WebSocket events."
+
+  google_gmail:
+    upstream_repo: "googleapis/google-api-nodejs-client"
+    upstream_path: "src/apis/gmail/"
+    source_commit: "unknown"
+    local_path: "docs/reference/google-gmail/"
+    notes: "Single TypeScript reference file from the Node client."
+
+  google_calendar:
+    upstream_repo: "googleapis/google-api-nodejs-client"
+    upstream_path: "src/apis/calendar/"
+    source_commit: "unknown"
+    local_path: "docs/reference/google-calendar/"
+    notes: "Single TypeScript reference file from the Node client."
+
+  apple_eventkit:
+    upstream_repo: "n/a"
+    upstream_path: "n/a"
+    source_commit: "gap"
+    local_path: "docs/reference/apple-eventkit/"
+    notes: "Apple does not publish docs source publicly. See _gaps.md for the manual-clip checklist."
+
+  apple_shortcuts:
+    upstream_repo: "n/a"
+    upstream_path: "n/a"
+    source_commit: "gap"
+    local_path: "docs/reference/apple-shortcuts/"
+    notes: "Apple does not publish docs source publicly. See _gaps.md."
+
+  tailscale:
+    upstream_repo: "partial"
+    upstream_path: "n/a"
+    source_commit: "partial"
+    local_path: "docs/reference/tailscale/"
+    notes: "Partial gap — some KB pages manually clipped. See _gaps.md."
+
+  textual:
+    upstream_repo: "Textualize/textual"
+    upstream_path: "docs/"
+    source_commit: "unknown"
+    local_path: "docs/reference/textual/"
+    notes: "TUI framework docs for the bootstrap wizard."
+
+# Refresh policy: a mirror is NOT refreshed opportunistically. A dedicated
+# phase prompt updates this manifest + refreshed files + any affected
+# invariants atomically in one PR. Stale mirrors are acceptable; uncoordinated
+# refreshes are not.
