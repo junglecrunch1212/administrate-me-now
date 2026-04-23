@@ -30,3 +30,30 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - 3 new projections × ~6 queries = ~18 more TODO(prompt-08) markers across queries.py files. Total now ~38 across 10 projections.
 - **Carry-forward for future embedding daemon**:
   - `embedding.generated` schema requires pre-computed vector in payload. AdministrateMe does not import embedding SDKs. Daemon will call OpenClaw's embedding endpoint per [§8].
+
+### Prompt 07b — xlsx_workbooks forward daemon
+- **Refactored**: by Partner in Claude Chat. Prompt file: prompts/07b-xlsx-workbooks-forward.md.
+- **Session merged**: PR #<N>, commits 05e13dd / 3c14625 / 2546061 / <commit4>, merged <merge date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - xlsx_workbooks projection built as forward-only daemon consuming events from 10 projections; structurally a projection per [§2.2], emits only the categorized system event `xlsx.regenerated`.
+  - 1 new event type at v1: `xlsx.regenerated` — in new `schemas/system.py` module to keep domain event files clean.
+  - 2 workbook builders: adminme-ops.xlsx (Tasks, Recurrences, Commitments, People, Metadata) and adminme-finance.xlsx (Raw Data, Accounts, Metadata). Sheets requiring unregistered event types (Lists, Members, Assumptions, Dashboard, Balance Sheet, Pro Forma, Budget vs Actual) skipped with TODO markers.
+  - File locking via `fcntl.flock` with 10s timeout; atomic write via temp+rename.
+  - 5s debounce with cancel-on-new-event; `regenerate_now` bypasses for tests.
+  - Derived-cell protection at cell level + sheet protection on read-only sheets (placeholder password `"adminme-placeholder"` — real secrets in prompt 16).
+  - XlsxQueryContext holds handles to 7 projection connections (parties, tasks, commitments, recurrences, calendars, places_assets_accounts, money). Runner's register() unchanged; bootstrap constructs the projection with the context after other projections start.
+  - 28 new unit tests (ops workbook 13, finance 8, emit 4, debounce 3) + 1 integration test + demo_xlsx_forward.py smoke.
+  - §2.2 grep audit: every `log.append` in the xlsx projection is for `xlsx.regenerated` only.
+  - Ruff clean, mypy clean (109 source files), all inviolable greps OK (one pre-existing false positive in pipelines/runner.py docstring noted, not introduced by 07b).
+- **Carry-forward for prompt 07c (xlsx reverse daemon)**:
+  - Sidecar state JSON (last-known sheet state) is NOT written in this prompt. 07c writes it after each forward regeneration OR reads from the just-written workbook at adapter startup. 07c decides the implementation path.
+  - `xlsx.regenerated` emit provides a signal 07c's reverse adapter can subscribe to, to avoid re-diffing a workbook that forward just wrote.
+  - Sheet protection passwords hardcoded to `"adminme-placeholder"` — 07c accepts this; real secrets flow lands in prompt 16.
+  - Stub forward.py / reverse.py / schemas.py scaffolding files (from prompt 05) remain untouched — 07c may repurpose or delete.
+- **Carry-forward for prompt 08**:
+  - No query functions in xlsx projection; nothing for Session to wrap. Sheet builders read other projections' queries (which are the ones Session wraps).
+- **Carry-forward for prompt 10+**:
+  - Dashboard / Balance Sheet / Pro Forma / Budget vs Actual sheets skipped — derived-math pipelines build them later.
+- **Carry-forward for future bootstrap (prompt 16)**:
+  - Real xlsx daemon lifecycle (start-on-boot, stop-on-shutdown) lands in bootstrap. Phase A is code + tests only.
