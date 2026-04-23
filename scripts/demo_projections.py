@@ -27,8 +27,15 @@ from adminme.projections.commitments import CommitmentsProjection
 from adminme.projections.commitments.queries import pending_approval
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.queries import recent_with
+from adminme.projections.money import MoneyProjection
+from adminme.projections.money.queries import category_totals
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import all_parties, list_household_members
+from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
+from adminme.projections.places_assets_accounts.queries import (
+    accounts_renewing_before,
+    list_places,
+)
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.recurrences.queries import all_active as all_recurrences
 from adminme.projections.runner import ProjectionRunner
@@ -76,6 +83,8 @@ async def main() -> None:
         runner.register(TasksProjection())
         runner.register(RecurrencesProjection())
         runner.register(CalendarsProjection())
+        runner.register(PlacesAssetsAccountsProjection())
+        runner.register(MoneyProjection())
         await runner.start()
 
         # 1 household + 3 members + 2 external parties
@@ -288,6 +297,164 @@ async def main() -> None:
                 )
             )
 
+        # 2 places + 2 assets + 2 accounts
+        await log.append(
+            _env(
+                "place.added",
+                {
+                    "place_id": "pl-home",
+                    "display_name": "Demo home",
+                    "kind": "home",
+                    "address_json": {
+                        "street": "1 Example Ln",
+                        "city": "Springfield",
+                        "state": "IL",
+                        "postal": "62704",
+                        "country": "US",
+                    },
+                    "geo_lat": 39.78,
+                    "geo_lon": -89.65,
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "place.added",
+                {
+                    "place_id": "pl-office",
+                    "display_name": "Demo office",
+                    "kind": "office",
+                    "address_json": {
+                        "street": "100 Market",
+                        "city": "Springfield",
+                        "state": "IL",
+                        "postal": "62704",
+                        "country": "US",
+                    },
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "asset.added",
+                {
+                    "asset_id": "as-car",
+                    "display_name": "Honda Civic",
+                    "kind": "vehicle",
+                    "linked_place": "pl-home",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "asset.added",
+                {
+                    "asset_id": "as-fridge",
+                    "display_name": "Refrigerator",
+                    "kind": "appliance",
+                    "linked_place": "pl-home",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "account.added",
+                {
+                    "account_id": "ac-power",
+                    "display_name": "Power bill",
+                    "organization_party_id": "x1",
+                    "kind": "utility",
+                    "status": "active",
+                    "billing_rrule": "FREQ=MONTHLY",
+                    "next_renewal": "2026-05-10",
+                    "linked_place": "pl-home",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "account.added",
+                {
+                    "account_id": "ac-bank",
+                    "display_name": "Checking",
+                    "organization_party_id": "x1",
+                    "kind": "bank",
+                    "status": "active",
+                    "login_vault_ref": "op://Vault/bank",
+                },
+            )
+        )
+
+        # 4 money flows
+        await log.append(
+            _env(
+                "money_flow.recorded",
+                {
+                    "flow_id": "mf1",
+                    "from_party_id": "m1",
+                    "to_party_id": "x1",
+                    "amount_minor": 7500,
+                    "currency": "USD",
+                    "occurred_at": "2026-04-10T12:00:00Z",
+                    "kind": "paid",
+                    "category": "utilities",
+                    "linked_account": "ac-power",
+                    "source_adapter": "plaid",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "money_flow.recorded",
+                {
+                    "flow_id": "mf2",
+                    "from_party_id": "m1",
+                    "to_party_id": "x1",
+                    "amount_minor": 2500,
+                    "currency": "USD",
+                    "occurred_at": "2026-04-15T12:00:00Z",
+                    "kind": "paid",
+                    "category": "groceries",
+                    "linked_account": "ac-bank",
+                    "source_adapter": "plaid",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "money_flow.recorded",
+                {
+                    "flow_id": "mf3",
+                    "from_party_id": "x2",
+                    "to_party_id": "m1",
+                    "amount_minor": 1200,
+                    "currency": "USD",
+                    "occurred_at": "2026-04-16T12:00:00Z",
+                    "kind": "reimbursable",
+                    "category": "groceries",
+                    "linked_account": "ac-bank",
+                    "source_adapter": "plaid",
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "money_flow.manually_added",
+                {
+                    "flow_id": "mf-manual",
+                    "from_party_id": "m1",
+                    "to_party_id": "x1",
+                    "amount_minor": 500,
+                    "currency": "USD",
+                    "occurred_at": "2026-04-18T12:00:00Z",
+                    "kind": "paid",
+                    "category": "misc",
+                    "notes": "farmer's market",
+                    "added_by_party_id": "m1",
+                },
+            )
+        )
+
         latest = await log.latest_event_id()
         assert latest is not None
         await bus.notify(latest)
@@ -303,6 +470,8 @@ async def main() -> None:
                 "projection:tasks",
                 "projection:recurrences",
                 "projection:calendars",
+                "projection:places_assets_accounts",
+                "projection:money",
             ):
                 s = await bus.subscriber_status(sid)
                 if s["lag_count"] > 0:
@@ -388,6 +557,30 @@ async def main() -> None:
                 f"  {e['external_uid']:<14} {e['start_at']}-{e['end_at']}  "
                 f"{e['summary']}"
             )
+
+        conn_paa = runner.connection("places_assets_accounts")
+        places = list_places(conn_paa, tenant_id="tenant-demo")
+        print(f"\nPlaces ({len(places)}):")
+        for pl in places:
+            print(f"  {pl['place_id']:<10} {pl['kind']:<10} {pl['display_name']}")
+        renewing = accounts_renewing_before(
+            conn_paa, tenant_id="tenant-demo", cutoff_iso="2026-05-31"
+        )
+        print(f"\nAccounts renewing by 2026-05-31 ({len(renewing)}):")
+        for ac in renewing:
+            print(
+                f"  {ac['account_id']:<10} {ac['kind']:<10} "
+                f"next={ac['next_renewal']}  {ac['display_name']}"
+            )
+
+        conn_m = runner.connection("money")
+        totals = category_totals(
+            conn_m, tenant_id="tenant-demo", since_iso="2026-01-01T00:00:00Z"
+        )
+        total_sum = sum(totals.values())
+        print(f"\nMoney flow totals since 2026-01-01 (sum={total_sum}):")
+        for cat, total in sorted(totals.items()):
+            print(f"  {cat:<12} {total}")
 
         await runner.stop()
         await log.close()
