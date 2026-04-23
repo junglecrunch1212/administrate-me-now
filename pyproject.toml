@@ -1,0 +1,84 @@
+# AdministrateMe v1 — tenant-agnostic platform.
+# LLM provider contact is OpenClaw's responsibility; this package deliberately
+# does not depend on provider SDKs (see SYSTEM_INVARIANTS.md §8).
+# Pipelines call POST http://127.0.0.1:18789/skills/invoke via httpx — never
+# import anthropic/openai directly.
+
+[tool.poetry]
+name = "adminme"
+version = "0.1.0"
+description = "AdministrateMe — event-sourced household chief-of-staff platform layered on OpenClaw"
+authors = ["AdministrateMe contributors"]
+readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+packages = [{ include = "adminme" }]
+
+[tool.poetry.dependencies]
+# Python 3.11 per docs/DECISIONS.md D10 (platform version lock).
+python = "^3.11"
+
+# L2: event log + crypto
+pydantic = ">=2.6"
+sqlalchemy = ">=2.0"
+alembic = "*"
+sqlcipher3-binary = "*"
+sqlite-vec = "*"
+cryptography = "*"
+keyring = "*"
+
+# L3: projections + xlsx
+openpyxl = "*"
+pandas = "*"
+
+# L4: pipelines — HTTP to OpenClaw's skill runner (no provider SDKs; see §8)
+httpx = "*"
+apscheduler = ">=3.10"
+watchdog = "*"
+
+# L5: products + CLI + wizard
+fastapi = ">=0.110"
+uvicorn = "*"
+typer = ">=0.12"
+rich = "*"
+textual = "*"
+
+# Adapters: built-in integrations that AdministrateMe owns directly
+plaid-python = "*"
+google-api-python-client = "*"
+google-auth = "*"
+msgraph-sdk = "*"
+caldav = "*"
+vobject = "*"
+
+# Shared utilities
+authlib = "*"
+python-dotenv = "*"
+structlog = "*"
+pyyaml = "*"
+
+[tool.poetry.group.llm]
+optional = true
+
+[tool.poetry.group.llm.dependencies]
+# Empty — OpenClaw handles LLM calls per SYSTEM_INVARIANTS.md §8 and
+# DECISIONS.md §D6. AdministrateMe does not take a direct dep on provider SDKs.
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-asyncio = "*"
+pytest-cov = "*"
+ruff = "*"
+mypy = "*"
+pyright = "*"
+hypothesis = "*"
+
+[tool.poetry.scripts]
+adminme = "adminme.cli.main:app"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
