@@ -1,13 +1,13 @@
 """
-Integration test: rebuild correctness across all seven projections.
+Integration test: rebuild correctness across all ten projections.
 
 Per SYSTEM_INVARIANTS.md §2 invariant 1: ``projection.rebuild(name)``
 truncates the projection's tables and replays from event 0 producing
-state equivalent to the live cursor. This test populates ~800 mixed
-events across all seven projections (parties, interactions, artifacts,
-commitments, tasks, recurrences, calendars), waits for catch-up,
-snapshots the row data, calls rebuild per projection, and asserts
-byte-equivalence.
+state equivalent to the live cursor. This test populates ~1200 mixed
+events across all ten projections (parties, interactions, artifacts,
+commitments, tasks, recurrences, calendars, places_assets_accounts,
+money, vector_search), waits for catch-up, snapshots the row data,
+calls rebuild per projection, and asserts byte-equivalence.
 
 Also includes a cross-DB referential-integrity audit: orphan foreign-
 key references are logged informationally. Per [§2.3] projections do
@@ -18,6 +18,7 @@ passes regardless of orphan count.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -33,10 +34,13 @@ from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
 from adminme.projections.interactions import InteractionsProjection
+from adminme.projections.money import MoneyProjection
 from adminme.projections.parties import PartiesProjection
+from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
+from adminme.projections.vector_search import VectorSearchProjection
 
 _log = logging.getLogger(__name__)
 
@@ -101,6 +105,9 @@ async def rig(tmp_path: Path):
     runner.register(TasksProjection())
     runner.register(RecurrencesProjection())
     runner.register(CalendarsProjection())
+    runner.register(PlacesAssetsAccountsProjection())
+    runner.register(MoneyProjection())
+    runner.register(VectorSearchProjection())
     await runner.start()
     try:
         yield {"log": log, "bus": bus, "runner": runner}
@@ -109,7 +116,14 @@ async def rig(tmp_path: Path):
         await log.close()
 
 
-async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> None:
+def _fake_embedding(text: str, dim: int = 1536) -> list[float]:
+    h = hashlib.sha256(text.encode("utf-8")).digest()
+    floats = [(h[i % 32] - 127.5) / 127.5 for i in range(dim)]
+    mag = sum(f * f for f in floats) ** 0.5
+    return [f / mag for f in floats]
+
+
+async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> None:
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -461,6 +475,188 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
             )
         )
 
+    # 50 places: 40 added, 10 updated.
+    for i in range(40):
+        await log.append(
+            _envelope(
+                "place.added",
+                {
+                    "place_id": f"pl{i:03d}",
+                    "display_name": f"Place {i}",
+                    "kind": ("home", "office", "school", "other")[i % 4],
+                    "address_json": {
+                        "street": f"{i} Example",
+                        "city": "Springfield",
+                        "state": "IL",
+                        "postal": "62704",
+                        "country": "US",
+                    },
+                    "geo_lat": 39.0 + i * 0.01,
+                    "geo_lon": -89.0 - i * 0.01,
+                },
+            )
+        )
+    for i in range(10):
+        await log.append(
+            _envelope(
+                "place.updated",
+                {
+                    "place_id": f"pl{i:03d}",
+                    "updated_at": "2026-04-20T10:00:00Z",
+                    "field_updates": {"display_name": f"Place {i} renamed"},
+                },
+            )
+        )
+
+    # 100 assets: 80 added, 20 updated.
+    for i in range(80):
+        await log.append(
+            _envelope(
+                "asset.added",
+                {
+                    "asset_id": f"as{i:03d}",
+                    "display_name": f"Asset {i}",
+                    "kind": ("vehicle", "appliance", "instrument", "other")[i % 4],
+                    "linked_place": f"pl{i % 40:03d}",
+                },
+            )
+        )
+    for i in range(20):
+        await log.append(
+            _envelope(
+                "asset.updated",
+                {
+                    "asset_id": f"as{i:03d}",
+                    "updated_at": "2026-04-20T11:00:00Z",
+                    "field_updates": {"display_name": f"Asset {i} updated"},
+                },
+            )
+        )
+
+    # 60 accounts: 50 added, 10 updated.
+    for i in range(50):
+        await log.append(
+            _envelope(
+                "account.added",
+                {
+                    "account_id": f"ac{i:03d}",
+                    "display_name": f"Account {i}",
+                    "organization_party_id": f"p{i % 100:03d}",
+                    "kind": ("utility", "subscription", "insurance", "bank")[i % 4],
+                    "status": "active",
+                    "next_renewal": f"2026-05-{1 + i % 28:02d}",
+                    "login_vault_ref": (
+                        f"op://Vault/acc-{i}" if i % 3 == 0 else None
+                    ),
+                },
+            )
+        )
+    for i in range(10):
+        await log.append(
+            _envelope(
+                "account.updated",
+                {
+                    "account_id": f"ac{i:03d}",
+                    "updated_at": "2026-04-20T12:00:00Z",
+                    "field_updates": {"status": "dormant"},
+                },
+            )
+        )
+
+    # 150 money flows: 100 recorded, 30 manually_added, 20 manually_deleted
+    # (of manually-added rows).
+    for i in range(100):
+        await log.append(
+            _envelope(
+                "money_flow.recorded",
+                {
+                    "flow_id": f"mf{i:03d}",
+                    "from_party_id": f"p{i % 100:03d}",
+                    "to_party_id": f"p{(i + 1) % 100:03d}",
+                    "amount_minor": 100 + i,
+                    "currency": "USD",
+                    "occurred_at": f"2026-04-{1 + i % 28:02d}T12:00:00Z",
+                    "kind": ("paid", "received", "owed", "reimbursable")[i % 4],
+                    "category": ("groceries", "utilities", "transport")[i % 3],
+                    "linked_account": f"ac{i % 50:03d}",
+                    "source_adapter": "plaid",
+                },
+            )
+        )
+    for i in range(30):
+        await log.append(
+            _envelope(
+                "money_flow.manually_added",
+                {
+                    "flow_id": f"mfm{i:03d}",
+                    "from_party_id": f"p{i % 100:03d}",
+                    "to_party_id": f"p{(i + 1) % 100:03d}",
+                    "amount_minor": 500 + i,
+                    "currency": "USD",
+                    "occurred_at": f"2026-04-{1 + i % 28:02d}T14:00:00Z",
+                    "kind": "paid",
+                    "category": "misc",
+                    "added_by_party_id": f"p{i % 100:03d}",
+                },
+            )
+        )
+    for i in range(20):
+        await log.append(
+            _envelope(
+                "money_flow.manually_deleted",
+                {
+                    "flow_id": f"mfm{i:03d}",
+                    "deleted_at": "2026-04-28T12:00:00Z",
+                    "deleted_by_party_id": f"p{i % 100:03d}",
+                },
+            )
+        )
+
+    # 40 embeddings: 35 normal, 5 privileged (skipped).
+    for i in range(35):
+        text = f"embedding text {i}"
+        await log.append(
+            _envelope(
+                "embedding.generated",
+                {
+                    "embedding_id": f"emb{i:03d}",
+                    "linked_kind": (
+                        "interaction",
+                        "artifact",
+                        "party_notes",
+                    )[i % 3],
+                    "linked_id": f"lnk{i:03d}",
+                    "embedding_dimensions": 1536,
+                    "embedding": _fake_embedding(text),
+                    "model_name": "text-embedding-3-small",
+                    "sensitivity": "normal",
+                    "source_text_sha256": hashlib.sha256(
+                        text.encode()
+                    ).hexdigest(),
+                },
+            )
+        )
+    for i in range(5):
+        text = f"privileged text {i}"
+        await log.append(
+            _envelope(
+                "embedding.generated",
+                {
+                    "embedding_id": f"embp{i:03d}",
+                    "linked_kind": "interaction",
+                    "linked_id": f"lnkp{i:03d}",
+                    "embedding_dimensions": 1536,
+                    "embedding": _fake_embedding(text),
+                    "model_name": "text-embedding-3-small",
+                    "sensitivity": "privileged",
+                    "source_text_sha256": hashlib.sha256(
+                        text.encode()
+                    ).hexdigest(),
+                },
+                sensitivity="privileged",
+            )
+        )
+
     latest = await log.latest_event_id()
     assert latest is not None
     await bus.notify(latest)
@@ -473,8 +669,11 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
         "projection:tasks",
         "projection:recurrences",
         "projection:calendars",
+        "projection:places_assets_accounts",
+        "projection:money",
+        "projection:vector_search",
     ):
-        await _wait_idle(bus, sid, timeout=15.0)
+        await _wait_idle(bus, sid, timeout=30.0)
 
     parties_tables = ["parties", "identifiers", "memberships", "relationships"]
     interactions_tables = [
@@ -487,6 +686,13 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     tasks_tables = ["tasks"]
     recurrences_tables = ["recurrences"]
     calendars_tables = ["calendar_events", "availability_blocks"]
+    paa_tables = ["places", "place_associations", "assets", "asset_owners", "accounts"]
+    money_tables = ["money_flows"]
+    # vec0 virtual tables don't read cleanly via `SELECT * FROM ...` for
+    # structural comparison — SQLite-vec returns the blob serialization
+    # of the embedding column which is deterministic, so direct snapshot
+    # works here too.
+    vector_tables = ["embeddings_meta"]
 
     pre_parties = _snapshot(runner.connection("parties"), parties_tables)
     pre_interactions = _snapshot(
@@ -497,6 +703,12 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     pre_tasks = _snapshot(runner.connection("tasks"), tasks_tables)
     pre_recurrences = _snapshot(runner.connection("recurrences"), recurrences_tables)
     pre_calendars = _snapshot(runner.connection("calendars"), calendars_tables)
+    pre_paa = _snapshot(runner.connection("places_assets_accounts"), paa_tables)
+    pre_money = _snapshot(runner.connection("money"), money_tables)
+    pre_vector = _snapshot(runner.connection("vector_search"), vector_tables)
+    pre_vector_idx_count = runner.connection("vector_search").execute(
+        "SELECT count(*) FROM vector_index"
+    ).fetchone()[0]
 
     await runner.rebuild("parties")
     await runner.rebuild("interactions")
@@ -505,6 +717,9 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     await runner.rebuild("tasks")
     await runner.rebuild("recurrences")
     await runner.rebuild("calendars")
+    await runner.rebuild("places_assets_accounts")
+    await runner.rebuild("money")
+    await runner.rebuild("vector_search")
 
     post_parties = _snapshot(runner.connection("parties"), parties_tables)
     post_interactions = _snapshot(
@@ -515,6 +730,12 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     post_tasks = _snapshot(runner.connection("tasks"), tasks_tables)
     post_recurrences = _snapshot(runner.connection("recurrences"), recurrences_tables)
     post_calendars = _snapshot(runner.connection("calendars"), calendars_tables)
+    post_paa = _snapshot(runner.connection("places_assets_accounts"), paa_tables)
+    post_money = _snapshot(runner.connection("money"), money_tables)
+    post_vector = _snapshot(runner.connection("vector_search"), vector_tables)
+    post_vector_idx_count = runner.connection("vector_search").execute(
+        "SELECT count(*) FROM vector_index"
+    ).fetchone()[0]
 
     assert pre_parties == post_parties
     assert pre_interactions == post_interactions
@@ -523,6 +744,10 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     assert pre_tasks == post_tasks
     assert pre_recurrences == post_recurrences
     assert pre_calendars == post_calendars
+    assert pre_paa == post_paa
+    assert pre_money == post_money
+    assert pre_vector == post_vector
+    assert pre_vector_idx_count == post_vector_idx_count
 
     # Sanity: rebuilt state has non-zero rows.
     assert len(post_parties["parties"]) == 101
@@ -534,6 +759,20 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
     assert len(post_recurrences["recurrences"]) == 20
     # Calendar: 30 added - 5 hard-deleted = 25.
     assert len(post_calendars["calendar_events"]) == 25
+    # 07a sanity counts.
+    assert len(post_paa["places"]) == 40
+    assert len(post_paa["assets"]) == 80
+    assert len(post_paa["accounts"]) == 50
+    # 100 recorded + 30 manually_added; manually_deleted is soft-delete
+    # so rows persist.
+    assert len(post_money["money_flows"]) == 130
+    deleted_count = runner.connection("money").execute(
+        "SELECT count(*) FROM money_flows WHERE deleted_at IS NOT NULL"
+    ).fetchone()[0]
+    assert deleted_count == 20
+    # 35 normal + 5 privileged skipped.
+    assert len(post_vector["embeddings_meta"]) == 35
+    assert post_vector_idx_count == 35
 
     # Cross-DB referential-integrity audit (informational only per [§2.3]).
     # Open parties DB and check that commitments.owed_by_party,
@@ -584,11 +823,60 @@ async def test_rebuild_preserves_all_seven_projections(rig: dict[str, Any]) -> N
         "SELECT owner_party FROM calendar_events WHERE tenant_id='tenant-a'",
         party_ids,
     )
+
+    # 07a cross-DB orphan audit (informational).
+    paa_conn = runner.connection("places_assets_accounts")
+    place_ids = {
+        row[0]
+        for row in paa_conn.execute(
+            "SELECT place_id FROM places WHERE tenant_id='tenant-a'"
+        )
+    }
+    asset_ids = {
+        row[0]
+        for row in paa_conn.execute(
+            "SELECT asset_id FROM assets WHERE tenant_id='tenant-a'"
+        )
+    }
+    account_ids = {
+        row[0]
+        for row in paa_conn.execute(
+            "SELECT account_id FROM accounts WHERE tenant_id='tenant-a'"
+        )
+    }
+
+    asset_place_orphans = _orphans_of(
+        paa_conn,
+        "SELECT linked_place FROM assets WHERE tenant_id='tenant-a'",
+        place_ids,
+    )
+    account_org_orphans = _orphans_of(
+        paa_conn,
+        "SELECT organization FROM accounts WHERE tenant_id='tenant-a'",
+        party_ids,
+    )
+    account_asset_orphans = _orphans_of(
+        paa_conn,
+        "SELECT linked_asset FROM accounts WHERE tenant_id='tenant-a'",
+        asset_ids,
+    )
+    money_acct_orphans = _orphans_of(
+        runner.connection("money"),
+        "SELECT linked_account FROM money_flows WHERE tenant_id='tenant-a'",
+        account_ids,
+    )
+
     _log.info(
         "cross-DB orphan audit: commitments.owed_by=%d, tasks.assignee=%d, "
-        "tasks.recurring_id=%d, calendar.owner_party=%d",
+        "tasks.recurring_id=%d, calendar.owner_party=%d, "
+        "assets.linked_place=%d, accounts.organization=%d, "
+        "accounts.linked_asset=%d, money.linked_account=%d",
         len(c_orphans),
         len(t_party_orphans),
         len(t_rec_orphans),
         len(cal_orphans),
+        len(asset_place_orphans),
+        len(account_org_orphans),
+        len(account_asset_orphans),
+        len(money_acct_orphans),
     )
