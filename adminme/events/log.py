@@ -136,6 +136,7 @@ class EventLog:
 
     MIGRATIONS: tuple[tuple[int, str], ...] = (
         (1, "0001_initial.sql"),
+        (2, "0002_full_envelope.sql"),
     )
 
     def __init__(self, db_path: Path, encryption_key: bytes) -> None:
@@ -347,11 +348,7 @@ class EventLog:
             placeholders = ",".join("?" for _ in types)
             where.append(f"type IN ({placeholders})")
             params.extend(types)
-        sql = (
-            "SELECT event_id, event_at_ms, tenant_id, owner_scope, type, version,"
-            "       correlation_id, source, payload"
-            " FROM events"
-        )
+        sql = _SELECT_COLUMNS + " FROM events"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY event_id ASC LIMIT ?"
@@ -366,9 +363,7 @@ class EventLog:
     def _get_one(self, event_id: str) -> sqlcipher3.Row | None:
         cur = self._conn.cursor()
         cur.execute(
-            "SELECT event_id, event_at_ms, tenant_id, owner_scope, type, version,"
-            "       correlation_id, source, payload"
-            " FROM events WHERE event_id = ?",
+            _SELECT_COLUMNS + " FROM events WHERE event_id = ?",
             (event_id,),
         )
         return cur.fetchone()
@@ -381,9 +376,8 @@ class EventLog:
         cur = self._conn.cursor()
         return list(
             cur.execute(
-                "SELECT event_id, event_at_ms, tenant_id, owner_scope, type, version,"
-                "       correlation_id, source, payload"
-                " FROM events WHERE correlation_id = ? ORDER BY event_id ASC",
+                _SELECT_COLUMNS
+                + " FROM events WHERE correlation_id = ? ORDER BY event_id ASC",
                 (correlation_id,),
             )
         )
@@ -419,7 +413,19 @@ class EventLog:
         )
 
 
+_SELECT_COLUMNS = (
+    "SELECT event_id, event_at_ms, tenant_id, owner_scope, type, version,"
+    "       schema_version, occurred_at, recorded_at, source_adapter,"
+    "       source_account_id, visibility_scope, sensitivity,"
+    "       correlation_id, causation_id, source, payload,"
+    "       raw_ref, actor_identity"
+)
+
+
 def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
+    """Return the full 15-column envelope shape (plus the legacy `version`
+    and `source` MVP fields for backwards compatibility during the prompt-04
+    transition). Prompt 05+ callers should read `schema_version` directly."""
     return {
         "event_id": row["event_id"],
         "event_at_ms": row["event_at_ms"],
@@ -427,9 +433,19 @@ def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
         "owner_scope": row["owner_scope"],
         "type": row["type"],
         "version": row["version"],
+        "schema_version": row["schema_version"],
+        "occurred_at": row["occurred_at"],
+        "recorded_at": row["recorded_at"],
+        "source_adapter": row["source_adapter"],
+        "source_account_id": row["source_account_id"],
+        "visibility_scope": row["visibility_scope"],
+        "sensitivity": row["sensitivity"],
         "correlation_id": row["correlation_id"],
+        "causation_id": row["causation_id"],
         "source": json.loads(row["source"]) if row["source"] is not None else None,
         "payload": json.loads(row["payload"]),
+        "raw_ref": row["raw_ref"],
+        "actor_identity": row["actor_identity"],
     }
 
 
