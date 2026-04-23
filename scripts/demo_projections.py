@@ -21,12 +21,16 @@ from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.artifacts.queries import list_recent
+from adminme.projections.calendars import CalendarsProjection
+from adminme.projections.calendars.queries import today as calendars_today
 from adminme.projections.commitments import CommitmentsProjection
 from adminme.projections.commitments.queries import pending_approval
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.queries import recent_with
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import all_parties, list_household_members
+from adminme.projections.recurrences import RecurrencesProjection
+from adminme.projections.recurrences.queries import all_active as all_recurrences
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
 from adminme.projections.tasks.queries import open_for_member
@@ -70,6 +74,8 @@ async def main() -> None:
         runner.register(ArtifactsProjection())
         runner.register(CommitmentsProjection())
         runner.register(TasksProjection())
+        runner.register(RecurrencesProjection())
+        runner.register(CalendarsProjection())
         await runner.start()
 
         # 1 household + 3 members + 2 external parties
@@ -228,6 +234,60 @@ async def main() -> None:
                     )
                 )
 
+        # 2 recurrences (one birthday, one oil_change)
+        await log.append(
+            _env(
+                "recurrence.added",
+                {
+                    "recurrence_id": "r-birthday-m1",
+                    "linked_kind": "party",
+                    "linked_id": "m1",
+                    "kind": "birthday",
+                    "rrule": "FREQ=YEARLY",
+                    "next_occurrence": "2026-06-01T00:00:00Z",
+                    "lead_time_days": 7,
+                    "trackable": True,
+                },
+            )
+        )
+        await log.append(
+            _env(
+                "recurrence.added",
+                {
+                    "recurrence_id": "r-oil-change",
+                    "linked_kind": "household",
+                    "linked_id": "hh",
+                    "kind": "oil_change",
+                    "rrule": "FREQ=MONTHLY;INTERVAL=3",
+                    "next_occurrence": "2026-07-01T00:00:00Z",
+                    "lead_time_days": 14,
+                },
+            )
+        )
+
+        # 4 calendar events (two today, two this week)
+        cal_specs = [
+            ("ce-today-1", "2026-04-23T09:00:00Z", "2026-04-23T10:00:00Z", "m1"),
+            ("ce-today-2", "2026-04-23T14:00:00Z", "2026-04-23T15:00:00Z", "m2"),
+            ("ce-week-1", "2026-04-25T11:00:00Z", "2026-04-25T12:00:00Z", "m1"),
+            ("ce-week-2", "2026-04-27T16:00:00Z", "2026-04-27T17:00:00Z", "m2"),
+        ]
+        for uid, start, end, attendee in cal_specs:
+            await log.append(
+                _env(
+                    "calendar.event_added",
+                    {
+                        "source": "google",
+                        "external_event_id": uid,
+                        "calendar_id": "cal-primary",
+                        "summary": f"Demo calendar event {uid}",
+                        "start": start,
+                        "end": end,
+                        "attendees": [{"party_id": attendee}],
+                    },
+                )
+            )
+
         latest = await log.latest_event_id()
         assert latest is not None
         await bus.notify(latest)
@@ -241,6 +301,8 @@ async def main() -> None:
                 "projection:artifacts",
                 "projection:commitments",
                 "projection:tasks",
+                "projection:recurrences",
+                "projection:calendars",
             ):
                 s = await bus.subscriber_status(sid)
                 if s["lag_count"] > 0:
@@ -302,6 +364,30 @@ async def main() -> None:
         print(f"\nOpen tasks for m1 ({len(open_t)}):")
         for t in open_t:
             print(f"  {t['task_id']:<6} {t['status']:<12} {t['title']}")
+
+        conn_r = runner.connection("recurrences")
+        recs = all_recurrences(conn_r, tenant_id="tenant-demo")
+        print(f"\nRecurrences ({len(recs)}):")
+        for r in recs:
+            print(
+                f"  {r['recurrence_id']:<16} {r['kind']:<12} "
+                f"next={r['next_occurrence']}"
+            )
+
+        conn_cal = runner.connection("calendars")
+        today_events = calendars_today(
+            conn_cal,
+            tenant_id="tenant-demo",
+            member_party_id="m1",
+            today_iso="2026-04-23T00:00:00Z",
+            tz_name="UTC",
+        )
+        print(f"\nCalendar events today (m1) ({len(today_events)}):")
+        for e in today_events:
+            print(
+                f"  {e['external_uid']:<14} {e['start_at']}-{e['end_at']}  "
+                f"{e['summary']}"
+            )
 
         await runner.stop()
         await log.close()
