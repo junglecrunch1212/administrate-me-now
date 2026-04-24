@@ -44,7 +44,7 @@ James will attach `prompts/PROMPT_SEQUENCE.md`. This is the **single canonical c
 
 - The full sequence (prompts 00 through 19).
 - The dependency graph.
-- The current universal preamble (at the bottom of the file).
+- The current universal preamble (slim, post-PM-7).
 - The per-prompt structure template.
 
 ### Step 4 — Identify current state and this session's task
@@ -103,25 +103,27 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-24 (accuracy-fix update — `07c-draft.md` reference removed; root `PROMPT_SEQUENCE.md` removal noted).
+**Last updated:** 2026-04-24 (07c drafted; PM-7 + 07a + 07b confirmed merged; this update reflects the new Partner session that produced 07c).
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
-**Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06.
+**Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06, 07a, 07b, **PM-7 infrastructure PR (slim preamble + scripts/verify_invariants.sh)**.
 
-**Prompts with PR open, not yet merged:** 07a (commits `81290b0 / edd0c34 / 71731fb / <commit4>`), 07b (commits `05e13dd / 3c14625 / 2546061 / <commit4>`).
+**Prompts with PR open, not yet merged:** none.
+
+**Prompts drafted, ready for Claude Code execution:** **07c** (`prompts/07c-xlsx-workbooks-reverse.md`, drafted 2026-04-24, four-commit discipline, ~700 lines, slim form per post-PM-7 preamble).
 
 **Next task queue (in order):**
 
-1. **Universal preamble extraction** — land `scripts/verify_invariants.sh` + slim preamble in `prompts/PROMPT_SEQUENCE.md` per `docs/universal_preamble_extension.md` proposal. Single-purpose infrastructure PR. This is PM-7 execution.
-2. **Prompt 07c refactor** — xlsx_workbooks reverse adapter. **No draft exists yet**; Partner drafts 07c from scratch using the pre-split `prompts/07-projections-ops.md` xlsx-reverse subsection as source material. Draft against the post-extraction slim preamble (so the universal preamble extension in task #1 must complete first). Output is a new `prompts/07c-xlsx-workbooks-reverse.md`.
-3. **07.5 checkpoint refactor** — original 07.5 was written assuming 11 projections built in one prompt. After the 07a/07b/07c split, it needs to audit all three ops prompts together. **Do NOT refactor until 07c is written + merged.** See UT-1.
-4. **Prompt 08 refactor** — Session + scope enforcement + governance. Large; may split into 08a/08b. See UT-3.
+1. **Claude Code executes 07c** — produces PR; James reviews and merges.
+2. **Partner session: QC of 07c merge** — three-job pass per `docs/qc_rubric.md`. Update this handoff. Confirm verify_invariants.sh's extended `ALLOWED_EMITS` is honored. Confirm sidecar JSON pathway is structurally as drafted.
+3. **Partner session: refactor 07.5** — original checkpoint was written assuming 11 projections built in one prompt. After the 07a/07b/07c split, it audits all three ops prompts together as a cohort. Per UT-1, this happens AFTER 07c ships.
+4. **Partner session: refactor 08** — Session + scope enforcement + governance + observation mode. Large; UT-3 still open (likely splits into 08a/08b). After 07c, the TODO(prompt-08) marker count grows again — reverse daemon's emit path is currently un-Session-wrapped, and 08 closes that seam.
 5. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
 
-**Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5. These exist in `prompts/` but were drafted before the 07 split and before carry-forward discipline emerged. Each needs a refactor session before Claude Code executes it.
+**Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. Each needs a refactor session before Claude Code executes it. The slim preamble means each refactor is shorter than 07a/07b were.
 
-**Prompts not yet drafted:** 07c. Produced by next Partner session after PM-7 lands.
+**Prompts not yet drafted:** none. 07c was the last unwritten prompt; everything from 08 onward exists in unrefactored form.
 
 ---
 
@@ -155,9 +157,9 @@ Claude Code extends scope helpfully unless told otherwise. Format: "Do not X —
 
 First used in prompt 05 (registers `party.merged` v1 schema stub even though prompt 10b emits it). Trade-off: schema shape changes when pipeline is built pay upcaster cost (D7). Accepted so far.
 
-### PM-7: Carry-forwards firing in 3+ prompts graduate to universal preamble — HARD (CURRENT)
+### PM-7: Carry-forwards firing in 3+ prompts graduate to universal preamble — HARD (EXECUTED)
 
-See `docs/universal_preamble_extension.md`. CF-1..CF-7 accumulated in 07a/07b and should extract. Status: proposed, **not yet executed**. Next Partner session executes it.
+See `docs/universal_preamble_extension.md`. CF-1..CF-7 accumulated in 07a/07b and were extracted via the PM-7 infrastructure PR (slim preamble in `prompts/PROMPT_SEQUENCE.md` + canonical `scripts/verify_invariants.sh`). Status: **EXECUTED 2026-04-24**. All future prompts (07c onward) drafted in slim form; cross-cutting discipline lives in the preamble + verify script, not in each prompt.
 
 ### PM-8: Inline implementation code in prompts is a warning sign — SOFT
 
@@ -167,9 +169,9 @@ If Deliverables section runs over 5K tokens, it's spec-heavy rather than contrac
 
 Prompt 07b ships Lists/Members/Assumptions/Dashboard/Balance Sheet/Pro Forma/Budget vs Actual as sheet-builder TODOs. They populate when emitting prompts ship. Fragmenting into more prompts destroys cohesion.
 
-### PM-10: Stub files from earlier scaffold prompts need explicit disposition — SOFT
+### PM-10: Stub files from earlier scaffold prompts need explicit disposition — SOFT (07c resolved xlsx stubs)
 
-Prompt 02 scaffolded `xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` as stubs. Prompt 07b built alongside rather than in them. Dead code in young codebase is debt. Every prompt touching an area with scaffolded stubs explicitly decides: repurpose, delete, or continue ignoring. 07c will decide on `reverse.py` + `schemas.py` + `forward.py`.
+Prompt 02 scaffolded `xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` as stubs. Prompt 07b built alongside rather than in them. **07c deletes all three** — forward daemon code lives in `__init__.py`/`builders.py`; reverse daemon lives in `adminme/daemons/xlsx_sync/reverse.py` per BUILD.md §3.11 line 995; `schemas.py` was empty noise. PM-10 remains as a SOFT pattern for future prompts: every prompt touching an area with scaffolded stubs explicitly decides repurpose / delete / continue ignoring.
 
 ### PM-11: Load only what the session needs from the zip — HARD
 
@@ -179,9 +181,20 @@ Partner sessions that ingest the whole codebase run out of headroom before produ
 
 Refactoring doesn't just fix — it also removes what the preamble now covers. Extraction is as valuable as addition. A refactored prompt should be **smaller** than the draft it replaced if the preamble has grown to cover cross-cutting concerns.
 
-### PM-13: Project knowledge is retrievable via search, not enumerable via filesystem — HARD (NEW)
+### PM-13: Project knowledge is retrievable via search, not enumerable via filesystem — HARD
 
 Claude Chat's Project knowledge is not filesystem-browsable. The `/mnt/project/` mount shows only a subset of uploaded files. Partner discovers Project knowledge contents via the `project_knowledge_search` tool. Running `project_knowledge_search` on targeted terms (e.g. "SYSTEM_INVARIANTS binding invariants", "partner_handoff current build state") confirms files are present. **Never claim a file is missing from Project knowledge based on `/mnt/project/` listing alone — only an empty `project_knowledge_search` result is authoritative evidence of absence.** Partner runs these searches proactively at startup, not when prompted.
+
+### PM-14: Daemons live in `adminme/daemons/`, projections in `adminme/projections/` — HARD (NEW)
+
+Introduced in 07c. The xlsx reverse daemon is architecturally an L1-adjacent adapter (ingests external state — file edits — and emits typed events into the event log). Per BUILD.md §3.11 line 995, it lives at `adminme/daemons/xlsx_sync/reverse.py`, NOT in `adminme/projections/xlsx_workbooks/`. The two directories enforce a structural distinction:
+
+- `adminme/projections/` — pure-functional event consumers; emit only system events; `verify_invariants.sh`'s §2.2 audit applies (`ALLOWED_EMIT_FILES` allowlist).
+- `adminme/daemons/` — adapters/daemons that emit domain events on external authority (file edits, webhook events, time-based ticks). NOT covered by the §2.2 projection-emit allowlist.
+
+The forward xlsx daemon is the exception: it lives in `adminme/projections/xlsx_workbooks/` because it IS a projection (consumes events, regenerates derived state). It only EMITS system events; that's what §2.2 permits.
+
+Future adapter prompts (11, 12) will populate `adminme/adapters/` for adapters that don't share the daemon characteristic (Gmail, Plaid, etc.). The naming convention is therefore: `daemons/` for long-running file/clock-based watchers; `adapters/` for request/response or pull-based external integrations. Both emit domain events; both live outside the projections audit scope.
 
 ---
 
@@ -189,7 +202,7 @@ Claude Chat's Project knowledge is not filesystem-browsable. The `/mnt/project/`
 
 ### UT-1: When to refactor checkpoint 07.5
 
-Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c split, it audits three prompts together. **Refactor 07.5 AFTER 07c ships**, not before — pre-07c refactor would encode 07c assumptions that may not hold.
+Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c split, it audits three prompts together. **Refactor 07.5 AFTER 07c ships**, not before — pre-07c refactor would encode 07c assumptions that may not hold. Status: still open until 07c merges.
 
 ### UT-2: Proactive pipeline registration path (10c)
 
@@ -197,7 +210,7 @@ Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c split, it 
 
 ### UT-3: Session / scope enforcement seam (prompt 08) may need splitting
 
-38+ `# TODO(prompt-08)` markers across projection query files (growing — more after 07b merges, more after 07c). Prompt 08 wraps every query with `Session` (authMember + viewMember + scope). Large — likely ≥15K tokens even with slim preamble. May need 08a (Session construction + scope enforcement) / 08b (privacy filter + authority gate). Decide when 08 is refactored.
+38+ `# TODO(prompt-08)` markers across projection query files (growing — more after 07b merged, more after 07c merges). Prompt 08 wraps every query with `Session` (authMember + viewMember + scope). Large — likely ≥15K tokens even with slim preamble. May need 08a (Session construction + scope enforcement) / 08b (privacy filter + authority gate). Decide when 08 is refactored. After 07c merges, UT-7 also feeds into this prompt.
 
 ### UT-4: Placeholder values in xlsx protection passwords
 
@@ -205,11 +218,15 @@ Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c split, it 
 
 ### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG
 
-07a and 07b entries have literal `<commit4>` and `<merge date>` placeholders. Filled post-merge during Partner's QC pass. Rubric calls this out.
+07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. Filled post-merge during Partner's QC pass per the rubric. After 07c merges, its BUILD_LOG entry will need the same treatment.
 
-### UT-6: Sidecar-state JSON pathway for xlsx round-trip
+### UT-6: Sidecar-state JSON pathway for xlsx round-trip — RESOLVED in 07c draft
 
-07b deferred the sidecar-state JSON write. 07c must choose: (a) add a sidecar PR to 07b to have the forward daemon write sidecar-state after each regeneration (more robust to process restarts), or (b) 07c takes a snapshot on adapter startup from the just-written workbook (less robust). Depth-read BUILD.md §3.11 during 07c refactor to confirm whether spec specifies one path. If ambiguous, recommend (a). Resolved during 07c refactor.
+Per BUILD.md §3.11 line 1009 + line 1015, the sidecar is written by both daemons: forward writes it after each regeneration (in the same lock as the xlsx write), and reverse rewrites it at the end of each cycle. Sidecar lives at `<instance_dir>/projections/.xlsx-state/<workbook>/<sheet>.json` (sibling to xlsx files). 07c implements both halves. **Resolved.**
+
+### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — open until prompt 08 (NEW)
+
+The xlsx reverse daemon (07c) emits domain events through `EventLog.append()` directly, without routing through Session/guardedWrite/scope checks. This is the simple seam for now. A hostile file editor (or a malware-injected edit) could in principle drive the daemon to emit events on behalf of the principal without any rate-limit, action-gate, or authority check. Prompt 08 (session + scope + governance) will close this — reverse-emitted events should route through guardedWrite with the daemon as the agent identity. Carry-forward for 08.
 
 ---
 
@@ -260,15 +277,22 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── build_log.md                             # LIVE: Claude Code's record
 │   ├── partner_handoff.md                       # THIS FILE
 │   ├── qc_rubric.md                             # companion
-│   ├── universal_preamble_extension.md          # PM-7 proposal
+│   ├── universal_preamble_extension.md          # PM-7 proposal (EXECUTED)
 │   ├── preflight-report.md                      # prompt 00's artifact
 │   ├── adrs/                                    # ADRs (longer form than DECISIONS entries)
 │   └── reference/                               # mirrored external docs
+├── scripts/
+│   ├── verify_invariants.sh                     # canonical invariant-grep (PM-7)
+│   ├── demo_event_log.py
+│   ├── demo_projections.py
+│   ├── demo_xlsx_forward.py
+│   └── demo_xlsx_roundtrip.py                   # added by 07c
 ├── prompts/
-│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy)
+│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy; slim preamble)
 │   ├── 00-preflight.md ... 19-phase-b-smoke-test.md
 │   ├── 07a-projections-ops-spine.md
 │   ├── 07b-xlsx-workbooks-forward.md
+│   ├── 07c-xlsx-workbooks-reverse.md            # NEW: drafted 2026-04-24
 │   ├── 07.5-checkpoint-projection-consistency.md
 │   ├── d01-*.md ... d08-*.md                    # diagnostic prompts
 │   ├── prompt-01a-openclaw-cheatsheet.md
@@ -278,11 +302,12 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 ├── adminme/
 │   ├── events/{log,bus,envelope,registry}.py
 │   ├── events/schemas/{ingest,crm,domain,governance,ops,system}.py
-│   ├── projections/{base,runner}.py + 11 subdirs
+│   ├── projections/{base,runner}.py + 11 subdirs (10 sqlite + xlsx_workbooks)
+│   ├── daemons/                                 # NEW (PM-14): adapters/daemons that emit domain events
+│   │   └── xlsx_sync/                           # populated by 07c: diff.py, sheet_schemas.py, reverse.py
 │   ├── lib/instance_config.py
-│   └── (pipelines, products, openclaw_plugins, daemons, cli, adapters — stubs or partial)
+│   └── (pipelines, products, openclaw_plugins, cli, adapters — stubs or partial)
 ├── tests/{unit,integration,fixtures,e2e}/
-├── scripts/demo_*.py
 ├── console/  bootstrap/  packs/
 └── pyproject.toml  poetry.lock  .gitignore
 ```
