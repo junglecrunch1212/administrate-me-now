@@ -6,7 +6,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 ### Prompt 07a — ops spine projections (places_assets_accounts, money, vector_search)
 - **Refactored**: by Partner in Claude Chat, pre-session. Prompt file: prompts/07a-projections-ops-spine.md (~600 lines, quality bar = 06).
 - **Session merged**: PR #<N>, commits 81290b0 / edd0c34 / 71731fb / <commit4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Outcome**: MERGED
 - **Evidence**:
   - 3 projections: places_assets_accounts (3 entity tables + 2 association tables), money (1 table with is_manual + soft-delete), vector_search (vec0 virtual table + embeddings_meta sidecar).
   - 10 new event types registered at v1 per [D7] (place/asset/account × added/updated, money_flow × 3, embedding.generated).
@@ -34,7 +34,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 ### Prompt 07b — xlsx_workbooks forward daemon
 - **Refactored**: by Partner in Claude Chat. Prompt file: prompts/07b-xlsx-workbooks-forward.md.
 - **Session merged**: PR #<N>, commits 05e13dd / 3c14625 / 2546061 / <commit4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Outcome**: MERGED
 - **Evidence**:
   - xlsx_workbooks projection built as forward-only daemon consuming events from 10 projections; structurally a projection per [§2.2], emits only the categorized system event `xlsx.regenerated`.
   - 1 new event type at v1: `xlsx.regenerated` — in new `schemas/system.py` module to keep domain event files clean.
