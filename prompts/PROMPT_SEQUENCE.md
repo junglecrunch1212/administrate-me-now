@@ -292,30 +292,48 @@ See `ADMINISTRATEME_FIELD_MANUAL.md` chapter 7 for ongoing operations (deploys, 
 
 ### The universal preamble (paste before every prompt)
 
-Before pasting any prompt (00 through 19), paste this preamble first:
+Before pasting any prompt (00 through 19), paste this preamble first.
+
+---
 
 > **Phase + repository + documentation + sandbox discipline.**
 >
-> You are in **Phase A**: generating code in Anthropic's sandbox against https://github.com/junglecrunch1212/administrate-me-now. The Mac Mini is not involved. You do not contact live OpenClaw, live BlueBubbles, live Plaid, or any other external service. Tests that require those are marked `@pytest.mark.requires_live_services` and skipped.
+> You are in **Phase A**: generating code in Anthropic's sandbox against https://github.com/junglecrunch1212/administrate-me-now. The Mac Mini is not involved. You do not contact live OpenClaw, live BlueBubbles, live Plaid, or any other external service. Tests that require those are marked `@pytest.mark.requires_live_services` and skipped. If a prompt is ambiguous about which phase it belongs to, the answer is always Phase A.
 >
-> **Sandbox egress is allowlisted.** `github.com` and `raw.githubusercontent.com` work. Most other hosts return HTTP 403 `x-deny-reason: host_not_allowed` from Anthropic's proxy. Do NOT interpret 403s as "the site is down" — they mean the sandbox won't reach non-allowlisted hosts. If a prompt tells you to WebFetch a non-GitHub URL and you get 403, that's expected; document the gap and move on per prompt 00.5's pattern.
+> **Sandbox egress is allowlisted.** `github.com` and `raw.githubusercontent.com` work. Most other hosts return HTTP 403 `x-deny-reason: host_not_allowed` from Anthropic's proxy. A 403 does not mean the site is down — it means the sandbox won't reach it. If a prompt tells you to WebFetch a non-GitHub URL and you get 403, that's expected; document the gap and move on per prompt 00.5's pattern.
 >
-> **Session start (required sequence):** Before reading any artifact or committing any code, do:
+> **Session-start sequence (required):**
 > ```
 > git checkout main
 > git pull origin main
-> git checkout -b phase-<NN>-<slug>   # e.g. phase-03-event-log-bus
+> git checkout -b phase-<NN>-<slug>
 > ```
-> This gives you a clean workspace based on the operator's latest approved state, isolated on a branch that cannot accidentally modify `main`. Do NOT `git pull` again during the session — if the operator merges other work while yours is in progress, you will pick it up on the *next* session.
+> The harness may auto-reassign you to `claude/<random>` regardless of the `-b` name. Work on whatever branch you actually get — do not fight it. Do NOT `git pull` again during the session. Do NOT push to `main`. You open a PR at the end; James reviews and merges.
 >
-> When a prompt tells you to read something, READ IT — do not skim, do not assume, do not infer from your training. If it says "Read `ADMINISTRATEME_BUILD.md` section X," open the file and read section X.
+> **Poetry install as needed.** If `pytest` fails with `ModuleNotFoundError: No module named 'sqlcipher3'` (or similar), run `poetry install 2>&1 | tail -5` and retry. Sandbox warm-state quirk; do not fix in code.
 >
-> When a prompt says "per OpenClaw docs" or "per Plaid docs" or any external documentation reference, read from `docs/reference/<section>/` — the local mirror populated by prompt 00.5 (GitHub-first fetch). **Do NOT use WebFetch to pull these docs live.** The mirror is the version-pinned source of truth. If a referenced file is missing from `docs/reference/`, stop the session and report that prompt 00.5 is incomplete or the gap is documented in `docs/reference/_gaps.md`.
+> **Read before acting.** When a prompt tells you to read something, READ IT — do not skim, do not assume, do not infer from training. Use targeted line ranges (`sed -n '<start>,<end>p'`) for large files; never full-read `ADMINISTRATEME_BUILD.md`, `ADMINISTRATEME_CONSOLE_PATTERNS.md`, `ADMINISTRATEME_REFERENCE_EXAMPLES.md`, `ADMINISTRATEME_DIAGRAMS.md`, or `ADMINISTRATEME_CONSOLE_REFERENCE.html`. If a file or range listed in a prompt's "Read first" block does not exist in the repo, stop and report — do not proceed.
 >
-> Commit your work frequently with honest messages on the branch. When the prompt's stop condition is met:
-> ```
-> git push origin phase-<NN>-<slug>
-> ```
-> Do NOT open the PR yourself and do NOT push to `main`. The operator reviews the branch, opens the PR, and merges when they've reviewed the work.
+> **External documentation is mirrored.** When a prompt says "per OpenClaw docs" or "per Plaid docs" or any external-doc reference, read from `docs/reference/<section>/` (the local mirror populated by prompt 00.5). Do NOT use WebFetch to pull these docs live. If a referenced file is missing, either the mirror is incomplete (stop and finish prompt 00.5) or the content is a documented gap (check `docs/reference/_gaps.md`).
+>
+> **Four-commit discipline.** Every prompt structures its work as four incremental commits — typically schema/plumbing, first-module build, second-module build, then integration + verification + BUILD_LOG append + push. If a turn times out mid-commit, stop; James re-launches. Commit 4 includes appending the structured entry to `docs/build_log.md` (template in the prompt's Commit 4 block) — this is not a separate PR, it's part of Commit 4's changeset.
+>
+> **Cross-cutting invariant verification** is `bash scripts/verify_invariants.sh` — one line in Commit 4's verification block. It checks [§8]/[D6] (no LLM/embedding SDK imports in adminme/), [§15]/[D15] (no hardcoded instance paths), [§12.4] (no tenant identity in platform code), [§2.2] (projections emit only allowed system events, only from allowed files), and pipeline → projection direct writes. Exits non-zero on any violation and prints the offending lines. Do not duplicate its checks inline in the prompt.
+>
+> **Schema conventions.** New event types register at `v1` per [D7]. Migrations (and upcasters when the schema shape changes) compose forward only. Projection schemas use SQLite `CHECK` constraints on closed-enum columns (e.g. `kind IN (...)`, `status IN (...)`, `sensitivity IN ('normal','sensitive','privileged')`) and NOT on open columns (display_name, category, notes). Composite PK `(tenant_id, <entity_id>)` for multi-tenant projection tables. Cross-DB FK references are documentation-only comments; SQLite cannot enforce FKs across separate projection DBs per [§2.3].
+>
+> **Tenant-identity firewall.** Platform code under `adminme/` must not reference "James", "Laura", "Charlie", "Stice", "Morningside", or any other specific tenant name per [§12.4]. These names live in `tests/fixtures/` only, with `# fixture:tenant_data:ok` on the relevant line if ambiguity warrants. If a prompt's illustrative example uses a name, it's illustrative — the shipped code stays tenant-agnostic. The verify script catches violations.
+>
+> **Citation discipline.** When a decision or invariant shapes code, cite it in the code comment or docstring. Formats: `[§N]` for SYSTEM_INVARIANTS.md section N, `[DN]` for DECISIONS.md entry N, `[arch §N]` for architecture-summary.md section N, `[cheatsheet Qn]` for openclaw-cheatsheet.md question n. BUILD_LOG entries under Evidence cite the invariants that shaped the implementation.
+>
+> **Async-subscriber test discipline.** When a test appends an event and then reads a projection, it MUST call `notify(event_id)` on the bus and then `_wait_for_checkpoint(bus, subscriber_id, event_id)` before the read assertion. For "event NOT landing" tests (privileged-skipped, filter rejected, etc.), append a follow-up innocuous event after the one under test, notify + wait-for-checkpoint on the follow-up, THEN assert the original's absence. Without the follow-up, the subscriber may not have processed the earlier event yet and your "absence" assertion is just a timing artifact.
+>
+> **Failure-mode handler-direct discipline.** When a test wants to assert "a malformed write does not land" (CHECK-constraint failure, IntegrityError, schema-validation reject), call the handler or sheet-builder function directly with a test connection — do not route through the bus + subscriber. Routing a deliberately-bad event through the bus puts the subscriber in a degraded state and wrecks subsequent tests.
+>
+> **Mypy preflight for new libraries.** If a prompt adds an import from a library not already in the codebase, run `poetry run mypy adminme/ 2>&1 | tail -10` before Commit 1. If mypy complains about missing stubs, add the library to the `[[tool.mypy.overrides]]` block in `pyproject.toml` with `ignore_missing_imports = true` as part of Commit 1.
+>
+> **PR creation with gh/MCP fallback.** After pushing your branch, try `gh pr create` first. If `gh` returns `command not found` or a GitHub API permission error, fall back to `mcp__github__create_pull_request` with `base=main`, `head=<your branch>`, `owner=junglecrunch1212`, `repo=administrate-me-now`, title + body from the prompt's template. If the MCP tool also fails: report the exact error and stop. Do not retry with modified flags — James decides next step.
+>
+> **Post-PR: one check, then stop.** After the PR opens, the MCP tool returns a webhook-subscription message. Do ONE round of `mcp__github__pull_request_read` with `method=get_status`, `get_reviews`, and `get_comments`. Report whatever is returned. Then STOP. Do not poll again. Do not respond to webhook events that arrive after the stop message. Do not merge the PR yourself.
 
-This preamble is a reminder, not a duplicate instruction. The behaviors are baked into the prompts themselves; the preamble just makes them top-of-mind in Claude Code's context.
+This preamble is a reminder, not a duplicate instruction. The behaviors are baked into the prompts themselves and into `scripts/verify_invariants.sh`; the preamble just makes them top-of-mind in Claude Code's context.
