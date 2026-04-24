@@ -40,7 +40,7 @@ Still in this session context (small files):
 
 ### Step 3 — Read PROMPT_SEQUENCE.md
 
-James will attach `prompts/PROMPT_SEQUENCE.md` (the version in `prompts/`, not the root copy — they're the same content today but `prompts/PROMPT_SEQUENCE.md` is canonical). This gives you:
+James will attach `prompts/PROMPT_SEQUENCE.md`. This is the **single canonical copy** — the root-level duplicate was removed when the `sidecar-prompt-sequence-version-drift` sidecar merged (see PM-1). It gives you:
 
 - The full sequence (prompts 00 through 19).
 - The dependency graph.
@@ -103,7 +103,7 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-24 (seed entry — Partner Instance 1 before any refactor session).
+**Last updated:** 2026-04-24 (accuracy-fix update — `07c-draft.md` reference removed; root `PROMPT_SEQUENCE.md` removal noted).
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
@@ -113,13 +113,15 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Next task queue (in order):**
 
-1. **Universal preamble extraction** — land `scripts/verify_invariants.sh` + slim preamble in `prompts/PROMPT_SEQUENCE.md` per `universal_preamble_extension.md` proposal. Single-purpose infrastructure PR.
-2. **Prompt 07c refactor** — xlsx_workbooks reverse adapter. An initial draft was written (before preamble extraction) as `07c-draft.md`; refactor slims it against the post-extraction preamble, then hands to Claude Code.
+1. **Universal preamble extraction** — land `scripts/verify_invariants.sh` + slim preamble in `prompts/PROMPT_SEQUENCE.md` per `docs/universal_preamble_extension.md` proposal. Single-purpose infrastructure PR. This is PM-7 execution.
+2. **Prompt 07c refactor** — xlsx_workbooks reverse adapter. **No draft exists yet**; Partner drafts 07c from scratch using the pre-split `prompts/07-projections-ops.md` xlsx-reverse subsection as source material. Draft against the post-extraction slim preamble (so the universal preamble extension in task #1 must complete first). Output is a new `prompts/07c-xlsx-workbooks-reverse.md`.
 3. **07.5 checkpoint refactor** — original 07.5 was written assuming 11 projections built in one prompt. After the 07a/07b/07c split, it needs to audit all three ops prompts together. **Do NOT refactor until 07c is written + merged.** See UT-1.
 4. **Prompt 08 refactor** — Session + scope enforcement + governance. Large; may split into 08a/08b. See UT-3.
 5. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
 
 **Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5. These exist in `prompts/` but were drafted before the 07 split and before carry-forward discipline emerged. Each needs a refactor session before Claude Code executes it.
+
+**Prompts not yet drafted:** 07c. Produced by next Partner session after PM-7 lands.
 
 ---
 
@@ -131,7 +133,7 @@ Each tagged **HARD** (treat as immutable) or **SOFT** (current convention; recon
 
 ### PM-1: Prompt files live in `prompts/` — HARD
 
-`PROMPT_SEQUENCE.md` exists at both repo root AND `prompts/PROMPT_SEQUENCE.md`. Canonical copy is in `prompts/`. If they diverge, `prompts/` wins. The root copy is a duplicate for README visibility.
+`prompts/PROMPT_SEQUENCE.md` is the **single canonical copy**. The root-level duplicate was removed when the `sidecar-prompt-sequence-version-drift` sidecar merged — single source of truth now enforced. Do NOT recreate the root duplicate. Any reference to `PROMPT_SEQUENCE.md` in this file or any future prompt refactor means `prompts/PROMPT_SEQUENCE.md`.
 
 ### PM-2: Four-commit discipline per build prompt — HARD
 
@@ -155,7 +157,7 @@ First used in prompt 05 (registers `party.merged` v1 schema stub even though pro
 
 ### PM-7: Carry-forwards firing in 3+ prompts graduate to universal preamble — HARD (CURRENT)
 
-See `universal_preamble_extension.md`. CF-1..CF-7 accumulated in 07a/07b and should extract. Status: proposed, not yet executed. Next Partner session executes it.
+See `docs/universal_preamble_extension.md`. CF-1..CF-7 accumulated in 07a/07b and should extract. Status: proposed, **not yet executed**. Next Partner session executes it.
 
 ### PM-8: Inline implementation code in prompts is a warning sign — SOFT
 
@@ -167,7 +169,7 @@ Prompt 07b ships Lists/Members/Assumptions/Dashboard/Balance Sheet/Pro Forma/Bud
 
 ### PM-10: Stub files from earlier scaffold prompts need explicit disposition — SOFT
 
-Prompt 02 scaffolded `xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` as stubs. Prompt 07b built alongside rather than in them. Dead code in young codebase is debt. Every prompt touching an area with scaffolded stubs explicitly decides: repurpose, delete, or continue ignoring.
+Prompt 02 scaffolded `xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` as stubs. Prompt 07b built alongside rather than in them. Dead code in young codebase is debt. Every prompt touching an area with scaffolded stubs explicitly decides: repurpose, delete, or continue ignoring. 07c will decide on `reverse.py` + `schemas.py` + `forward.py`.
 
 ### PM-11: Load only what the session needs from the zip — HARD
 
@@ -176,6 +178,10 @@ Partner sessions that ingest the whole codebase run out of headroom before produ
 ### PM-12: Prompt refactor is additive AND subtractive — SOFT
 
 Refactoring doesn't just fix — it also removes what the preamble now covers. Extraction is as valuable as addition. A refactored prompt should be **smaller** than the draft it replaced if the preamble has grown to cover cross-cutting concerns.
+
+### PM-13: Project knowledge is retrievable via search, not enumerable via filesystem — HARD (NEW)
+
+Claude Chat's Project knowledge is not filesystem-browsable. The `/mnt/project/` mount shows only a subset of uploaded files. Partner discovers Project knowledge contents via the `project_knowledge_search` tool. Running `project_knowledge_search` on targeted terms (e.g. "SYSTEM_INVARIANTS binding invariants", "partner_handoff current build state") confirms files are present. **Never claim a file is missing from Project knowledge based on `/mnt/project/` listing alone — only an empty `project_knowledge_search` result is authoritative evidence of absence.** Partner runs these searches proactively at startup, not when prompted.
 
 ---
 
@@ -200,6 +206,10 @@ Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c split, it 
 ### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG
 
 07a and 07b entries have literal `<commit4>` and `<merge date>` placeholders. Filled post-merge during Partner's QC pass. Rubric calls this out.
+
+### UT-6: Sidecar-state JSON pathway for xlsx round-trip
+
+07b deferred the sidecar-state JSON write. 07c must choose: (a) add a sidecar PR to 07b to have the forward daemon write sidecar-state after each regeneration (more robust to process restarts), or (b) 07c takes a snapshot on adapter startup from the just-written workbook (less robust). Depth-read BUILD.md §3.11 during 07c refactor to confirm whether spec specifies one path. If ambiguous, recommend (a). Resolved during 07c refactor.
 
 ---
 
@@ -241,7 +251,6 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 ├── ADMINISTRATEME_DIAGRAMS.md                   # constitutional
 ├── ADMINISTRATEME_REFERENCE_EXAMPLES.md         # constitutional
 ├── ADMINISTRATEME_FIELD_MANUAL.md               # for James (not Partner)
-├── PROMPT_SEQUENCE.md                           # duplicate of prompts/PROMPT_SEQUENCE.md
 ├── README.md                                    # for James
 ├── docs/
 │   ├── SYSTEM_INVARIANTS.md                     # constitutional
@@ -251,11 +260,12 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── build_log.md                             # LIVE: Claude Code's record
 │   ├── partner_handoff.md                       # THIS FILE
 │   ├── qc_rubric.md                             # companion
+│   ├── universal_preamble_extension.md          # PM-7 proposal
 │   ├── preflight-report.md                      # prompt 00's artifact
 │   ├── adrs/                                    # ADRs (longer form than DECISIONS entries)
 │   └── reference/                               # mirrored external docs
 ├── prompts/
-│   ├── PROMPT_SEQUENCE.md                       # canonical
+│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy)
 │   ├── 00-preflight.md ... 19-phase-b-smoke-test.md
 │   ├── 07a-projections-ops-spine.md
 │   ├── 07b-xlsx-workbooks-forward.md
