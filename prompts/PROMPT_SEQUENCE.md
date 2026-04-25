@@ -100,7 +100,8 @@ Rationale: the Claude Code sandbox has an egress allowlist. `github.com` and `ra
 | 07c-α | `07c-alpha-foundations.md` **MERGED** | xlsx round-trip foundations: 2 new system events (`xlsx.reverse_projected`, `xlsx.reverse_skipped_during_forward`); `adminme/projections/xlsx_workbooks/sidecar.py` I/O module; forward daemon writes per-sheet sidecar inside the workbook lock; descriptors + diff core at `adminme/daemons/xlsx_sync/{sheet_schemas,diff}.py`. Part 1 of 2 per PM-15. | 3-4 hrs | Schema + sidecar + descriptors + diff core in place for 07c-β to consume |
 | 07c-β | `07c-beta-reverse-daemon.md` **MERGED** | `XlsxReverseDaemon` at `adminme/daemons/xlsx_sync/reverse.py` (L1-adjacent per PM-14). Watchdog→asyncio bridge; per-workbook lock; 4 bidirectional sheet pathways (Tasks/Commitments/Recurrences/Raw Data); undo window for deletes; sensitivity preservation; integration round-trip test. Part 2 of 2 per PM-15. UT-7 deferred to prompt 08. | 3-4 hrs | Closed xlsx round-trip + UT-6 RESOLVED |
 | 07.5 | `07.5-checkpoint-projection-consistency.md` **LANDED** | **Checkpoint:** audit the 11 projections + L1-adjacent reverse daemon for schema consistency, subscribes/dispatch alignment, privileged-filter coverage, `DERIVED_COLUMNS` ↔ descriptor `always_derived` equivalence, rebuild determinism (cited not re-prescribed), cross-projection shared-ID references, TODO(prompt-08) accounting. Memo at `docs/checkpoints/07.5-projection-consistency.md`. | 30-45 min | Projection layer internally consistent; UT-1 closed |
-| 08 | `08-session-scope-governance.md` | Session + scope enforcement + authority gate + observation mode | 3-4 hrs | Security layers |
+| 08a | `08a-session-scope-read.md` | L3-cont: Session dataclass + scope/privacy filter at read; wrap every projection query with Session-scoped predicates; ScopeViolation canary | 3-4 hrs | Reads correctly Session-scoped + privileged redaction works |
+| 08b | `08b-governance-observation-write.md` | L3-cont: guardedWrite three-layer (allowlist→governance→rate-limit) + observation final-outbound-filter wrapper + five new event types; closes UT-7 | 3-4 hrs | Writes route through three-layer gate; observation suppresses external |
 | 09a | `09a-skill-runner.md` | Skill runner wrapper around OpenClaw's skill system | 2-3 hrs | First skill call succeeds |
 | 09b | `09b-first-skill-pack.md` | `classify_thank_you_candidate` skill pack end-to-end | 2 hrs | Skill pack install + invoke |
 | 10a | `10a-pipeline-runner.md` | Pipeline runner + event subscription machinery | 2-3 hrs | Pipelines receive events |
@@ -137,9 +138,9 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
 00 ──► 00.5 ──► 01 ──► 01b ──► 02 ──► 03 ──► 04 ──► 05 ──► 06 ──► 07a ──► 07b ──► 07c-α ──► 07c-β ──► 07.5
                                                                                                        │
                                                                                                        ▼
-                                                                                                       08
-                                                                                                       │
-                                                                                                       ▼
+                                                                                                       08a ──► 08b
+                                                                                                                │
+                                                                                                                ▼
                                                                                                        09a ──► 09b
                                                                                                                 │
                                                                                                                 ▼
@@ -188,6 +189,7 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
 - 03 before 04. Event log must exist before schemas that validate against it.
 - 04 before 05. Schemas must exist before projections consume events.
 - 07a → 07b → 07c-α → 07c-β before 08 (and 07.5 before 08). All projections + the L1-adjacent reverse daemon must exist before session/scope queries against them; the 07.5 audit must pass first. Within the 07 cohort the order is mandatory: 07b's xlsx forward daemon reads from 07a's projections; 07c-α extends 07b's forward daemon with the sidecar writer and lands the descriptors/diff core; 07c-β consumes both. Per PM-15.
+- 08a before 08b; 08b before 09a (skill runner consumes Session).
 - 09a before 09b. Runner must exist before skill pack uses it.
 - 10a before 10b. Pipeline machinery before specific pipelines.
 - 14a before 14b/14c. Framework before views.
