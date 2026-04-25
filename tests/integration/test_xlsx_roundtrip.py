@@ -342,3 +342,99 @@ async def test_full_round_trip(rig: dict[str, Any]) -> None:
         )
     finally:
         await reverse.stop()
+
+
+# ---------------------------------------------------------------------------
+# UT-7 closure (08b): principal_member_id attribution
+# ---------------------------------------------------------------------------
+
+
+async def test_ut7_reverse_emits_attribute_detected_principal(
+    rig: dict[str, Any],
+) -> None:
+    """UT-7 closure (08b): when the reverse daemon is wired with a
+    principal_member_id_resolver that returns a specific member id,
+    every domain event emitted by that cycle carries
+    ``actor_identity == <detected principal>`` (not the literal
+    ``"xlsx_reverse"``)."""
+    config = rig["config"]
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+
+    # Seed a single party + an existing task so the cycle has both an ADD
+    # path and an UPDATE path to exercise.
+    await log.append(_envelope("party.created", {
+        "party_id": "principal_a", "kind": "person",
+        "display_name": "principal_a", "sort_name": "principal_a",
+    }))
+    seed = await log.append(_envelope("task.created", {
+        "task_id": "ut7_t1", "title": "ut7 baseline task",
+    }))
+    await bus.notify(seed)
+    for name in ("parties", "tasks"):
+        await _wait_idle(bus, f"projection:{name}")
+
+    ctx = XlsxQueryContext(
+        parties_conn=runner.connection("parties"),
+        tasks_conn=runner.connection("tasks"),
+        commitments_conn=runner.connection("commitments"),
+        recurrences_conn=runner.connection("recurrences"),
+        calendars_conn=runner.connection("calendars"),
+        places_assets_accounts_conn=runner.connection("places_assets_accounts"),
+        money_conn=runner.connection("money"),
+    )
+    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    await forward.regenerate_now(OPS_WORKBOOK_NAME)
+
+    detected_principal = "principal_a"
+    reverse = XlsxReverseDaemon(
+        config,
+        ctx,
+        event_log=log,
+        flush_wait_s=0.05,
+        forward_lock_timeout_s=2.0,
+        delete_undo_window_s=0.1,
+        principal_member_id_resolver=lambda _wb: detected_principal,
+    )
+    try:
+        # Edit the existing task title + append a brand-new task. Both
+        # emits must attribute to detected_principal.
+        ops_path = config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME
+        wb = load_workbook(str(ops_path))
+        tasks_ws = wb["Tasks"]
+        idx = _row_index_by_id(tasks_ws, "ut7_t1")
+        assert idx is not None
+        tasks_ws.cell(row=idx, column=2, value="ut7 renamed by principal")
+        new_row = tasks_ws.max_row + 1
+        tasks_ws.cell(row=new_row, column=2, value="ut7 appended by principal")
+        wb.save(str(ops_path))
+        wb.close()
+
+        cursor_pre = await log.latest_event_id()
+        await reverse.run_cycle_now(OPS_WORKBOOK_NAME)
+        await asyncio.sleep(0.3)
+
+        # task.created — appended row
+        created = await _events_of_type(log, "task.created", cursor_pre)
+        assert len(created) == 1
+        assert created[0]["actor_identity"] == detected_principal
+        assert created[0]["payload"]["title"] == "ut7 appended by principal"
+
+        # task.updated — title rename
+        updated = await _events_of_type(log, "task.updated", cursor_pre)
+        assert len(updated) == 1
+        assert updated[0]["actor_identity"] == detected_principal
+        assert updated[0]["payload"]["task_id"] == "ut7_t1"
+        # The updated_by_party_id payload field also reflects the principal,
+        # not the literal placeholder.
+        assert updated[0]["payload"]["updated_by_party_id"] == detected_principal
+
+        # The terminal cycle event stays system-attributed.
+        projected = await _events_of_type(
+            log, "xlsx.reverse_projected", cursor_pre
+        )
+        assert len(projected) == 1
+        assert projected[0]["actor_identity"] == "xlsx_reverse"
+    finally:
+        await reverse.stop()

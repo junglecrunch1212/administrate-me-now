@@ -1,15 +1,21 @@
 """
-XlsxReverseDaemon — the reverse xlsx daemon (07c-β).
+XlsxReverseDaemon — the reverse xlsx daemon (07c-β, UT-7 closed in 08b).
 
 Per ADMINISTRATEME_BUILD.md §3.11 (lines 993–1080) and SYSTEM_INVARIANTS.md
 §§2.2 / 6 / 10 / 13. The daemon is L1-adjacent (NOT a projection): it
 watches the workbook on disk via watchdog, debounces a flush window,
 acquires the same per-workbook advisory lock the forward daemon uses,
 diffs the live workbook against the per-sheet sidecar baseline, and emits
-domain events on principal authority. UT-7 (principal_member_id
-attribution) is OPEN here and resolves in prompt 08; this prompt stubs
-``actor_identity = "xlsx_reverse"`` on every emit and uses the literal
-string ``"xlsx_reverse"`` for ``*_by_party_id`` payload fields.
+domain events on principal authority.
+
+UT-7 closure (08b): the daemon now constructs a Session via
+``build_session_from_xlsx_reverse_daemon`` per cycle and passes it to
+``_append``. ``actor_identity`` is derived from the session's
+``auth_member_id`` — a detected principal becomes their own attribution; a
+no-detection cycle uses the device-role placeholder ``"xlsx_reverse"``.
+Each emit additionally routes through ``guarded_write.check`` (when a
+``GuardedWrite`` is wired in) so the three-layer write check applies to
+xlsx-originated events identically to console-originated ones [§6.5-6.8].
 
 Per-cycle algorithm:
 1. Wait ``flush_wait_s`` for writers to flush.
@@ -62,7 +68,12 @@ from adminme.daemons.xlsx_sync.sheet_schemas import (
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.lib.governance import GuardedWrite
 from adminme.lib.instance_config import InstanceConfig
+from adminme.lib.session import (
+    Session,
+    build_session_from_xlsx_reverse_daemon,
+)
 from adminme.projections.xlsx_workbooks import (
     FINANCE_WORKBOOK_NAME,
     OPS_WORKBOOK_NAME,
@@ -87,8 +98,6 @@ _READONLY_SHEETS: dict[str, tuple[str, ...]] = {
     OPS_WORKBOOK_NAME: ("People", "Metadata"),
     FINANCE_WORKBOOK_NAME: ("Accounts", "Metadata"),
 }
-
-_ACTOR = "xlsx_reverse"
 
 _SensitivityLiteral = Literal["normal", "sensitive", "privileged"]
 
@@ -120,6 +129,8 @@ class XlsxReverseDaemon:
         flush_wait_s: float = 2.0,
         forward_lock_timeout_s: float = 10.0,
         delete_undo_window_s: float = 5.0,
+        guarded_write: GuardedWrite | None = None,
+        principal_member_id_resolver: Any = None,
     ) -> None:
         self._config = config
         self._ctx = query_context
@@ -127,6 +138,15 @@ class XlsxReverseDaemon:
         self._flush_wait_s = flush_wait_s
         self._forward_lock_timeout_s = forward_lock_timeout_s
         self._delete_undo_window_s = delete_undo_window_s
+        # UT-7 closure (08b): the daemon may be wired with a GuardedWrite
+        # so xlsx-originated emits route through the same three-layer
+        # check as console writes. Older callers (and the basic 07c-β
+        # test rig) construct without it; the daemon falls back to direct
+        # appends in that case.
+        self._guarded_write = guarded_write
+        # Optional resolver maps a workbook name to a detected principal
+        # member_id. None ⇒ system-internal device-role attribution.
+        self._principal_member_id_resolver = principal_member_id_resolver
 
         self._observer: Any | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -256,6 +276,23 @@ class XlsxReverseDaemon:
             finally:
                 self._inflight_cycles[workbook] -= 1
 
+    def _session_for(self, workbook: str) -> Session:
+        """Construct the per-cycle Session per UT-7 closure (08b).
+
+        If a ``principal_member_id_resolver`` is wired and resolves to a
+        non-None member id, the resulting Session attributes that
+        principal as actor; otherwise the Session is the device-role
+        ``"xlsx_reverse"`` placeholder. ``actor_identity`` on every
+        emitted envelope downstream comes from this Session via
+        ``_append``."""
+        detected: str | None = None
+        if self._principal_member_id_resolver is not None:
+            try:
+                detected = self._principal_member_id_resolver(workbook)
+            except Exception:
+                detected = None
+        return build_session_from_xlsx_reverse_daemon(detected, self._config)
+
     async def _cycle_under_serialization(
         self, workbook: str, *, waited: bool
     ) -> None:
@@ -263,6 +300,11 @@ class XlsxReverseDaemon:
         start_ms = int(time.time() * 1000)
         path = self._config.xlsx_workbooks_dir / workbook
         lock_path = path.with_suffix(path.suffix + ".lock")
+
+        # UT-7 closure (08b): one Session per cycle; passed into every
+        # emit so actor_identity reflects the detected principal (or the
+        # device placeholder when no principal could be detected).
+        session = self._session_for(workbook)
 
         events_emitted: list[str] = []
         sheets_affected: list[str] = []
@@ -357,7 +399,7 @@ class XlsxReverseDaemon:
 
         result_obj = await asyncio.to_thread(_under_lock)
         if result_obj is SKIP:
-            await self._emit_skip(workbook)
+            await self._emit_skip(workbook, session)
             return
         diffs: list[tuple[str, DiffResult]] = result_obj
 
@@ -385,7 +427,9 @@ class XlsxReverseDaemon:
                 continue
             if not (diff_result.added or diff_result.updated or diff_result.deleted):
                 continue
-            sheet_event_ids = await self._emit_diff(workbook, descriptor, diff_result)
+            sheet_event_ids = await self._emit_diff(
+                workbook, descriptor, diff_result, session
+            )
             events_emitted.extend(sheet_event_ids)
             if (
                 sheet_event_ids
@@ -396,6 +440,10 @@ class XlsxReverseDaemon:
                 sheets_affected.append(sheet_name)
 
         # Step 8 (continued): emit xlsx.reverse_projected.
+        # The terminal cycle event is system observability and stays
+        # under the device-role placeholder identity per [§13]: detected
+        # principal authorship attaches to the domain events emitted
+        # within the cycle, not to the cycle's terminal signal.
         duration_ms = max(0, int(time.time() * 1000) - start_ms)
         await self._log_.append(
             EventEnvelope(
@@ -409,7 +457,7 @@ class XlsxReverseDaemon:
                 owner_scope="shared:household",
                 visibility_scope="shared:household",
                 sensitivity="normal",
-                actor_identity=_ACTOR,
+                actor_identity="xlsx_reverse",
                 payload={
                     "workbook_name": workbook,
                     "detected_at": EventEnvelope.now_utc_iso(),
@@ -420,7 +468,12 @@ class XlsxReverseDaemon:
             )
         )
 
-    async def _emit_skip(self, workbook: str) -> None:
+    async def _emit_skip(self, workbook: str, session: Session) -> None:
+        # session is accepted for symmetry with other emit pathways but
+        # the skip signal is system observability — actor_identity stays
+        # the device-role placeholder per the same rationale as
+        # xlsx.reverse_projected above.
+        del session
         await self._log_.append(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
@@ -433,7 +486,7 @@ class XlsxReverseDaemon:
                 owner_scope="shared:household",
                 visibility_scope="shared:household",
                 sensitivity="normal",
-                actor_identity=_ACTOR,
+                actor_identity="xlsx_reverse",
                 payload={
                     "workbook_name": workbook,
                     "detected_at": EventEnvelope.now_utc_iso(),
@@ -450,17 +503,18 @@ class XlsxReverseDaemon:
         workbook: str,
         descriptor: SheetDescriptor,
         result: DiffResult,
+        session: Session,
     ) -> list[str]:
         emitted: list[str] = []
         sheet = descriptor.sheet
         if sheet == "Tasks":
-            emitted.extend(await self._emit_tasks(result))
+            emitted.extend(await self._emit_tasks(result, session))
         elif sheet == "Commitments":
-            emitted.extend(await self._emit_commitments(result))
+            emitted.extend(await self._emit_commitments(result, session))
         elif sheet == "Recurrences":
-            emitted.extend(await self._emit_recurrences(result))
+            emitted.extend(await self._emit_recurrences(result, session))
         elif sheet == "Raw Data":
-            emitted.extend(await self._emit_raw_data(result))
+            emitted.extend(await self._emit_raw_data(result, session))
         else:
             _log.info(
                 "[reverse] no emit pathway for sheet %s/%s; "
@@ -476,7 +530,9 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Tasks pathway
     # ------------------------------------------------------------------
-    async def _emit_tasks(self, result: DiffResult) -> list[str]:
+    async def _emit_tasks(
+        self, result: DiffResult, session: Session
+    ) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
             task_id = row.get("task_id") or ""
@@ -502,11 +558,13 @@ class XlsxReverseDaemon:
                 _log.info("[reverse] tasks ADD with blank title; skipping")
                 continue
             event_id = await self._append(
+                session=session,
                 event_type="task.created",
                 payload=payload,
                 sensitivity="normal",
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
 
         for row, changes in result.updated:
             task_id = row.get("task_id")
@@ -516,18 +574,20 @@ class XlsxReverseDaemon:
             payload = {
                 "task_id": task_id,
                 "updated_at": EventEnvelope.now_utc_iso(),
-                "updated_by_party_id": None,
+                "updated_by_party_id": session.auth_member_id,
                 "field_updates": field_updates,
             }
             sensitivity = self._lookup_sensitivity(
                 self._ctx.tasks_conn, "tasks", "task_id", task_id
             )
             event_id = await self._append(
+                session=session,
                 event_type="task.updated",
                 payload=payload,
                 sensitivity=sensitivity,
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
 
         for row in result.deleted:
             task_id = row.get("task_id")
@@ -536,20 +596,25 @@ class XlsxReverseDaemon:
             self._schedule_undo_delete(
                 sheet="Tasks",
                 row_id=str(task_id),
-                emit_factory=lambda tid=str(task_id): self._emit_task_deleted(tid),
+                emit_factory=lambda tid=str(task_id): self._emit_task_deleted(
+                    tid, session
+                ),
             )
         return emitted
 
-    async def _emit_task_deleted(self, task_id: str) -> None:
+    async def _emit_task_deleted(
+        self, task_id: str, session: Session
+    ) -> None:
         sensitivity = self._lookup_sensitivity(
             self._ctx.tasks_conn, "tasks", "task_id", task_id
         )
         await self._append(
+            session=session,
             event_type="task.deleted",
             payload={
                 "task_id": task_id,
                 "deleted_at": EventEnvelope.now_utc_iso(),
-                "deleted_by_party_id": _ACTOR,
+                "deleted_by_party_id": session.auth_member_id,
             },
             sensitivity=sensitivity,
         )
@@ -557,7 +622,9 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Commitments pathway
     # ------------------------------------------------------------------
-    async def _emit_commitments(self, result: DiffResult) -> list[str]:
+    async def _emit_commitments(
+        self, result: DiffResult, session: Session
+    ) -> list[str]:
         emitted: list[str] = []
         if result.added:
             _log.info(
@@ -577,16 +644,18 @@ class XlsxReverseDaemon:
                 commitment_id,
             )
             event_id = await self._append(
+                session=session,
                 event_type="commitment.edited",
                 payload={
                     "commitment_id": commitment_id,
                     "edited_at": EventEnvelope.now_utc_iso(),
-                    "edited_by_party_id": _ACTOR,
+                    "edited_by_party_id": session.auth_member_id,
                     "field_updates": field_updates,
                 },
                 sensitivity=sensitivity,
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
         if result.deleted:
             _log.info(
                 "[reverse] commitments cancel via API; dropping %d row deletions",
@@ -597,7 +666,9 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Recurrences pathway
     # ------------------------------------------------------------------
-    async def _emit_recurrences(self, result: DiffResult) -> list[str]:
+    async def _emit_recurrences(
+        self, result: DiffResult, session: Session
+    ) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
             recurrence_id = row.get("recurrence_id") or ""
@@ -622,11 +693,13 @@ class XlsxReverseDaemon:
             if notes:
                 payload["notes"] = notes
             event_id = await self._append(
+                session=session,
                 event_type="recurrence.added",
                 payload=payload,
                 sensitivity="normal",
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
 
         for row, changes in result.updated:
             recurrence_id = row.get("recurrence_id")
@@ -640,6 +713,7 @@ class XlsxReverseDaemon:
                 recurrence_id,
             )
             event_id = await self._append(
+                session=session,
                 event_type="recurrence.updated",
                 payload={
                     "recurrence_id": recurrence_id,
@@ -648,7 +722,8 @@ class XlsxReverseDaemon:
                 },
                 sensitivity=sensitivity,
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
 
         if result.deleted:
             _log.info(
@@ -661,7 +736,9 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Raw Data pathway
     # ------------------------------------------------------------------
-    async def _emit_raw_data(self, result: DiffResult) -> list[str]:
+    async def _emit_raw_data(
+        self, result: DiffResult, session: Session
+    ) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
             is_manual = bool(row.get("is_manual"))
@@ -691,7 +768,7 @@ class XlsxReverseDaemon:
                 "currency": "USD",
                 "occurred_at": occurred_at,
                 "kind": "paid",
-                "added_by_party_id": _ACTOR,
+                "added_by_party_id": session.auth_member_id,
             }
             assigned = row.get("assigned_category")
             if assigned:
@@ -700,11 +777,13 @@ class XlsxReverseDaemon:
             if notes:
                 payload["notes"] = notes
             event_id = await self._append(
+                session=session,
                 event_type="money_flow.manually_added",
                 payload=payload,
                 sensitivity="normal",
             )
-            emitted.append(event_id)
+            if event_id is not None:
+                emitted.append(event_id)
 
         if result.updated:
             _log.info(
@@ -726,20 +805,25 @@ class XlsxReverseDaemon:
             self._schedule_undo_delete(
                 sheet="Raw Data",
                 row_id=str(flow_id),
-                emit_factory=lambda fid=str(flow_id): self._emit_money_flow_deleted(fid),
+                emit_factory=lambda fid=str(flow_id): self._emit_money_flow_deleted(
+                    fid, session
+                ),
             )
         return emitted
 
-    async def _emit_money_flow_deleted(self, flow_id: str) -> None:
+    async def _emit_money_flow_deleted(
+        self, flow_id: str, session: Session
+    ) -> None:
         sensitivity = self._lookup_sensitivity(
             self._ctx.money_conn, "money_flows", "flow_id", flow_id
         )
         await self._append(
+            session=session,
             event_type="money_flow.manually_deleted",
             payload={
                 "flow_id": flow_id,
                 "deleted_at": EventEnvelope.now_utc_iso(),
-                "deleted_by_party_id": _ACTOR,
+                "deleted_by_party_id": session.auth_member_id,
             },
             sensitivity=sensitivity,
         )
@@ -830,10 +914,35 @@ class XlsxReverseDaemon:
     async def _append(
         self,
         *,
+        session: Session,
         event_type: str,
         payload: dict[str, Any],
         sensitivity: str,
-    ) -> str:
+    ) -> str | None:
+        """Append an envelope to the event log on the cycle's Session
+        authority. Returns the event_id on success, None when the
+        guarded-write check refused.
+
+        UT-7 closure (08b): ``actor_identity`` is the cycle session's
+        ``auth_member_id`` — a detected principal becomes their own
+        attribution; a no-detection cycle uses the device-role placeholder.
+        ``source_adapter`` stays ``"xlsx_reverse"`` per [arch §3] (the row
+        schema's source_adapter is the adapter identity, not the actor).
+
+        When a ``GuardedWrite`` is wired in, the three-layer check runs
+        before the append. A refused write emits ``write.denied`` (inside
+        ``GuardedWrite.check``) and the domain event is NOT appended."""
+        if self._guarded_write is not None:
+            result = await self._guarded_write.check(session, event_type, payload)
+            if not result.pass_:
+                _log.info(
+                    "[reverse] guarded_write refused %s at layer %s "
+                    "(reason=%s); skipping append",
+                    event_type,
+                    result.layer_failed,
+                    result.reason,
+                )
+                return None
         envelope = EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id=self._config.tenant_id,
@@ -845,7 +954,7 @@ class XlsxReverseDaemon:
             owner_scope="shared:household",
             visibility_scope="shared:household",
             sensitivity=_sensitivity_literal(sensitivity),
-            actor_identity=_ACTOR,
+            actor_identity=session.auth_member_id,
             payload=payload,
         )
         return await self._log_.append(envelope)

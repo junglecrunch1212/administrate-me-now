@@ -1,0 +1,49 @@
+# fixture:tenant_data:ok
+# Sample governance.yaml for unit + integration tests.
+# Mirrors ADMINISTRATEME_BUILD.md §GOVERNANCE (lines 2120-2145) with the
+# prompt's vocabulary (allow / review / deny / hard_refuse).
+#
+# Tenant-agnostic: no specific household identity. Production tenants get
+# their own governance.yaml from the bootstrap wizard (prompt 16).
+
+action_gates:
+  task.create: allow
+  task.complete: allow
+  task.delete: review
+  task.updated: allow
+  commitment.confirm: allow
+  commitment.cancel: review
+  commitment.delegate: review
+  commitment.edited: allow
+  recurrence.added: allow
+  recurrence.updated: allow
+  money_flow.manually_added: allow
+  money_flow.manually_deleted: allow
+  outbound.send: review
+  plaid.go_live: review
+  observation.off: review
+  projections.rebuild: review
+  send_as_principal: hard_refuse
+  auto_answer_unknown_coparent: hard_refuse
+  reference_privileged_medical_in_outbound: hard_refuse
+  reference_privileged_legal_in_outbound: hard_refuse
+  noise.create: deny
+
+rate_limits:
+  __default__:
+    window_s: 60
+    max_n: 60
+  outbound.send:
+    window_s: 60
+    max_n: 20
+  task.create:
+    window_s: 60
+    max_n: 30
+  burst.action:
+    window_s: 1
+    max_n: 2
+
+forbidden_outbound_parties:
+  - send_to: opposing_counsel
+  - reference_in_outbound: privileged_medical
+  - reference_in_outbound: privileged_legal
