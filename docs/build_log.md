@@ -57,3 +57,33 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - Dashboard / Balance Sheet / Pro Forma / Budget vs Actual sheets skipped — derived-math pipelines build them later.
 - **Carry-forward for future bootstrap (prompt 16)**:
   - Real xlsx daemon lifecycle (start-on-boot, stop-on-shutdown) lands in bootstrap. Phase A is code + tests only.
+
+### Prompt 07c-α — xlsx round-trip foundations (schema + sidecar + diff core)
+- **Refactored**: by Partner in Claude Chat, pre-session. Prompt file: prompts/07c-alpha-foundations.md.
+- **Session merged**: PR #<N>, commits aa395dd / 7305acd / fcdb592 / <commit4>, merged <merge date>.
+- **Outcome**: MERGED
+- **Note**: Part 1 of a two-prompt split. 07c-β consumes what this prompt lands and ships the reverse daemon + integration round-trip. Split exists per partner_handoff PM-2 / PM-15: full reverse daemon plus its test pyramid does not fit one Claude Code session window.
+- **Evidence**:
+  - Two new system events at v1 in `adminme/events/schemas/system.py`: `xlsx.reverse_projected` (workbook_name, detected_at, sheets_affected, events_emitted, duration_ms) and `xlsx.reverse_skipped_during_forward` (workbook_name, detected_at, skip_reason: forward_lock_held). Schema-registry test asserts both register at v1.
+  - `scripts/verify_invariants.sh` `ALLOWED_EMITS` regex extended; `ALLOWED_EMIT_FILES` left alone with maintenance comment explaining why (07c-β's reverse daemon lives outside `adminme/projections/` so the projection-emit auditor doesn't apply).
+  - PM-10 disposition: deleted `adminme/projections/xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` — three 22-line scaffolding stubs from prompt 02 with no callers. Pre-delete grep confirmed zero imports.
+  - `InstanceConfig.xlsx_workbooks_dir` flipped from `projections/.xlsx-state/` to `projections/xlsx_workbooks/`. Sibling `.xlsx-state/` resolves via `xlsx_workbooks_dir.parent / ".xlsx-state"`. Sibling pathway is required so 07c-β's watchdog scoped to the workbooks dir cannot self-trigger on sidecar writes. Existing 29-test xlsx suite unchanged — all callers use `config.xlsx_workbooks_dir` directly so the path change is transparent.
+  - Sidecar I/O module at `adminme/projections/xlsx_workbooks/sidecar.py`: `sidecar_dir`, `sidecar_path`, `write_sheet_state`, `write_readonly_state`, `read_sheet_state`, `read_readonly_state`, `hash_readonly_sheet`. Atomic writes via `.tmp.<pid>` + `os.replace`. Bidirectional sheets persist `{"rows": [...]}`; read-only sheets persist `{"content_hash": "<sha256-hex>"}` only (no row data — hash-only is sufficient for the WARN signal 07c-β needs on read-only edits).
+  - Forward daemon extended: `XlsxWorkbooksProjection._regenerate` now calls a new `_write_sidecar_for(workbook, xlsx_path)` helper as the LAST step inside the workbook lock. Helper opens the just-written xlsx with `openpyxl.load_workbook(data_only=True)` and writes per-sheet sidecar JSON. Reading back from the xlsx (rather than re-querying projections) ensures byte-alignment between sidecar and workbook on disk.
+  - Two module-level constants `_BIDIRECTIONAL_SHEETS` and `_READONLY_SHEETS` are now the single source of truth for which sheets each workbook contains; both the `xlsx.regenerated` payload's `sheets_regenerated` list and the sidecar writer derive from them.
+  - New `adminme/daemons/xlsx_sync/` package with binding placement note: "this daemon is L1-adjacent, NOT a projection per [§2.2] — it emits events." Per-sheet diff descriptors at `sheet_schemas.py` (Tasks/Commitments/Recurrences/Raw Data) declaring id_column, editable_columns (frozenset OR per-row callable for Raw Data), always_derived, add/update/delete event mappings, undo-window flag, new_id_prefix, and drop dispositions for non-emitting cases. Pure-functional diff core at `diff.py` with type normalization (float tol 1e-9, datetime/date → isoformat, None ≡ "", int↔float as floats) and id-column-edit-as-delete-plus-add semantics. Diff core has zero I/O — no openpyxl, no watchdog, no event log.
+  - 23 new unit tests across four sites: 1 schema-registry extension, 8 sidecar I/O, 4 forward-writes-sidecar, 15 diff core (the diff site exceeds the ≥10 requirement).
+  - Ruff clean, mypy clean, `bash scripts/verify_invariants.sh` clean. Full test suite passes.
+- **Carry-forward for prompt 07c-β (reverse daemon + integration round-trip)**:
+  - Descriptors at `adminme/daemons/xlsx_sync/sheet_schemas.py` — bidirectional set is exactly Tasks / Commitments / Recurrences / Raw Data. People / Accounts / Metadata are read-only; 07c-β handles them via a separate "WARN if hash drifted" code path, NOT via descriptors here.
+  - Diff core at `adminme/daemons/xlsx_sync/diff.py` — sync, pure-functional, returns `DiffResult(added, updated, deleted, dropped_edits)`. Daemon wraps it with watchdog → asyncio bridge, lock acquisition, undo window, sensitivity preservation, cold-start handling.
+  - Sidecar I/O at `adminme/projections/xlsx_workbooks/sidecar.py` — forward already writes inside its lock. Reverse must rewrite at the end of each cycle (per BUILD.md §3.11 line 1015) so two principal saves diff against each other. Path: `<instance_dir>/projections/.xlsx-state/<workbook>/<sheet>.json`, sibling of workbooks dir.
+  - The reverse daemon emits domain events on principal authority. The full UT-7 actor-attribution path (which member id authored the edit) does NOT resolve here; it resolves in prompt 08 when the event router knows about Session/principal_member_id. 07c-β stubs actor with a documented placeholder.
+  - The `xlsx.regenerated` system event provides a signal 07c-β's reverse can use to skip diffing a workbook the forward daemon just wrote.
+- **Carry-forward for prompt 08 (Session + scope + governance)**:
+  - UT-7 opens here, resolves there: route reverse-emitted events through Session/guardedWrite so the actor (`added_by_party_id`, `principal_member_id`, etc.) is principal-attributed.
+- **Carry-forward for prompt 16 (bootstrap wizard)**:
+  - Daemon lifecycle (start-on-boot, stop-on-shutdown) for the reverse daemon — shipped in 07c-β, wired into bootstrap in 16.
+  - Adding `observation_mode_active` to forward emit payload per D5 — deferred to 16 alongside observation-mode wiring.
+- **Carry-forward for prompt 17 (CLI)**:
+  - `adminme projection rebuild xlsx_workbooks` CLI per BUILD.md §3.11 line 1054 (rebuild deletes both workbook files plus the sidecar tree, then regenerates).

@@ -55,7 +55,11 @@ class InstanceConfig:
     config_dir: Path
     secrets_path: Path
 
-    # xlsx workbook projections (prompt 07 uses these)
+    # xlsx workbook projections (prompt 07 uses these). The xlsx round-trip
+    # state sidecar (`.xlsx-state/`) is a SIBLING of this directory, resolved
+    # via ``xlsx_workbooks_dir.parent / ".xlsx-state"``. The sibling pathway
+    # exists so a future xlsx watchdog scoped to ``xlsx_workbooks_dir`` cannot
+    # self-trigger when the forward daemon writes the sidecar (see 07c-β).
     xlsx_workbooks_dir: Path
 
     def projection_db_path(self, projection_name: str) -> Path:
@@ -111,5 +115,5 @@ def load_instance_config(instance_dir: Path) -> InstanceConfig:
         artifacts_dir=instance_dir / "data" / "artifacts",
         config_dir=config_dir,
         secrets_path=instance_dir / "config" / "secrets.yaml.enc",
-        xlsx_workbooks_dir=instance_dir / "projections" / ".xlsx-state",
+        xlsx_workbooks_dir=instance_dir / "projections" / "xlsx_workbooks",
     )

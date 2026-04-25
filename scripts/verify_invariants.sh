@@ -104,7 +104,13 @@ fi
 # Maintenance-driven allowlists. When a projection earns the right to emit,
 # add its file to ALLOWED_EMIT_FILES and its type string to ALLOWED_EMITS.
 
-ALLOWED_EMITS='xlsx\.regenerated'
+# When the reverse xlsx daemon (07c-β) lands, it lives at
+# adminme/daemons/xlsx_sync/reverse.py — that path is OUTSIDE
+# adminme/projections/, so ALLOWED_EMIT_FILES does NOT extend for it.
+# This script only audits projection emits; the daemon's emits are
+# governed by the schemas it appends, not by its file location. The
+# allowlist below names the system event types a projection MAY emit.
+ALLOWED_EMITS='xlsx\.regenerated|xlsx\.reverse_projected|xlsx\.reverse_skipped_during_forward'
 ALLOWED_EMIT_FILES=(
     "adminme/projections/xlsx_workbooks/__init__.py"
 )

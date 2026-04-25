@@ -54,11 +54,28 @@ from adminme.events.log import EventLog
 from adminme.lib.instance_config import InstanceConfig
 from adminme.projections.base import Projection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.projections.xlsx_workbooks.sidecar import (
+    write_readonly_state,
+    write_sheet_state,
+)
 
 _log = logging.getLogger(__name__)
 
 OPS_WORKBOOK_NAME = "adminme-ops.xlsx"
 FINANCE_WORKBOOK_NAME = "adminme-finance.xlsx"
+
+# Single source of truth for which sheets each workbook contains and
+# whether reverse-projection treats them as bidirectional or read-only.
+# Drives both the ``xlsx.regenerated`` payload's ``sheets_regenerated``
+# list and the per-cycle sidecar writer.
+_BIDIRECTIONAL_SHEETS: dict[str, list[str]] = {
+    OPS_WORKBOOK_NAME: ["Tasks", "Recurrences", "Commitments"],
+    FINANCE_WORKBOOK_NAME: ["Raw Data"],
+}
+_READONLY_SHEETS: dict[str, list[str]] = {
+    OPS_WORKBOOK_NAME: ["People", "Metadata"],
+    FINANCE_WORKBOOK_NAME: ["Accounts", "Metadata"],
+}
 
 # adminme-ops.xlsx trigger event types (currently registered only).
 _OPS_TRIGGERS: tuple[str, ...] = (
@@ -223,13 +240,18 @@ class XlsxWorkbooksProjection(Projection):
                         tenant_id=self._config.tenant_id,
                         last_event_id=last_event_id,
                     )
+                # Sidecar must be written INSIDE the same lock as the xlsx
+                # write so reverse (07c-β) cannot observe a workbook whose
+                # sidecar baseline is from the prior cycle. Reads back from
+                # the just-written xlsx (not re-queries projections) so the
+                # sidecar is byte-aligned with the workbook on disk.
+                self._write_sidecar_for(workbook, path)
 
         await asyncio.to_thread(_under_lock)
 
-        if workbook == OPS_WORKBOOK_NAME:
-            sheets = ["Tasks", "Recurrences", "Commitments", "People", "Metadata"]
-        else:
-            sheets = ["Raw Data", "Accounts", "Metadata"]
+        sheets = (
+            _BIDIRECTIONAL_SHEETS[workbook] + _READONLY_SHEETS[workbook]
+        )
         duration_ms = int(time.time() * 1000) - start_ms
 
         # Emit xlsx.regenerated as a SYSTEM event per [§2.2] resolution.
@@ -255,6 +277,49 @@ class XlsxWorkbooksProjection(Projection):
                 },
             )
         )
+
+    # ------------------------------------------------------------------
+    # Sidecar
+    # ------------------------------------------------------------------
+    def _write_sidecar_for(self, workbook: str, xlsx_path: Path) -> None:
+        """Write per-sheet sidecar JSON next to ``xlsx_path``.
+
+        Reads the just-written xlsx (rather than re-querying projection
+        databases) so the sidecar is guaranteed to match the workbook
+        byte-for-byte. Bidirectional sheets get a row-list payload;
+        read-only sheets get a content-hash payload (07c-β WARN signal,
+        not a state baseline).
+        """
+        from openpyxl import load_workbook
+
+        workbooks_dir = self._config.xlsx_workbooks_dir
+        wb = load_workbook(str(xlsx_path), data_only=True, read_only=False)
+        try:
+            for sheet_name in _BIDIRECTIONAL_SHEETS.get(workbook, []):
+                ws = wb[sheet_name]
+                rows = list(ws.iter_rows(values_only=True))
+                if not rows:
+                    write_sheet_state(workbooks_dir, workbook, sheet_name, [])
+                    continue
+                headers = [
+                    str(h) if h is not None else "" for h in rows[0]
+                ]
+                row_dicts: list[dict[str, Any]] = []
+                for raw in rows[1:]:
+                    row_dicts.append(
+                        {headers[i]: raw[i] for i in range(len(headers))}
+                    )
+                write_sheet_state(
+                    workbooks_dir, workbook, sheet_name, row_dicts
+                )
+            for sheet_name in _READONLY_SHEETS.get(workbook, []):
+                ws = wb[sheet_name]
+                raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+                write_readonly_state(
+                    workbooks_dir, workbook, sheet_name, raw_rows
+                )
+        finally:
+            wb.close()
 
 
 __all__ = [

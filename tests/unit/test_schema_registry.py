@@ -143,3 +143,17 @@ def test_autoload_is_idempotent() -> None:
     ensure_autoloaded()
     after = dict(module_registry._by_key)
     assert before == after, "autoload duplicated registrations on second call"
+
+
+def test_xlsx_reverse_system_events_registered_at_v1() -> None:
+    """The two xlsx reverse-side system events (07c-α) register at v1."""
+    from adminme.events.registry import ensure_autoloaded
+
+    ensure_autoloaded()
+    known = module_registry.known_types()
+    assert "xlsx.reverse_projected" in known
+    assert "xlsx.reverse_skipped_during_forward" in known
+    assert module_registry.latest_version("xlsx.reverse_projected") == 1
+    assert module_registry.latest_version("xlsx.reverse_skipped_during_forward") == 1
+    assert module_registry.get("xlsx.reverse_projected", 1) is not None
+    assert module_registry.get("xlsx.reverse_skipped_during_forward", 1) is not None
