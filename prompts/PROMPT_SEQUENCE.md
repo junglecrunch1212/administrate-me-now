@@ -95,8 +95,11 @@ Rationale: the Claude Code sandbox has an egress allowlist. `github.com` and `ra
 | 04 | `04-event-schemas.md` | Pydantic schemas for all ~60 event types + schema registry | 2-3 hrs | All events validate |
 | 05 | `05-projections-core.md` | L3: parties, interactions, artifacts projections | 4-5 hrs | CRM primitives |
 | 06 | `06-projections-domain.md` | L3: commitments, tasks, recurrences, calendars projections | 3-4 hrs | Domain state |
-| 07 | `07-projections-ops.md` | L3: money, places_assets_accounts, vector_search, xlsx (bidirectional) projections | 4-5 hrs | Ops state + bidirectional xlsx |
-| 07.5 | `07.5-checkpoint-projection-consistency.md` | **Checkpoint:** audit all 11 projections for schema match, FK integrity, rebuild determinism | 30-45 min | Projection layer internally consistent |
+| 07a | `07a-projections-ops-spine.md` **MERGED** | L3 ops spine: places_assets_accounts, money, vector_search projections (3 of the 4 ops projections in the original 07; xlsx split out) | 4-5 hrs | Ops spine state + privileged-filter at handler time |
+| 07b | `07b-xlsx-workbooks-forward.md` **MERGED** | L3: `xlsx_workbooks` forward-only daemon (regenerates `adminme-ops.xlsx` and `adminme-finance.xlsx` from 7 projections). Structurally a projection per [§2.2]; emits only the system event `xlsx.regenerated`. Sheets requiring unregistered event types ship as TODO markers per PM-9. | 3-4 hrs | Forward xlsx + first system-event registration |
+| 07c-α | `07c-alpha-foundations.md` **MERGED** | xlsx round-trip foundations: 2 new system events (`xlsx.reverse_projected`, `xlsx.reverse_skipped_during_forward`); `adminme/projections/xlsx_workbooks/sidecar.py` I/O module; forward daemon writes per-sheet sidecar inside the workbook lock; descriptors + diff core at `adminme/daemons/xlsx_sync/{sheet_schemas,diff}.py`. Part 1 of 2 per PM-15. | 3-4 hrs | Schema + sidecar + descriptors + diff core in place for 07c-β to consume |
+| 07c-β | `07c-beta-reverse-daemon.md` **MERGED** | `XlsxReverseDaemon` at `adminme/daemons/xlsx_sync/reverse.py` (L1-adjacent per PM-14). Watchdog→asyncio bridge; per-workbook lock; 4 bidirectional sheet pathways (Tasks/Commitments/Recurrences/Raw Data); undo window for deletes; sensitivity preservation; integration round-trip test. Part 2 of 2 per PM-15. UT-7 deferred to prompt 08. | 3-4 hrs | Closed xlsx round-trip + UT-6 RESOLVED |
+| 07.5 | `07.5-checkpoint-projection-consistency.md` **LANDED** | **Checkpoint:** audit the 11 projections + L1-adjacent reverse daemon for schema consistency, subscribes/dispatch alignment, privileged-filter coverage, `DERIVED_COLUMNS` ↔ descriptor `always_derived` equivalence, rebuild determinism (cited not re-prescribed), cross-projection shared-ID references, TODO(prompt-08) accounting. Memo at `docs/checkpoints/07.5-projection-consistency.md`. | 30-45 min | Projection layer internally consistent; UT-1 closed |
 | 08 | `08-session-scope-governance.md` | Session + scope enforcement + authority gate + observation mode | 3-4 hrs | Security layers |
 | 09a | `09a-skill-runner.md` | Skill runner wrapper around OpenClaw's skill system | 2-3 hrs | First skill call succeeds |
 | 09b | `09b-first-skill-pack.md` | `classify_thank_you_candidate` skill pack end-to-end | 2 hrs | Skill pack install + invoke |
@@ -122,6 +125,8 @@ Rationale: the Claude Code sandbox has an egress allowlist. `github.com` and `ra
 
 **Total estimate:** 93-123 hours of Claude Code work (Phase A), spread over 2-4 weeks of Saturday deploys (one or two prompts per slot). Breakdown: ~88-118 hrs of build prompts, ~2 hrs for the invariants document (01b), ~3-4 hrs across the four checkpoints (07.5, 10d, 14e, 15.5). Prompt 00.5 adds 1-2 hours plus any manual clipping. Prompt 19 is quick (~1 hour to write) plus whatever bootstrap time Phase B takes on the Mac Mini (typically 2-4 hours if all credentials are at hand).
 
+The original prompt 07 (one ~4-5 hr session shipping all 4 ops projections) was retired per PM-10; the work landed across **07a + 07b + 07c-α + 07c-β** (four sessions of ~3-5 hrs each) per PM-15. The total work hours did not change — the per-session cap did, because the original 07 + its xlsx round-trip exceeded what one Claude Code session can complete without timing out. See `docs/build_log.md` for the merge record.
+
 The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what separates "decent chance the build works first try" from "good chance the build works first try." These prompts catch cross-cutting architectural drift before it compounds.
 
 ---
@@ -129,42 +134,44 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
 ## Dependency graph
 
 ```
-00 ──► 00.5 ──► 01 ──► 01b ──► 02 ──► 03 ──► 04 ──► 05 ──► 06 ──► 07 ──► 07.5
-                                                                          │
-                                                                          ▼
-                                                                          08
-                                                                          │
-                                                                          ▼
-                                                                          09a ──► 09b
-                                                                                   │
-                                                                                   ▼
-                                                                          10a ──► 10b ──► 10c ──► 10d
-                                                                                                    │
-                                                                 ┌─────────┬──────────────────────┤
-                                                                 ▼         ▼                      ▼
-                                                                 11        12                 (needs 10c
-                                                                 │         │                   to fully
-                                                                 ▼         ▼                   verify)
-                                                                 13a ◄────13b
-                                                                  │
-                                                                  ▼
-                                                                 14a ──► 14b ──► 14c ──► 14d ──► 14e
-                                                                                                    │
-                                                                                                    ▼
-                                                                                                   15 ──► 15.5
-                                                                                                            │
-                                                                                                            ▼
-                                                                                                           16
-                                                                                                            │
-                                                                                                            ▼
-                                                                                                           17
-                                                                                                            │
-                                                                                                            ▼
-                                                                                                           18
-                                                                                                            │
-                                                                                                            ▼
-                                                                                                           19 (Phase B smoke test — operator runs on Mac Mini)
+00 ──► 00.5 ──► 01 ──► 01b ──► 02 ──► 03 ──► 04 ──► 05 ──► 06 ──► 07a ──► 07b ──► 07c-α ──► 07c-β ──► 07.5
+                                                                                                       │
+                                                                                                       ▼
+                                                                                                       08
+                                                                                                       │
+                                                                                                       ▼
+                                                                                                       09a ──► 09b
+                                                                                                                │
+                                                                                                                ▼
+                                                                                                       10a ──► 10b ──► 10c ──► 10d
+                                                                                                                                 │
+                                                                                              ┌─────────┬──────────────────────┤
+                                                                                              ▼         ▼                      ▼
+                                                                                              11        12                 (needs 10c
+                                                                                              │         │                   to fully
+                                                                                              ▼         ▼                   verify)
+                                                                                              13a ◄────13b
+                                                                                               │
+                                                                                               ▼
+                                                                                              14a ──► 14b ──► 14c ──► 14d ──► 14e
+                                                                                                                                 │
+                                                                                                                                 ▼
+                                                                                                                                15 ──► 15.5
+                                                                                                                                         │
+                                                                                                                                         ▼
+                                                                                                                                        16
+                                                                                                                                         │
+                                                                                                                                         ▼
+                                                                                                                                        17
+                                                                                                                                         │
+                                                                                                                                         ▼
+                                                                                                                                        18
+                                                                                                                                         │
+                                                                                                                                         ▼
+                                                                                                                                        19 (Phase B smoke test — operator runs on Mac Mini)
 ```
+
+**The 07 cohort.** What was originally one prompt (`07-projections-ops.md`, retired per PM-10) is now a four-prompt sequential chain: **07a** (ops spine: places_assets_accounts + money + vector_search) → **07b** (xlsx forward daemon) → **07c-α** (xlsx round-trip foundations: schema + sidecar + descriptors + diff core) → **07c-β** (xlsx reverse daemon + integration round-trip). Each fits one Claude Code session per PM-15 (HARD: split a draft that combines new infrastructure + a long-running daemon consuming it). The 07.5 checkpoint audits the four prompts together as a cohort.
 
 **Phase boundary:** Prompts 00 through 18 run in Claude Code's sandbox against GitHub. Prompt 19 produces a script the operator runs on the Mac Mini after Phase B bootstrap.
 
@@ -180,7 +187,7 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
 
 - 03 before 04. Event log must exist before schemas that validate against it.
 - 04 before 05. Schemas must exist before projections consume events.
-- 07 before 08. All projections must exist before session/scope queries against them.
+- 07a → 07b → 07c-α → 07c-β before 08 (and 07.5 before 08). All projections + the L1-adjacent reverse daemon must exist before session/scope queries against them; the 07.5 audit must pass first. Within the 07 cohort the order is mandatory: 07b's xlsx forward daemon reads from 07a's projections; 07c-α extends 07b's forward daemon with the sidecar writer and lands the descriptors/diff core; 07c-β consumes both. Per PM-15.
 - 09a before 09b. Runner must exist before skill pack uses it.
 - 10a before 10b. Pipeline machinery before specific pipelines.
 - 14a before 14b/14c. Framework before views.
