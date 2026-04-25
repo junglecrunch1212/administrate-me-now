@@ -50,7 +50,7 @@ import logging
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import sqlcipher3
 from openpyxl import load_workbook
@@ -90,9 +90,22 @@ _READONLY_SHEETS: dict[str, tuple[str, ...]] = {
 
 _ACTOR = "xlsx_reverse"
 
+_SensitivityLiteral = Literal["normal", "sensitive", "privileged"]
+
 
 def _mint_id(prefix: str) -> str:
     return f"{prefix}{secrets.token_hex(4)}"
+
+
+def _sensitivity_literal(value: str) -> _SensitivityLiteral:
+    """Coerce a stored projection sensitivity to the envelope literal type.
+
+    Defends against legacy or corrupt rows: anything outside the allowed
+    triple falls back to ``'normal'``.
+    """
+    if value in ("normal", "sensitive", "privileged"):
+        return value  # type: ignore[return-value]
+    return "normal"
 
 
 class XlsxReverseDaemon:
@@ -831,7 +844,7 @@ class XlsxReverseDaemon:
             source_account_id="daemon",
             owner_scope="shared:household",
             visibility_scope="shared:household",
-            sensitivity=sensitivity,
+            sensitivity=_sensitivity_literal(sensitivity),
             actor_identity=_ACTOR,
             payload=payload,
         )
