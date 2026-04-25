@@ -18,16 +18,24 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.calendars.queries import (
     busy_slots,
     by_source,
-    get_calendar_event,
     today,
 )
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"l" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -111,8 +119,7 @@ async def test_calendar_event_added_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", eid)
 
     conn = runner.connection("calendars")
-    row = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["summary"] == "Dentist"
@@ -140,8 +147,7 @@ async def test_duplicate_added_upserts_to_single_row(rig: dict[str, Any]) -> Non
         ("tenant-a", "google", "ext-1"),
     ).fetchone()[0]
     assert count == 1
-    row = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["summary"] == "Dentist rescheduled"
@@ -174,8 +180,7 @@ async def test_calendar_event_updated_applies_field_updates(
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    row = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["location"] == "Uptown clinic"
@@ -212,8 +217,7 @@ async def test_calendar_event_deleted_removes_row(rig: dict[str, Any]) -> None:
     assert before == 1
     assert after == 0
     conn = runner.connection("calendars")
-    row = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is None
 
@@ -264,10 +268,7 @@ async def test_today_filters_by_member_and_window(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    rows = today(
-        conn,
-        tenant_id="tenant-a",
-        member_party_id="m1",
+    rows = today(conn, _S("tenant-a"), member_party_id="m1",
         today_iso="2026-04-25T00:00:00Z",
         tz_name="UTC",
     )
@@ -317,10 +318,7 @@ async def test_busy_slots_merges_events_and_availability(
     )
     conn.commit()
 
-    slots = busy_slots(
-        conn,
-        tenant_id="tenant-a",
-        member_party_id="m1",
+    slots = busy_slots(conn, _S("tenant-a"), member_party_id="m1",
         range_start_iso="2026-04-25T00:00:00Z",
         range_end_iso="2026-04-25T23:59:59Z",
     )
@@ -441,18 +439,20 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    a = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+    a = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
-    b = by_source(
-        conn, tenant_id="tenant-b", calendar_source="google", external_uid="ext-1"
+    b = by_source(conn, _S("tenant-b"), calendar_source="google", external_uid="ext-1"
     )
     assert a is not None and a["summary"] == "A-event"
     assert b is not None and b["summary"] == "B-event"
 
 
-async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
-    """Prompt 06 stub — prompt 08 extends to ScopeViolation on query."""
+async def test_scope_canary_privileged_redacts_for_non_owner(
+    rig: dict[str, Any],
+) -> None:
+    """Prompt 08a wired: a privileged-sensitivity calendar event with
+    shared:household owner_scope drops from a non-owner's read; the row
+    is still in the projection table per [§6.4] / [CONSOLE_PATTERNS §6]."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -469,12 +469,13 @@ async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
 
     conn = runner.connection("calendars")
     row = by_source(
-        conn, tenant_id="tenant-a", calendar_source="google", external_uid="ext-1"
+        conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
-    # get_calendar_event works too.
-    direct = get_calendar_event(
-        conn, tenant_id="tenant-a", calendar_event_id=row["calendar_event_id"]
-    )
-    assert direct is not None
+    assert row is None
+
+    raw = conn.execute(
+        "SELECT count(*) FROM calendar_events "
+        "WHERE tenant_id = ? AND calendar_source = ?",
+        ("tenant-a", "google"),
+    ).fetchone()
+    assert raw[0] == 1

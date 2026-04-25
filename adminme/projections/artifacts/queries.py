@@ -1,8 +1,9 @@
 """
 Artifacts projection read queries.
 
-Per ADMINISTRATEME_BUILD.md §3.3. Plain query functions; prompt 08 wraps
-them with Session / scope enforcement.
+Per ADMINISTRATEME_BUILD.md §3.3 and SYSTEM_INVARIANTS.md §3, §6. Every
+public query takes a ``session: Session`` per [§6.1] and runs through
+``scope.filter_rows`` before return.
 """
 
 from __future__ import annotations
@@ -11,47 +12,45 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.lib.scope import filter_one, filter_rows
+from adminme.lib.session import Session
 
-# TODO(prompt-08): wrap with Session scope check
+
 def get_artifact(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     artifact_id: str,
 ) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT * FROM artifacts WHERE tenant_id = ? AND artifact_id = ?",
-        (tenant_id, artifact_id),
+        (session.tenant_id, artifact_id),
     ).fetchone()
-    if row is None:
-        return None
-    return dict(row)
+    return filter_one(session, dict(row) if row is not None else None)
 
 
-# TODO(prompt-08): wrap with Session scope check
 def search_by_sha256(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     sha256: str,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM artifacts WHERE tenant_id = ? AND sha256 = ?",
-        (tenant_id, sha256),
+        (session.tenant_id, sha256),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return filter_rows(session, [dict(r) for r in rows])
 
 
-# TODO(prompt-08): wrap with Session scope check
 def list_recent(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM artifacts WHERE tenant_id = ? "
         "ORDER BY captured_at DESC LIMIT ?",
-        (tenant_id, limit),
+        (session.tenant_id, limit),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return filter_rows(session, [dict(r) for r in rows])

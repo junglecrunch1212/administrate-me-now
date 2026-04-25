@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adminme.lib.session import Session
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets._common import (
     apply_row_protection,
@@ -30,7 +31,13 @@ HEADERS: list[str] = [
 DERIVED_COLUMNS: set[str] = {"next_due", "last_completed_at"}
 
 
-def build(ws: Worksheet, ctx: XlsxQueryContext, *, tenant_id: str) -> None:
+def build(
+    ws: Worksheet,
+    ctx: XlsxQueryContext,
+    *,
+    tenant_id: str,
+    session: Session,
+) -> None:
     write_header_row(ws, HEADERS)
 
     rows = ctx.recurrences_conn.execute(

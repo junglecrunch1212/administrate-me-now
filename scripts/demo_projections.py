@@ -19,6 +19,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import build_internal_session
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.artifacts.queries import list_recent
 from adminme.projections.calendars import CalendarsProjection
@@ -48,6 +49,10 @@ from adminme.projections.vector_search.queries import (
 )
 
 TEST_KEY = b"s" * 32
+
+
+def _demo_session():
+    return build_internal_session("demo", "principal", "tenant-demo")
 
 
 def _env(
@@ -528,21 +533,19 @@ async def main() -> None:
             )
 
         conn_p = runner.connection("parties")
-        parties = all_parties(conn_p, tenant_id="tenant-demo")
+        parties = all_parties(conn_p, _demo_session())
         print(f"\nParties ({len(parties)}):")
         for p in parties:
             print(f"  {p['party_id']:<8} {p['kind']:<13} {p['display_name']}")
 
-        members_rows = list_household_members(
-            conn_p, tenant_id="tenant-demo", household_party_id="hh"
+        members_rows = list_household_members(conn_p, _demo_session(), household_party_id="hh"
         )
         print(f"\nHousehold members ({len(members_rows)}):")
         for m in members_rows:
             print(f"  {m['party_id']:<4} role={m['role']:<10} {m['display_name']}")
 
         conn_i = runner.connection("interactions")
-        ix = recent_with(
-            conn_i, tenant_id="tenant-demo", party_id="vendor@example.com", days=60
+        ix = recent_with(conn_i, _demo_session(), party_id="vendor@example.com", days=60
         )
         print(f"\nInteractions with vendor@example.com ({len(ix)}):")
         for row in ix:
@@ -552,13 +555,13 @@ async def main() -> None:
             )
 
         conn_a = runner.connection("artifacts")
-        arts = list_recent(conn_a, tenant_id="tenant-demo")
+        arts = list_recent(conn_a, _demo_session())
         print(f"\nArtifacts ({len(arts)}):")
         for a in arts:
             print(f"  {a['artifact_id']}  {a['title']}  {a['sha256'][:12]}...")
 
         conn_c = runner.connection("commitments")
-        pending = pending_approval(conn_c, tenant_id="tenant-demo")
+        pending = pending_approval(conn_c, _demo_session())
         print(f"\nPending commitments ({len(pending)}):")
         for c in pending:
             print(
@@ -567,13 +570,13 @@ async def main() -> None:
             )
 
         conn_t = runner.connection("tasks")
-        open_t = open_for_member(conn_t, tenant_id="tenant-demo", member_party_id="m1")
+        open_t = open_for_member(conn_t, _demo_session(), member_party_id="m1")
         print(f"\nOpen tasks for m1 ({len(open_t)}):")
         for t in open_t:
             print(f"  {t['task_id']:<6} {t['status']:<12} {t['title']}")
 
         conn_r = runner.connection("recurrences")
-        recs = all_recurrences(conn_r, tenant_id="tenant-demo")
+        recs = all_recurrences(conn_r, _demo_session())
         print(f"\nRecurrences ({len(recs)}):")
         for r in recs:
             print(
@@ -582,10 +585,7 @@ async def main() -> None:
             )
 
         conn_cal = runner.connection("calendars")
-        today_events = calendars_today(
-            conn_cal,
-            tenant_id="tenant-demo",
-            member_party_id="m1",
+        today_events = calendars_today(conn_cal, _demo_session(), member_party_id="m1",
             today_iso="2026-04-23T00:00:00Z",
             tz_name="UTC",
         )
@@ -597,12 +597,11 @@ async def main() -> None:
             )
 
         conn_paa = runner.connection("places_assets_accounts")
-        places = list_places(conn_paa, tenant_id="tenant-demo")
+        places = list_places(conn_paa, _demo_session())
         print(f"\nPlaces ({len(places)}):")
         for pl in places:
             print(f"  {pl['place_id']:<10} {pl['kind']:<10} {pl['display_name']}")
-        renewing = accounts_renewing_before(
-            conn_paa, tenant_id="tenant-demo", cutoff_iso="2026-05-31"
+        renewing = accounts_renewing_before(conn_paa, _demo_session(), cutoff_iso="2026-05-31"
         )
         print(f"\nAccounts renewing by 2026-05-31 ({len(renewing)}):")
         for ac in renewing:
@@ -612,8 +611,7 @@ async def main() -> None:
             )
 
         conn_m = runner.connection("money")
-        totals = category_totals(
-            conn_m, tenant_id="tenant-demo", since_iso="2026-01-01T00:00:00Z"
+        totals = category_totals(conn_m, _demo_session(), since_iso="2026-01-01T00:00:00Z"
         )
         total_sum = sum(totals.values())
         print(f"\nMoney flow totals since 2026-01-01 (sum={total_sum}):")
@@ -621,12 +619,9 @@ async def main() -> None:
             print(f"  {cat:<12} {total}")
 
         conn_vs = runner.connection("vector_search")
-        n_embeddings = count_embeddings(conn_vs, tenant_id="tenant-demo")
+        n_embeddings = count_embeddings(conn_vs, _demo_session())
         print(f"\nVector index embeddings: {n_embeddings}")
-        near = nearest(
-            conn_vs,
-            tenant_id="tenant-demo",
-            query_vector=_fake_emb("demo interaction summary"),
+        near = nearest(conn_vs, _demo_session(), query_vector=_fake_emb("demo interaction summary"),
             k=3,
         )
         print(f"Nearest to 'demo interaction summary' ({len(near)}):")

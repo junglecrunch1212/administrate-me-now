@@ -18,6 +18,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.queries import (
     closeness_signals,
@@ -27,6 +28,14 @@ from adminme.projections.interactions.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"i" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -207,7 +216,7 @@ async def test_recent_with_window(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:interactions")
 
     conn = runner.connection("interactions")
-    got = recent_with(conn, tenant_id="tenant-a", party_id="a@example.com", days=30)
+    got = recent_with(conn, _S("tenant-a"), party_id="a@example.com", days=30)
     assert len(got) == 1
     assert got[0]["occurred_at"] == recent
 
@@ -235,7 +244,7 @@ async def test_thread_returns_ordered_by_occurred_at(rig: dict[str, Any]) -> Non
     await _wait_idle(bus, "projection:interactions")
 
     conn = runner.connection("interactions")
-    rows = thread(conn, tenant_id="tenant-a", thread_id="t9")
+    rows = thread(conn, _S("tenant-a"), thread_id="t9")
     assert len(rows) == 2
     assert rows[0]["occurred_at"] == "2026-04-10T09:00:00Z"
     assert rows[1]["occurred_at"] == "2026-04-10T10:00:00Z"
@@ -362,10 +371,7 @@ async def test_closeness_signals_counts(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:interactions")
 
     conn = runner.connection("interactions")
-    signals = closeness_signals(
-        conn,
-        tenant_id="tenant-a",
-        party_id="a@example.com",
+    signals = closeness_signals(conn, _S("tenant-a"), party_id="a@example.com",
         since_iso="2026-01-01T00:00:00Z",
     )
     assert signals["inbound_count"] == 1

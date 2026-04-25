@@ -20,6 +20,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
 from adminme.projections.places_assets_accounts.queries import (
     accounts_renewing_before,
@@ -33,6 +34,14 @@ from adminme.projections.places_assets_accounts.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"p" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -151,7 +160,7 @@ async def test_place_added_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", eid)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_place(conn, tenant_id="tenant-a", place_id="pl1")
+    row = get_place(conn, _S("tenant-a"), place_id="pl1")
     assert row is not None
     assert row["kind"] == "home"
     assert row["display_name"] == "Primary residence"
@@ -178,7 +187,7 @@ async def test_place_updated_changes_only_listed_fields(rig: dict[str, Any]) -> 
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_place(conn, tenant_id="tenant-a", place_id="pl1")
+    row = get_place(conn, _S("tenant-a"), place_id="pl1")
     assert row is not None
     assert row["display_name"] == "The house"
     # unchanged
@@ -199,7 +208,7 @@ async def test_asset_added_with_linked_place(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_asset(conn, tenant_id="tenant-a", asset_id="a1")
+    row = get_asset(conn, _S("tenant-a"), asset_id="a1")
     assert row is not None
     assert row["kind"] == "vehicle"
     assert row["linked_place"] == "pl1"
@@ -225,7 +234,7 @@ async def test_asset_updated_changes_fields(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_asset(conn, tenant_id="tenant-a", asset_id="a1")
+    row = get_asset(conn, _S("tenant-a"), asset_id="a1")
     assert row is not None
     assert row["display_name"] == "Honda Civic 2020"
 
@@ -248,7 +257,7 @@ async def test_account_added_with_vault_ref(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", eid)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_account(conn, tenant_id="tenant-a", account_id="ac1")
+    row = get_account(conn, _S("tenant-a"), account_id="ac1")
     assert row is not None
     assert row["login_vault_ref"] == "op://Vault/power-bill"
     assert row["organization"] == "p-utility"
@@ -313,7 +322,7 @@ async def test_account_updated_changes_fields(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_account(conn, tenant_id="tenant-a", account_id="ac1")
+    row = get_account(conn, _S("tenant-a"), account_id="ac1")
     assert row is not None
     assert row["status"] == "dormant"
 
@@ -453,7 +462,7 @@ async def test_list_places_filter_by_kind(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    homes = list_places(conn, tenant_id="tenant-a", kind="home")
+    homes = list_places(conn, _S("tenant-a"), kind="home")
     assert {r["place_id"] for r in homes} == {"pl1", "pl3"}
 
 
@@ -494,8 +503,7 @@ async def test_accounts_renewing_before_orders_ascending(rig: dict[str, Any]) ->
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    rows = accounts_renewing_before(
-        conn, tenant_id="tenant-a", cutoff_iso="2026-06-15"
+    rows = accounts_renewing_before(conn, _S("tenant-a"), cutoff_iso="2026-06-15"
     )
     # ac3 is cancelled — excluded. ac2 < ac4 < ac1 by next_renewal ascending.
     assert [r["account_id"] for r in rows] == ["ac2", "ac4", "ac1"]
@@ -522,7 +530,7 @@ async def test_list_assets_for_place(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    rows = list_assets_for_place(conn, tenant_id="tenant-a", place_id="pl1")
+    rows = list_assets_for_place(conn, _S("tenant-a"), place_id="pl1")
     assert {r["asset_id"] for r in rows} == {"a1", "a2"}
 
 
@@ -547,7 +555,7 @@ async def test_list_accounts_by_kind(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    rows = list_accounts_by_kind(conn, tenant_id="tenant-a", kind="utility")
+    rows = list_accounts_by_kind(conn, _S("tenant-a"), kind="utility")
     assert {r["account_id"] for r in rows} == {"ac1", "ac3"}
 
 
@@ -577,15 +585,18 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    a = get_place(conn, tenant_id="tenant-a", place_id="pl1")
-    b = get_place(conn, tenant_id="tenant-b", place_id="pl1")
+    a = get_place(conn, _S("tenant-a"), place_id="pl1")
+    b = get_place(conn, _S("tenant-b"), place_id="pl1")
     assert a is not None and a["display_name"] == "Tenant A home"
     assert b is not None and b["display_name"] == "Tenant B home"
 
 
-async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
-    """Prompt 07a stub — a privileged envelope still lands in the projection
-    because scope enforcement is not yet wired. Prompt 08 extends."""
+async def test_scope_canary_privileged_drops_for_non_owner(
+    rig: dict[str, Any],
+) -> None:
+    """Prompt 08a wired: a privileged-sensitivity row with shared:household
+    owner_scope drops from a non-owner's read; the row is still in the
+    projection table per [§6.4]."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -601,6 +612,11 @@ async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", eid)
 
     conn = runner.connection("places_assets_accounts")
-    row = get_account(conn, tenant_id="tenant-a", account_id="ac-priv")
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
+    row = get_account(conn, _S("tenant-a"), account_id="ac-priv")
+    assert row is None
+
+    raw = conn.execute(
+        "SELECT count(*) FROM accounts WHERE tenant_id = ? AND account_id = ?",
+        ("tenant-a", "ac-priv"),
+    ).fetchone()
+    assert raw[0] == 1

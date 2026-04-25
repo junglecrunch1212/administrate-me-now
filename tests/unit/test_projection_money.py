@@ -19,6 +19,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.money import MoneyProjection
 from adminme.projections.money.queries import (
     category_totals,
@@ -31,6 +32,14 @@ from adminme.projections.money.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"m" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -139,7 +148,7 @@ async def test_money_flow_recorded_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", eid)
 
     conn = runner.connection("money")
-    row = get_money_flow(conn, tenant_id="tenant-a", flow_id="f1")
+    row = get_money_flow(conn, _S("tenant-a"), flow_id="f1")
     assert row is not None
     assert row["is_manual"] == 0
     assert row["deleted_at"] is None
@@ -159,7 +168,7 @@ async def test_money_flow_manually_added_inserts_row(rig: dict[str, Any]) -> Non
     await _wait_for_checkpoint(bus, "projection:money", eid)
 
     conn = runner.connection("money")
-    row = get_money_flow(conn, tenant_id="tenant-a", flow_id="f-manual-1")
+    row = get_money_flow(conn, _S("tenant-a"), flow_id="f-manual-1")
     assert row is not None
     assert row["is_manual"] == 1
     assert row["added_by_party_id"] == "m1"
@@ -190,7 +199,7 @@ async def test_money_flow_manually_deleted_sets_deleted_at(
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    row = get_money_flow(conn, tenant_id="tenant-a", flow_id="f-manual-1")
+    row = get_money_flow(conn, _S("tenant-a"), flow_id="f-manual-1")
     assert row is not None
     assert row["deleted_at"] == "2026-04-22T12:00:00Z"
     # Row persists — rebuild depends on it.
@@ -224,8 +233,8 @@ async def test_deletion_before_addition_is_no_op(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    ghost = get_money_flow(conn, tenant_id="tenant-a", flow_id="f-ghost")
-    real = get_money_flow(conn, tenant_id="tenant-a", flow_id="f-real")
+    ghost = get_money_flow(conn, _S("tenant-a"), flow_id="f-ghost")
+    real = get_money_flow(conn, _S("tenant-a"), flow_id="f-real")
     assert ghost is None
     assert real is not None
 
@@ -345,10 +354,7 @@ async def test_flows_in_range_excludes_deleted(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    rows = flows_in_range(
-        conn,
-        tenant_id="tenant-a",
-        start_iso="2026-04-01T00:00:00Z",
+    rows = flows_in_range(conn, _S("tenant-a"), start_iso="2026-04-01T00:00:00Z",
         end_iso="2026-04-30T23:59:59Z",
     )
     ids = {r["flow_id"] for r in rows}
@@ -433,8 +439,7 @@ async def test_category_totals_excludes_deleted_and_null(
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    totals = category_totals(
-        conn, tenant_id="tenant-a", since_iso="2026-04-01T00:00:00Z"
+    totals = category_totals(conn, _S("tenant-a"), since_iso="2026-04-01T00:00:00Z"
     )
     assert totals == {"groceries": 3000, "transport": 5000}
 
@@ -467,7 +472,7 @@ async def test_manual_flows_returns_only_manual_non_deleted(
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    rows = manual_flows(conn, tenant_id="tenant-a")
+    rows = manual_flows(conn, _S("tenant-a"))
     assert {r["flow_id"] for r in rows} == {"fm1"}
 
 
@@ -498,7 +503,7 @@ async def test_flows_by_account(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    rows = flows_by_account(conn, tenant_id="tenant-a", account_id="ac1")
+    rows = flows_by_account(conn, _S("tenant-a"), account_id="ac1")
     assert {r["flow_id"] for r in rows} == {"f1", "f2"}
 
 
@@ -529,7 +534,7 @@ async def test_flows_by_category(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    rows = flows_by_category(conn, tenant_id="tenant-a", category="groceries")
+    rows = flows_by_category(conn, _S("tenant-a"), category="groceries")
     assert {r["flow_id"] for r in rows} == {"f1", "f3"}
 
 
@@ -559,15 +564,18 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    a = get_money_flow(conn, tenant_id="tenant-a", flow_id="f1")
-    b = get_money_flow(conn, tenant_id="tenant-b", flow_id="f1")
+    a = get_money_flow(conn, _S("tenant-a"), flow_id="f1")
+    b = get_money_flow(conn, _S("tenant-b"), flow_id="f1")
     assert a is not None and a["amount_minor"] == 100
     assert b is not None and b["amount_minor"] == 999
 
 
-async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
-    """Prompt 07a stub — a privileged envelope still lands. Prompt 08
-    extends."""
+async def test_scope_canary_privileged_drops_for_non_owner(
+    rig: dict[str, Any],
+) -> None:
+    """Prompt 08a wired: a privileged-sensitivity money flow with
+    shared:household owner_scope drops from a non-owner's read; the row
+    is still in the projection table per [§6.4]."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -583,6 +591,11 @@ async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", eid)
 
     conn = runner.connection("money")
-    row = get_money_flow(conn, tenant_id="tenant-a", flow_id="f-priv")
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
+    row = get_money_flow(conn, _S("tenant-a"), flow_id="f-priv")
+    assert row is None
+
+    raw = conn.execute(
+        "SELECT count(*) FROM money_flows WHERE tenant_id = ? AND flow_id = ?",
+        ("tenant-a", "f-priv"),
+    ).fetchone()
+    assert raw[0] == 1

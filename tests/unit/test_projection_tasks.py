@@ -18,6 +18,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
 from adminme.projections.tasks.queries import (
@@ -30,6 +31,14 @@ from adminme.projections.tasks.queries import (
 )
 
 TEST_KEY = b"t" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -108,7 +117,7 @@ async def test_task_created_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", eid)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
     assert row is not None
     assert row["title"] == "Mow the lawn"
     assert row["assignee_party"] == "m1"
@@ -140,7 +149,7 @@ async def test_task_completed_marks_done(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
     assert row is not None
     assert row["status"] == "done"
     assert row["completed_at"] == "2026-04-25T14:00:00Z"
@@ -171,7 +180,7 @@ async def test_task_updated_new_status_changes_status_only(
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
     assert row is not None
     assert row["status"] == "in_progress"
     # Other fields untouched
@@ -202,7 +211,7 @@ async def test_task_updated_field_updates(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
     assert row is not None
     assert row["energy"] == "high"
     assert row["micro_script"] == "open garage"
@@ -231,7 +240,7 @@ async def test_task_deleted_is_soft(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
     assert row is not None  # row stays (soft delete)
     assert row["status"] == "dismissed"
 
@@ -271,7 +280,7 @@ async def test_sub_tasks_of_returns_children(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    children = sub_tasks_of(conn, tenant_id="tenant-a", goal_ref_task_id="parent")
+    children = sub_tasks_of(conn, _S("tenant-a"), goal_ref_task_id="parent")
     assert {c["task_id"] for c in children} == {"child1", "child2"}
 
 
@@ -328,8 +337,7 @@ async def test_today_for_member_filters_correctly(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    rows = today_for_member(
-        conn, tenant_id="tenant-a", member_party_id="m1", today_iso="2026-04-23"
+    rows = today_for_member(conn, _S("tenant-a"), member_party_id="m1", today_iso="2026-04-23"
     )
     ids = {r["task_id"] for r in rows}
     assert ids == {"t1", "t4"}
@@ -450,14 +458,19 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    a = get_task(conn, tenant_id="tenant-a", task_id="t1")
-    b = get_task(conn, tenant_id="tenant-b", task_id="t1")
+    a = get_task(conn, _S("tenant-a"), task_id="t1")
+    b = get_task(conn, _S("tenant-b"), task_id="t1")
     assert a is not None and a["title"] == "A-task"
     assert b is not None and b["title"] == "B-task"
 
 
-async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
-    """Prompt 06 stub — prompt 08 extends to ScopeViolation on query."""
+async def test_scope_canary_privileged_drops_for_non_owner(
+    rig: dict[str, Any],
+) -> None:
+    """Prompt 08a wired: a privileged-sensitivity row scoped at
+    shared:household (an illegal combination per DIAGRAMS §5) is dropped
+    from a non-owner's read. The row is still in the projection table —
+    the scope filter excludes it on the way out."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -473,9 +486,17 @@ async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", eid)
 
     conn = runner.connection("tasks")
-    row = get_task(conn, tenant_id="tenant-a", task_id="t1")
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
+    # Non-owner reader does not see the privileged row.
+    row = get_task(conn, _S("tenant-a"), task_id="t1")
+    assert row is None
+
+    # The row IS in the projection — confirm via raw SQL (defense-in-depth
+    # belongs to the query layer, not the table).
+    raw = conn.execute(
+        "SELECT count(*) FROM tasks WHERE tenant_id = ? AND task_id = ?",
+        ("tenant-a", "t1"),
+    ).fetchone()
+    assert raw[0] == 1
 
 
 async def test_open_for_member_excludes_done(rig: dict[str, Any]) -> None:
@@ -499,7 +520,7 @@ async def test_open_for_member_excludes_done(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    rows = open_for_member(conn, tenant_id="tenant-a", member_party_id="m1")
+    rows = open_for_member(conn, _S("tenant-a"), member_party_id="m1")
     assert {r["task_id"] for r in rows} == {"t1"}
 
 
@@ -525,9 +546,9 @@ async def test_by_context_and_in_status(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    default_dom = by_context(conn, tenant_id="tenant-a", domain="tasks")
-    home_dom = by_context(conn, tenant_id="tenant-a", domain="home")
+    default_dom = by_context(conn, _S("tenant-a"), domain="tasks")
+    home_dom = by_context(conn, _S("tenant-a"), domain="home")
     assert {r["task_id"] for r in default_dom} == {"t1"}
     assert {r["task_id"] for r in home_dom} == {"t2"}
-    inboxes = in_status(conn, tenant_id="tenant-a", status="inbox")
+    inboxes = in_status(conn, _S("tenant-a"), status="inbox")
     assert {r["task_id"] for r in inboxes} == {"t1", "t2"}

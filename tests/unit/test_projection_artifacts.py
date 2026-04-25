@@ -15,6 +15,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.artifacts.queries import (
     get_artifact,
@@ -24,6 +25,14 @@ from adminme.projections.artifacts.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"a" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -96,7 +105,7 @@ async def test_artifact_received_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:artifacts")
 
     conn = runner.connection("artifacts")
-    row = get_artifact(conn, tenant_id="tenant-a", artifact_id=f"art_{eid}")
+    row = get_artifact(conn, _S("tenant-a"), artifact_id=f"art_{eid}")
     assert row is not None
     assert row["sha256"] == sha
     assert row["mime_type"] == "application/pdf"
@@ -114,7 +123,7 @@ async def test_search_by_sha256(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:artifacts")
 
     conn = runner.connection("artifacts")
-    hits = search_by_sha256(conn, tenant_id="tenant-a", sha256=sha)
+    hits = search_by_sha256(conn, _S("tenant-a"), sha256=sha)
     assert len(hits) == 1
     assert hits[0]["title"] == "copy-a.pdf"
 
@@ -180,7 +189,7 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:artifacts")
 
     conn = runner.connection("artifacts")
-    a = list_recent(conn, tenant_id="tenant-a")
-    b = list_recent(conn, tenant_id="tenant-b")
+    a = list_recent(conn, _S("tenant-a"))
+    b = list_recent(conn, _S("tenant-b"))
     assert len(a) == 1 and a[0]["sha256"] == sha_a
     assert len(b) == 1 and b[0]["sha256"] == sha_b
