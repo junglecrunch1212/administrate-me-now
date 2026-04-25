@@ -364,6 +364,77 @@ def build_internal_session(
     )
 
 
+def build_session_from_xlsx_reverse_daemon(
+    detected_member_id: str | None,
+    config: Any,
+    *,
+    correlation_id: str | None = None,
+) -> Session:
+    """Construct a Session for the xlsx reverse daemon's per-cycle work
+    [§6, prompt 08b UT-7 closure].
+
+    The reverse daemon detects principal-authored workbook edits and emits
+    domain events on principal authority. Two regimes:
+
+    - ``detected_member_id`` is None  → system-internal device-role session;
+      the daemon couldn't pin a specific principal to the edit, so events
+      attribute to a generic device actor (``actor_identity = "xlsx_reverse"``).
+    - ``detected_member_id`` is set    → Session attributing that principal as
+      ``auth_member`` so emitted events carry their principal_member_id in
+      ``actor_identity``. The view_member equals auth_member (the daemon
+      does not view-as).
+
+    The caller — XlsxReverseDaemon — uses this helper inside
+    ``_run_cycle_internal`` and passes the resulting Session into ``_append``
+    so every emit is attributed correctly. UT-7 was OPEN through 07c-β with
+    a literal ``"xlsx_reverse"`` actor_identity; 08b closes it by routing
+    attribution through Session [arch §6].
+    """
+    tenant_id = getattr(config, "tenant_id", None)
+    if not tenant_id:
+        raise AuthError("missing_tenant_id")
+
+    if detected_member_id is None:
+        # System-internal device-role session. Same shape as
+        # ``build_internal_session("xlsx_reverse", "device", tenant_id)``
+        # — kept inline so this helper is the single seam the daemon
+        # consults.
+        return Session(
+            tenant_id=tenant_id,
+            auth_member_id="xlsx_reverse",
+            auth_role="device",
+            view_member_id="xlsx_reverse",
+            view_role="device",
+            dm_scope="shared",
+            source="xlsx_reverse_daemon",
+            correlation_id=correlation_id,
+        )
+
+    # Detected principal — attribute on principal authority. Role is
+    # 'principal' by definition; ambient/child/coach members do not edit
+    # workbooks under v1 [§6.2]. If a future household-config flag wants
+    # to allow non-principal members to author xlsx changes, the
+    # role-resolution lives here.
+    _validate(
+        tenant_id=tenant_id,
+        auth_member_id=detected_member_id,
+        auth_role="principal",
+        view_member_id=detected_member_id,
+        view_role="principal",
+        source="xlsx_reverse_daemon",
+    )
+    return Session(
+        tenant_id=tenant_id,
+        auth_member_id=detected_member_id,
+        auth_role="principal",
+        view_member_id=detected_member_id,
+        view_role="principal",
+        dm_scope="per_channel_peer",
+        source="xlsx_reverse_daemon",
+        correlation_id=correlation_id,
+    )
+
+
 __all__ = [
     "AuthError",
     "AuthRole",
@@ -375,4 +446,5 @@ __all__ = [
     "build_internal_session",
     "build_session_from_node",
     "build_session_from_openclaw",
+    "build_session_from_xlsx_reverse_daemon",
 ]
