@@ -1,0 +1,57 @@
+# fixture:tenant_data:ok
+# Sample authority.yaml — agent allowlist for unit + integration tests.
+# Mirrors ADMINISTRATEME_BUILD.md §AUTHORITY (lines 2055-2117).
+#
+# Tenant-agnostic: actor handles use the BUILD.md ``<persona.handle>``
+# placeholder pattern. Production tenants populate their own authority.yaml
+# from the bootstrap wizard (prompt 16).
+
+agent_allowlist:
+  # System-internal callers — bootstrap, migrations, internal pipelines.
+  - agent_id: "system:internal"
+    actions: ["*"]
+
+  - agent_id: "system:bootstrap"
+    actions: ["*"]
+
+  # The xlsx reverse daemon may emit only domain events derived from
+  # detected workbook edits.  Out-of-band channel emits require a
+  # different agent_id.
+  - agent_id: "daemon:xlsx_reverse"
+    actions:
+      - "task.*"
+      - "commitment.*"
+      - "recurrence.*"
+      - "money_flow.*"
+
+  # The xlsx forward daemon emits only the projection-completion signal
+  # (xlsx.regenerated).  See SYSTEM_INVARIANTS.md §2.2.
+  - agent_id: "daemon:xlsx_workbooks"
+    actions: ["xlsx.regenerated"]
+
+  # Console-bridged user actions — wide allowlist for principals; the
+  # action_gate layer narrows the per-action policy.
+  - agent_id: "user:*"
+    actions:
+      - "task.*"
+      - "commitment.*"
+      - "recurrence.*"
+      - "money_flow.*"
+      - "outbound.send"
+      - "observation.*"
+      - "projections.rebuild"
+
+  # OpenClaw slash commands and standing orders — same vocabulary as user
+  # actions plus skill-level invocations.
+  - agent_id: "openclaw:*"
+    actions:
+      - "task.*"
+      - "commitment.*"
+      - "skill.*"
+      - "outbound.send"
+
+# Forbidden outbound parties (mirror of governance.yaml never block;
+# duplicated here so the AgentAllowlist loader can short-circuit
+# outbound-send checks at the agent level if a future prompt wants).
+forbidden_outbound_parties:
+  - send_to: opposing_counsel
