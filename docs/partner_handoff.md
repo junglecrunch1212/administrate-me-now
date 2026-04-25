@@ -103,17 +103,17 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-25 (split-08 prep PR landed: prompts/08a-session-and-scope.md and prompts/08b-governance-and-observation.md drafted; UT-3 RESOLVED; UT-8 added — `vector_search` privileged-exclusion edge case to surface during 08a refactor; UT-7 still carries forward to 08b. Earlier today: 07c-β merged via PR #21, BUILD_LOG housekeeping completed; 07.5 audit memo landed at `docs/checkpoints/07.5-projection-consistency.md`; UT-1 and UT-6 RESOLVED; UT-5 advanced.)
+**Last updated:** 2026-04-25 (08a and 08b merged via PR #&lt;PR-08a&gt; and PR #&lt;PR-08b&gt;; security backbone complete (read + write sides); UT-3 RESOLVED; UT-7 RESOLVED — reverse-daemon `_ACTOR` literal removed, `build_session_from_xlsx_reverse_daemon` + `_session_for(workbook)` helper installed, sidecar hedge to 08.5 NOT activated; UT-8 RESOLVED — `vector_search.nearest` carve-out shipped inline with three-layer privileged exclusion per [§13.9]; UT-5 advanced — 08a and 08b BUILD_LOG headers filled with merge dates; PR numbers and commit SHAs left as placeholders for James to fill from `gh pr list --state merged --limit 5` before the housekeeping commit lands. Earlier today: split-08 prep PR landed (08a/08b drafts on main); 07c-β merged via PR #21; 07.5 audit memo landed; UT-1 and UT-6 RESOLVED.)
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
-**Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06, 07a, 07b, **PM-7 infrastructure PR (slim preamble + scripts/verify_invariants.sh)**, **07c-α (PR #20, merged 2026-04-24)**, **07c-β (PR #21, merged 2026-04-25 — reverse daemon class + 4 emit pathways + integration round-trip; closes the xlsx round-trip and resolves UT-6)**.
+**Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06, 07a, 07b, **PM-7 infrastructure PR (slim preamble + scripts/verify_invariants.sh)**, **07c-α (PR #20, merged 2026-04-24)**, **07c-β (PR #21, merged 2026-04-25 — reverse daemon class + 4 emit pathways + integration round-trip; closes the xlsx round-trip and resolves UT-6)**, **08a (PR #&lt;PR-08a&gt;, merged 2026-04-25 — Session model + scope enforcement; 48 TODO(prompt-08) markers cleared across 10 sqlite projection queries.py files; 69 new tests; resolves UT-8 inline via `vector_search.nearest` three-layer carve-out)**, **08b (PR #&lt;PR-08b&gt;, merged 2026-04-25 — guardedWrite three-layer + observation `outbound()` + 6 governance event types at v1; 47 new tests + 4 security-E2E + 1 UT-7 closure case; resolves UT-7 — `_ACTOR` literal removed from reverse daemon, sidecar hedge NOT activated)**.
 
 **Checkpoints landed:** **07.5 (`docs/checkpoints/07.5-projection-consistency.md`, 2026-04-25)** — projection consistency audit across the 07a/07b/07c-α/07c-β cohort plus L1-adjacent reverse daemon. Verdict: PASS with 1 non-critical finding (C-1: Raw Data builder `ALWAYS_DERIVED` missing `is_manual` while descriptor `always_derived` includes it; deferred to sidecar PR `sidecar-raw-data-is-manual-derived`). UT-1 closes here.
 
 **Prompts with PR open, not yet merged:** none.
 
-**Prompts drafted, ready for Claude Code execution:** 08a and 08b drafts on main (landed by `split-08-2026-04-25` PR); each still needs a Partner refactor session for Job 3 sizing confirmation against current main before Claude Code executes it.
+**Prompts drafted, ready for Claude Code execution:** none. (08a and 08b shipped this session — see merged list above.)
 
 **Sidecar PRs queued (non-blocking):**
 - **`sidecar-raw-data-is-manual-derived`** — surfaced by 07.5 finding C-1. Two-file change:
@@ -124,15 +124,21 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Next task queue (in order):**
 
-1. **Sidecar Claude Code session: ship `sidecar-raw-data-is-manual-derived`** — non-blocking; can run in parallel with the 08 split memo session or after.
-2. **Partner session: refactor 08a (Type 3, refactor-only).** Draft exists at `prompts/08a-session-and-scope.md` (landed by `split-08-2026-04-25` PR). Session re-runs depth-reads to confirm projection-queries shape on main is unchanged from snapshot, runs Job 3 sizing pass against the draft, produces prep PR command block for Claude Code. Touches the 48 explicit `# TODO(prompt-08)` markers across 10 projection `queries.py` files.
-3. **Claude Code session: execute 08a.** James drives. Closes the 48 markers.
-4. **Partner session: QC of 08a merge + refactor 08b (Type 1 combined if QC is small; else Type 2 then Type 3).** Draft exists at `prompts/08b-governance-and-observation.md`. UT-7 carries into 08b; closes there if the reverse-daemon rewrite is mechanical, or splits to a 08.5 sidecar if it touches more than one structural seam (per the Commit 3 hedge in the 08b draft). UT-8 may surface during 08a QC if `vector_search`'s carve-out manifests differently than the draft anticipates.
-5. **Claude Code session: execute 08b.** Closes UT-7 (or activates the 08.5 sidecar hedge).
-6. **Partner session: QC of 08b merge.** UT-7 closes here if rewrite landed; otherwise the next session is the 08.5 sidecar refactor, then Claude Code on 08.5, then QC on 08.5.
-7. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
+1. **Sidecar Claude Code session: ship `sidecar-raw-data-is-manual-derived`** — non-blocking; carried forward from the 07.5 audit (C-1 finding). Two-file change in `adminme/projections/xlsx_workbooks/sheets/raw_data.py:45` + a unit test asserting equivalence with `descriptor_for(FINANCE_WORKBOOK_NAME, "Raw Data").always_derived`. ≤15 minutes. Cosmetic protection drift; does not block prompt 09a.
+2. **Partner session: refactor 09a (Skill runner — Type 3, refactor-only).** Draft exists at `prompts/09a-skill-runner.md` in v1 long form (no slim preamble; "Phase:" prose header). Pre-split disposition per `D-prompt-tier-and-pattern-index.md`: single prompt expected (pattern Introduction). Refactor must (a) prepend the slim post-PM-7 preamble verbatim, (b) update "Depends on" from "Prompt 08" to "08a + 08b merged", (c) wire `SkillContext` to import `Session` from `adminme.lib.session`, (d) thread `outbound(session, action, payload, action_fn)` from `adminme.lib.observation` for any external side effect, (e) thread `guarded_write.check(session, "skill.invoke", ...)` from `adminme.lib.governance` before HTTP dispatch to OpenClaw, (f) confirm `docs/reference/openclaw/` has the files 09a depends on (skill manifest shape, `/skills/invoke` endpoint) — if not, this is a prompt 00.5 sidecar before 09a can ship. Job 3 size budget should fit comfortably in slim form (target ~200 lines, well under the 350-line ceiling).
+3. **Claude Code session: execute 09a.** James drives. Ships `adminme/lib/skill_runner/wrapper.py` + dummy skill pack `packs/skills/classify_test/`.
+4. **Partner session: QC of 09a merge + refactor 09b.** Type 1 combined if QC small. 09b ships the first canonical skill pack (classify_thank_you_candidate per BUILD.md L4).
+5. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
 
-**Prompts drafted but not yet refactored:** 08a, 08b, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (`prompts/08-session-scope-governance.md` is preserved on main as historical record but superseded by 08a/08b; the index treats it as RETIRED.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
+**Pre-merge verification James should run before committing this housekeeping PR:**
+
+```bash
+gh pr list --state merged --limit 5 --json number,title,mergedAt,mergeCommit
+```
+
+…and find-and-replace `<PR-08a>` / `<PR-08b>` / `<sha1-08a>` etc. in `docs/build_log.md` and `docs/partner_handoff.md` with the actual values. Expected sequence: PR #21 = 07c-β; PR #22 = split-08 prep (drafts only, no code); PR #23 = 08a; PR #24 = 08b. Confirm via `gh` before commit.
+
+**Prompts drafted but not yet refactored:** 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (`prompts/08-session-scope-governance.md` is preserved on main as historical record but superseded by the merged 08a/08b; the index treats it as RETIRED.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
 
 **Prompts not yet drafted:** none. 07c was the last unwritten prompt; it was split into 07c-α (merged) and 07c-β (merged). Everything from 08 onward exists in unrefactored form. The original `prompts/07c-xlsx-workbooks-reverse.md` was retired as part of the α/β split.
 
@@ -227,6 +233,14 @@ Partner discipline: when prompt N specifies module API surface, and prompt N+1 c
 
 When the consumer prompt expects public symbols and the producer shipped private ones, either prompt N+1's refactor uses the public accessor (`descriptor_for`) or a single-purpose follow-on PR re-exports the symbols. 07c-β chose the accessor approach (cheaper; no module re-edit needed).
 
+### PM-17: Single-seam enforcement invariants verified by exclusion-grep — HARD
+
+Surfaced by 08b QC. When an invariant takes the form "X must only ever happen at one place" — e.g. [§6.13/§6.14] "every outbound call goes through `outbound()` in `lib/observation.py`; emitting `external.sent` anywhere else is a bug" — the QC verification is an exclusion-grep, not an inclusion-check. Pattern: `grep -rnE "log\.append.*external\.sent|log\.append.*observation\.suppressed" adminme/lib/ adminme/products/ adminme/projections/ adminme/daemons/ adminme/pipelines/` must return zero hits outside the single seam (`adminme/lib/observation.py`). The same pattern applies to UT-7 closure (`_ACTOR` literal grep returns 0), [§2.2] (only allowed projections emit, only allowed system events), and [§15] (no `~/.adminme` literals outside fixtures).
+
+These are already mechanized in `scripts/verify_invariants.sh` for the four invariants the script covers. PM-17 generalizes the pattern: any time a future prompt introduces a new "this happens at exactly one place" rule, the prompt's Commit 4 verification block adds the exclusion-grep AND adds the canary to `verify_invariants.sh`'s permanent set. Future PMs that surface another single-seam invariant should expect to extend the script rather than duplicate the grep inline.
+
+The 08b refactor did NOT extend `verify_invariants.sh` for `external.sent` / `observation.suppressed` — the canary lives in `tests/unit/test_observation.py` instead. This is acceptable because the test asserts the seam directly (it imports `outbound` and confirms it's the only function emitting these types in observation.py's namespace), but a future Partner session may decide to lift it into the script for cross-codebase enforcement. Track: candidate for `verify_invariants.sh` extension when 09a or 11+ adds the next outbound-callable subsystem.
+
 ---
 
 ## Open tensions / unresolved things
@@ -251,7 +265,7 @@ The 60 attention sites catalogued by the 07.5 audit (48 explicit `# TODO(prompt-
 
 ### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG — current
 
-07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. **Filled post-merge during Partner's QC pass per the rubric.** 07c-α entry filled with PR #20, commits aa395dd / 7305acd / fcdb592 / 1d770ec, merge date 2026-04-24. **07c-β entry filled with PR #21, commits ffa6d9c / bf649ed / 00bff7d / 2788761, merge date 2026-04-25** during the 2026-04-25 QC session's Pass A housekeeping. The full sequence is up-to-date through 07c-β; UT-5 will surface again after the next merge.
+07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. **Filled post-merge during Partner's QC pass per the rubric.** 07c-α entry filled with PR #20, commits aa395dd / 7305acd / fcdb592 / 1d770ec, merge date 2026-04-24. 07c-β entry filled with PR #21, commits ffa6d9c / bf649ed / 00bff7d / 2788761, merge date 2026-04-25. **08a and 08b entries advanced this session (2026-04-25 QC)**: merge date filled (`2026-04-25`) and `Outcome` flipped to `MERGED`. PR numbers and commit SHAs left as `<PR-08a>` / `<PR-08b>` / `<sha1-08a>` etc. placeholders for James to find-and-replace from `gh pr list --state merged --limit 5` before committing the housekeeping PR. Expected sequence: PR #21 = 07c-β; PR #22 = split-08 prep (drafts only, no code); PR #23 = 08a; PR #24 = 08b. UT-5 will surface again after the next merge.
 
 ### UT-6: Sidecar-state JSON pathway for xlsx round-trip — RESOLVED 2026-04-25
 
@@ -259,15 +273,35 @@ Per BUILD.md §3.11 line 1009 + line 1015, the sidecar is written by both daemon
 
 07c-α landed the forward half (PR #20, merged 2026-04-24); 07c-β landed the reverse half (PR #21, merged 2026-04-25). The 07.5 audit confirmed the pathway is closed at both ends with three canaries: `tests/unit/test_xlsx_forward_writes_sidecar.py`, `tests/unit/test_xlsx_reverse_cold_start.py`, `tests/integration/test_xlsx_roundtrip.py`. Status: **RESOLVED**.
 
-### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — open until prompt 08 (specifically 08b)
+### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — RESOLVED 2026-04-25
 
-The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emits domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks. This is the simple seam for now. A hostile file editor (or a malware-injected edit) could in principle drive the daemon to emit events on behalf of the principal without any rate-limit, action-gate, or authority check. Prompt 08b (privacy filter + authority gate + observation mode) will close this — reverse-emitted events should route through guardedWrite with the daemon as the agent identity.
+The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emitted domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks.
 
-The 07.5 audit (Section F) catalogued the 12 attention sites — 10 emit-type literals at lines 404, 428, 505, 526, 548, 580, 625, 643, 703, 738 + 2 actor-stamping lines on the system-event envelopes at 412, 436. The shared `_emit` helper at line 848 routes all per-pathway domain emits through one envelope construction; one fix to the helper plus per-pathway plumbing closes the seam. Status: **OPEN, scoped to prompt 08b**.
+**Closed by 08b (PR #&lt;PR-08b&gt;, merged 2026-04-25).** The reverse-daemon rewrite stayed in 08b's Commit 3 — the **sidecar hedge to 08.5 was NOT activated** because the rewrite proved mechanical (single `_append` helper signature change + new `_session_for(workbook)` per-cycle helper + per-pathway plumbing through eight `_emit_*` methods, all hanging off the existing seam). The 08b Evidence section enumerates the closure precisely:
 
-### UT-8 (NEW 2026-04-25): vector_search privileged-exclusion is a per-projection carve-out
+- `_ACTOR = "xlsx_reverse"` literal at line 91 removed; `grep -nE "_ACTOR\s*=" adminme/daemons/xlsx_sync/reverse.py` returns 0.
+- `_append` helper now takes `session: Session`, derives `actor_identity` from `session.auth_member_id`, returns `str | None` to support guarded-write refusals.
+- New `XlsxReverseDaemon.__init__` parameters: `guarded_write: GuardedWrite | None`, `principal_member_id_resolver: Callable[[str], str | None] | None`. Both optional for backward compatibility; when wired, every `_append` routes through the three-layer check before append.
+- New helper `_session_for(workbook)` constructs the per-cycle Session via `build_session_from_xlsx_reverse_daemon(detected_member_id, config)` (added to `adminme/lib/session.py` line 367).
+- Each of the eight `_emit_*` methods threads the cycle's session through and replaces literal `"xlsx_reverse"` references in `*_by_party_id` payload fields with `session.auth_member_id`.
+- Cycle-terminus `xlsx.reverse_projected` and skip-cycle `xlsx.reverse_skipped_during_forward` events stay system-attributed (`actor_identity="xlsx_reverse"`) per [§13] — they are system observability signals, not domain events.
+- Closure canary: `tests/integration/test_xlsx_roundtrip.py` UT-7 case asserts `actor_identity == principal_member_id` (NOT `"xlsx_reverse"`) for the principal-attributed domain emits. Test passes.
 
-Per `[§13.9]` and `[§6.10]`, `vector_search` excludes privileged events outright (not just redacts). 08a's uniform `privacy_filter` does not handle this; the projection needs a per-projection carve-out. The 08a draft at `prompts/08a-session-and-scope.md` Commit 3 handles it inline (entry-point assertion + drop-before-vector-match + return-empty-on-privileged). If Claude Code surfaces a more general pattern during execution (e.g., other projections need similar carve-outs), the carve-out lifts to a named function in `scope.py`. Resolves: during 08a refactor or 08a Claude Code execution, whichever surfaces it.
+Status: **RESOLVED 2026-04-25**.
+
+### UT-8: vector_search privileged-exclusion is a per-projection carve-out — RESOLVED 2026-04-25
+
+Per `[§13.9]` and `[§6.10]`, `vector_search` excludes privileged events outright (not just redacts). 08a's uniform `privacy_filter` does not handle this; the projection needed a per-projection carve-out.
+
+**Closed by 08a (PR #&lt;PR-08a&gt;, merged 2026-04-25).** The carve-out shipped inline in `adminme/projections/vector_search/queries.py` exactly as the 08a draft anticipated — Claude Code did NOT need to surface a more general pattern, so the carve-out stayed local to `vector_search` rather than lifting to a named function in `scope.py`. The implementation is **three layers of defense**:
+
+1. **Handler refuses to insert privileged rows at write time.** Privileged content never reaches the vector index in the first place.
+2. **SQL filter at read time** — every `nearest()` query has hardcoded `WHERE vi.sensitivity != 'privileged'`. The exclusion is NOT session-controlled — even a principal-as-owner query for their own privileged content returns empty here, because `vector_search` is permanently privileged-free per [§13.9].
+3. **`scope.allowed_read` re-check** as a defense-in-depth third line — if a privileged row somehow leaked into the index, the filter would still drop it from results.
+
+The `nearest()` docstring (lines 49–69) cites all three layers + `[§13.9]` + `[§6.9]` + UT-8 explicitly. Per-cell tests in `tests/unit/test_scope.py` (the privileged × ambient/principal × owner_scope cells) confirm the SQL exclusion is evaluated regardless of session role. No `ScopeViolation` is raised on a privileged-owned vector_search query — the path returns empty so coach context builders downstream cannot inadvertently leak existence through error semantics.
+
+Status: **RESOLVED 2026-04-25**.
 
 ---
 
@@ -338,6 +372,9 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── 07c-alpha-foundations.md                # MERGED (PR #20, 2026-04-24)
 │   ├── 07c-beta-reverse-daemon.md              # MERGED (PR #21, 2026-04-25)
 │   ├── 07.5-checkpoint-projection-consistency.md  # source contract; audit memo at docs/checkpoints/
+│   ├── 08-session-scope-governance.md          # RETIRED (superseded by 08a + 08b)
+│   ├── 08a-session-and-scope.md                # MERGED (PR #&lt;PR-08a&gt;, 2026-04-25)
+│   ├── 08b-governance-and-observation.md       # MERGED (PR #&lt;PR-08b&gt;, 2026-04-25)
 │   ├── d01-*.md ... d08-*.md                    # diagnostic prompts
 │   ├── prompt-01a-openclaw-cheatsheet.md
 │   ├── prompt-01b-architecture-summary.md
@@ -350,6 +387,10 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── daemons/                                 # PM-14: adapters/daemons that emit domain events
 │   │   └── xlsx_sync/                           # populated by 07c: diff.py, sheet_schemas.py, reverse.py
 │   ├── lib/instance_config.py
+│   ├── lib/session.py                          # MERGED 08a (Session dataclass, 3 constructors + xlsx_reverse_daemon constructor)
+│   ├── lib/scope.py                            # MERGED 08a (allowed_read, privacy_filter, coach_column_strip, child_hidden_tag_filter, ScopeViolation, CHILD_FORBIDDEN_TAGS)
+│   ├── lib/governance.py                       # MERGED 08b (GuardedWrite three-layer; ActionGateConfig, RateLimiter, AgentAllowlist)
+│   ├── lib/observation.py                      # MERGED 08b (outbound() single seam per [§6.13/§6.14]; ObservationManager default-on)
 │   └── (pipelines, products, openclaw_plugins, cli, adapters — stubs or partial)
 ├── tests/{unit,integration,fixtures,e2e}/
 ├── console/  bootstrap/  packs/
