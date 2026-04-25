@@ -103,7 +103,7 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-25 (07c-β merged via PR #21, BUILD_LOG housekeeping completed; 07.5 audit memo landed at `docs/checkpoints/07.5-projection-consistency.md`; UT-1 closes; UT-5 advanced; UT-6 RESOLVED; UT-7 carries forward to prompt 08).
+**Last updated:** 2026-04-25 (split-08 prep PR landed: prompts/08a-session-and-scope.md and prompts/08b-governance-and-observation.md drafted; UT-3 RESOLVED; UT-8 added — `vector_search` privileged-exclusion edge case to surface during 08a refactor; UT-7 still carries forward to 08b. Earlier today: 07c-β merged via PR #21, BUILD_LOG housekeeping completed; 07.5 audit memo landed at `docs/checkpoints/07.5-projection-consistency.md`; UT-1 and UT-6 RESOLVED; UT-5 advanced.)
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
@@ -113,7 +113,7 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Prompts with PR open, not yet merged:** none.
 
-**Prompts drafted, ready for Claude Code execution:** none. (07c-β shipped; 08 is the next refactor target — pre-split candidate per UT-3, see "Next task queue" below.)
+**Prompts drafted, ready for Claude Code execution:** 08a and 08b drafts on main (landed by `split-08-2026-04-25` PR); each still needs a Partner refactor session for Job 3 sizing confirmation against current main before Claude Code executes it.
 
 **Sidecar PRs queued (non-blocking):**
 - **`sidecar-raw-data-is-manual-derived`** — surfaced by 07.5 finding C-1. Two-file change:
@@ -125,12 +125,14 @@ This section is the live baton between sessions. Update it at the end of every P
 **Next task queue (in order):**
 
 1. **Sidecar Claude Code session: ship `sidecar-raw-data-is-manual-derived`** — non-blocking; can run in parallel with the 08 split memo session or after.
-2. **Partner session: 08 split memo (Type 0)** — pre-split candidate per UT-3 + `D-prompt-tier-and-pattern-index.md`. Partner produces a Tier C split memo proposing **08a (Session construction + scope enforcement)** / **08b (privacy filter + authority gate + observation mode)**. The 07.5 audit confirms 48 explicit + 12 implicit (reverse-daemon emit attribution sites) = **60 attention sites**, supporting the split. Closing PR for that session is a `split-08-<date>` branch updating `prompts/PROMPT_SEQUENCE.md` + `D-prompt-tier-and-pattern-index.md` (flip 08's pre-split disposition to "Was split on arrival") + landing the new 08a + 08b draft files. **Do NOT draft a full single 08 prompt** — pre-split disposition forbids it.
-3. **Partner session: refactor 08a** — Session construction + scope enforcement. Touches the 48 explicit TODO(prompt-08) markers in projection query files. UT-3 progresses.
-4. **Partner session: refactor 08b** — privacy filter + authority gate + observation mode. UT-7 closes here (route reverse-daemon emits through guardedWrite to attribute principal_member_id; replaces the `actor_identity="xlsx_reverse"` literal across the attribution sites in `adminme/daemons/xlsx_sync/reverse.py`).
-5. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
+2. **Partner session: refactor 08a (Type 3, refactor-only).** Draft exists at `prompts/08a-session-and-scope.md` (landed by `split-08-2026-04-25` PR). Session re-runs depth-reads to confirm projection-queries shape on main is unchanged from snapshot, runs Job 3 sizing pass against the draft, produces prep PR command block for Claude Code. Touches the 48 explicit `# TODO(prompt-08)` markers across 10 projection `queries.py` files.
+3. **Claude Code session: execute 08a.** James drives. Closes the 48 markers.
+4. **Partner session: QC of 08a merge + refactor 08b (Type 1 combined if QC is small; else Type 2 then Type 3).** Draft exists at `prompts/08b-governance-and-observation.md`. UT-7 carries into 08b; closes there if the reverse-daemon rewrite is mechanical, or splits to a 08.5 sidecar if it touches more than one structural seam (per the Commit 3 hedge in the 08b draft). UT-8 may surface during 08a QC if `vector_search`'s carve-out manifests differently than the draft anticipates.
+5. **Claude Code session: execute 08b.** Closes UT-7 (or activates the 08.5 sidecar hedge).
+6. **Partner session: QC of 08b merge.** UT-7 closes here if rewrite landed; otherwise the next session is the 08.5 sidecar refactor, then Claude Code on 08.5, then QC on 08.5.
+7. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
 
-**Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. Each needs a refactor session before Claude Code executes it. The slim preamble means each refactor is shorter than 07a/07b were. 08, 15, 16 are pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
+**Prompts drafted but not yet refactored:** 08a, 08b, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (`prompts/08-session-scope-governance.md` is preserved on main as historical record but superseded by 08a/08b; the index treats it as RETIRED.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
 
 **Prompts not yet drafted:** none. 07c was the last unwritten prompt; it was split into 07c-α (merged) and 07c-β (merged). Everything from 08 onward exists in unrefactored form. The original `prompts/07c-xlsx-workbooks-reverse.md` was retired as part of the α/β split.
 
@@ -237,11 +239,11 @@ Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c-α/07c-β 
 
 `[D1]` confirmed: proactive pipelines register via workspace-prose `AGENTS.md` + `openclaw cron add`. Prompt 10c will generate both. Concrete question: does bootstrap §8 concatenate per-pipeline markdown into AGENTS.md and issue cron adds, or ship AGENTS.md pre-written? Answer lands when 10c is refactored.
 
-### UT-3: Session / scope enforcement seam (prompt 08) needs splitting
+### UT-3 (RESOLVED 2026-04-25): Prompt 08 split executed
 
-48 explicit `# TODO(prompt-08)` markers across the 10 sqlite projections' `queries.py` files (snapshot from 07.5 audit, 2026-04-25). Plus 12 implicit prompt-08 attribution sites in `adminme/daemons/xlsx_sync/reverse.py` (every `_emit_*` helper currently stamps `actor_identity="xlsx_reverse"` per UT-7).¹ Total: **60 attention sites**. Prompt 08 wraps every query with `Session` (authMember + viewMember + scope) and routes reverse-daemon emits through guardedWrite. The 60-site count combined with the four new modules (session.py, scope.py, governance.py, observation.py) supports an 08a (Session construction + scope enforcement) / 08b (privacy filter + authority gate + observation mode) split per `D-prompt-tier-and-pattern-index.md` pre-split disposition. **Next Partner session is the split memo (Type 0)**, then 08a refactor (Type 3), then 08b refactor (Type 3).
+Prompt 08 split into **08a (Session + scope, read side)** and **08b (governance + observation + UT-7 closure, write side)**. The architectural decision is recorded at `docs/2026-04-25-prompt-08-split.md` (the on-repo split memo from a prior Partner session). The `prompts/PROMPT_SEQUENCE.md` sequence-table and dependency-graph updates landed in an earlier commit. The `split-08-2026-04-25` PR closed the gap by landing `prompts/08a-session-and-scope.md` and `prompts/08b-governance-and-observation.md` and updating this handoff state.
 
-¹ The 12-site count is the number of UT-7 attention sites the audit catalogued. The literal `type="..."` / `event_type="..."` emit lines in `reverse.py` are 10 (lines 404, 428, 505, 526, 548, 580, 625, 643, 703, 738); the 12-count adds 2 actor-stamping lines on the system-event envelopes (412, 436). A shared `_emit` helper at line 848 routes all per-pathway domain emits through one envelope construction; one fix to the helper plus per-pathway plumbing closes the seam. Both numbers (10 emit-type literals; 12 attention sites) are correct interpretations of "where prompt 08 must touch the file"; Partner's refactor session for 08b will catalogue these directly.
+The 60 attention sites catalogued by the 07.5 audit (48 explicit `# TODO(prompt-08)` markers across 10 sqlite projection `queries.py` files + 12 implicit attribution sites in `adminme/daemons/xlsx_sync/reverse.py`) split: 48 to 08a (projection query integration), 12 to 08b (reverse-daemon attribution). Status: **RESOLVED**. UT-7 carries forward into 08b (or 08.5 if the reverse-daemon rewrite triggers the sidecar hedge per 08b's Commit 3).
 
 ### UT-4: Placeholder values in xlsx protection passwords
 
@@ -262,6 +264,10 @@ Per BUILD.md §3.11 line 1009 + line 1015, the sidecar is written by both daemon
 The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emits domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks. This is the simple seam for now. A hostile file editor (or a malware-injected edit) could in principle drive the daemon to emit events on behalf of the principal without any rate-limit, action-gate, or authority check. Prompt 08b (privacy filter + authority gate + observation mode) will close this — reverse-emitted events should route through guardedWrite with the daemon as the agent identity.
 
 The 07.5 audit (Section F) catalogued the 12 attention sites — 10 emit-type literals at lines 404, 428, 505, 526, 548, 580, 625, 643, 703, 738 + 2 actor-stamping lines on the system-event envelopes at 412, 436. The shared `_emit` helper at line 848 routes all per-pathway domain emits through one envelope construction; one fix to the helper plus per-pathway plumbing closes the seam. Status: **OPEN, scoped to prompt 08b**.
+
+### UT-8 (NEW 2026-04-25): vector_search privileged-exclusion is a per-projection carve-out
+
+Per `[§13.9]` and `[§6.10]`, `vector_search` excludes privileged events outright (not just redacts). 08a's uniform `privacy_filter` does not handle this; the projection needs a per-projection carve-out. The 08a draft at `prompts/08a-session-and-scope.md` Commit 3 handles it inline (entry-point assertion + drop-before-vector-match + return-empty-on-privileged). If Claude Code surfaces a more general pattern during execution (e.g., other projections need similar carve-outs), the carve-out lifts to a named function in `scope.py`. Resolves: during 08a refactor or 08a Claude Code execution, whichever surfaces it.
 
 ---
 
