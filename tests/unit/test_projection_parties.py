@@ -18,6 +18,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import (
     all_parties,
@@ -29,6 +30,13 @@ from adminme.projections.parties.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"p" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
 
 
 @pytest.fixture
@@ -113,7 +121,7 @@ async def test_party_created_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:parties", eid)
 
     conn = runner.connection("parties")
-    row = get_party(conn, tenant_id="tenant-a", party_id="p1")
+    row = get_party(conn, _S("tenant-a"), party_id="p1")
     assert row is not None
     assert row["display_name"] == "Ada"
     assert row["kind"] == "person"
@@ -238,7 +246,7 @@ async def test_membership_roundtrip(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    members = list_household_members(conn, tenant_id="tenant-a", household_party_id="hh")
+    members = list_household_members(conn, _S("tenant-a"), household_party_id="hh")
     assert {m["party_id"] for m in members} == {"m1", "m2"}
 
 
@@ -267,8 +275,8 @@ async def test_relationship_mutual_visible_from_both_sides(rig: dict[str, Any]) 
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    rels_a = relationships_of(conn, tenant_id="tenant-a", party_id="p1")
-    rels_b = relationships_of(conn, tenant_id="tenant-a", party_id="p2")
+    rels_a = relationships_of(conn, _S("tenant-a"), party_id="p1")
+    rels_b = relationships_of(conn, _S("tenant-a"), party_id="p2")
     assert len(rels_a) == 1 and rels_a[0]["relationship_id"] == "r1"
     assert len(rels_b) == 1 and rels_b[0]["relationship_id"] == "r1"
 
@@ -299,8 +307,7 @@ async def test_find_party_by_identifier(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    party = find_party_by_identifier(
-        conn, tenant_id="tenant-a", kind="email", value_normalized="ada@example.com"
+    party = find_party_by_identifier(conn, _S("tenant-a"), kind="email", value_normalized="ada@example.com"
     )
     assert party is not None and party["party_id"] == "p1"
 
@@ -428,8 +435,8 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    a = get_party(conn, tenant_id="tenant-a", party_id="p1")
-    b = get_party(conn, tenant_id="tenant-b", party_id="p1")
+    a = get_party(conn, _S("tenant-a"), party_id="p1")
+    b = get_party(conn, _S("tenant-b"), party_id="p1")
     assert a is not None and a["display_name"] == "Ada"
     assert b is not None and b["display_name"] == "Ada's Twin"
 
@@ -437,7 +444,7 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
 async def test_get_party_missing_returns_none(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
     conn = runner.connection("parties")
-    assert get_party(conn, tenant_id="tenant-a", party_id="nope") is None
+    assert get_party(conn, _S("tenant-a"), party_id="nope") is None
 
 
 async def test_all_parties_filters_by_kind(rig: dict[str, Any]) -> None:
@@ -461,9 +468,9 @@ async def test_all_parties_filters_by_kind(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    persons = all_parties(conn, tenant_id="tenant-a", kind="person")
-    orgs = all_parties(conn, tenant_id="tenant-a", kind="organization")
-    all_ = all_parties(conn, tenant_id="tenant-a")
+    persons = all_parties(conn, _S("tenant-a"), kind="person")
+    orgs = all_parties(conn, _S("tenant-a"), kind="organization")
+    all_ = all_parties(conn, _S("tenant-a"))
     assert [p["party_id"] for p in persons] == ["p1"]
     assert [o["party_id"] for o in orgs] == ["org1"]
     assert len(all_) == 2

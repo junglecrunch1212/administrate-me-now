@@ -18,6 +18,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.commitments import CommitmentsProjection
 from adminme.projections.commitments.queries import (
     by_party,
@@ -29,6 +30,14 @@ from adminme.projections.commitments.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"c" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -116,7 +125,7 @@ async def test_commitment_proposed_inserts_pending(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", eid)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "pending"
     assert row["owed_by_party"] == "m1"
@@ -146,7 +155,7 @@ async def test_commitment_confirmed_sets_confirmed_fields(rig: dict[str, Any]) -
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["confirmed_at"] == "2026-04-23T12:00:00Z"
     assert row["confirmed_by"] == "m1"
@@ -172,7 +181,7 @@ async def test_commitment_completed_sets_done(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "done"
     assert row["completed_at"] == "2026-04-23T14:00:00Z"
@@ -199,7 +208,7 @@ async def test_commitment_dismissed_sets_cancelled(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "cancelled"
 
@@ -227,7 +236,7 @@ async def test_commitment_edited_updates_only_listed_fields(
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["description"] == "Edited description"
     # status untouched
@@ -256,7 +265,7 @@ async def test_commitment_snoozed_sets_status_and_due(rig: dict[str, Any]) -> No
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "snoozed"
     assert row["due_at"] == "2026-05-01T00:00:00Z"
@@ -282,7 +291,7 @@ async def test_commitment_cancelled_sets_status(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "cancelled"
     assert row["completed_at"] == "2026-04-23T14:00:00Z"
@@ -309,7 +318,7 @@ async def test_commitment_delegated_updates_owed_by(rig: dict[str, Any]) -> None
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "delegated"
     assert row["owed_by_party"] == "m2"
@@ -336,7 +345,7 @@ async def test_commitment_expired_cancels_without_completed_by(
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "cancelled"
     # expired → nobody acted; no completed_by.
@@ -537,18 +546,19 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    a = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
-    b = get_commitment(conn, tenant_id="tenant-b", commitment_id="c1")
+    a = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
+    b = get_commitment(conn, _S("tenant-b"), commitment_id="c1")
     assert a is not None and a["description"] == "Tenant A commitment"
     assert b is not None and b["description"] == "Tenant B commitment"
 
 
-async def test_scope_canary_stub_privileged_lands_with_sensitivity(
+async def test_scope_canary_privileged_drops_for_non_owner(
     rig: dict[str, Any],
 ) -> None:
-    """Prompt 06 stub — a privileged envelope still lands in the projection
-    because scope enforcement is not yet wired. Prompt 08 extends this to
-    raise ScopeViolation when a query is made outside the allowed scope."""
+    """Prompt 08a wired: a privileged-sensitivity row scoped at
+    shared:household (an illegal combination per DIAGRAMS §5) is dropped
+    from a non-owner's read. The row is still in the projection table —
+    the scope filter excludes it on the way out [§6.4]."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -564,9 +574,16 @@ async def test_scope_canary_stub_privileged_lands_with_sensitivity(
     await _wait_for_checkpoint(bus, "projection:commitments", eid)
 
     conn = runner.connection("commitments")
-    row = get_commitment(conn, tenant_id="tenant-a", commitment_id="c1")
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
+    # Non-owner reader does not see the privileged row.
+    row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
+    assert row is None
+
+    raw = conn.execute(
+        "SELECT count(*) FROM commitments "
+        "WHERE tenant_id = ? AND commitment_id = ?",
+        ("tenant-a", "c1"),
+    ).fetchone()
+    assert raw[0] == 1
 
 
 async def test_open_for_member_filters_by_status(rig: dict[str, Any]) -> None:
@@ -601,7 +618,7 @@ async def test_open_for_member_filters_by_status(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    rows = open_for_member(conn, tenant_id="tenant-a", member_party_id="m1")
+    rows = open_for_member(conn, _S("tenant-a"), member_party_id="m1")
     assert {r["commitment_id"] for r in rows} == {"c1"}
 
 
@@ -627,7 +644,7 @@ async def test_pending_approval_ordered_desc(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    rows = pending_approval(conn, tenant_id="tenant-a")
+    rows = pending_approval(conn, _S("tenant-a"))
     assert len(rows) == 3
     # Proposed_at is envelope.occurred_at which has seconds precision;
     # secondary sort by insertion keeps rows stable. Validate newest id
@@ -663,7 +680,7 @@ async def test_by_source_interaction_groups_proposals(rig: dict[str, Any]) -> No
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    from_ix1 = by_source_interaction(conn, tenant_id="tenant-a", interaction_id="ix-1")
+    from_ix1 = by_source_interaction(conn, _S("tenant-a"), interaction_id="ix-1")
     assert {r["commitment_id"] for r in from_ix1} == {"c1", "c2"}
 
 
@@ -696,5 +713,5 @@ async def test_by_party_returns_both_sides(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:commitments", last)
 
     conn = runner.connection("commitments")
-    rows = by_party(conn, tenant_id="tenant-a", party_id="p-ext")
+    rows = by_party(conn, _S("tenant-a"), party_id="p-ext")
     assert {r["commitment_id"] for r in rows} == {"c1", "c2"}

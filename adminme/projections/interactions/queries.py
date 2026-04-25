@@ -1,8 +1,9 @@
 """
 Interactions projection read queries.
 
-Per ADMINISTRATEME_BUILD.md §3.2. Plain query functions; prompt 08 wraps
-them with Session / scope enforcement.
+Per ADMINISTRATEME_BUILD.md §3.2 and SYSTEM_INVARIANTS.md §3, §6. Every
+public query takes a ``session: Session`` per [§6.1] and runs through
+``scope.filter_rows`` before return.
 """
 
 from __future__ import annotations
@@ -11,12 +12,14 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.lib.scope import filter_rows
+from adminme.lib.session import Session
 
-# TODO(prompt-08): wrap with Session scope check
+
 def recent_with(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     party_id: str,
     days: int = 30,
 ) -> list[dict[str, Any]]:
@@ -40,75 +43,59 @@ def recent_with(
            AND i.occurred_at >= ?
          ORDER BY i.occurred_at DESC
         """,
-        (tenant_id, party_id, cutoff),
+        (session.tenant_id, party_id, cutoff),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return filter_rows(session, [dict(r) for r in rows])
 
 
-# TODO(prompt-08): wrap with Session scope check
 def thread(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     thread_id: str,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM interactions "
         "WHERE tenant_id = ? AND thread_id = ? "
         "ORDER BY occurred_at ASC",
-        (tenant_id, thread_id),
+        (session.tenant_id, thread_id),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return filter_rows(session, [dict(r) for r in rows])
 
 
-# TODO(prompt-08): wrap with Session scope check
 def closeness_signals(
     conn: sqlcipher3.Connection,
+    session: Session,
     *,
-    tenant_id: str,
     party_id: str,
     since_iso: str,
 ) -> dict[str, Any]:
-    """Stub signature. Real computation lives in prompt 05 or 06; the
-    parties projection can link against this shape today."""
-    inbound = conn.execute(
+    """Aggregate counts of inbound / outbound interactions involving
+    ``party_id`` since ``since_iso``. The aggregation is restricted to
+    rows the session may read [§6.4]; rows the session cannot see are
+    excluded from the counts."""
+    rows = conn.execute(
         """
-        SELECT count(*) FROM interactions i
+        SELECT i.*, p.role AS _participant_role
+          FROM interactions i
           JOIN interaction_participants p
             ON p.tenant_id = i.tenant_id
            AND p.interaction_id = i.interaction_id
          WHERE i.tenant_id = ?
            AND p.party_id = ?
-           AND p.role = 'from'
            AND i.occurred_at >= ?
         """,
-        (tenant_id, party_id, since_iso),
-    ).fetchone()[0]
-    outbound = conn.execute(
-        """
-        SELECT count(*) FROM interactions i
-          JOIN interaction_participants p
-            ON p.tenant_id = i.tenant_id
-           AND p.interaction_id = i.interaction_id
-         WHERE i.tenant_id = ?
-           AND p.party_id = ?
-           AND p.role = 'to'
-           AND i.occurred_at >= ?
-        """,
-        (tenant_id, party_id, since_iso),
-    ).fetchone()[0]
-    last = conn.execute(
-        """
-        SELECT max(occurred_at) FROM interactions i
-          JOIN interaction_participants p
-            ON p.tenant_id = i.tenant_id
-           AND p.interaction_id = i.interaction_id
-         WHERE i.tenant_id = ? AND p.party_id = ?
-        """,
-        (tenant_id, party_id),
-    ).fetchone()[0]
+        (session.tenant_id, party_id, since_iso),
+    ).fetchall()
+    visible = filter_rows(session, [dict(r) for r in rows])
+    inbound = sum(1 for r in visible if r.get("_participant_role") == "from")
+    outbound = sum(1 for r in visible if r.get("_participant_role") == "to")
+    last_iso = max(
+        (r["occurred_at"] for r in visible if r.get("occurred_at")),
+        default=None,
+    )
     return {
-        "inbound_count": int(inbound or 0),
-        "outbound_count": int(outbound or 0),
-        "last_contact_iso": last,
+        "inbound_count": inbound,
+        "outbound_count": outbound,
+        "last_contact_iso": last_iso,
     }
