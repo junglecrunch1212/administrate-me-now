@@ -2,7 +2,7 @@
 
 **Phase:** BUILD.md PHASE 2. Closes the round-trip 07c-α opened.
 **Depends on:** 07c-α merged. On main: two new system events at v1, sidecar I/O at `adminme/projections/xlsx_workbooks/sidecar.py`, forward daemon already writes sidecar inside its lock, descriptor registry at `adminme/daemons/xlsx_sync/sheet_schemas.py`, diff core at `adminme/daemons/xlsx_sync/diff.py`, three dead stubs in `adminme/projections/xlsx_workbooks/` deleted. `scripts/verify_invariants.sh` `ALLOWED_EMITS` already covers `xlsx.reverse_projected` and `xlsx.reverse_skipped_during_forward`.
-**Stop condition:** `XlsxReverseDaemon` lives at `adminme/daemons/xlsx_sync/reverse.py` with full per-cycle algorithm, watchdog→asyncio bridge, lock acquisition, undo-window infrastructure, and emit pathways for all four bidirectional sheets. ≥22 unit tests across four new test files + 1 integration round-trip test pass. `bash scripts/verify_invariants.sh` clean.
+**Stop condition:** `XlsxReverseDaemon` lives at `adminme/daemons/xlsx_sync/reverse.py` with full per-cycle algorithm, watchdog→asyncio bridge, lock acquisition, undo-window infrastructure, and emit pathways for all four bidirectional sheets. ≥23 unit tests across four new test files + 1 integration round-trip test pass. `bash scripts/verify_invariants.sh` clean.
 
 This is part 2 of a two-prompt split. 07c-α landed the schema and infrastructure; this prompt lands the daemon and proves round-trip end-to-end.
 
@@ -20,7 +20,7 @@ The slim universal preamble (`prompts/PROMPT_SEQUENCE.md`) governs cross-cutting
 
 **Codebase — already-merged from 07c-α (load only as needed):**
 
-- `adminme/daemons/xlsx_sync/sheet_schemas.py` — descriptors. Already defines `BIDIRECTIONAL_DESCRIPTORS`, `descriptor_for`, `editable_columns_for`, `TASKS_DESCRIPTOR`, `COMMITMENTS_DESCRIPTOR`, `RECURRENCES_DESCRIPTOR`, `RAW_DATA_DESCRIPTOR`.
+- `adminme/daemons/xlsx_sync/sheet_schemas.py` — descriptors. Public API: `BIDIRECTIONAL_DESCRIPTORS` (tuple of all four), `descriptor_for(workbook, sheet) -> SheetDescriptor | None`, `editable_columns_for(descriptor, row) -> frozenset[str]`. The four descriptors (`_TASKS`, `_COMMITMENTS`, `_RECURRENCES`, `_RAW_DATA`) are **module-private** — do NOT import them by name. Always reach a descriptor via `descriptor_for(workbook, sheet)`. Iterate via `BIDIRECTIONAL_DESCRIPTORS` in the daemon's per-cycle loop.
 - `adminme/daemons/xlsx_sync/diff.py` — `diff_sheet`, `DiffResult`. Pure-functional, sync.
 - `adminme/projections/xlsx_workbooks/sidecar.py` — `read_sheet_state`, `read_readonly_state`, `write_sheet_state`, `write_readonly_state`, `sidecar_dir`, `sidecar_path`, `hash_readonly_sheet`.
 - `adminme/projections/xlsx_workbooks/__init__.py` — forward daemon. Constants `_BIDIRECTIONAL_SHEETS` and `_READONLY_SHEETS` are the per-workbook sheet inventory you mirror.
@@ -109,7 +109,13 @@ EventEnvelope(
 - DELETE: drop INFO ("commitments cancel via API; row deletion dropped").
 
 **Recurrences:**
-- ADD: if `recurrence_id` blank, generate `rec_<8hex>`. Emit `recurrence.added` — `linked_kind = "household"` and `linked_id = "household"` (no per-row way to specify in v1; principals editing recurrences in xlsx is a power-user path), `kind` from sheet's `cadence`, `rrule` from sheet (free-text passes through), `next_occurrence` from sheet (if blank, today's ISO date via `EventEnvelope.now_utc_iso().split("T")[0]`).
+- ADD: if `recurrence_id` blank, generate `rec_<8hex>`. Emit `recurrence.added`. Field mapping (note: the Recurrences sheet has `cadence`, NOT `rrule` — the 07b sheet builder renders the projection's underlying `rrule` value into the human-readable `cadence` column. Map sheet→event accordingly):
+  - `recurrence_id` from sheet (or minted).
+  - `linked_kind = "household"` and `linked_id = "household"` — no per-row way to specify in v1; principals editing recurrences in xlsx is a power-user path. UT-7 territory.
+  - `kind` from sheet's `title` column (the `RecurrenceAddedV1.kind` field is a free-text human label per the schema, not the cadence kind).
+  - `rrule` from sheet's `cadence` column directly. The schema accepts free-text — no RFC 5545 validation. Whatever the principal typed in `cadence` (e.g. "monthly", "every Tuesday", or an actual RRULE string) passes through unchanged.
+  - `next_occurrence` from sheet's `next_due` column if present, else today's ISO date via `EventEnvelope.now_utc_iso().split("T")[0]`.
+  - `notes` from sheet's `notes` column (optional in schema).
 - UPDATE: emit `recurrence.updated` with `field_updates`.
 - DELETE: drop INFO ("recurrences not deletable in v1 per descriptor").
 
@@ -176,7 +182,7 @@ Extend `reverse.py` with the three remaining sheet pathways per the helper specs
 
 Append BUILD_LOG entry per slim preamble template. Sections:
 - Refactored / Session merged / Outcome.
-- Evidence: list landed modules from this prompt (daemon, 4 test files, integration test, smoke), the daemon's watchdog/asyncio/lock/undo-window machinery, all four bidirectional pathways wired, sensitivity preservation, ≥22 unit tests + 1 integration. Note 07c-α landed schema/descriptors/diff/sidecar in PR #<07c-α>; together they close the round-trip.
+- Evidence: list landed modules from this prompt (daemon, 4 test files, integration test, smoke), the daemon's watchdog/asyncio/lock/undo-window machinery, all four bidirectional pathways wired, sensitivity preservation, ≥23 unit tests + 1 integration. Note 07c-α landed schema/descriptors/diff/sidecar in PR #<07c-α>; together they close the round-trip.
 - Carry-forward to 07.5 (audit `DERIVED_COLUMNS ↔ always_derived` equivalence; the round-trip integration test is the canary), to 08 (route reverse-emitted events through guardedWrite — UT-7 OPEN, this prompt did not resolve it), to 16 (daemon lifecycle wiring), to future prompts (register `money_flow.recategorized` then flip Raw Data descriptor's `updates_emit_event`).
 
 **Verification block** (one block, end of Commit 4):
@@ -190,7 +196,7 @@ poetry run python scripts/demo_xlsx_forward.py
 poetry run python scripts/demo_xlsx_roundtrip.py
 ```
 
-Full suite expected: prior baseline (with 07c-α included) + ≥22 new tests. All must pass. Both smoke scripts exit 0.
+Full suite expected: prior baseline (with 07c-α included) + ≥23 new tests. All must pass. Both smoke scripts exit 0.
 
 **Push + open PR** per slim preamble. PR title: `Phase 07c-β: xlsx reverse daemon + integration round-trip`. Body notes this is part 2 of 2 — together with 07c-α (already merged), closes the round-trip and resolves UT-6. Single-purpose; no sidecar fixes.
 
@@ -200,4 +206,4 @@ Full suite expected: prior baseline (with 07c-α included) + ≥22 new tests. Al
 
 Per slim preamble's stop discipline: post-PR, ONE round of `mcp__github__pull_request_read` (`get_status`, `get_reviews`, `get_comments`); report; STOP. Do not poll. Do not merge.
 
-Stop report names: branch, PR URL, four commit SHAs, full-suite count, ≥22 new unit tests confirmed (basic ≥11 + lock ≥4 + finance ≥6 + cold ≥2) + 1 integration round-trip green, both smoke scripts green, `bash scripts/verify_invariants.sh` clean. UT-6 fully resolved. Flag UT-7 as the new open tension for prompt 08.
+Stop report names: branch, PR URL, four commit SHAs, full-suite count, ≥23 new unit tests confirmed (basic ≥11 + lock ≥4 + finance ≥6 + cold ≥2) + 1 integration round-trip green, both smoke scripts green, `bash scripts/verify_invariants.sh` clean. UT-6 fully resolved. Flag UT-7 as the new open tension for prompt 08.
