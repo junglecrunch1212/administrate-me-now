@@ -94,7 +94,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 07c-β — xlsx reverse daemon + integration round-trip
 - **Refactored**: by Partner in Claude Chat, pre-session. Prompt file: prompts/07c-beta-reverse-daemon.md.
-- **Session merged**: PR #<N>, commits ffa6d9c / bf649ed / 00bff7d / <commit4>, merged <merge date>.
+- **Session merged**: PR #21, commits ffa6d9c / bf649ed / 00bff7d / 2788761, merged 2026-04-25.
 - **Outcome**: MERGED
 - **Note**: Part 2 of a two-prompt split. 07c-α (PR #20, merged 2026-04-24) landed schema/descriptors/diff/sidecar; together with this prompt it closes the xlsx round-trip and resolves UT-6.
 - **Evidence**:

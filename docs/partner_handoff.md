@@ -103,7 +103,7 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-25 (07c-β merged via PR #21; 07.5 audit memo landed; UT-1 closes; UT-6 RESOLVED; UT-7 carries forward to prompt 08).
+**Last updated:** 2026-04-25 (07c-β merged via PR #21, BUILD_LOG housekeeping completed; 07.5 audit memo landed at `docs/checkpoints/07.5-projection-consistency.md`; UT-1 closes; UT-5 advanced; UT-6 RESOLVED; UT-7 carries forward to prompt 08).
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
@@ -113,20 +113,26 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Prompts with PR open, not yet merged:** none.
 
-**Prompts drafted, ready for Claude Code execution:** none. (07c-β shipped; 08 is the next refactor target.)
+**Prompts drafted, ready for Claude Code execution:** none. (07c-β shipped; 08 is the next refactor target — pre-split candidate per UT-3, see "Next task queue" below.)
 
 **Sidecar PRs queued (non-blocking):**
-- `sidecar-raw-data-is-manual-derived` — one-line addition of `"is_manual"` to `ALWAYS_DERIVED` in `adminme/projections/xlsx_workbooks/sheets/raw_data.py:45`, plus a guard test asserting `ALWAYS_DERIVED == descriptor_for(FINANCE_WORKBOOK_NAME, "Raw Data").always_derived`. ≤15 minutes. Cosmetic protection drift, not a correctness bug; does not block prompt 08. Flagged by 07.5 finding C-1.
+- **`sidecar-raw-data-is-manual-derived`** — surfaced by 07.5 finding C-1. Two-file change:
+  1. `adminme/projections/xlsx_workbooks/sheets/raw_data.py:45` — add `"is_manual"` to `ALWAYS_DERIVED` so it reads `{"txn_id", "plaid_category", "is_manual"}`.
+  2. New unit test (location TBD by Claude Code; suggested: extend `tests/unit/test_xlsx_finance_workbook.py`) asserting `from adminme.projections.xlsx_workbooks.sheets.raw_data import ALWAYS_DERIVED` matches `descriptor_for(FINANCE_WORKBOOK_NAME, "Raw Data").always_derived`. The single assertion is the canary that blocks future drift in either direction.
+
+  ≤15 minutes. Cosmetic protection drift, not a correctness bug; does not block prompt 08. **The C-1 finding text in the audit memo doubles as the sidecar memo** — Partner does not need to write a separate `prompts/<NN.5>-<slug>.md` file; James can hand Claude Code the audit-memo §C content + the assertion above.
 
 **Next task queue (in order):**
 
-1. **Sidecar Claude Code session: ship `sidecar-raw-data-is-manual-derived`** — non-blocking; can run in parallel with 08 refactor or after.
-2. **Partner session: refactor 08** — Session + scope enforcement + governance + observation mode. Large; UT-3 still open (likely splits into 08a/08b). 07.5 audit confirms 48 explicit + 12 implicit (reverse-daemon emit sites) = 60 attention sites; the marker count likely supports the split. UT-7 closes here (route reverse-emitted events through Session/guardedWrite to attribute principal_member_id).
-3. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
+1. **Sidecar Claude Code session: ship `sidecar-raw-data-is-manual-derived`** — non-blocking; can run in parallel with the 08 split memo session or after.
+2. **Partner session: 08 split memo (Type 0)** — pre-split candidate per UT-3 + `D-prompt-tier-and-pattern-index.md`. Partner produces a Tier C split memo proposing **08a (Session construction + scope enforcement)** / **08b (privacy filter + authority gate + observation mode)**. The 07.5 audit confirms 48 explicit + 12 implicit (reverse-daemon emit attribution sites) = **60 attention sites**, supporting the split. Closing PR for that session is a `split-08-<date>` branch updating `prompts/PROMPT_SEQUENCE.md` + `D-prompt-tier-and-pattern-index.md` (flip 08's pre-split disposition to "Was split on arrival") + landing the new 08a + 08b draft files. **Do NOT draft a full single 08 prompt** — pre-split disposition forbids it.
+3. **Partner session: refactor 08a** — Session construction + scope enforcement. Touches the 48 explicit TODO(prompt-08) markers in projection query files. UT-3 progresses.
+4. **Partner session: refactor 08b** — privacy filter + authority gate + observation mode. UT-7 closes here (route reverse-daemon emits through guardedWrite to attribute principal_member_id; replaces the `actor_identity="xlsx_reverse"` literal across the attribution sites in `adminme/daemons/xlsx_sync/reverse.py`).
+5. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
 
-**Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. Each needs a refactor session before Claude Code executes it. The slim preamble means each refactor is shorter than 07a/07b were.
+**Prompts drafted but not yet refactored:** 08, 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. Each needs a refactor session before Claude Code executes it. The slim preamble means each refactor is shorter than 07a/07b were. 08, 15, 16 are pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
 
-**Prompts not yet drafted:** none. 07c was the last unwritten prompt; it was split into 07c-α (merged) and 07c-β (refactored, ready). Everything from 08 onward exists in unrefactored form. The original `prompts/07c-xlsx-workbooks-reverse.md` was retired as part of the α/β split.
+**Prompts not yet drafted:** none. 07c was the last unwritten prompt; it was split into 07c-α (merged) and 07c-β (merged). Everything from 08 onward exists in unrefactored form. The original `prompts/07c-xlsx-workbooks-reverse.md` was retired as part of the α/β split.
 
 ---
 
@@ -188,7 +194,7 @@ Refactoring doesn't just fix — it also removes what the preamble now covers. E
 
 Claude Chat's Project knowledge is not filesystem-browsable. The `/mnt/project/` mount shows only a subset of uploaded files. Partner discovers Project knowledge contents via the `project_knowledge_search` tool. Running `project_knowledge_search` on targeted terms (e.g. "SYSTEM_INVARIANTS binding invariants", "partner_handoff current build state") confirms files are present. **Never claim a file is missing from Project knowledge based on `/mnt/project/` listing alone — only an empty `project_knowledge_search` result is authoritative evidence of absence.** Partner runs these searches proactively at startup, not when prompted.
 
-### PM-14: Daemons live in `adminme/daemons/`, projections in `adminme/projections/` — HARD (NEW)
+### PM-14: Daemons live in `adminme/daemons/`, projections in `adminme/projections/` — HARD
 
 Introduced in 07c. The xlsx reverse daemon is architecturally an L1-adjacent adapter (ingests external state — file edits — and emits typed events into the event log). Per BUILD.md §3.11 line 995, it lives at `adminme/daemons/xlsx_sync/reverse.py`, NOT in `adminme/projections/xlsx_workbooks/`. The two directories enforce a structural distinction:
 
@@ -199,7 +205,7 @@ The forward xlsx daemon is the exception: it lives in `adminme/projections/xlsx_
 
 Future adapter prompts (11, 12) will populate `adminme/adapters/` for adapters that don't share the daemon characteristic (Gmail, Plaid, etc.). The naming convention is therefore: `daemons/` for long-running file/clock-based watchers; `adapters/` for request/response or pull-based external integrations. Both emit domain events; both live outside the projections audit scope.
 
-### PM-15: Two-prompt splits when a draft asks for both new infrastructure AND a long-running daemon consuming it — HARD (NEW)
+### PM-15: Two-prompt splits when a draft asks for both new infrastructure AND a long-running daemon consuming it — HARD
 
 Surfaced by 07c. The original `prompts/07c-xlsx-workbooks-reverse.md` draft asked Claude Code to land schema additions, sidecar I/O, descriptors, diff core, full reverse daemon class, watchdog→asyncio bridge, lock contention, undo window, integration round-trip, and smoke script in one session. That overruns Claude Code's session window — proven empirically by two attempts that died partway through.
 
@@ -211,7 +217,7 @@ Existing examples of the same pattern: 01 → 01a/01b/01c (architecture + cheats
 
 PM-15 supersedes the implicit assumption that every numbered prompt fits one session. PM-2 (four-commit discipline) is per-PR, not per-prompt-number; a split prompt ships two PRs of four commits each.
 
-### PM-16: Descriptor public-API discipline — SOFT (NEW)
+### PM-16: Descriptor public-API discipline — SOFT
 
 07c-α landed sheet descriptors as private symbols (`_TASKS`, `_COMMITMENTS`, `_RECURRENCES`, `_RAW_DATA`) accessible only through `descriptor_for(workbook, sheet)`, `editable_columns_for(descriptor, row)`, and the `BIDIRECTIONAL_DESCRIPTORS` tuple. The original 07c-β draft Read-first referred to them as `TASKS_DESCRIPTOR` etc. — symbols that don't exist. Neither approach is wrong on its own; the drift is the issue.
 
@@ -225,23 +231,25 @@ When the consumer prompt expects public symbols and the producer shipped private
 
 ### UT-1: When to refactor checkpoint 07.5 — CLOSED 2026-04-25
 
-Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c-α/07c-β split, it audits four ops prompts together as a cohort. Audit landed at `docs/checkpoints/07.5-projection-consistency.md` on 2026-04-25 post-07c-β merge. Verdict PASS with one non-critical sidecar finding. Status: **CLOSED**.
+Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c-α/07c-β split, it audits four ops prompts together as a cohort. Audit landed at `docs/checkpoints/07.5-projection-consistency.md` on 2026-04-25 post-07c-β merge. Verdict PASS with one non-critical sidecar finding (C-1, queued as `sidecar-raw-data-is-manual-derived`). Status: **CLOSED**.
 
 ### UT-2: Proactive pipeline registration path (10c)
 
 `[D1]` confirmed: proactive pipelines register via workspace-prose `AGENTS.md` + `openclaw cron add`. Prompt 10c will generate both. Concrete question: does bootstrap §8 concatenate per-pipeline markdown into AGENTS.md and issue cron adds, or ship AGENTS.md pre-written? Answer lands when 10c is refactored.
 
-### UT-3: Session / scope enforcement seam (prompt 08) may need splitting
+### UT-3: Session / scope enforcement seam (prompt 08) needs splitting
 
-48 explicit `# TODO(prompt-08)` markers across the 10 sqlite projections' `queries.py` files (snapshot from 07.5 audit, 2026-04-25). Plus 12 implicit prompt-08 sites in `adminme/daemons/xlsx_sync/reverse.py` (every `_emit_*` helper currently stamps `actor_identity="xlsx_reverse"` per UT-7). Total: 60 attention sites. Prompt 08 wraps every query with `Session` (authMember + viewMember + scope) and routes reverse-daemon emits through guardedWrite. Large — the 60-site count likely supports an 08a (Session construction + scope enforcement) / 08b (privacy filter + authority gate) split. Decide when 08 is refactored.
+48 explicit `# TODO(prompt-08)` markers across the 10 sqlite projections' `queries.py` files (snapshot from 07.5 audit, 2026-04-25). Plus 12 implicit prompt-08 attribution sites in `adminme/daemons/xlsx_sync/reverse.py` (every `_emit_*` helper currently stamps `actor_identity="xlsx_reverse"` per UT-7).¹ Total: **60 attention sites**. Prompt 08 wraps every query with `Session` (authMember + viewMember + scope) and routes reverse-daemon emits through guardedWrite. The 60-site count combined with the four new modules (session.py, scope.py, governance.py, observation.py) supports an 08a (Session construction + scope enforcement) / 08b (privacy filter + authority gate + observation mode) split per `D-prompt-tier-and-pattern-index.md` pre-split disposition. **Next Partner session is the split memo (Type 0)**, then 08a refactor (Type 3), then 08b refactor (Type 3).
+
+¹ The 12-site count is the number of UT-7 attention sites the audit catalogued. The literal `type="..."` / `event_type="..."` emit lines in `reverse.py` are 10 (lines 404, 428, 505, 526, 548, 580, 625, 643, 703, 738); the 12-count adds 2 actor-stamping lines on the system-event envelopes (412, 436). A shared `_emit` helper at line 848 routes all per-pathway domain emits through one envelope construction; one fix to the helper plus per-pathway plumbing closes the seam. Both numbers (10 emit-type literals; 12 attention sites) are correct interpretations of "where prompt 08 must touch the file"; Partner's refactor session for 08b will catalogue these directly.
 
 ### UT-4: Placeholder values in xlsx protection passwords
 
 07b uses `"adminme-placeholder"` as sheet-protection password. Real secret flow lands in prompt 16 (bootstrap wizard §5). Do not resolve earlier.
 
-### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG
+### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG — current
 
-07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. **Filled post-merge during Partner's QC pass per the rubric.** 07c-α entry filled with PR #20, commits aa395dd / 7305acd / fcdb592 / 1d770ec, merge date 2026-04-24. The 07c-β entry (PR #21, merged 2026-04-25) still has `PR #<N>` / `<commit4>` / `<merge date>` placeholders awaiting fill — open chore for the next Partner QC session.
+07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. **Filled post-merge during Partner's QC pass per the rubric.** 07c-α entry filled with PR #20, commits aa395dd / 7305acd / fcdb592 / 1d770ec, merge date 2026-04-24. **07c-β entry filled with PR #21, commits ffa6d9c / bf649ed / 00bff7d / 2788761, merge date 2026-04-25** during the 2026-04-25 QC session's Pass A housekeeping. The full sequence is up-to-date through 07c-β; UT-5 will surface again after the next merge.
 
 ### UT-6: Sidecar-state JSON pathway for xlsx round-trip — RESOLVED 2026-04-25
 
@@ -249,11 +257,11 @@ Per BUILD.md §3.11 line 1009 + line 1015, the sidecar is written by both daemon
 
 07c-α landed the forward half (PR #20, merged 2026-04-24); 07c-β landed the reverse half (PR #21, merged 2026-04-25). The 07.5 audit confirmed the pathway is closed at both ends with three canaries: `tests/unit/test_xlsx_forward_writes_sidecar.py`, `tests/unit/test_xlsx_reverse_cold_start.py`, `tests/integration/test_xlsx_roundtrip.py`. Status: **RESOLVED**.
 
-### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — open until prompt 08
+### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — open until prompt 08 (specifically 08b)
 
-The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emits domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks. This is the simple seam for now. A hostile file editor (or a malware-injected edit) could in principle drive the daemon to emit events on behalf of the principal without any rate-limit, action-gate, or authority check. Prompt 08 (session + scope + governance) will close this — reverse-emitted events should route through guardedWrite with the daemon as the agent identity.
+The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emits domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks. This is the simple seam for now. A hostile file editor (or a malware-injected edit) could in principle drive the daemon to emit events on behalf of the principal without any rate-limit, action-gate, or authority check. Prompt 08b (privacy filter + authority gate + observation mode) will close this — reverse-emitted events should route through guardedWrite with the daemon as the agent identity.
 
-The 07.5 audit (Section F) catalogued the 12 emit call sites in `adminme/daemons/xlsx_sync/reverse.py` (lines 412, 436, 505, 526, 548, 580, 625, 643, 703, 738, 848 plus the helpers wrapping them) as implicit prompt-08 attention sites. Status: OPEN, scoped to prompt 08.
+The 07.5 audit (Section F) catalogued the 12 attention sites — 10 emit-type literals at lines 404, 428, 505, 526, 548, 580, 625, 643, 703, 738 + 2 actor-stamping lines on the system-event envelopes at 412, 436. The shared `_emit` helper at line 848 routes all per-pathway domain emits through one envelope construction; one fix to the helper plus per-pathway plumbing closes the seam. Status: **OPEN, scoped to prompt 08b**.
 
 ---
 
@@ -315,7 +323,7 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── demo_event_log.py
 │   ├── demo_projections.py
 │   ├── demo_xlsx_forward.py
-│   └── demo_xlsx_roundtrip.py                   # added by 07c
+│   └── demo_xlsx_roundtrip.py                   # added by 07c-β
 ├── prompts/
 │   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy; slim preamble)
 │   ├── 00-preflight.md ... 19-phase-b-smoke-test.md
@@ -323,7 +331,7 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── 07b-xlsx-workbooks-forward.md
 │   ├── 07c-alpha-foundations.md                # MERGED (PR #20, 2026-04-24)
 │   ├── 07c-beta-reverse-daemon.md              # MERGED (PR #21, 2026-04-25)
-│   ├── 07.5-checkpoint-projection-consistency.md  # source draft; audit memo at docs/checkpoints/
+│   ├── 07.5-checkpoint-projection-consistency.md  # source contract; audit memo at docs/checkpoints/
 │   ├── d01-*.md ... d08-*.md                    # diagnostic prompts
 │   ├── prompt-01a-openclaw-cheatsheet.md
 │   ├── prompt-01b-architecture-summary.md
@@ -333,7 +341,7 @@ Similarly, don't trust your cached reading of the **codebase** across sessions. 
 │   ├── events/{log,bus,envelope,registry}.py
 │   ├── events/schemas/{ingest,crm,domain,governance,ops,system}.py
 │   ├── projections/{base,runner}.py + 11 subdirs (10 sqlite + xlsx_workbooks)
-│   ├── daemons/                                 # NEW (PM-14): adapters/daemons that emit domain events
+│   ├── daemons/                                 # PM-14: adapters/daemons that emit domain events
 │   │   └── xlsx_sync/                           # populated by 07c: diff.py, sheet_schemas.py, reverse.py
 │   ├── lib/instance_config.py
 │   └── (pipelines, products, openclaw_plugins, cli, adapters — stubs or partial)
