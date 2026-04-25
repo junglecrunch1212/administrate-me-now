@@ -20,6 +20,7 @@ import json
 
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adminme.lib.session import Session
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets._common import (
     apply_row_protection,
@@ -71,7 +72,13 @@ def _resolve_last4(ctx: XlsxQueryContext, tenant_id: str) -> dict[str, str]:
     return out
 
 
-def build(ws: Worksheet, ctx: XlsxQueryContext, *, tenant_id: str) -> None:
+def build(
+    ws: Worksheet,
+    ctx: XlsxQueryContext,
+    *,
+    tenant_id: str,
+    session: Session,
+) -> None:
     write_header_row(ws, HEADERS)
 
     last4_by_account = _resolve_last4(ctx, tenant_id)

@@ -17,6 +17,7 @@ from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import load_instance_config
+from adminme.lib.session import Session, build_internal_session
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.recurrences.queries import (
     all_active,
@@ -27,6 +28,14 @@ from adminme.projections.recurrences.queries import (
 from adminme.projections.runner import ProjectionRunner
 
 TEST_KEY = b"r" * 32
+
+
+def _S(tenant_id: str = "tenant-a") -> Session:
+    """Internal-actor Session for projection-read tests; carries tenant_id
+    only. 08a + scope filtering use principal role so allowed_read accepts
+    shared:household + private:<self> rows."""
+    return build_internal_session("test_actor", "principal", tenant_id)
+
 
 
 @pytest.fixture
@@ -113,7 +122,7 @@ async def test_recurrence_added_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", eid)
 
     conn = runner.connection("recurrences")
-    row = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-daily")
+    row = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-daily")
     assert row is not None
     assert row["kind"] == "birthday"
     assert row["linked_kind"] == "party"
@@ -144,7 +153,7 @@ async def test_recurrence_completed_advances_next_occurrence(
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    row = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-daily")
+    row = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-daily")
     assert row is not None
     # Daily RRULE from 2026-04-24T08:00:00Z, completed at 08:30 → next is 04-25T08:00.
     assert row["next_occurrence"] == "2026-04-25T08:00:00Z"
@@ -180,7 +189,7 @@ async def test_recurrence_completed_weekly_advances_by_week(
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    row = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-weekly")
+    row = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-weekly")
     assert row is not None
     assert row["next_occurrence"] == "2026-05-01T08:00:00Z"
 
@@ -207,7 +216,7 @@ async def test_recurrence_updated_recomputes_next_when_rrule_changes(
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    row = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-daily")
+    row = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-daily")
     assert row is not None
     assert row["rrule"] == "FREQ=YEARLY"
     assert row["lead_time_days"] == 7
@@ -242,8 +251,7 @@ async def test_due_within_filters_cutoff(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    rows = due_within(
-        conn, tenant_id="tenant-a", days=30, as_of_iso="2026-04-24T00:00:00Z"
+    rows = due_within(conn, _S("tenant-a"), days=30, as_of_iso="2026-04-24T00:00:00Z"
     )
     assert {r["recurrence_id"] for r in rows} == {"soon"}
 
@@ -279,7 +287,7 @@ async def test_for_member_includes_household(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    rows = for_member(conn, tenant_id="tenant-a", member_party_id="m1")
+    rows = for_member(conn, _S("tenant-a"), member_party_id="m1")
     assert {r["recurrence_id"] for r in rows} == {"rec-hh", "rec-member"}
 
 
@@ -391,8 +399,8 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    a = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-1")
-    b = get_recurrence(conn, tenant_id="tenant-b", recurrence_id="rec-1")
+    a = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-1")
+    b = get_recurrence(conn, _S("tenant-b"), recurrence_id="rec-1")
     assert a is not None and a["notes"] == "Tenant A"
     assert b is not None and b["notes"] == "Tenant B"
 
@@ -418,12 +426,16 @@ async def test_all_active_orders_by_next(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    rows = all_active(conn, tenant_id="tenant-a")
+    rows = all_active(conn, _S("tenant-a"))
     assert [r["recurrence_id"] for r in rows] == ["rec-soon", "rec-late"]
 
 
-async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
-    """Prompt 06 stub — prompt 08 extends to ScopeViolation on query."""
+async def test_scope_canary_privileged_drops_for_non_owner(
+    rig: dict[str, Any],
+) -> None:
+    """Prompt 08a wired: a privileged-sensitivity row with shared:household
+    owner_scope drops from a non-owner's read; the row is still in the
+    projection table per [§6.4]."""
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -439,6 +451,12 @@ async def test_scope_canary_stub_privileged_lands(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", eid)
 
     conn = runner.connection("recurrences")
-    row = get_recurrence(conn, tenant_id="tenant-a", recurrence_id="rec-priv")
-    assert row is not None
-    assert row["sensitivity"] == "privileged"
+    row = get_recurrence(conn, _S("tenant-a"), recurrence_id="rec-priv")
+    assert row is None
+
+    raw = conn.execute(
+        "SELECT count(*) FROM recurrences WHERE tenant_id = ? "
+        "AND recurrence_id = ?",
+        ("tenant-a", "rec-priv"),
+    ).fetchone()
+    assert raw[0] == 1

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adminme.lib.session import Session
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets._common import (
     apply_row_protection,
@@ -27,6 +28,7 @@ def build(
     *,
     tenant_id: str,
     last_event_id: str,
+    session: Session,
 ) -> None:
     write_header_row(ws, HEADERS)
 
