@@ -11,7 +11,7 @@
 
 1. `ADMINISTRATEME_BUILD.md` **"L4 CONTINUED: THE SKILL RUNNER (LAYERED ON OPENCLAW)"** — the nine-step wrapper flow is the contract.
 2. `docs/openclaw-cheatsheet.md` question 1 (skill install) and question 5 (SKILL.md shape) — your own from prompt 01.
-3. `docs/reference/openclaw/` — specifically any file covering `/skills/invoke`, skill manifest shape, and the provider abstraction. These were mirrored in prompt 00.5. If a file you need is missing, see `docs/reference/_status.md` — the mirror may be incomplete and need operator clipping before proceeding.
+3. `docs/reference/openclaw/gateway/tools-invoke-http-api.md` (the canonical `POST /tools/invoke` HTTP contract) and `docs/reference/openclaw/tools/llm-task.md` (the structured-JSON LLM tool the wrapper invokes through `/tools/invoke`) — see ADR-0002 for the manifest-to-args translation. Also: `docs/reference/openclaw/tools/skills.md` for SKILL.md frontmatter shape and skill-loader precedence. The mirror is fully synced (see `docs/reference/_status.md`).
 4. `ADMINISTRATEME_REFERENCE_EXAMPLES.md` §3 (the full thank-you skill pack, including `pack.yaml`, `SKILL.md`, `handler.py`, schemas, tests). This is the shape the wrapper must support.
 
 ## Operating context
@@ -20,7 +20,7 @@ The wrapper is a thin Python module that stands between AdministrateMe pipelines
 1. Validate inputs before sending.
 2. Enforce sensitivity policy (refuse privileged inputs for skills not declared privileged).
 3. Enforce scope (skill's required scopes must be subset of caller's session scopes).
-4. POST to OpenClaw `/skills/invoke`.
+4. POST to OpenClaw `/tools/invoke` with `tool: "llm-task"` per ADR-0002.
 5. Run `handler.py` post-process if present.
 6. Validate output.
 7. Emit `skill.call.recorded` event with full provenance.
@@ -76,7 +76,7 @@ Behavior:
 3. Sensitivity check. If any input value has metadata indicating privileged content and the skill doesn't declare `sensitivity_required: privileged`, raise `SkillSensitivityRefused`.
 4. Scope check: for each scope in `context_scopes_required`, check `session.allowed_scopes`. Fail → raise `SkillScopeInsufficient`.
 5. If `ctx.dry_run` or `ctx.observation_mode_active AND skill is outbound-affecting`: short-circuit and emit `skill.call.suppressed` instead. Return a stub result. (Most skills are read-only; this only applies when the skill's metadata declares outbound impact.)
-6. POST to OpenClaw: `http://127.0.0.1:18789/skills/invoke` with JSON body `{skill_name, skill_version, inputs, correlation_id, session_context: {auth_member_id, dm_scope, tenant_id}}`. Use `httpx` async client. Timeout = manifest's `timeout_seconds`.
+6. POST to OpenClaw: `http://127.0.0.1:18789/tools/invoke` with JSON body `{tool: "llm-task", action: "json", args: {prompt, input, schema, provider, model, maxTokens, timeoutMs, ...}, sessionKey, dryRun: false}` per ADR-0002. Use `httpx` async client. Timeout = manifest's `timeout_seconds * 1000` (passed as `args.timeoutMs`).
 7. Response shape (verify against openclaw cheatsheet): `{invocation_id, raw_response, provider, tokens_in, tokens_out, cost_usd, duration_ms}`. If shape differs, raise `OpenClawResponseMalformed` with what was received (this is recoverable — consult diagnostic d02).
 8. Load handler.py if present; call `post_process(raw_response, inputs, ctx)`. If handler raises, log full response to `~/.adminme/raw_events/skill_validation_failures/<ts>.json`, return a fallback value per the skill's `on_failure` policy, also emit `skill.call.failed`.
 9. Validate output against output.schema.json. Same failure path as #8.

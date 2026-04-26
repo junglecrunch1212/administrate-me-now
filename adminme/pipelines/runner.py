@@ -13,8 +13,9 @@ Key rules:
 - No pipeline writes directly to a projection or an xlsx file; pipelines emit
   events, projections consume them (§7 invariant 3).
 - Pipelines invoke skills ONLY through `await run_skill(skill_id, inputs, ctx)`,
-  which wraps POST http://127.0.0.1:18789/skills/invoke; pipelines NEVER
-  import anthropic / openai / any provider SDK (§7 invariant 4, §8 invariant 2).
+  which wraps POST http://127.0.0.1:18789/tools/invoke with tool: "llm-task"
+  per ADR-0002; pipelines NEVER import anthropic / openai / any provider SDK
+  (§7 invariant 4, §8 invariant 2).
 - A pipeline failure on one event does not halt the bus — the runner records,
   retries per policy, and continues (§7 invariant 7).
 

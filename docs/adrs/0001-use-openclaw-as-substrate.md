@@ -45,9 +45,11 @@ The two systems meet at exactly four documented seams
 1. **Skills** — AdministrateMe's skill packs (classify_commitment_candidate,
    extract_commitment_fields, compose_morning_digest, etc.) install into
    OpenClaw via `openclaw skill install` or ClawHub. Pipelines invoke skills
-   via `POST http://127.0.0.1:18789/skills/invoke` — `httpx` only; no
-   provider SDK (SYSTEM_INVARIANTS.md §7 invariant 4 / §8 invariant 2 /
-   DECISIONS.md §D6).
+   via `POST http://127.0.0.1:18789/tools/invoke` with `tool: "llm-task"` —
+   `httpx` only; no provider SDK (SYSTEM_INVARIANTS.md §7 invariant 4 / §8
+   invariant 2 / DECISIONS.md §D6; the manifest-to-args translation contract
+   is specified in ADR-0002, which refines this seam without changing the
+   ADR-0001 decision to use OpenClaw as substrate).
 2. **Slash commands** — AdministrateMe registers household-CoS verbs with
    OpenClaw's slash dispatcher; handlers are AdministrateMe HTTP endpoints
    inside the Python product APIs (SYSTEM_INVARIANTS.md §8 invariant 6).

@@ -4,16 +4,17 @@ Skill runner wrapper — thin client for OpenClaw's skill runner.
 Implemented in prompt 09a per ADMINISTRATEME_BUILD.md §L4-continued and SYSTEM_INVARIANTS.md §7-§8.
 
 AdministrateMe does NOT run its own LLM loop. Every skill call flows through
-OpenClaw's skill runner at `POST http://127.0.0.1:18789/skills/invoke`
-(§7 invariant 4, §8 invariant 2).
+OpenClaw's gateway HTTP API at `POST http://127.0.0.1:18789/tools/invoke`
+with `tool: "llm-task"` (§7 invariant 4, §8 invariant 2, ADR-0002).
 
 `await run_skill(skill_id, inputs, ctx)` does:
 1. Validate inputs against `input.schema.json`.
 2. Check `sensitivity_required` is satisfied (refuse privileged inputs unless
    the skill declares it).
 3. Check `context_scopes_required ⊆ Session.requested_scopes`.
-4. POST to OpenClaw's skill runner with `{skill_name, inputs, correlation_id,
-   session_context, dmScope}`.
+4. POST to OpenClaw's gateway: body shape is `{tool: "llm-task", action: "json",
+   args: {prompt, input, schema, provider, model, maxTokens, timeoutMs, ...},
+   sessionKey, dryRun: false}` per ADR-0002.
 5. Optional `handler.py` `post_process`.
 6. Validate output against `output.schema.json`.
 7. Emit `skill.call.recorded` with full provenance (skill name, version,
