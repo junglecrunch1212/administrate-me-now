@@ -1,0 +1,7 @@
+# Ordered list of built-in skill packs the bootstrap wizard installs into
+# OpenClaw during Phase B (per prompt 16 §6). Consumers: prompt 15
+# (OpenClaw integration) and prompt 16 (bootstrap). Order matters when
+# later packs depend on earlier ones; for now the list has one entry.
+
+built_in_skill_packs:
+  - skill:classify_thank_you_candidate

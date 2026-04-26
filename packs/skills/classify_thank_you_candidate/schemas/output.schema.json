@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classify_thank_you_candidate output",
+  "type": "object",
+  "required": ["is_candidate", "confidence", "reasons"],
+  "properties": {
+    "is_candidate": { "type": "boolean" },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "urgency": {
+      "type": "string",
+      "enum": ["within_24h", "this_week", "within_month", "no_rush"]
+    },
+    "suggested_medium": {
+      "type": "string",
+      "enum": ["text", "email", "handwritten_card", "small_gift"]
+    },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    }
+  },
+  "if": { "properties": { "is_candidate": { "const": true } } },
+  "then": { "required": ["urgency", "suggested_medium"] }
+}

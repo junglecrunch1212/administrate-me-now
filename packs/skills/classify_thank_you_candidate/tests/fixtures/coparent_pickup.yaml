@@ -1,0 +1,26 @@
+name: coparent_pickup_skip
+description: |
+  Mike did James a favor by switching kid pickup timing — not a thank-you
+  candidate (coparent skip rule).
+
+input:
+  principal_member_id: stice-james
+  party_summary:
+    party_id: p-mike
+    name: Mike (coparent)
+    tier: 3
+    tags: ["coparent", "charlie_dad"]
+    relationship_summary: "Charlie's dad. Non-user. Logistical relationship only."
+  interaction_context:
+    recent_messages:
+      - from_member_or_party: "p-mike"
+        when: "2026-04-20T16:00:00-04:00"
+        text: "Picking up C Friday at 4 instead of 5 if that works. Got a thing."
+    recent_events: []
+
+expected_output:
+  is_candidate: false
+  confidence_min: 0.75
+  reasons_must_include_any_of:
+    - "coparent"
+    - "coparenting logistics"

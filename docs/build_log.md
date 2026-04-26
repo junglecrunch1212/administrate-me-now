@@ -221,3 +221,25 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - Bootstrap §7 calls `set_default_event_log(...)` at service start so production callers don't need to construct `_Runtime` themselves.
 - **Carry-forward for prompt 19** (Phase B smoke test):
   - `tests/integration/test_skill_wrapper_live.py` is the test that activates against the live OpenClaw gateway. The skip in 09a is its Phase-A placeholder.
+
+### Prompt 09b — first canonical skill pack (classify_thank_you_candidate)
+- **Refactored**: by Partner in Claude Chat, 2026-04-27. Prompt file: prompts/09b-first-skill-pack.md (~290 lines, quality bar = 09a).
+- **Session merged**: PR #<N>, commits bae1681 / 585d9bf / 36fd872 / <commit4>, merged <merge date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `packs/skills/classify_thank_you_candidate/` — full pack at version 1.3.0 per [REFERENCE_EXAMPLES.md §3]; pack.yaml + SKILL.md (frontmatter + §3 body) + schemas/{input,output}.schema.json + prompt.jinja2 + handler.py.
+  - `handler.py` — top-level `post_process(raw, inputs, ctx)`; only logic is the urgency-coercion safety net per [REFERENCE_EXAMPLES.md §3 lines 1389-1395]. Zero `adminme_platform`-style imports.
+  - `tests/test_skill.py` — pack-loads-cleanly canary + handler-direct unit cases; 4 tests (loads + well-formed pass-through + missing-urgency coercion + non-dict defensive).
+  - `tests/integration/test_classify_thank_you_pack.py` — three fixture tests (kleins_hosted_us, reciprocal_coffee, coparent_pickup) + handler-direct safety-net test; 4 tests; all HTTP via `httpx.MockTransport`.
+  - `bootstrap/pack_install_order.yaml` — NEW; single-entry list queued for prompt 15 / 16 install path.
+  - `[§8]`/`[D6]`: zero LLM/embedding SDK imports; `verify_invariants.sh` clean.
+  - `[§12.4]`: tenant-identity strings (stice-james, Klein, Mike) confined to `packs/skills/classify_thank_you_candidate/tests/fixtures/` and integration test fixture-construction sites with `# fixture:tenant_data:ok`.
+  - `[ADR-0002]`: pack consumes `run_skill()` which POSTs to `/tools/invoke` with `tool: "llm-task"`. No new HTTP seams.
+- **Carry-forward for prompt 10a (pipeline runner)**:
+  - `bootstrap/pack_install_order.yaml` exists with one entry. Pipeline runner does not consume this file directly — that's prompt 15/16. 10a should reference packs by absolute path resolved via `InstanceConfig.packs_dir` (per UT-9 SOFT note).
+- **Carry-forward for prompt 10b (thank_you pipeline)**:
+  - The pipeline calls `await run_skill("classify_thank_you_candidate", inputs, ctx)` against this pack. Inputs match `schemas/input.schema.json`; outputs decoded per `schemas/output.schema.json`. The pipeline emits `commitment.proposed` (or equivalent) when `is_candidate=true`; that emit happens in pipeline code, not in skill code (skills never emit events directly per [REFERENCE_EXAMPLES.md §3 line 1527]).
+- **Carry-forward for prompt 15 (OpenClaw integration)**:
+  - `bootstrap/pack_install_order.yaml` is the source-of-truth list of built-in packs to register with OpenClaw. Prompt 15's persona-compiler / pack-registration path reads this file.
+- **Carry-forward for prompt 16 (bootstrap wizard)**:
+  - Bootstrap §6 / §7 walks `bootstrap/pack_install_order.yaml` and calls `openclaw skill install` per entry. Phase B only.

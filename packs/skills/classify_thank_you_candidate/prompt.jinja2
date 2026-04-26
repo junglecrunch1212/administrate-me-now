@@ -1,0 +1,49 @@
+You are a careful classifier deciding whether {{ principal_display_name }}
+should send a thank-you note to {{ party_summary.name }}.
+
+Context on the relationship:
+- Closeness tier: {{ party_summary.tier }} ({{ tier_label(party_summary.tier) }})
+- Relationship: {{ party_summary.relationship_summary or "no summary available" }}
+- Party tags: {{ party_summary.tags | join(", ") or "—" }}
+
+Recent thread (chronological):
+{% for msg in interaction_context.recent_messages %}
+  [{{ msg.when }}] {{ msg.from_member_or_party }}: {{ msg.text | truncate(220) }}
+{% endfor %}
+
+Recent events involving this party (last 14 days):
+{% for e in interaction_context.recent_events %}
+  - {{ e.when }}: {{ e.kind }} — {{ e.summary }}
+{% else %}
+  - (none)
+{% endfor %}
+
+Decide whether a thank-you note is warranted, following the criteria in
+the SKILL.md document. Specifically:
+
+- Hosting hospitality, substantial favors, significant gifts, or
+  above-scope professional kindness count.
+- Transactional, reciprocal-among-close-friends, coparent exchanges,
+  already-thanked threads, and standard-service-provider interactions
+  do NOT count.
+- If the principal is visibly frustrated in the thread, return
+  is_candidate=false with a reason; do not propose a note.
+
+Return ONLY valid JSON matching the output schema. Specifically:
+{
+  "is_candidate": <bool>,
+  "confidence": <float 0-1>,
+  "urgency": <"within_24h"|"this_week"|"within_month"|"no_rush">,
+  "suggested_medium": <"text"|"email"|"handwritten_card"|"small_gift">,
+  "reasons": [<short strings>]
+}
+
+If is_candidate is false, omit urgency and suggested_medium.
+
+Confidence guidance:
+- 0.9+ when the triggering event is unambiguous (hosting, gift, significant favor)
+- 0.7-0.9 when the signal is clear but the relationship context adds uncertainty
+- 0.5-0.7 when the signal is weak (could be either way; err toward false negative)
+- <0.5 always returns is_candidate=false
+
+Return the JSON and nothing else.
