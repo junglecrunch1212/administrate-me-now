@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classify_thank_you_candidate input",
+  "type": "object",
+  "required": ["interaction_context", "party_summary", "principal_member_id"],
+  "properties": {
+    "principal_member_id": {
+      "type": "string",
+      "description": "The member who would be sending the note."
+    },
+    "party_summary": {
+      "type": "object",
+      "required": ["party_id", "name", "tier", "tags"],
+      "properties": {
+        "party_id": { "type": "string" },
+        "name": { "type": "string" },
+        "tier": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "relationship_summary": { "type": "string" }
+      }
+    },
+    "interaction_context": {
+      "type": "object",
+      "required": ["recent_messages", "recent_events"],
+      "properties": {
+        "recent_messages": {
+          "type": "array",
+          "description": "Last 10 messages in the thread, chronological.",
+          "items": {
+            "type": "object",
+            "required": ["from_member_or_party", "text", "when"],
+            "properties": {
+              "from_member_or_party": { "type": "string" },
+              "text": { "type": "string" },
+              "when": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "recent_events": {
+          "type": "array",
+          "description": "Calendar/hosting/favor events involving this party in the last 14 days.",
+          "items": {
+            "type": "object",
+            "required": ["kind", "summary", "when"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["hosting_us", "hosting_them", "gift_received", "favor_received", "calendar_event"]
+              },
+              "summary": { "type": "string" },
+              "when": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
