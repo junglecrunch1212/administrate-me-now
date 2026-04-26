@@ -247,8 +247,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10a — pipeline runner
 - **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: prompts/10a-pipeline-runner.md (~340 lines, quality bar = 09a).
-- **Session merged**: PR #<N>, commits edb3920 / 1fa335a / f30a6f2 / <commit4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #33, commits edb3920 / 1fa335a / f30a6f2 / c96cf55, merged 2026-04-26.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/pipelines/base.py` — `Pipeline` Protocol + `PipelineContext` frozen dataclass + `Triggers` TypedDict + `PipelinePackLoadError`.
   - `adminme/pipelines/pack_loader.py` — `load_pipeline_pack()` parses `pipeline.yaml` + imports `handler.py` + instantiates `runtime.class`; cache by `(pack_id, version)`.
@@ -256,6 +256,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `tests/fixtures/pipelines/echo_logger/` — trivial fixture pack (`pipeline.yaml` + `handler.py` with `EchoLoggerPipeline`); used by runner tests. NOT a production pipeline.
   - `tests/fixtures/pipelines/echo_emitter/` — sibling fixture pack used by the integration causation test; emits `messaging.sent` with `causation_id=ctx.triggering_event_id` (no new schema registration, reuses `messaging.sent` v1).
   - 8 unit tests (`tests/unit/test_pipeline_pack_loader.py`) + 5 unit tests (`tests/unit/test_pipeline_runner.py`) + 4 integration tests (`tests/integration/test_pipeline_runner_integration.py`) — total 17 new tests (vs. floor 14).
+  - **QC overshoot (Partner, 2026-04-26 post-merge):** prompt floor 14 tests; shipped **17** (overshoot from 3 extra `pack_loader` cases — wrong-kind manifest, missing-entrypoint-file, class-without-handle protocol-check). Logged as quality signal, not drift. Full repo: 429 passed / 1 skipped per Claude Code's transcript.
+  - **QC silent-architecture decision (Partner, 2026-04-26 post-merge):** the prompt's Commit 1 plan named test #6 as "runtime.class not present in `handler.py`" combined with "instance does not implement handle"; Claude Code factored these into TWO separate tests (`test_missing_runtime_class_raises` and `test_class_missing_handle_raises`), which is why the unit-test count overshot 5→8. Cleaner separation. Accept and note.
   - `[§7.3]` (no projection direct writes): pipeline → projection canary in `verify_invariants.sh` is armed and clean.
   - `[§7.4]`/`[§8]`/`[D6]`: zero new SDK imports; `verify_invariants.sh` clean.
   - `[§7.7]` (one failure does not halt the bus): bus checkpoint advancement on success, non-advancement on raise — both asserted in tests.
