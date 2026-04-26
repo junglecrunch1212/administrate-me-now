@@ -273,3 +273,23 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - Bootstrap §6 calls `set_default_event_log(...)` (already from 09a). Pipeline runner uses the same shared event log.
 - **Carry-forward for prompt 19** (Phase B smoke test):
   - Confirm at least one reactive pipeline fires end-to-end against a live bus + live skill-runner against live OpenClaw.
+
+---
+
+## Sidecar PRs (out-of-band, no four-commit discipline)
+
+Sidecar PRs are single-purpose fixes against already-merged code, run
+outside the build-prompt sequence. They have no carry-forwards and do
+not appear in the `## Build prompts` ledger above. This section is a
+chronological trace; the per-PR detail lives in the PR description on
+GitHub. Tracked here so future Partner sessions reading the build_log
+see the full PR landscape.
+
+### sidecar-raw-data-is-manual-derived (PR #35, merged 2026-04-26)
+- **Surfaced by**: 07.5 audit finding C-1 (`docs/checkpoints/07.5-projection-consistency.md`).
+- **Diff scope**: 2 files. `adminme/projections/xlsx_workbooks/sheets/raw_data.py` (1-line set-literal expansion + 4-line docstring comment); `tests/unit/test_xlsx_finance_workbook.py` (3 imports + 1 sync test).
+- **Why**: Raw Data builder's `ALWAYS_DERIVED` was missing `is_manual` while the bidirectional descriptor's `always_derived` included it. Cosmetic protection drift, not a correctness bug — `is_manual` is set by the projection from event type and has no live workbook-side edit path, so the missing cell-level lock had nothing to gate. But the two declarations are meant to be equivalent in each direction (builder owns sheet-side cell protection; descriptor owns reverse-diff drop behavior); re-drift in either direction would silently change round-trip semantics.
+- **Guard**: `test_raw_data_always_derived_matches_descriptor` asserts `ALWAYS_DERIVED == set(descriptor_for(FINANCE_WORKBOOK_NAME, "Raw Data").always_derived)`. Both-direction drift fails CI on next push.
+- **Verification (per Claude Code transcript)**: ruff clean, mypy clean on `raw_data.py`, full unit suite 412 passed / 1 skipped (was 411/1; +1 from the new sync test), `scripts/verify_invariants.sh` exits 0 (no `ALLOWED_EMITS` change).
+- **Closes**: 07.5 finding C-1. UT-1 was already CLOSED 2026-04-25 when the audit landed; this PR is the formal closure of the audit's queued sidecar.
+- **Outcome**: MERGED.
