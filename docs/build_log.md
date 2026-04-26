@@ -224,12 +224,13 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 09b — first canonical skill pack (classify_thank_you_candidate)
 - **Refactored**: by Partner in Claude Chat, 2026-04-27. Prompt file: prompts/09b-first-skill-pack.md (~290 lines, quality bar = 09a).
-- **Session merged**: PR #<N>, commits bae1681 / 585d9bf / 36fd872 / <commit4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #<PR-09b>, commits bae1681 / 585d9bf / 36fd872 / <commit4-09b>, merged <merge-date-09b>.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `packs/skills/classify_thank_you_candidate/` — full pack at version 1.3.0 per [REFERENCE_EXAMPLES.md §3]; pack.yaml + SKILL.md (frontmatter + §3 body) + schemas/{input,output}.schema.json + prompt.jinja2 + handler.py.
   - `handler.py` — top-level `post_process(raw, inputs, ctx)`; only logic is the urgency-coercion safety net per [REFERENCE_EXAMPLES.md §3 lines 1389-1395]. Zero `adminme_platform`-style imports.
   - `tests/test_skill.py` — pack-loads-cleanly canary + handler-direct unit cases; 4 tests (loads + well-formed pass-through + missing-urgency coercion + non-dict defensive).
+  - **QC overshoot (Partner, 2026-04-27 post-merge):** prompt floor for `tests/test_skill.py` was 1 test (loader canary only); shipped 4 (loader canary + 3 handler-direct unit cases). Adds the non-dict defensive case that mirrors the handler's first guard. Logged as quality signal, not drift. Prompt-floor for `tests/integration/test_classify_thank_you_pack.py` was 4 (3 fixtures + 1 handler-direct safety net) — shipped exactly 4. Total 09b new tests: **8** (4 unit + 4 integration), vs. floor 5.
   - `tests/integration/test_classify_thank_you_pack.py` — three fixture tests (kleins_hosted_us, reciprocal_coffee, coparent_pickup) + handler-direct safety-net test; 4 tests; all HTTP via `httpx.MockTransport`.
   - `bootstrap/pack_install_order.yaml` — NEW; single-entry list queued for prompt 15 / 16 install path.
   - `[§8]`/`[D6]`: zero LLM/embedding SDK imports; `verify_invariants.sh` clean.
