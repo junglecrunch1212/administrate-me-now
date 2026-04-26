@@ -1,0 +1,17 @@
+pack:
+  id: pipeline:echo_logger
+  name: Echo Logger
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: EchoLoggerPipeline
+triggers:
+  events:
+    - messaging.received
+depends_on:
+  skills: []
+  projections: []
+events_emitted: []

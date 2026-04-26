@@ -244,3 +244,30 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `bootstrap/pack_install_order.yaml` is the source-of-truth list of built-in packs to register with OpenClaw. Prompt 15's persona-compiler / pack-registration path reads this file.
 - **Carry-forward for prompt 16 (bootstrap wizard)**:
   - Bootstrap §6 / §7 walks `bootstrap/pack_install_order.yaml` and calls `openclaw skill install` per entry. Phase B only.
+
+### Prompt 10a — pipeline runner
+- **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: prompts/10a-pipeline-runner.md (~340 lines, quality bar = 09a).
+- **Session merged**: PR #<N>, commits edb3920 / 1fa335a / f30a6f2 / <commit4>, merged <merge date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `adminme/pipelines/base.py` — `Pipeline` Protocol + `PipelineContext` frozen dataclass + `Triggers` TypedDict + `PipelinePackLoadError`.
+  - `adminme/pipelines/pack_loader.py` — `load_pipeline_pack()` parses `pipeline.yaml` + imports `handler.py` + instantiates `runtime.class`; cache by `(pack_id, version)`.
+  - `adminme/pipelines/runner.py` — `PipelineRunner` with `register()` / `discover(builtin_root, installed_root)` / `start()` / `stop()` / `status()`. Discovery walks two roots: in-tree `adminme/pipelines/` and `instance_config.packs_dir / "pipelines"`. Per UT-9, callers pass absolute paths.
+  - `tests/fixtures/pipelines/echo_logger/` — trivial fixture pack (`pipeline.yaml` + `handler.py` with `EchoLoggerPipeline`); used by runner tests. NOT a production pipeline.
+  - `tests/fixtures/pipelines/echo_emitter/` — sibling fixture pack used by the integration causation test; emits `messaging.sent` with `causation_id=ctx.triggering_event_id` (no new schema registration, reuses `messaging.sent` v1).
+  - 8 unit tests (`tests/unit/test_pipeline_pack_loader.py`) + 5 unit tests (`tests/unit/test_pipeline_runner.py`) + 4 integration tests (`tests/integration/test_pipeline_runner_integration.py`) — total 17 new tests (vs. floor 14).
+  - `[§7.3]` (no projection direct writes): pipeline → projection canary in `verify_invariants.sh` is armed and clean.
+  - `[§7.4]`/`[§8]`/`[D6]`: zero new SDK imports; `verify_invariants.sh` clean.
+  - `[§7.7]` (one failure does not halt the bus): bus checkpoint advancement on success, non-advancement on raise — both asserted in tests.
+  - `[ADR-0002]`: `PipelineContext.run_skill_fn` is the one seam pipelines use to call skills; no direct OpenClaw HTTP calls from pipeline code.
+- **Carry-forward for prompt 10b** (reactive pipelines):
+  - `PipelineRunner.discover()` will pick up packs added under `adminme/pipelines/<namespace>/<n>/`. 10b's four pipelines (`identity_resolution`, `noise_filtering`, `commitment_extraction`, `thank_you_detection`) each get their own subdirectory and `pipeline.yaml` + `handler.py`.
+  - Each 10b pipeline's `handle()` receives a `PipelineContext` with pre-built Session + run_skill_fn + outbound_fn + guarded_write. They do NOT construct these themselves.
+  - Causation wiring: pipelines emitting derived events set `causation_id=ctx.triggering_event_id` on the emitted envelope. The integration test for `echo_emitter` is the canary.
+- **Carry-forward for prompt 10c** (proactive pipelines):
+  - 10c registers proactive pipelines with OpenClaw via workspace-prose AGENTS.md + `openclaw cron add` per cheatsheet Q3. The runner's `discover()` reads `triggers.schedule` / `triggers.proactive` but does NOT subscribe them; 10c's bootstrap step picks up the registered packs and writes the AGENTS.md sections.
+- **Carry-forward for prompt 16** (bootstrap wizard):
+  - `pipeline_supervisor.py` remains a docstring-only stub. Bootstrap §7 wires `PipelineRunner` lifecycle (start-on-boot via the supervisor, stop-on-shutdown).
+  - Bootstrap §6 calls `set_default_event_log(...)` (already from 09a). Pipeline runner uses the same shared event log.
+- **Carry-forward for prompt 19** (Phase B smoke test):
+  - Confirm at least one reactive pipeline fires end-to-end against a live bus + live skill-runner against live OpenClaw.

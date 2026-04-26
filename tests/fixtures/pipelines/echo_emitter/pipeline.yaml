@@ -1,0 +1,18 @@
+pack:
+  id: pipeline:echo_emitter
+  name: Echo Emitter
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: EchoEmitterPipeline
+triggers:
+  events:
+    - messaging.received
+depends_on:
+  skills: []
+  projections: []
+events_emitted:
+  - messaging.sent
