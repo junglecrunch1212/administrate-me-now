@@ -105,7 +105,8 @@ Rationale: the Claude Code sandbox has an egress allowlist. `github.com` and `ra
 | 09a | `09a-skill-runner.md` | Skill runner wrapper around OpenClaw's skill system | 2-3 hrs | First skill call succeeds |
 | 09b | `09b-first-skill-pack.md` | `classify_thank_you_candidate` skill pack end-to-end | 2 hrs | Skill pack install + invoke |
 | 10a | `10a-pipeline-runner.md` | Pipeline runner + event subscription machinery | 2-3 hrs | Pipelines receive events |
-| 10b | `10b-reactive-pipelines.md` | identity_resolution, noise_filtering, commitment_extraction, thank_you | 4-5 hrs | Reactive pipelines working |
+| 10b-i | `10b-i-identity-and-noise.md` | Reactive pipelines: identity_resolution + noise_filtering | 2-3 hrs | Reactive pipelines (identity + noise) working |
+| 10b-ii | `10b-ii-commitments-and-thank-you.md` | Reactive pipelines: commitment_extraction + thank_you_detection | 2-3 hrs | Reactive pipelines (commitments + thank-you) working |
 | 10c | `10c-proactive-pipelines.md` | morning_digest, paralysis_detection, reminder_dispatch, reward_dispatch, crm_surface, custody_brief — registered as OpenClaw standing orders | 4-5 hrs | Proactive pipelines firing |
 | 10d | `10d-checkpoint-pipeline-skill-consistency.md` | **Checkpoint:** audit pipeline ↔ skill ↔ schema wiring; confirm no projection writes / LLM calls from pipelines | 30-45 min | Pipeline layer internally consistent |
 | 11 | `11-standalone-adapters.md` | L1 standalone Python adapters: Gmail, Plaid, Apple Reminders, Google Calendar, CalDAV | 5-6 hrs | External ingest working |
@@ -144,7 +145,7 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
                                                                                                        09a ──► 09b
                                                                                                                 │
                                                                                                                 ▼
-                                                                                                       10a ──► 10b ──► 10c ──► 10d
+                                                                                                       10a ──► 10b-i ──► 10b-ii ──► 10c ──► 10d
                                                                                                                                  │
                                                                                               ┌─────────┬──────────────────────┤
                                                                                               ▼         ▼                      ▼
@@ -191,7 +192,7 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
 - 07a → 07b → 07c-α → 07c-β before 08 (and 07.5 before 08). All projections + the L1-adjacent reverse daemon must exist before session/scope queries against them; the 07.5 audit must pass first. Within the 07 cohort the order is mandatory: 07b's xlsx forward daemon reads from 07a's projections; 07c-α extends 07b's forward daemon with the sidecar writer and lands the descriptors/diff core; 07c-β consumes both. Per PM-15.
 - 08a before 08b; 08b before 09a (skill runner consumes Session).
 - 09a before 09b. Runner must exist before skill pack uses it.
-- 10a before 10b. Pipeline machinery before specific pipelines.
+- 10a before 10b-i; 10b-i before 10b-ii. Pipeline machinery before reactive pipelines; identity + noise must land before commitment + thank-you (10b-ii consumes identity_resolution output). Downstream prompts that depended on 10b now depend on 10b-ii.
 - 14a before 14b/14c. Framework before views.
 - 15 before 16. OpenClaw integration must be working before bootstrap wizard configures it.
 - 17 before 18. CLI must exist for integration test to call it.
