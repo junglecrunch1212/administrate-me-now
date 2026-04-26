@@ -129,13 +129,6 @@ async def test_end_to_end_dispatch(tmp_path: Path) -> None:
         await _wait_for_checkpoint(
             bus, "pipeline:pipeline:echo_logger", last_eid
         )
-        from tests.fixtures.pipelines.echo_logger.handler import (  # type: ignore
-            EchoLoggerPipeline,
-        )
-
-        # The class loaded by the loader is the same one the test fixture
-        # imports — both go through the same module path. Re-fetch via
-        # the cached pack to get the live counter.
         pack = load_pipeline_pack(ECHO_LOGGER_ROOT)
         assert pack.instance.__class__._count_for_test() == 10  # type: ignore[attr-defined]
     finally:

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from adminme.lib.governance import GuardedWrite
     from adminme.lib.observation import ObservationManager
     from adminme.lib.session import Session
-    from adminme.lib.skill_runner import SkillContext, SkillResult
+    from adminme.lib.skill_runner import SkillResult
 
 
 class PipelinePackLoadError(RuntimeError):
