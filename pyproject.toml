@@ -35,6 +35,7 @@ pandas = "*"
 httpx = "*"
 apscheduler = ">=3.10"
 watchdog = "*"
+jsonschema = ">=4.21"
 
 # L5: products + CLI + wizard
 fastapi = ">=0.110"
@@ -72,6 +73,7 @@ ruff = "*"
 mypy = "*"
 pyright = "*"
 hypothesis = "*"
+respx = "*"
 
 [tool.poetry.scripts]
 adminme = "adminme.cli.main:app"
@@ -101,4 +103,12 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["openpyxl", "openpyxl.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["respx", "respx.*"]
 ignore_missing_imports = true
