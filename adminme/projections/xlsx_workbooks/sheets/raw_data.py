@@ -43,7 +43,11 @@ HEADERS: list[str] = [
 ]
 
 # Columns always derived (backend-assigned).
-ALWAYS_DERIVED: set[str] = {"txn_id", "plaid_category"}
+# is_manual is derived from event type by the projection — never
+# principal-authored on the sheet. Kept in sync with the descriptor's
+# always_derived in adminme/daemons/xlsx_sync/sheet_schemas.py;
+# equivalence is asserted in tests/unit/test_xlsx_finance_workbook.py.
+ALWAYS_DERIVED: set[str] = {"txn_id", "plaid_category", "is_manual"}
 
 # Columns Plaid owns on non-manual rows.
 PLAID_AUTHORITATIVE: set[str] = {
