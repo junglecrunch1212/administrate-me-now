@@ -1,0 +1,30 @@
+name: reciprocal_coffee_with_close_friend_not_candidate
+description: |
+  Kate and James met for coffee. Tier 2 close friend. Reciprocal activity,
+  not hosting. Skill should return is_candidate=false.
+
+input:
+  principal_member_id: stice-james
+  party_summary:
+    party_id: p-kate
+    name: Kate Sullivan
+    tier: 2
+    tags: ["close_friend", "college"]
+    relationship_summary: "College friend, 12 years. Lives in Virginia-Highland. See each other regularly; hosting balance even."
+  interaction_context:
+    recent_messages:
+      - from_member_or_party: "p-kate"
+        when: "2026-04-20T08:00:00-04:00"
+        text: "Coffee this morning was great! see u sat"
+    recent_events:
+      - kind: calendar_event
+        when: "2026-04-20T07:30:00-04:00"
+        summary: "Coffee with Kate at Bald Cafe — 60 min, reciprocal"
+
+expected_output:
+  is_candidate: false
+  confidence_min: 0.70
+  reasons_must_include_any_of:
+    - "reciprocal"
+    - "not hosting"
+    - "standard interaction"
