@@ -16,6 +16,7 @@ import pytest
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adminme.daemons.xlsx_sync.sheet_schemas import descriptor_for
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
@@ -28,8 +29,10 @@ from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProje
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
+from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
 from adminme.projections.xlsx_workbooks.builders import build_finance_workbook
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.projections.xlsx_workbooks.sheets.raw_data import ALWAYS_DERIVED
 
 TEST_KEY = b"f" * 32
 
@@ -317,3 +320,22 @@ async def test_finance_idempotent_semantically(populated: dict[str, Any]) -> Non
     wb_b = load_workbook(str(path_b))
     for name in ("Raw Data", "Accounts"):
         assert _data_rows(wb_a[name]) == _data_rows(wb_b[name]), name
+
+
+def test_raw_data_always_derived_matches_descriptor() -> None:
+    """ALWAYS_DERIVED in the builder must match always_derived in
+    the descriptor, in both directions.
+
+    Sidecar guard for 07.5 finding C-1. Either side adding or
+    removing a column without the other tracking it is a silent
+    round-trip drift; this assertion blocks the regression.
+    """
+    descriptor = descriptor_for(FINANCE_WORKBOOK_NAME, "Raw Data")
+    assert descriptor is not None, (
+        "descriptor_for() returned None for Finance / Raw Data; "
+        "the sheet should be bidirectional"
+    )
+    assert ALWAYS_DERIVED == set(descriptor.always_derived), (
+        f"Raw Data ALWAYS_DERIVED ({ALWAYS_DERIVED}) drifted from "
+        f"descriptor.always_derived ({set(descriptor.always_derived)})"
+    )
