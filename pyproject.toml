@@ -85,6 +85,9 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "requires_live_services: tests that need live external services (OpenClaw, BlueBubbles, Plaid, …); skipped in Phase A sandbox.",
+]
 
 [tool.mypy]
 python_version = "3.11"
