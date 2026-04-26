@@ -192,8 +192,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 09a — skill runner wrapper (around OpenClaw)
 - **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: prompts/09a-skill-runner.md (~250 lines, quality bar = 08b).
-- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #29, commits ff0b319 / 2ba917e / 9c92b33 / a55277e, merged 2026-04-26.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/lib/skill_runner/wrapper.py` — `run_skill()` 9-step flow per [BUILD.md L4-continued] + [ADR-0002]. Provider-preference fallback iterates inside the wrapper; one POST per provider per attempt; deterministic 4xx and malformed 200 short-circuit the loop. Module-level event-log DI via `set_default_event_log()` mirrors 08b's `outbound()` pattern.
   - `adminme/lib/skill_runner/pack_loader.py` — parses `pack.yaml` + `SKILL.md` frontmatter + `schemas/input.schema.json` + `schemas/output.schema.json` + optional `handler.py`. Schemas validated with `Draft202012Validator.check_schema()`; cache by `(pack_id, version)`; `invalidate_cache()` test hook.
@@ -209,6 +209,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `[§7]`/`[D7]`: `skill.call.failed` and `skill.call.suppressed` registered at v1.
   - `[§8]`/`[D6]`: zero new SDK imports; `verify_invariants.sh` clean.
   - `[ADR-0002]`: wrapper POSTs `/tools/invoke` with `tool: "llm-task"`; provider iteration in wrapper, not in OpenClaw.
+  - **QC overshoot (Partner, 2026-04-26):** Commit 1 also relaxed `SkillCallRecordedV2.openclaw_invocation_id` to Optional (in addition to the three token/cost fields the prompt named). Defensible per [ADR-0002] provenance table — `openclaw_invocation_id` is documented as "from `/tools/invoke` response if present in response envelope." Logged as quality signal, not drift.
 - **Carry-forward for prompt 09b**:
   - `pack_loader` accepts the canonical pack shape; `classify_thank_you_candidate` will be the second pack to load through it.
   - `run_skill` is stable; 09b just supplies a pack and asserts the round-trip.
