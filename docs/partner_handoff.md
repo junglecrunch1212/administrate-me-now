@@ -103,7 +103,7 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-25 (08a and 08b merged via PR #&lt;PR-08a&gt; and PR #&lt;PR-08b&gt;; security backbone complete (read + write sides); UT-3 RESOLVED; UT-7 RESOLVED — reverse-daemon `_ACTOR` literal removed, `build_session_from_xlsx_reverse_daemon` + `_session_for(workbook)` helper installed, sidecar hedge to 08.5 NOT activated; UT-8 RESOLVED — `vector_search.nearest` carve-out shipped inline with three-layer privileged exclusion per [§13.9]; UT-5 advanced — 08a and 08b BUILD_LOG headers filled with merge dates; PR numbers and commit SHAs left as placeholders for James to fill from `gh pr list --state merged --limit 5` before the housekeeping commit lands. Earlier today: split-08 prep PR landed (08a/08b drafts on main); 07c-β merged via PR #21; 07.5 audit memo landed; UT-1 and UT-6 RESOLVED.)
+**Last updated:** 2026-04-26 (09a refactored and ready for Claude Code execution; prep PR `prep-09a-2026-04-26` queued. Partner Session of 2026-04-26 was Type 3 — refactor-only — targeting 09a. Job 2 surfaced one drift: SkillCallRecordedV2 schema declares token/cost fields as required non-negative numbers, but ADR-0002's graceful-degradation clause requires them to be optional. Folded into 09a Commit 1 rather than spun out as a sidecar — the prompt itself activates the seam. Job 3 §2.9 self-check PASS on every budget; single prompt, no split.)
 
 This section is the live baton between sessions. Update it at the end of every Partner session.
 
@@ -113,7 +113,7 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Prompts with PR open, not yet merged:** none.
 
-**Prompts drafted, ready for Claude Code execution:** none. (08a and 08b shipped this session — see merged list above.)
+**Prompts drafted, ready for Claude Code execution:** 09a (`prep-09a-2026-04-26`).
 
 **Sidecar PRs queued (non-blocking):**
 - **`sidecar-raw-data-is-manual-derived`** — surfaced by 07.5 finding C-1. Two-file change:
@@ -138,7 +138,7 @@ gh pr list --state merged --limit 5 --json number,title,mergedAt,mergeCommit
 
 …and find-and-replace `<PR-08a>` / `<PR-08b>` / `<sha1-08a>` etc. in `docs/build_log.md` and `docs/partner_handoff.md` with the actual values. Expected sequence: PR #21 = 07c-β; PR #22 = split-08 prep (drafts only, no code); PR #23 = 08a; PR #24 = 08b. Confirm via `gh` before commit.
 
-**Prompts drafted but not yet refactored:** 09a, 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (`prompts/08-session-scope-governance.md` is preserved on main as historical record but superseded by the merged 08a/08b; the index treats it as RETIRED.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates (Tier C memo first); per `D-prompt-tier-and-pattern-index.md`, additional candidates may surface at orientation.
+**Prompts drafted but not yet refactored:** 09b, 10a, 10b, 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (09a moved to "ready for Claude Code execution" 2026-04-26.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates; per `[D-prompt-tier-and-pattern-index.md](http://D-prompt-tier-and-pattern-index.md)`, 10b, 10c, 11, 14b, 17 are also pre-split candidates.
 
 **Prompts not yet drafted:** none. 07c was the last unwritten prompt; it was split into 07c-α (merged) and 07c-β (merged). Everything from 08 onward exists in unrefactored form. The original `prompts/07c-xlsx-workbooks-reverse.md` was retired as part of the α/β split.
 
@@ -241,6 +241,10 @@ These are already mechanized in `scripts/verify_invariants.sh` for the four inva
 
 The 08b refactor did NOT extend `verify_invariants.sh` for `external.sent` / `observation.suppressed` — the canary lives in `tests/unit/test_observation.py` instead. This is acceptable because the test asserts the seam directly (it imports `outbound` and confirms it's the only function emitting these types in observation.py's namespace), but a future Partner session may decide to lift it into the script for cross-codebase enforcement. Track: candidate for `verify_invariants.sh` extension when 09a or 11+ adds the next outbound-callable subsystem.
 
+### PM-19: Schema/contract conflicts surfaced during refactor go in the prompt's Commit 1, not in a separate sidecar — when the prompt activates the seam — HARD
+
+A prompt that introduces a new external seam (09a is the first AdministrateMe→OpenClaw HTTP seam) will surface contract drift between merged stub schemas and the actual contract the prompt is about to honor. When the drift is field-shape only (no schema-version bump, no callers to migrate), fold the fix into the prompt's Commit 1 with explicit citation in the schema docstring. Spinning a separate sidecar is correct when the drift affects merged code that's already in flight elsewhere; folding is correct when the prompt itself is the first consumer of the corrected shape. The 09a refactor demonstrates the folding path: `SkillCallRecordedV2.input_tokens` (and friends) was registered as required `int` but ADR-0002 mandates `int | None` — fix lands in 09a Commit 1 because 09a is the first emitter. PM-19 generalizes: future prompts that introduce a seam must check the merged stub against the contract and fold any field-shape drift into Commit 1, not a separate PR.
+
 ---
 
 ## Open tensions / unresolved things
@@ -302,6 +306,10 @@ Per `[§13.9]` and `[§6.10]`, `vector_search` excludes privileged events outrig
 The `nearest()` docstring (lines 49–69) cites all three layers + `[§13.9]` + `[§6.9]` + UT-8 explicitly. Per-cell tests in `tests/unit/test_scope.py` (the privileged × ambient/principal × owner_scope cells) confirm the SQL exclusion is evaluated regardless of session role. No `ScopeViolation` is raised on a privileged-owned vector_search query — the path returns empty so coach context builders downstream cannot inadvertently leak existence through error semantics.
 
 Status: **RESOLVED 2026-04-25**.
+
+### UT-9: ALLOWED_EMITS per-file allowlisting in scripts/verify_[invariants.sh](http://invariants.sh)
+
+09a Commit 4 extends `ALLOWED_EMITS` to permit three new event types from `adminme/lib/skill_runner/[wrapper.py](http://wrapper.py)`. The xlsx single-seam pattern (`ALLOWED_EMIT_FILES`) was carried forward as a comment in 07c-α. 09a ships using the same pattern if the script structure supports it cleanly; if not, falls back to test-side enforcement per PM-17 (the path 08b chose for `external.sent`/`observation.suppressed`). After 09a merges, Partner reviews which path was taken and decides whether to harden the script's per-file allowlist support — a candidate single-purpose PR. Status: open after 09a merge.
 
 ---
 
