@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["this_field_will_never_exist"],
+  "properties": {"this_field_will_never_exist": {"type": "boolean"}}
+}

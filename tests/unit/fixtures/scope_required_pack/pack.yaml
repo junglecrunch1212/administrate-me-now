@@ -1,0 +1,5 @@
+pack:
+  id: skill:scope_required_pack
+  name: Scope-required test pack
+  version: 0.1.0
+  kind: skill

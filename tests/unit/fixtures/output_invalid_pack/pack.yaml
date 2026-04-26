@@ -1,0 +1,5 @@
+pack:
+  id: skill:output_invalid_pack
+  name: Output-invalid test pack
+  version: 0.1.0
+  kind: skill

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classify_test output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["is_thing", "confidence"],
+  "properties": {
+    "is_thing": {
+      "type": "boolean"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

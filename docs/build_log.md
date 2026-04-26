@@ -189,3 +189,34 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 - **Carry-forward for prompt 16** (bootstrap wizard):
   - The bootstrap wizard authors the production `governance.yaml` and `authority.yaml` per the household's profile (`adhd_executive_profile` etc. from BUILD.md §AUTHORITY rate_limits). Default observation state at bootstrap end is ACTIVE (matches the manager's default-on behavior).
 - **UT-7 status**: **RESOLVED 2026-04-25**. Reverse-daemon rewrite stayed in this prompt (Commit 3); the sidecar hedge to 08.5 was not activated. `_ACTOR` literal grep canary returns 0 hits.
+
+### Prompt 09a — skill runner wrapper (around OpenClaw)
+- **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: prompts/09a-skill-runner.md (~250 lines, quality bar = 08b).
+- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `adminme/lib/skill_runner/wrapper.py` — `run_skill()` 9-step flow per [BUILD.md L4-continued] + [ADR-0002]. Provider-preference fallback iterates inside the wrapper; one POST per provider per attempt; deterministic 4xx and malformed 200 short-circuit the loop. Module-level event-log DI via `set_default_event_log()` mirrors 08b's `outbound()` pattern.
+  - `adminme/lib/skill_runner/pack_loader.py` — parses `pack.yaml` + `SKILL.md` frontmatter + `schemas/input.schema.json` + `schemas/output.schema.json` + optional `handler.py`. Schemas validated with `Draft202012Validator.check_schema()`; cache by `(pack_id, version)`; `invalidate_cache()` test hook.
+  - `packs/skills/classify_test/` — full pack scaffold for tests; trivial `(text) -> (is_thing, confidence)` classifier.
+  - `adminme/events/schemas/domain.py` — `SkillCallRecordedV2.input_tokens`, `output_tokens`, `cost_usd`, and `openclaw_invocation_id` relaxed to Optional per `[ADR-0002]` graceful-degradation clause.
+  - `adminme/events/schemas/system.py` — `SkillCallFailedV1` (closed-enum `failure_class`) and `SkillCallSuppressedV1` (closed-enum `reason`) registered at v1.
+  - `scripts/verify_invariants.sh` — extended with a single-seam check that `skill.call.recorded`, `skill.call.failed`, `skill.call.suppressed` are emitted only from `adminme/lib/skill_runner/wrapper.py`. Same single-seam pattern as the xlsx forward projector.
+  - `pyproject.toml` — `jsonschema >=4.21` (runtime, used by wrapper + pack_loader) and `respx` (dev) added; mypy `ignore_missing_imports` overrides for both. `markers = ["requires_live_services: ..."]` declared so the integration stub doesn't warn.
+  - 14 unit tests (`tests/unit/test_skill_wrapper.py`) covering the full failure-mode pyramid: happy path with body-shape assertion, input invalid, sensitivity refused, scope insufficient, provider fallback (5xx → next provider), all providers 5xx, malformed 200 envelope, timeout, handler raises (defensive default returned + raw response saved), output validation fails, observation-mode short-circuit, dry-run short-circuit, large-input spillover, token/cost graceful degradation. All HTTP routed through `httpx.MockTransport` (the AdministrateMe sandbox has no live OpenClaw gateway).
+  - 10 pack-loader tests (`tests/unit/test_pack_loader.py`) — manifest fields, schema validation samples, no-handler / handler-loaded / handler-without-`post_process`, cache hit, cache invalidation, malformed yaml, invalid JSON Schema.
+  - 6 schema tests (`tests/unit/test_event_schemas.py`) — `SkillCallRecordedV2` accepts `None` tokens and cost; `SkillCallFailedV1` round-trip + rejects bad `failure_class`; `SkillCallSuppressedV1` round-trip + rejects bad `reason`.
+  - `tests/integration/test_skill_wrapper_live.py` — live integration stub marked `requires_live_services`, skipped in Phase A.
+  - `[§7]`/`[D7]`: `skill.call.failed` and `skill.call.suppressed` registered at v1.
+  - `[§8]`/`[D6]`: zero new SDK imports; `verify_invariants.sh` clean.
+  - `[ADR-0002]`: wrapper POSTs `/tools/invoke` with `tool: "llm-task"`; provider iteration in wrapper, not in OpenClaw.
+- **Carry-forward for prompt 09b**:
+  - `pack_loader` accepts the canonical pack shape; `classify_thank_you_candidate` will be the second pack to load through it.
+  - `run_skill` is stable; 09b just supplies a pack and asserts the round-trip.
+- **Carry-forward for prompt 10a**:
+  - Pipelines call `await run_skill(skill_id, inputs, SkillContext(session=..., correlation_id=...))`. Causation wiring (set causation_id on `skill.call.recorded` to the triggering domain event) lands in pipeline runner.
+  - The wrapper's `_resolve_pack_root` accepts absolute paths, repo-relative slugs, and `namespace:name` forms; production pipelines should pass the absolute path resolved via `InstanceConfig.packs_dir`.
+- **Carry-forward for prompt 16 (bootstrap)**:
+  - Bootstrap §6 wires `OPENCLAW_GATEWAY_TOKEN` from 1Password; 09a falls back to env for now.
+  - Bootstrap §7 calls `set_default_event_log(...)` at service start so production callers don't need to construct `_Runtime` themselves.
+- **Carry-forward for prompt 19** (Phase B smoke test):
+  - `tests/integration/test_skill_wrapper_live.py` is the test that activates against the live OpenClaw gateway. The skip in 09a is its Phase-A placeholder.

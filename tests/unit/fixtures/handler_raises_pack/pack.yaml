@@ -1,0 +1,5 @@
+pack:
+  id: skill:handler_raises_pack
+  name: Handler-raises test pack
+  version: 0.1.0
+  kind: skill

@@ -1,0 +1,28 @@
+pack:
+  id: skill:classify_test
+  name: Classify test
+  version: 0.1.0
+  kind: skill
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+# Test pack used by the skill-runner wrapper's unit tests in 09a.
+# Trivial classifier; never installed into a live OpenClaw instance.
+
+runtime:
+  language: python
+  python_version: ">=3.11"
+
+model:
+  preferred: anthropic/claude-haiku-4-5
+  deterministic_mode: true
+
+inputs:
+  schema: schemas/input.schema.json
+outputs:
+  schema: schemas/output.schema.json
+
+documentation:
+  readme: SKILL.md
+  prompt: prompt.jinja2

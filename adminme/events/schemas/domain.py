@@ -172,18 +172,22 @@ class RecurrenceUpdatedV1(BaseModel):
 
 
 class SkillCallRecordedV2(BaseModel):
-    """First version actually emitted. v1 is reserved — see module docstring."""
+    """First version actually emitted. v1 is reserved — see module docstring.
+
+    Token / cost fields are Optional per [ADR-0002] graceful-degradation
+    clause: when OpenClaw's `/tools/invoke` response envelope omits these
+    fields, the wrapper records `None` rather than skipping the event."""
 
     model_config = {"extra": "forbid"}
     skill_name: str = Field(min_length=1)
     skill_version: str = Field(min_length=1)
-    openclaw_invocation_id: str = Field(min_length=1)
+    openclaw_invocation_id: str | None = None
     inputs: dict
     outputs: dict
     provider: str = Field(min_length=1)
-    input_tokens: int = Field(ge=0)
-    output_tokens: int = Field(ge=0)
-    cost_usd: float = Field(ge=0.0)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: float | None = Field(default=None, ge=0.0)
     duration_ms: int = Field(ge=0)
 
 

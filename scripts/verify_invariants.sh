@@ -144,6 +144,26 @@ if [ -n "$emit_files" ]; then
     done <<< "$emit_files"
 fi
 
+# ─── Skill-runner single-seam emits (09a) ───────────────────────────────
+#
+# The skill runner wrapper at adminme/lib/skill_runner/wrapper.py is the
+# ONE file allowed to append `skill.call.recorded`, `skill.call.failed`,
+# or `skill.call.suppressed`. Same single-seam pattern as the xlsx forward
+# projector for `xlsx.regenerated` etc. — pipelines / surfaces / adapters
+# call run_skill() and never construct skill.call.* envelopes themselves.
+
+SKILL_EMITS='skill\.call\.recorded|skill\.call\.failed|skill\.call\.suppressed'
+SKILL_EMIT_FILE="adminme/lib/skill_runner/wrapper.py"
+
+skill_violations=$(grep -rnE "type\s*=\s*\"($SKILL_EMITS)\"" \
+    adminme/ --include='*.py' 2>/dev/null \
+    | grep -v "^${SKILL_EMIT_FILE}:" \
+    || true)
+if [ -n "$skill_violations" ]; then
+    report "[§7]/[ADR-0002] skill.call.* emitted outside skill_runner wrapper:"
+    echo "$skill_violations" | sed 's/^/    /'
+fi
+
 # ─── Pipeline → projection direct writes ────────────────────────────────
 #
 # Lights up at prompt 10a. Vacuous until then (adminme/pipelines/ has no

@@ -1,0 +1,5 @@
+pack:
+  id: skill:multi_provider_pack
+  name: Multi-provider fallback pack
+  version: 0.1.0
+  kind: skill
