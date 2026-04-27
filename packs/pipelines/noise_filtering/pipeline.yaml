@@ -1,0 +1,20 @@
+pack:
+  id: pipeline:noise_filtering
+  name: Noise filtering
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: NoiseFilteringPipeline
+triggers:
+  events:
+    - messaging.received
+    - telephony.sms_received
+depends_on:
+  skills:
+    - classify_message_nature@^2.0.0
+  projections: []
+events_emitted:
+  - messaging.classified
