@@ -77,8 +77,25 @@ class PartyMergedV1(BaseModel):
     rationale: str | None = None
 
 
+class IdentityMergeSuggestedV1(BaseModel):
+    """Heuristic merge suggestion from ``identity_resolution`` (prompt 10b-i)
+    when an unresolved identifier scores above the merge threshold against
+    an existing party. NEVER auto-applied — the suggestion lands in the
+    inbox for human approval per [BUILD.md §1130]."""
+
+    model_config = {"extra": "forbid"}
+    surviving_party_id: str = Field(min_length=1)
+    candidate_value: str = Field(min_length=1)
+    candidate_kind: Literal["email", "phone", "imessage_handle"]
+    candidate_value_normalized: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    heuristic: str = Field(min_length=1)
+    source_event_id: str = Field(min_length=1)
+
+
 registry.register("party.created", 1, PartyCreatedV1)
 registry.register("identifier.added", 1, IdentifierAddedV1)
 registry.register("membership.added", 1, MembershipAddedV1)
 registry.register("relationship.added", 1, RelationshipAddedV1)
 registry.register("party.merged", 1, PartyMergedV1)
+registry.register("identity.merge_suggested", 1, IdentityMergeSuggestedV1)

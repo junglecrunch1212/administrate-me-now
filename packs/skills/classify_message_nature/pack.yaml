@@ -1,0 +1,16 @@
+pack:
+  id: skill:classify_message_nature
+  name: Classify message nature
+  version: 2.0.0
+  kind: skill
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+# Documentation-only metadata (the loader ignores everything below
+# `pack:`; the active runtime contract lives in SKILL.md frontmatter
+# per [REFERENCE_EXAMPLES.md §3] / 09a's pack_loader contract).
+model:
+  preferred: anthropic/claude-haiku-4-5
+  fallback: anthropic/claude-opus-4-7
+  deterministic_mode: false
