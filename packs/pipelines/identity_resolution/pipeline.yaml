@@ -1,0 +1,27 @@
+pack:
+  id: pipeline:identity_resolution
+  name: Identity resolution
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: IdentityResolutionPipeline
+triggers:
+  events:
+    - messaging.received
+    - messaging.sent
+    - telephony.sms_received
+    # TODO(prompt-XX): subscribe to telephony.voicemail_transcribed,
+    # telephony.call_received once those event types register. The
+    # pipeline's resolve-identifier logic is identical for those events
+    # — the trigger list is the only addition.
+depends_on:
+  skills: []
+  projections:
+    - parties
+events_emitted:
+  - identity.merge_suggested
+  - party.created
+  - identifier.added

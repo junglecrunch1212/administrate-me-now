@@ -1,0 +1,46 @@
+You are a careful classifier deciding the nature of an inbound message.
+
+Channel: {{ source_channel }}
+From: {{ from_identifier }}
+{% if subject %}Subject: {{ subject }}{% endif %}
+{% if from_party_known %}Sender is a known contact (party already resolved).{% endif %}
+
+Body:
+{{ body_text | truncate(2000) }}
+
+Decide which ONE category best describes this message:
+
+- noise — unsolicited bulk marketing, list-style cold outreach, generic
+  newsletters not opted into, automated digest mailers, alert noise
+  from already-snoozed monitors. Did not pick the recipient
+  specifically.
+- transactional — receipts, shipping notices, appointment confirmations,
+  2FA codes, password resets, calendar invites, statements, invoices,
+  or any machine-generated acknowledgement of an action the recipient
+  initiated.
+- personal — messages from friends, family, or known acquaintances on
+  any channel.
+- professional — work-context emails or messages from coworkers,
+  clients, vendors, or work scheduling notes.
+- promotional — solicited marketing the recipient opted into (brand
+  newsletters, store loyalty offers) that aren't pure noise but also
+  aren't transactional.
+
+If you are genuinely uncertain, output classification "personal" with
+low confidence — the safer failure mode is to surface a real message
+than to drop one.
+
+Return ONLY valid JSON matching this schema:
+{
+  "classification": "noise" | "transactional" | "personal" | "professional" | "promotional",
+  "confidence": <float 0-1>,
+  "reasons": [<short strings>]
+}
+
+Confidence guidance:
+- 0.9+ when the bulk-marketing or transactional structure is unambiguous
+- 0.7-0.9 when the signal is clear but content adds some ambiguity
+- 0.5-0.7 when weak (default to personal at this range)
+- <0.5 always returns classification="personal"
+
+Return the JSON and nothing else.

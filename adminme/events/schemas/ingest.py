@@ -89,6 +89,24 @@ class ArtifactReceivedV1(BaseModel):
     received_at: str = Field(min_length=1)
 
 
+class MessagingClassifiedV1(BaseModel):
+    """Emitted by the ``noise_filtering`` pipeline (prompt 10b-i) tagging
+    an inbound messaging event with a classification + skill provenance.
+
+    Per [BUILD.md §1136-1138], the ``interactions`` projection uses this
+    to decide whether to surface the message in the inbox or suppress to
+    the noise bucket. The pipeline NEVER deletes the source event."""
+
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1)
+    classification: Literal[
+        "noise", "transactional", "personal", "professional", "promotional"
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    skill_name: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+
+
 registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
@@ -96,3 +114,4 @@ registry.register("calendar.event_added", 1, CalendarEventAddedV1)
 registry.register("calendar.event_updated", 1, CalendarEventUpdatedV1)
 registry.register("calendar.event_deleted", 1, CalendarEventDeletedV1)
 registry.register("artifact.received", 1, ArtifactReceivedV1)
+registry.register("messaging.classified", 1, MessagingClassifiedV1)

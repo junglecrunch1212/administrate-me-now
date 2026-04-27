@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "classify_message_nature input",
+  "type": "object",
+  "required": ["body_text", "source_channel", "from_identifier"],
+  "additionalProperties": false,
+  "properties": {
+    "body_text": {
+      "type": "string",
+      "description": "The message body. May be empty after trimming, but the field is required."
+    },
+    "source_channel": {
+      "type": "string",
+      "description": "The channel the message arrived on (e.g. gmail, imessage_adminme, sms_twilio)."
+    },
+    "from_identifier": {
+      "type": "string",
+      "description": "Sender's address — email, phone number, or handle."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Email subject. Absent for SMS / iMessage."
+    },
+    "from_party_known": {
+      "type": "boolean",
+      "description": "Has a Party already been resolved for this sender? Hint only — defaults to false in the noise_filtering pipeline."
+    }
+  }
+}
