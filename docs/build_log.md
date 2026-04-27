@@ -203,35 +203,42 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - Confirm at least one reactive pipeline fires end-to-end against a live bus + live skill-runner against live OpenClaw.
 
 ### Prompt 10b-i — reactive pipelines (identity_resolution + noise_filtering)
-- **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: `prompts/10b-i-identity-and-noise.md` (~NNN lines, quality bar = 09b + 10a). Pre-split memo at `docs/01-split-memo-10b.md` (single-purpose PR landed before this prompt).
-- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge-date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Refactored**: by Partner in Claude Chat, 2026-04-26. Prompt file: `prompts/10b-i-identity-and-noise.md` (320 lines, quality bar = 09b + 10a). Pre-split memo at `docs/01-split-memo-10b.md`. **The refactored prompt was committed to the repo this round** (a deviation from the historical paste-only convention; see PM-21 update in `partner_handoff.md`).
+- **Session merged**: PR #38, commits 22c6195 / 73880d4 / 4c19c80 / 0a3250f, merged 2026-04-26.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `packs/pipelines/identity_resolution/{pipeline.yaml,handler.py,tests/test_pack_load.py}` — `IdentityResolutionPipeline` heuristic-only resolver; emits `party.created` + `identifier.added` on miss; `identity.merge_suggested` above 0.85 threshold; never auto-merges per [BUILD.md §1130].
-  - **Open-question disposition**: `PipelineContext` does not currently expose a parties-projection connection. Per the prompt's "Open question for orientation", picked option (2): the production pipeline ships in degenerate-clean mode — `_default_candidate_loader` returns an empty list, so every miss creates a new party. The merge-threshold branch is exercised by unit tests injecting a custom candidate loader. A future prompt (likely a 10b-ii sequel or a runner-side wiring pass) will replace `_default_candidate_loader` with one that opens the parties DB; the seam is already factored.
+  - **Open-question disposition (silent architectural decision, accepted)**: `PipelineContext` does not currently expose a parties-projection connection. Per the prompt's "Open question for orientation", picked option (2): the production pipeline ships in degenerate-clean mode — `_default_candidate_loader` returns an empty list, so every miss creates a new party. The merge-threshold branch is exercised by unit tests injecting a custom candidate loader. The seam is fully factored on `IdentityResolutionPipeline.__init__(candidate_loader=...)`, so the future bridge from runner is one constructor-arg wiring, not a handler refactor. **This decision is load-bearing for 10b-ii — see "Carry-forward for prompt 10b-ii" below.**
   - `packs/pipelines/noise_filtering/{pipeline.yaml,handler.py,tests/test_pack_load.py}` — `NoiseFilteringPipeline` calls `classify_message_nature` once per inbound; emits `messaging.classified` with full skill provenance; defensive-default = "personal" / confidence 0.0 on skill failure (does NOT propagate exceptions per [§7.7]).
-  - `packs/skills/classify_message_nature/` — full 09b-shape skill pack at v2.0.0 ([BUILD.md §1136] names it `classify_message_nature@v2`). 3 unit tests via pack-loader canary + handler-direct.
-  - `adminme/events/schemas/crm.py` — appended `IdentityMergeSuggestedV1` registered at v1.
-  - `adminme/events/schemas/ingest.py` — appended `MessagingClassifiedV1` registered at v1.
+  - `packs/skills/classify_message_nature/` — full 09b-shape skill pack at v2.0.0 ([BUILD.md §1136] names it `classify_message_nature@v2`). 3 unit tests via pack-loader canary + handler-direct. **Minor undershoot vs 09b reference** (`classify_thank_you_candidate` ships 4 handler-direct cases; this pack folds the non-dict-input case into the `coerces_when_classification_missing` test). Cosmetic; coverage is the same.
+  - `adminme/events/schemas/crm.py` — appended `IdentityMergeSuggestedV1` registered at v1; `candidate_kind` is closed `Literal["email", "phone", "imessage_handle"]`.
+  - `adminme/events/schemas/ingest.py` — appended `MessagingClassifiedV1` registered at v1; `classification` is closed `Literal["noise", "transactional", "personal", "professional", "promotional"]`.
   - Integration tests at `tests/integration/test_pipeline_10b_i_integration.py` — 4 round-trip tests against the live runner.
-  - Total new tests: 24 (3 skill-pack handler-direct, 1 identity_resolution pack-load + 9 unit, 1 noise_filtering pack-load + 6 unit, 4 integration). Suite tally: 423 → 447 passed (+24); 1 → 2 skipped (carry-forward from prompt 10a's 1 skipped + 07a-era requires_live_services skip; no new skips introduced by this prompt).
+  - **Total new tests: 22** (3 skill-pack handler-direct + 1 identity_resolution pack-load + 8 unit + 1 noise_filtering pack-load + 5 unit + 4 integration). Suite tally: 423 → 447 passed. **QC F-1 (cosmetic):** the original BUILD_LOG entry written in the merged Commit 4 claimed 24 tests; actual is 22 (the breakdown overcounted identity_resolution unit by 1 and noise_filtering unit by 1). Corrected here.
+  - **QC F-3 (overshoot, positive signal):** extra unit test `test_exact_match_returns_without_emit` shipped beyond the prompt's Commit 2 plan — covers the case where an existing identifier already owns the inbound's `value_normalized` (return without emit; the parties projection already has the link). Smart addition; logged.
   - `[§7.3]` (no projection direct writes): pipelines emit only via `ctx.event_log.append`; pipeline→projection canary in `verify_invariants.sh` clean.
   - `[§7.4]` / `[§8]` / `[D6]`: zero new SDK imports (heuristics are pure-Python; the one skill call goes through `ctx.run_skill_fn` per [ADR-0002]).
+  - `[§7.7]` (pipeline failure does not halt bus): `noise_filtering` catches `SkillInputInvalid` / `SkillOutputInvalid` / `OpenClawTimeout` / `OpenClawUnreachable` / `OpenClawResponseMalformed` and emits the defensive default. **QC F-2 (soft-watch for 10b-ii):** does NOT catch `SkillSensitivityRefused` or `SkillScopeInsufficient` (also exported from `adminme.lib.skill_runner`). For 10b-i these can't fire (`classify_message_nature` has `sensitivity_required: normal`, `context_scopes_required: []`), so it's clean today. 10b-ii's `classify_commitment_candidate` and `extract_commitment_fields` should either match the same sensitivity/scopes shape OR widen the `except` list. Verify during 10b-ii refactor.
   - `[D7]`: both new event types register at v1.
-  - `verify_invariants.sh` exit 0.
+  - Causation-id wiring: every emit in both pipelines uses `causation_id=ctx.triggering_event_id` per the 10a echo_emitter canary contract.
+  - `verify_invariants.sh` exit 0. PM-14 honored: pipelines live under `packs/pipelines/`, NOT `adminme/projections/`; `ALLOWED_EMIT_FILES` left untouched (correct — pipelines are not projections). UT-11 confirmed CLOSED by this merge: convention is `packs/pipelines/<name>/` mirroring 09b's `packs/skills/<name>/`.
 - **Carry-forward for prompt 10b-ii** (commitment_extraction + thank_you_detection):
-  - `find_party_by_identifier` is now backed by parties auto-created by `identity_resolution` (in degenerate mode, every unresolved sender becomes a fresh party); commitment_extraction's sender-resolution step has a non-empty hit rate.
-  - `messaging.classified` events let commitment_extraction skip noise/transactional classifications cheaply (subscribe to the classification, not the raw inbound).
+  - **Parties-DB seam decision is load-bearing.** `commitment_extraction` per REFERENCE_EXAMPLES.md §2 calls `find_party_by_identifier` to resolve the sender before classification. 10b-i punted (degenerate-clean), but 10b-ii cannot punt the same way without making `commitment_extraction` always fail sender-resolution. Three options to evaluate at 10b-ii orientation:
+    - (a) Thread `parties_conn_factory` through `PipelineContext` as a Commit 1 of 10b-ii (one extra commit; sets the precedent for 10c+).
+    - (b) Use 10b-i's injectable-loader pattern (`candidate_loader: Callable | None`) and ship `commitment_extraction` in degenerate mode too (no DB read; weaker behavior but cohesive).
+    - (c) Split 10b-ii itself into 10b-ii-α (parties-DB seam wiring + `commitment_extraction`) and 10b-ii-β (`thank_you_detection`).
+    The split memo flagged (c) as a watch; the partner_handoff entry UT-12 tracks this open. **Resolve at 10b-ii orientation.**
+  - `find_party_by_identifier` is backed (in degenerate mode) by parties auto-created by `identity_resolution` — every unresolved sender from 10b-i merging onward becomes a fresh party. So even if 10b-ii also runs degenerate, hits will accumulate naturally over time.
+  - `messaging.classified` events let `commitment_extraction` skip noise/transactional classifications cheaply (subscribe to the classification, not the raw inbound).
   - The pipeline-pack shape pattern (yaml + handler + test_pack_load) is now duplicated; 10b-ii continues this exact shape.
-  - The defensive-default-on-skill-failure pattern from `noise_filtering` carries forward; commitment_extraction does the same on `classify_commitment_candidate` failure (suppress the proposal rather than crash).
-  - 10b-ii (or a sequel) should consider threading a `parties_conn_factory` through `PipelineContext` so `identity_resolution` graduates from degenerate mode to a real DB-read candidate loader. The seam is already factored on `IdentityResolutionPipeline.__init__` (`candidate_loader` parameter) — only the runner-side wiring is missing.
+  - The defensive-default-on-skill-failure pattern from `noise_filtering` carries forward — but **widen the `except` list** if 10b-ii's skills declare a non-`normal` sensitivity or non-empty context scopes (see QC F-2 above).
+  - `commitment.suppressed` event type registers at v1 in `domain.py` next to `commitment.proposed` (existing v1).
 - **Carry-forward for prompt 10c** (proactive pipelines):
   - The `triggers.events: []` + `triggers.proactive: true` shape is the unfilled half of the manifest contract; 10b-i's two manifests use only `triggers.events`.
 - **Carry-forward for prompt 16** (bootstrap wizard):
-  - `bootstrap §8` runs `PipelineRunner.discover(builtin_root=adminme/pipelines/pipeline_packs, installed_root=instance_config.packs_dir/"pipelines")`. The path layout is `packs/pipelines/<name>/pipeline.yaml`. Bootstrap copies builtin packs into the instance dir on first run.
+  - `bootstrap §8` runs `PipelineRunner.discover(builtin_root=adminme/pipelines/pipeline_packs, installed_root=instance_config.packs_dir/"pipelines")`. The path layout is `packs/pipelines/<name>/pipeline.yaml`. Bootstrap copies builtin packs into the instance dir on first run. **UT-11 closed by 10b-i shipping under `packs/pipelines/`.**
 - **Carry-forward for prompt 19** (Phase B smoke test):
-  - Confirm `identity_resolution` correctly resolves a test sender against a seeded party, and `noise_filtering` calls real OpenClaw and classifies a transactional receipt as `transactional`.
-
+  - Confirm `identity_resolution` correctly resolves a test sender against a seeded party (requires the parties-DB seam to be threaded by then), and `noise_filtering` calls real OpenClaw and classifies a transactional receipt as `transactional`.
 ---
 
 ## Sidecar PRs (out-of-band, no four-commit discipline)
