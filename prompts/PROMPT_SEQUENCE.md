@@ -108,7 +108,9 @@ Rationale: the Claude Code sandbox has an egress allowlist. `github.com` and `ra
 | 10b-i | `10b-i-identity-and-noise.md` | Reactive pipelines: identity_resolution + noise_filtering | 2-3 hrs | Reactive pipelines (identity + noise) working |
 | 10b-ii-α | `10b-ii-alpha-commitment-extraction.md` | Reactive pipelines: parties-DB seam (`PipelineContext.parties_conn_factory`) + commitment_extraction pipeline + classify_commitment_candidate + extract_commitment_fields skill packs + commitment.suppressed event schema at v1 | 3-4 hrs | commitment_extraction round-trip working with real party resolution |
 | 10b-ii-β | `10b-ii-beta-thank-you-detection.md` | Reactive pipelines: thank_you_detection + extract_thank_you_fields skill pack (reuses 10b-ii-α's parties-DB seam) | 2-3 hrs | thank_you_detection round-trip working |
-| 10c | `10c-proactive-pipelines.md` | morning_digest, paralysis_detection, reminder_dispatch, reward_dispatch, crm_surface, custody_brief — registered as OpenClaw standing orders | 4-5 hrs | Proactive pipelines firing |
+| 10c-i | `10c-i-standing-orders-infra-and-reward-dispatch.md` | Standing-orders infrastructure (`bootstrap/openclaw/programs/<six>.md` + `cron.yaml` + readme) + `reward_dispatch` reactive pipeline + `reward.ready` event schema at v1 | 2-3 hrs | reward_dispatch round-trip working; standing-orders directory ready for §8 consumption |
+| 10c-ii | `10c-ii-morning-digest-and-paralysis.md` | Proactive pipelines `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas at v1; completes their standing-order prose from 10c-i stubs | 3-4 hrs | Member-targeted briefs composing + delivering through `outbound()` |
+| 10c-iii | `10c-iii-reminder-crm-custody.md` | Proactive pipelines `reminder_dispatch` + `crm_surface` + `custody_brief` + 3 compose_* skill packs + 3 event schemas at v1; completes their standing-order prose from 10c-i stubs | 3-4 hrs | Scheduled scans of projection state composing + delivering through `outbound()` |
 | 10d | `10d-checkpoint-pipeline-skill-consistency.md` | **Checkpoint:** audit pipeline ↔ skill ↔ schema wiring; confirm no projection writes / LLM calls from pipelines | 30-45 min | Pipeline layer internally consistent |
 | 11 | `11-standalone-adapters.md` | L1 standalone Python adapters: Gmail, Plaid, Apple Reminders, Google Calendar, CalDAV | 5-6 hrs | External ingest working |
 | 12 | `12-openclaw-plugin-adapters.md` | L1 OpenClaw plugin adapters: memory bridge, channel bridges for BlueBubbles/Telegram/Discord | 3-4 hrs | OpenClaw channels feeding event log |
@@ -146,7 +148,7 @@ The extra ~5 hours of architectural-safety work (01b + 4 checkpoints) is what se
                                                                                                        09a ──► 09b
                                                                                                                 │
                                                                                                                 ▼
-                                                                                                       10a ──► 10b-i ──► 10b-ii-α ──► 10b-ii-β ──► 10c ──► 10d
+                                                                                                       10a ──► 10b-i ──► 10b-ii-α ──► 10b-ii-β ──► 10c-i ──► 10c-ii ──► 10c-iii ──► 10d
                                                                                                                                  │
                                                                                               ┌─────────┬──────────────────────┤
                                                                                               ▼         ▼                      ▼
