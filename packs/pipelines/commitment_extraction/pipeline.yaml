@@ -1,0 +1,30 @@
+pack:
+  id: pipeline:commitment_extraction
+  name: Commitment extraction
+  version: 4.2.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: CommitmentExtractionPipeline
+triggers:
+  events:
+    - messaging.received
+    - messaging.sent
+    # TODO(prompt-XX): subscribe to telephony.voicemail_transcribed,
+    # calendar.event.concluded, capture.note_created once those event
+    # types register. Same handler logic; just trigger-list extension.
+depends_on:
+  skills:
+    - classify_commitment_candidate@^3.0.0
+    - extract_commitment_fields@^2.1.0
+  projections:
+    - parties              # for find_party_by_identifier
+    - commitments          # for future dedupe (TODO)
+events_emitted:
+  - commitment.proposed
+  - commitment.suppressed
+config:
+  schema: config.schema.json
+  example: config.example.yaml
