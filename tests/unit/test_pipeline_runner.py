@@ -222,3 +222,186 @@ async def test_status_returns_per_pack_entry(rig: dict[str, Any]) -> None:
     assert entry["version"] == pack.version
     assert entry["subscriber_id"] == f"pipeline:{pack.pack_id}"
     assert entry["subscriber_status"] is not None
+
+
+# ---------------------------------------------------------------------------
+# parties_conn_factory seam (10b-ii-α)
+# ---------------------------------------------------------------------------
+
+
+async def test_runner_accepts_parties_conn_factory_none_default(
+    rig: dict[str, Any],
+) -> None:
+    """Backward-compat: existing PipelineRunner(bus, log, config) call sites
+    work unchanged; the constructed PipelineContext carries
+    `parties_conn_factory=None`."""
+    runner: PipelineRunner = rig["runner"]
+    log: EventLog = rig["log"]
+    bus: EventBus = rig["bus"]
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingPipeline:
+        pack_id = "pipeline:capturing"
+        version = "1.0.0"
+        triggers = {"events": ["messaging.received"]}
+
+        async def handle(
+            self, event: dict[str, Any], ctx: PipelineContext
+        ) -> None:
+            captured["factory"] = ctx.parties_conn_factory
+
+    pack = LoadedPipelinePack(
+        pack_id="pipeline:capturing",
+        version="1.0.0",
+        manifest={},
+        triggers={"events": ["messaging.received"]},
+        events_emitted=[],
+        instance=_CapturingPipeline(),
+        pack_root=ECHO_LOGGER_ROOT,
+    )
+    runner.register(pack)
+    await runner.start()
+
+    eid = await log.append(
+        _envelope(
+            "messaging.received",
+            _messaging_received_payload(),
+            tenant_id=rig["config"].tenant_id,
+        )
+    )
+    await bus.notify(eid)
+    await _wait_for_checkpoint(bus, "pipeline:pipeline:capturing", eid)
+
+    assert captured["factory"] is None
+
+
+async def test_runner_threads_parties_conn_factory_into_context(
+    tmp_path: Path,
+) -> None:
+    """A `parties_conn_factory` passed at construction time is threaded
+    into the PipelineContext handed to handle()."""
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+
+    sentinel = object()
+
+    def _factory() -> Any:
+        return sentinel
+
+    runner = PipelineRunner(
+        bus, log, config, parties_conn_factory=_factory
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingPipeline:
+        pack_id = "pipeline:capturing_threaded"
+        version = "1.0.0"
+        triggers = {"events": ["messaging.received"]}
+
+        async def handle(
+            self, event: dict[str, Any], ctx: PipelineContext
+        ) -> None:
+            captured["factory"] = ctx.parties_conn_factory
+
+    pack = LoadedPipelinePack(
+        pack_id="pipeline:capturing_threaded",
+        version="1.0.0",
+        manifest={},
+        triggers={"events": ["messaging.received"]},
+        events_emitted=[],
+        instance=_CapturingPipeline(),
+        pack_root=tmp_path / "capturing_threaded",
+    )
+    runner.register(pack)
+    await runner.start()
+
+    try:
+        eid = await log.append(
+            _envelope(
+                "messaging.received",
+                _messaging_received_payload(),
+                tenant_id=config.tenant_id,
+            )
+        )
+        await bus.notify(eid)
+        await _wait_for_checkpoint(
+            bus, "pipeline:pipeline:capturing_threaded", eid
+        )
+
+        assert captured["factory"] is _factory
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+
+
+async def test_runner_parties_conn_factory_is_same_object_per_dispatch(
+    tmp_path: Path,
+) -> None:
+    """The same factory object is threaded into every dispatched
+    PipelineContext (it is NOT re-constructed per event); the per-event
+    fresh-connection behavior comes from pipelines invoking the factory
+    inside handle() via `with ctx.parties_conn_factory() as conn:`."""
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+
+    def _factory() -> Any:
+        return None
+
+    runner = PipelineRunner(
+        bus, log, config, parties_conn_factory=_factory
+    )
+
+    captured: list[Any] = []
+
+    class _CapturingPipeline:
+        pack_id = "pipeline:capturing_repeated"
+        version = "1.0.0"
+        triggers = {"events": ["messaging.received"]}
+
+        async def handle(
+            self, event: dict[str, Any], ctx: PipelineContext
+        ) -> None:
+            captured.append(ctx.parties_conn_factory)
+
+    pack = LoadedPipelinePack(
+        pack_id="pipeline:capturing_repeated",
+        version="1.0.0",
+        manifest={},
+        triggers={"events": ["messaging.received"]},
+        events_emitted=[],
+        instance=_CapturingPipeline(),
+        pack_root=tmp_path / "capturing_repeated",
+    )
+    runner.register(pack)
+    await runner.start()
+
+    try:
+        last_eid = ""
+        for _ in range(3):
+            last_eid = await log.append(
+                _envelope(
+                    "messaging.received",
+                    _messaging_received_payload(),
+                    tenant_id=config.tenant_id,
+                )
+            )
+            await bus.notify(last_eid)
+        await _wait_for_checkpoint(
+            bus, "pipeline:pipeline:capturing_repeated", last_eid
+        )
+
+        assert len(captured) == 3
+        assert all(f is _factory for f in captured)
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()

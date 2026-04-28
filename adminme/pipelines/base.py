@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
+    import sqlcipher3
+
     from adminme.events.log import EventLog
     from adminme.lib.governance import GuardedWrite
     from adminme.lib.observation import ObservationManager
@@ -62,6 +64,14 @@ class PipelineContext:
     ``triggering_event_id`` carries the bus-delivered event's id so child
     pipelines can wire ``causation_id`` on emitted derivative events
     (carry-forward from 09a build_log §"Carry-forward for prompt 10a").
+
+    ``parties_conn_factory``, when present, opens a SQLCipher connection
+    to the parties projection DB; pipelines that resolve identifiers (e.g.
+    ``commitment_extraction``) call it inside ``handle()`` and close via
+    context manager. None for pipelines that don't need it. The runner does
+    NOT own per-pipeline DB connections (10a connection-management note);
+    each pipeline opens its own per-call. Per [§15]/[D15] the underlying
+    path resolves through ``InstanceConfig.projection_db_path("parties")``.
     """
 
     session: "Session"
@@ -72,6 +82,7 @@ class PipelineContext:
     observation_manager: "ObservationManager | None"
     triggering_event_id: str
     correlation_id: str | None
+    parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
 
 
 @runtime_checkable

@@ -1,0 +1,48 @@
+# commitment_extraction — example config.
+#
+# Tenants override these in <instance_dir>/packs/pipelines/commitment_extraction/config.yaml
+# at bootstrap time per [§15]/[D15]; the version checked into the repo
+# stays tenant-agnostic per [§12.4] (no specific household member ids
+# baked into platform code).
+#
+# The skills return confidence values 0.0 – 1.0. Messages below
+# `min_confidence` emit `commitment.suppressed`; messages at/above
+# `review_threshold` emit `commitment.proposed` with strength=confident;
+# messages between emit `commitment.proposed` with strength=weak so the
+# inbox can surface them with a visible confidence score.
+
+min_confidence: 0.55          # below this → commitment.suppressed
+review_threshold: 0.75        # at/above this → strength=confident
+
+# De-duplication: if a message references a thread that already
+# produced a commitment, don't re-propose. Dedupe is deferred to a
+# future projection-side prompt — this value is read but not yet
+# enforced by the pipeline.
+dedupe_window_hours: 72
+
+# Per-member tuning — values override the global thresholds. Real
+# values are populated post-bootstrap; the placeholders below show the
+# override structure without baking specific tenant identity into the
+# packaged example.
+#
+# Example shape (commented out):
+#
+#   per_member_overrides:
+#     "member_id_example_1":
+#       min_confidence: 0.50
+#       review_threshold: 0.70
+#     "member_id_example_2":
+#       min_confidence: 0.65
+#       review_threshold: 0.82
+#     "member_id_example_3":
+#       min_confidence: 1.1   # impossibly high = disabled per
+#                             # [REFERENCE_EXAMPLES.md §2 line 666]
+per_member_overrides: {}
+
+# Never extract commitments from interactions with these party tags.
+# Privileged attorney-client threads, opposing-counsel threads, etc.
+# Pipeline doesn't read content; skips on tag match.
+skip_party_tags:
+  - privileged
+  - opposing_counsel
+  - "provider:attorney"

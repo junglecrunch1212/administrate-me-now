@@ -41,6 +41,23 @@ class CommitmentProposedV1(BaseModel):
     classify_reasons: list[str] = Field(default_factory=list)
 
 
+class CommitmentSuppressedV1(BaseModel):
+    """Emitted by ``commitment_extraction`` (and future thank_you_detection)
+    when a candidate inbound message does NOT result in a
+    ``commitment.proposed``. The audit trail makes silent drops debuggable
+    per [REFERENCE_EXAMPLES.md §2 line 1024]. Registered at v1 per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    reason: Literal[
+        "below_confidence_threshold",
+        "dedupe_hit",
+        "skill_failure_defensive_default",
+    ]
+    confidence: float = Field(ge=0.0, le=1.0)
+    threshold: float = Field(ge=0.0, le=1.0)
+    source_event_id: str = Field(min_length=1)
+
+
 class CommitmentConfirmedV1(BaseModel):
     model_config = {"extra": "forbid"}
     commitment_id: str = Field(min_length=1)
@@ -192,6 +209,7 @@ class SkillCallRecordedV2(BaseModel):
 
 
 registry.register("commitment.proposed", 1, CommitmentProposedV1)
+registry.register("commitment.suppressed", 1, CommitmentSuppressedV1)
 registry.register("commitment.confirmed", 1, CommitmentConfirmedV1)
 registry.register("commitment.completed", 1, CommitmentCompletedV1)
 registry.register("commitment.dismissed", 1, CommitmentDismissedV1)

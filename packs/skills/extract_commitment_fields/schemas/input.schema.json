@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "extract_commitment_fields input",
+  "type": "object",
+  "required": ["message_text", "sender_party_id", "receiving_member_id", "classify_reasons"],
+  "additionalProperties": false,
+  "properties": {
+    "message_text": {
+      "type": "string",
+      "description": "The inbound message body."
+    },
+    "sender_party_id": {
+      "type": "string",
+      "description": "Party id of the message sender."
+    },
+    "receiving_member_id": {
+      "type": "string",
+      "description": "Member id of the household member the message was routed to."
+    },
+    "classify_reasons": {
+      "type": "array",
+      "description": "Reasons array forwarded from classify_commitment_candidate so the extractor knows why this was flagged.",
+      "items": { "type": "string" }
+    }
+  }
+}

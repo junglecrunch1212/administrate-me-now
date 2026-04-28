@@ -30,7 +30,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
@@ -41,6 +41,9 @@ from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import run_skill
 from adminme.pipelines.base import PipelineContext
 from adminme.pipelines.pack_loader import LoadedPipelinePack, load_pipeline_pack
+
+if TYPE_CHECKING:
+    import sqlcipher3
 
 _log = logging.getLogger(__name__)
 
@@ -54,6 +57,15 @@ class PipelineRunner:
     fresh :class:`PipelineContext` per delivered event and awaits the
     pack's ``handle()``. The bus owns checkpointing and failure
     semantics ([§1.10], [§7.7]).
+
+    The optional ``parties_conn_factory`` keyword arg is threaded into
+    every :class:`PipelineContext` constructed by ``_make_callback`` so
+    pipelines that need to resolve party identifiers (e.g.
+    ``commitment_extraction``) can open a SQLCipher connection to the
+    parties projection DB inside ``handle()``. Default ``None`` keeps
+    backward compatibility with all existing 10a runner-construction
+    sites; pipelines that depend on the factory must check for ``None``
+    and degrade cleanly.
     """
 
     def __init__(
@@ -64,12 +76,14 @@ class PipelineRunner:
         *,
         observation_manager: ObservationManager | None = None,
         guarded_write: GuardedWrite | None = None,
+        parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
         self._config = instance_config
         self._observation_manager = observation_manager
         self._guarded_write = guarded_write
+        self._parties_conn_factory = parties_conn_factory
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -200,6 +214,7 @@ class PipelineRunner:
                 observation_manager=self._observation_manager,
                 triggering_event_id=event["event_id"],
                 correlation_id=correlation,
+                parties_conn_factory=self._parties_conn_factory,
             )
             await pack.instance.handle(event, ctx)
 
