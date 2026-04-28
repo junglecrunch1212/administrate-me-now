@@ -280,8 +280,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10b-ii-β — reactive pipelines (thank_you_detection + extract_thank_you_fields)
 - **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10b-ii-beta-thank-you-detection.md` (~330 lines, quality bar = 10b-ii-α + reuse). Secondary-split memo at `docs/02-split-memo-10b-ii.md`.
-- **Session merged**: PR #<N>, commits 1cf287e / ec169a2 / 40fbeb5 / <sha4>, merged <merge-date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #<PR-10b-ii-beta>, commits 1cf287e / ec169a2 / 40fbeb5 / <sha4-10b-ii-beta>, merged <merge-date-10b-ii-beta>.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `packs/skills/extract_thank_you_fields/` — full 09b-shape skill pack at v1.0.0. 4 unit tests via pack-loader canary + handler-direct (well-formed pass-through, urgency coercion, non-dict-input defensive default). Output schema's `urgency` enum matches `CommitmentProposedV1.urgency`'s Literal exactly so the pipeline round-trips without coercion drift.
   - `packs/pipelines/thank_you_detection/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/test_pack_load.py}` — `ThankYouDetectionPipeline` reusing 10b-ii-α's parties-DB seam through `ctx.parties_conn_factory`; calls `classify_thank_you_candidate@^1.3.0` (already on main from 09b — NOT modified by this prompt) → `extract_thank_you_fields@^1.0.0` → emits `commitment.proposed` with `kind="other"` (above review_threshold = confident; between min and review_threshold = weak) or `commitment.suppressed` (below or on `is_candidate=False`, on skill failure, on sender resolution failure, on factory missing). Per-member overrides config-driven; tenant-agnostic placeholder member ids in `config.example.yaml`. Five inlined helpers (`_classify_identifier`, `_load_config`, `_thresholds_for_member`, `_new_commitment_id`, `_emit_suppressed`) duplicated from `commitment_extraction/handler.py` per the split memo's "no shared helper yet" guidance.
