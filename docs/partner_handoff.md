@@ -1,52 +1,53 @@
-# Partner handoff state — durable between Claude Chat sessions
+# Partner handoff — AdministrateMe Phase A build
 
-_The Partner's authoritative state file. Read at the start of every Chat session. Updated as the closing artifact of every session._
+_Every new Claude Chat instance that acts as Partner (Quality Control + Prompt Refactoring for Claude Code's Phase A sessions) reads this document first, before anything else._
+
+**Partner's job, in one sentence:** After each Claude Code merge, run the three-job QC pass against the merged work; then refactor the next unrefactored prompt (08 through 19, or a checkpoint) before handing it to Claude Code.
+
+**What Partner is not:** Partner does not execute prompts. Partner does not write code. Partner does not ship to `main`. Partner produces artifacts (refactored prompts; QC findings; updated handoff) that James hands to Claude Code.
 
 ---
 
-## How a Partner session starts
+## Session 1: the mandatory orientation sequence
 
-You are starting a fresh AdministrateMe Build Supervision Partner session in the AdministrateMe Build Partner Project.
+Do this in order at the top of every new Chat session. Do not skip. Do not reorder. Do not do "real work" (refactor prompts, produce artifacts, write code) until every step is complete and James has confirmed your orientation is correct.
 
-### Step 1 — Read the init prompt
+### Step 1 — Read the 9 constitutional docs in full
 
-The init prompt is the first message of this conversation. If it isn't, ask James to paste it before doing any work.
+These define the codebase's architecture. They are binding on every prompt. They are stable (change by deliberate decision, not in passing).
 
-### Step 2 — Run the mandatory `project_knowledge_search` queries (PM-13)
+James has attached them to this Chat session as documents. Read each one in full:
 
-Per init prompt §11, the Partner discovers Project knowledge contents via the `project_knowledge_search` tool, NOT via filesystem listing. Run these four queries before anything else, recording what each returns:
+1. **ADMINISTRATEME_BUILD.md** — the canonical build specification. Cite as `[BUILD.md §X]`.
+2. **ADMINISTRATEME_CONSOLE_PATTERNS.md** — 12 console patterns. Cite as `[CONSOLE_PATTERNS.md §N]`.
+3. **ADMINISTRATEME_DIAGRAMS.md** — 10 architecture diagrams. Cite as `[DIAGRAMS.md §N]`.
+4. **ADMINISTRATEME_REFERENCE_EXAMPLES.md** — 7 worked examples. Cite as `[REFERENCE_EXAMPLES.md §N]`.
+5. **ADMINISTRATEME_CONSOLE_REFERENCE.html** — interactive design reference. Skim for structure; read the specific sections the prompt you're working on touches.
+6. **docs/SYSTEM_INVARIANTS.md** — 15 sections of binding invariants. Cite as `[§N]`.
+7. **docs/DECISIONS.md** — D1 through D16+ decisions. Cite as `[DN]`.
+8. **docs/architecture-summary.md** — five-layer model + the 11 projections table. Cite as `[arch §N]`.
+9. **docs/openclaw-cheatsheet.md** — 8 Q&As. Cite as `[cheatsheet Qn]`.
 
-1. `project_knowledge_search("PROMPT_SEQUENCE universal preamble dependency graph")` — confirms PROMPT_SEQUENCE.md (Tier 1).
-2. `project_knowledge_search("SYSTEM_INVARIANTS binding invariants")` — confirms SYSTEM_INVARIANTS.md (Tier 2).
-3. `project_knowledge_search("partner_handoff PM UT current build state")` — confirms partner_handoff.md (Tier 2) and surfaces current state.
-4. `project_knowledge_search("qc_rubric three-job pass contract check invariant audit")` — confirms qc_rubric.md (Tier 2).
+Yes — in full. These are Partner's contract. Partner's opinions about "what the codebase should do" are worthless without them.
 
-If any search returns empty, the file is genuinely absent — flag it as **degraded** mode in the orientation report. **Never claim a file is missing based on `/mnt/project/` listing alone.**
+### Step 2 — Read the three session docs
 
-### Step 3 — Constitutional reading
+Still in this session context (small files):
 
-The 9 constitutional docs in `docs/` are the source of truth for invariants and decisions. They are not cached between sessions; the Partner reads them as needed via `project_knowledge_search` queries:
+- **partner_handoff.md** — this file. You just read it.
+- **qc_rubric.md** — the three-job QC pass you'll run after merges.
+- **build_log.md** — Claude Code's record of what shipped per prompt. This tells you what has merged, what's in-flight, and what deviations from prompt-intent occurred.
 
-- **architecture-summary.md** — five-layer model.
-- **SYSTEM_INVARIANTS.md** — 15 numbered sections of binding invariants. Cite as `[§N]`.
-- **DECISIONS.md** — numbered decisions. Cite as `[DN]`.
-- **openclaw-cheatsheet.md** — 8 Q&As on OpenClaw seams. Cite as `[cheatsheet Qn]`.
-- **architecture-summary.md** — same as above; layer-by-layer summary.
-- **partner_handoff.md** — this file.
-- **qc_rubric.md** — the three-job QC pass.
-- **build_log.md** — Claude Code's record of what shipped per prompt.
-- **universal_preamble_extension.md** — the PM-7 infrastructure proposal that produced `scripts/verify_invariants.sh`.
+### Step 3 — Read PROMPT_SEQUENCE.md
 
-### Step 4 — Read PROMPT_SEQUENCE.md
-
-`prompts/PROMPT_SEQUENCE.md` is the canonical sequence. It gives:
+James will attach `prompts/PROMPT_SEQUENCE.md`. This is the **single canonical copy** — the root-level duplicate was removed when the `sidecar-prompt-sequence-version-drift` sidecar merged (see PM-1). It gives you:
 
 - The full sequence (prompts 00 through 19).
 - The dependency graph.
 - The current universal preamble (slim, post-PM-7).
 - The per-prompt structure template.
 
-### Step 5 — Identify current state and this session's task
+### Step 4 — Identify current state and this session's task
 
 Based on `build_log.md` + `PROMPT_SEQUENCE.md`, identify:
 
@@ -55,7 +56,7 @@ Based on `build_log.md` + `PROMPT_SEQUENCE.md`, identify:
 - **Next prompt to write** (or checkpoint to refactor, or QC pass to run).
 - **What this session specifically needs to do**, which James tells you explicitly.
 
-### Step 6 — Identify what code context you'll need from the zip
+### Step 5 — Identify what code context you'll need from the zip
 
 James has attached the **most recent full codebase as a zip**. You have NOT loaded any of it yet. You load specific files from it based on what this session's task needs.
 
@@ -65,8 +66,8 @@ James has attached the **most recent full codebase as a zip**. You have NOT load
 
 | Task type | Load from zip (minimum) |
 |---|---|
-| Refactor a new build prompt (10b-ii-β, etc.) | (a) The draft prompt file from `prompts/<NN>-*.md`. (b) The most recently merged prompt file (same directory), as quality-bar reference. (c) Source files the new prompt's "Read first" section references. (d) `pyproject.toml`. |
-| Refactor a checkpoint (07.5, 10d, 14e, 15.5) | (a) The checkpoint file. (b) Directory listings of areas the checkpoint audits. (c) Related tests. |
+| Refactor a new build prompt (08, 09a, etc.) | (a) The draft prompt file from `prompts/<NN>-*.md`. (b) The most recently merged prompt file (same directory), as quality-bar reference. (c) Source files the new prompt's "Read first" section references. (d) `pyproject.toml`. |
+| Refactor a checkpoint (07.5, 10d, 14e, 15.5) | (a) The checkpoint file. (b) Directory listings of areas the checkpoint audits (e.g. 07.5 audits all 11 projections — load `adminme/projections/` listing + each projection's `schema.sql` + `queries.py`). (c) Related tests. |
 | QC pass on a merged PR | (a) The `build_log.md` entry. (b) The prompt file that specified what was to ship. (c) Spot-check files from the diff if Evidence lists seem off. Do NOT load the entire diff. |
 | Universal preamble extension / sequence refactor | (a) `prompts/PROMPT_SEQUENCE.md`. (b) `pyproject.toml`. (c) Any scripts or canonical files the proposal mentions. |
 | Structural refactor spanning multiple prompts | (a) All affected prompt files. (b) Shared references only. Decompose the task if it's bigger than this. |
@@ -75,7 +76,7 @@ James has attached the **most recent full codebase as a zip**. You have NOT load
 
 **Never make up filenames, line numbers, or code that contradicts the zip.** If you're about to reference "prompt 07b's `builders.py` line 142" — don't. Load the file and verify. Confident-sounding inaccuracy is the failure mode most likely to embed errors across sessions.
 
-### Step 7 — Report your orientation
+### Step 6 — Report your orientation
 
 Before producing any artifact, reply to James with:
 
@@ -86,7 +87,7 @@ Before producing any artifact, reply to James with:
 
 James corrects your orientation before you do real work. This is the value — catching misunderstandings before they're baked into a refactored prompt.
 
-**Do NOT skip step 7.** Partner sessions that skip the orientation report reliably produce work against a wrong mental model.
+**Do NOT skip step 6.** Partner sessions that skip the orientation report reliably produce work against a wrong mental model.
 
 ---
 
@@ -96,69 +97,91 @@ Household chief-of-staff platform. Event-sourced (SQLCipher append-only log at L
 
 Built in two phases. Phase A: Claude Code generates code in Anthropic's sandbox against GitHub. Phase B: operator bootstraps on Mac Mini. **Every build prompt 00 through 19 is Phase A.** Partner works only on Phase A — prompt refactoring + QC after merges.
 
-For anything beyond this summary, read the actual constitutional docs (step 3 above). Do not rely on this summary for architectural decisions.
+For anything beyond this summary, read the actual constitutional docs (step 1 above). Do not rely on this summary for architectural decisions.
 
 ---
 
 ## Current build state
 
-**Last updated:** 2026-04-28 (10b-ii-α merged as PR #41 — parties-DB seam through `PipelineContext.parties_conn_factory` + `commitment_extraction` reactive pipeline pack + 2 skill packs (`classify_commitment_candidate@3.0.0`, `extract_commitment_fields@2.1.0`) + `commitment.suppressed` event schema at v1. Partner session of 2026-04-28 ran Type 1 combined session: Job 1 QC of merged 10b-ii-α (clean — all findings F-1 through F-8 are overshoots or accepted decisions, no undershoots, no violations); Job 2 refactor of 10b-ii-β (artifact at `prompts/10b-ii-beta-thank-you-detection.md`); Job 3 delivery-gate self-check passed (330 lines, well under budget). UT-12 closed by this merge. PM-21 graduates from SOFT-watch to **HARD convention** ("refactored prompts ship in the build PR") on the strength of two consecutive merges (10b-i + 10b-ii-α) following the pattern. New PM-26 added (post-PM-7 byte-budget calibration drift in E-session-protocol §2.9 — the 25 KB ceiling is a measurement artifact predating universal-preamble extraction; line-count is the operationally relevant signal). New F-5 soft pattern observation carried forward to 10b-ii-β: outbound `messaging.sent` defensive-default emits audit-trail noise; address by early-return at top of handler. New F-8 soft pattern observation carried forward to prompt 16: `_load_config` reads YAML per-event; bootstrap should wire config caching at runner-construction time. Next refactor target: **10b-ii-β** (thank_you_detection + extract_thank_you_fields). Per `docs/02-split-memo-10b-ii.md` §"10b-ii-β" scope. **No new infrastructure, no new event types** — pure consumer of 10b-ii-α's parties-DB seam plus 09b's existing `classify_thank_you_candidate@1.3.0`. **Watch:** 10c is itself a pre-split candidate per `D-prompt-tier-and-pattern-index.md`; pre-split forecast goes in startup report when 10c orientation begins (UT-13).
+**Last updated:** 2026-04-28 (10b-ii-α merged as PR #41 — reactive pipelines `commitment_extraction` + `classify_commitment_candidate@3.0.0` + `extract_commitment_fields@2.1.0` skill packs + `commitment.suppressed` event schema at v1 + parties-DB seam through `PipelineContext.parties_conn_factory`. Partner session of 2026-04-28 ran Type 1 combined session: QC of 10b-ii-α merge + refactor of 10b-ii-β. **Findings on 10b-ii-α merge:** all eight findings F-1 through F-8 are positive signals or accepted decisions; zero undershoots, zero violations, zero silent scope changes. (1) Contract check **Match-with-overshoot** — F-1: classify_commitment_candidate ships 4 unit tests (floor 3); F-2: commitment_extraction unit test file ships 11 tests (floor 8); these mirror 10b-i's pattern of test overshoots and are positive quality signals. (2) Invariant audit **Clean** — `verify_invariants.sh` exit 0; `[§7.3]` / `[§7.4]` / `[§8]` / `[D6]` / `[§7.7]` / `[D7]` / `[§12.4]` / `[§15]` / `[D15]` / `[ADR-0002]` all clean; pipeline→projection canary clean; causation-id wiring on every emit; F-2 carry-forward from 10b-i CLOSED defense-in-depth (both new skill packs declare `sensitivity_required: normal` but pipeline catches `SkillSensitivityRefused`/`SkillScopeInsufficient` anyway). F-3: refactored 10b-ii-α prompt committed to repo at `prompts/10b-ii-alpha-commitment-extraction.md` (370 lines) — second consecutive build-prompt round where on-disk file matches what Claude Code executed against, so PM-21 graduates from SOFT-watch to HARD convention. F-4: `_load_config` reads `config.example.yaml` directly via `_config_override` test seam — accepted as the simplest viable seam given prompt 16 will overhaul the config-loading path. F-5 (soft pattern → carry-forward to 10b-ii-β): defensive-default `except` list catches outbound `messaging.sent` events even though pipeline subscribes inbound-only; if 10b-ii-β subscribes both inbound and outbound (because thank-yous land both directions), handler must early-return on outbound at top of method. F-6: `receiving_member_id` derived from `to_identifier` directly — accepted (matches REFERENCE_EXAMPLES.md §2). F-7: pre-existing 2 ruff F401 errors in `docs/reference/plaid/python-sdk-plaid_api.py` (since PR #17, NOT introduced by this work). F-8 (soft → carry-forward to prompt 16): per-event YAML config read should be cached at runner-construction time. (3) Job 2 (refactor 10b-ii-β) **Complete** — refactored prompt at 330 lines / 39KB lands at `prompts/10b-ii-beta-thank-you-detection.md`; reuses 10b-ii-α's parties-DB seam, defensive-default exception tuple, per-member-overrides config skeleton; default `kind="other"` for thank-you `commitment.proposed` (do NOT silently extend `CommitmentProposedV1.kind`'s Literal — open question reserved if `BUILD.md §1150` strictly requires it); F-5 closure baked into the Read first as subscription discipline. (4) Job 3 delivery-gate self-check **Pass** — line count 330 under 350 ceiling; KB count 39 over 25KB but matches 10b-ii-α empirical precedent; PM-25 autolinker grep clean; PM-26 NEW (post-PM-7 byte-budget calibration drift in E-session-protocol §2.9). **PM-26 added (SOFT/proposed)**, **PM-21 graduates from SOFT-watch to HARD convention** (two consecutive merges 10b-i + 10b-ii-α both committed refactored prompt to repo). UT-12 CLOSED by 10b-ii-α merge. Next refactor target advances to **10c orientation** (proactive pipelines; pre-split candidate per UT-13).
 
-**Merged to main (chronological by merge date):** 00, 00.5, 01a, 01b, 01c, 02, 03, 03.5, 04, 05, 06, **07a (PR #18, merged 2026-04-24 — three projection packs `places_assets_accounts`, `money`, `vector_search` per BUILD.md §L3; 38 new tests; sqlite-vec extension loaded for vector_search; `bootstrap/pack_install_order.yaml` queued for prompts 15/16; bench script `bench/vector_search_query.py` for ops-spine ad-hoc perf checks)**, **07b (PR #19, merged 2026-04-25 — xlsx_workbooks projection forward daemon per BUILD.md §3.11; 8 sheet builders for Finance + Lists + Members + Assumptions + Dashboard + Balance Sheet + Pro Forma + Budget vs Actual; 30 new tests; xlsx forward write coordination via watchdog observer + `xlsx_state.txt` sentinel; `xlsx.regenerated` system event registered at v1; `ALLOWED_EMITS` extended; `verify_invariants.sh §2.2` projection-emit allowlist updated; PM-7 EXECUTED — slim preamble + canonical verify_invariants.sh shipped)**, **07c-α (PR #28, merged 2026-04-25 — xlsx round-trip foundations: schema additions for `xlsx_round_trip` table, sidecar I/O at `~/.adminme/projections/xlsx_workbooks/.xlsx-state/`, bidirectional descriptors for Raw Data + Manual Categorization + Lists + Members + Assumptions sheets, diff core, `xlsx_workbooks/forward.py` extended to write sidecar state alongside the workbook regen; 21 new tests; PM-15 SOFT pattern surfaced — daemon + infrastructure prompts split at α/β when they overrun a single Claude Code session; PR #25/26 timeouts proved this empirically)**, **07c-β (PR #34, merged 2026-04-25 — xlsx reverse daemon at `adminme/daemons/xlsx_sync/reverse.py`; watchdog observer per workbook; lock-contention defaults; 60-second reverse-projection cycle; 10 new tests including 4 lock-contention concurrency tests; `xlsx.reverse_projected` and `xlsx.reverse_skipped_during_forward` system events registered at v1; PM-14 introduced — daemons live in `adminme/daemons/`, projections in `adminme/projections/`; reverse daemon emits domain events on file-edit authority and is NOT a projection; UT-1 CLOSED by 07.5 audit landing 2026-04-25; Raw Data ALWAYS_DERIVED descriptor-drift sidecar `sidecar-raw-data-is-manual-derived` queued)**, **08a (PR #&lt;PR-08a&gt;, merged &lt;merge-date-08a&gt; — Session/scope read side; integrates 48 explicit `# TODO(prompt-08)` markers across 10 sqlite projection `queries.py` files; UT-7 read-side closure)**, **08b (PR #&lt;PR-08b&gt;, merged &lt;merge-date-08b&gt; — governance + observation + UT-7 write-side closure; integrates 12 implicit attribution sites in `adminme/daemons/xlsx_sync/reverse.py`)**, **09a (PR #&lt;PR-09a&gt;, merged &lt;merge-date-09a&gt; — skill runner wrapper around OpenClaw `/tools/invoke`; `httpx`-mediated; 18 new tests; PM-19 introduced (prompts that introduce a seam must check the merged stub against the contract and fold any field-shape drift into Commit 1); `verify_invariants.sh §8` `single-seam check)**, **09b (PR #&lt;PR-09b&gt;, merged &lt;merge-date-09b&gt; — first canonical skill pack `classify_thank_you_candidate` v1.3.0; 8 new tests (4 unit + 4 integration); `bootstrap/pack_install_order.yaml` queued for prompts 15/16; zero domain events, zero `verify_invariants.sh` edits — pure wrapper-consumer)**, **10a (PR #33, merged 2026-04-26 — pipeline runner per BUILD.md §L4; `adminme/pipelines/{base,pack_loader,runner}.py` + `tests/fixtures/pipelines/{echo_logger,echo_emitter}/` + 17 new tests (8+5 unit + 4 integration); pipeline→projection canary armed and clean; `PipelineContext` threads `Session` + `run_skill_fn` + `outbound_fn` + `guarded_write` + `observation_manager` + `triggering_event_id` + `correlation_id`; reactive-only — proactive packs skipped during `discover()` per UT-2 carve-out, OpenClaw standing-order registration deferred to 10c; zero new event-schema registrations)**, **10b-i (PR #38, merged 2026-04-26 — reactive pipelines `identity_resolution` (heuristic-only, degenerate-clean candidate-loader) + `noise_filtering` (skill-call seam to `classify_message_nature`); skill pack `classify_message_nature@2.0.0` (full 09b shape); two new event schemas at v1 (`identity.merge_suggested`, `messaging.classified`); 22 new tests (3 + 1 + 8 + 1 + 5 + 4); suite 423 → 447 passed; `verify_invariants.sh` exit 0; UT-11 closed; refactored prompt committed to repo at `prompts/10b-i-identity-and-noise.md`, 320 lines — first deviation from PM-21's paste-only convention)**, **10b-ii-α (PR #41, merged 2026-04-28 — parties-DB seam through `PipelineContext.parties_conn_factory` (default None for 10a backward compat) + `PipelineRunner.__init__` extended; reactive pipeline `commitment_extraction@4.2.0` (full REFERENCE_EXAMPLES.md §2 architecture: classify → extract → emit, with defensive-default-on-skill-failure F-2 widened to catch all 7 SkillRunner exception types); 2 new skill packs `classify_commitment_candidate@3.0.0` + `extract_commitment_fields@2.1.0` (full 09b shape); one new event schema at v1 (`commitment.suppressed` with closed reason Literal `["below_confidence_threshold", "dedupe_hit", "skill_failure_defensive_default"]`); 26 new tests (4 + 4 + 1 + 11 + 3 + 3); suite tally on `tests/`: 447 → 464 passed, 2 skipped; `verify_invariants.sh` exit 0; UT-12 CLOSED via option (c)+(a) — split itself is option (c), parties-DB seam wired through `PipelineContext` is option (a); refactored prompt committed to repo at `prompts/10b-ii-alpha-commitment-extraction.md`, 370 lines)**.
+**Last updated:** 2026-04-27 (Partner session produced secondary-split memo for 10b-ii). Type 3 → Type 0 session at James's direction. **No code touched** — output is `docs/02-split-memo-10b-ii.md` (Tier C secondary split per the watch flag in `docs/01-split-memo-10b.md` §10b-ii) plus a Claude Code micro-prompt for the sequence-update PR. **Verdict:** 10b-ii splits into **10b-ii-α** (parties-DB seam through `PipelineContext.parties_conn_factory` + `commitment_extraction` pipeline + `classify_commitment_candidate` + `extract_commitment_fields` skill packs + `commitment.suppressed` event schema at v1) and **10b-ii-β** (`thank_you_detection` pipeline + `extract_thank_you_fields` skill pack; reuses 10b-ii-α's seam, no new infrastructure). UT-12 resolution: **option (c)+(a)** — the split itself selects (c), and 10b-ii-α's Commit 1 wires the parties-DB seam through `PipelineContext` per option (a). UT-12 status: **OPEN → CLOSING (formally CLOSED upon sequence-update PR merge)**. **Sizing rationale:** 10b-ii at original split-memo scope plus UT-12 option (a) infrastructure exceeds the empirical one-session budget set by 09b/10b-i; 10b-ii-α is sized at ~450–500 lines / ~25–30 tests / 4 net-new modules + one infrastructure extension; 10b-ii-β is sized at ~250–300 lines / ~12–15 tests / 2 net-new modules. Both within Claude Code's empirically-known one-session window. **New PM-23** added (secondary splits when a primary-split watch flag fires) and **new UT-13** added (10c is next pre-split candidate). **Next refactor target:** 10b-ii-α (after the sequence-update PR merges). **Watch:** 10c is itself a pre-split candidate per `D-prompt-tier-and-pattern-index.md`; pre-split forecast goes in startup report when 10c orientation begins.
 
-**Sequence updates merged (infrastructure, not build):** **PR #37 `sequence-update-10b-split` (merged 2026-04-26)** — splits 10b into 10b-i / 10b-ii per the on-disk split memo at `docs/01-split-memo-10b.md`; updates PROMPT_SEQUENCE.md sequence table + dependency graph + hard-sequential-dependency line; deletes `prompts/10b-reactive-pipelines.md`. Single commit on harness-assigned branch `claude/sequence-update-10b-split-OFrFL`. No code touched; no BUILD_LOG entry by design (PM-22). **PR #39 `sequence-update-10b-ii-split` (merged 2026-04-27)** — splits 10b-ii into 10b-ii-α / 10b-ii-β per `docs/02-split-memo-10b-ii.md`; updates PROMPT_SEQUENCE.md sequence table + dependency graph (now `10a → 10b-i → 10b-ii-α → 10b-ii-β → 10c → 10d`) + hard-sequential-dependency line; lands `docs/02-split-memo-10b-ii.md` (PM-24 web-UI path was used for the long static memo). No code touched; no BUILD_LOG entry by design (PM-22). **PR #40 `update-partner-handoff` (merged 2026-04-27)** — partner_handoff snapshot update reflecting the secondary split. Single commit; no BUILD_LOG entry (planning-artifact PR per PM-22).
+**Last updated:** 2026-04-26 (10b-i merged as PR #38 — reactive pipelines `identity_resolution` + `noise_filtering` + skill pack `classify_message_nature@2.0.0` + two new event schemas at v1 (`identity.merge_suggested`, `messaging.classified`). Partner session of 2026-04-27 ran Type 2 QC on the merged 10b-i. Findings: contract check Match-with-cosmetic-undershoot (F-1: BUILD_LOG claimed 24 tests vs actual 22; F-3: extra unit `test_exact_match_returns_without_emit` accepted positive; skill-pack 3 handler-direct cases vs 09b's 4 cosmetic). Invariant audit Clean. **F-2 (soft-watch for 10b-ii)**: `noise_filtering` except list omits `SkillSensitivityRefused` / `SkillScopeInsufficient`; safe today, must verify in 10b-ii. Next-prompt calibration on 10b-ii: Needs refresh — parties-DB seam load-bearing; UT-12 added. **F-4 (silent architectural decision, accepted)**: 10b-i shipped degenerate-clean per option (2). **PM-21 update**: refactored prompt committed to repo (first deviation from paste-only convention). UT-11 CLOSED (`packs/pipelines/<name>/`).
+
+**Last updated:** 2026-04-26 (sequence-update PR #37 `sequence-update-10b-split` merged — splits prompt 10b into 10b-i and 10b-ii per the split memo at `docs/01-split-memo-10b.md`. Partner Type 2 QC: contract check Match; invariant audit Clean (zero code touched); next-prompt calibration **Needs refresh** (resolved by 10b-i merge — UT-11 CLOSED). PM-22 added (sequence updates and split-memo prep PRs are infrastructure, not build prompts).
+
+**Last updated:** 2026-04-26 (sidecar PR #35 `sidecar-raw-data-is-manual-derived` merged — closes 07.5 finding C-1. Two-file change. Partner Type 2 QC: contract check Match; invariant audit Clean; next-prompt calibration Clean. UT-1 confirmed CLOSED.
+
+This section is the live baton between sessions. Update it at the end of every Partner session.
+
+**Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06, 07a, 07b, **PM-7 infrastructure PR (slim preamble + scripts/verify_invariants.sh)**, **07c-α (PR #20, merged 2026-04-24)**, **07c-β (PR #21, merged 2026-04-25 — reverse daemon class + 4 emit pathways + integration round-trip; closes the xlsx round-trip and resolves UT-6)**, **08a (PR #&lt;PR-08a&gt;, merged 2026-04-25 — Session model + scope enforcement; 48 TODO(prompt-08) markers cleared across 10 sqlite projection queries.py files; 69 new tests; resolves UT-8 inline via `vector_search.nearest` three-layer carve-out)**, **08b (PR #&lt;PR-08b&gt;, merged 2026-04-25 — guardedWrite three-layer + observation `outbound()` + 6 governance event types at v1; 47 new tests + 4 security-E2E + 1 UT-7 closure case; resolves UT-7 — `_ACTOR` literal removed from reverse daemon, sidecar hedge NOT activated)**, **09a (PR #29, merged 2026-04-26 — skill runner wrapper around OpenClaw `/tools/invoke` + `llm-task`; 30 new tests; ADR-0002 schema relaxation folded in per PM-19; `verify_invariants.sh` extended with `skill.call.*` single-seam check)**, **09b (PR #&lt;PR-09b&gt;, merged &lt;merge-date-09b&gt; — first canonical skill pack `classify_thank_you_candidate` v1.3.0; 8 new tests (4 unit + 4 integration); `bootstrap/pack_install_order.yaml` queued for prompts 15/16; zero domain events, zero `verify_invariants.sh` edits — pure wrapper-consumer)**, **10a (PR #33, merged 2026-04-26 — pipeline runner per BUILD.md §L4; `adminme/pipelines/{base,pack_loader,runner}.py` + `tests/fixtures/pipelines/{echo_logger,echo_emitter}/` + 17 new tests (8+5 unit + 4 integration); pipeline→projection canary armed and clean; `PipelineContext` threads `Session` + `run_skill_fn` + `outbound_fn` + `guarded_write` + `observation_manager` + `triggering_event_id` + `correlation_id`; reactive-only — proactive packs skipped during `discover()` per UT-2 carve-out, OpenClaw standing-order registration deferred to 10c; zero new event-schema registrations)**, **10b-i (PR #38, merged 2026-04-26 — reactive pipelines `identity_resolution` (heuristic-only, degenerate-clean candidate-loader) + `noise_filtering` (skill-call seam to `classify_message_nature`); skill pack `classify_message_nature@2.0.0` (full 09b shape); two new event schemas at v1 (`identity.merge_suggested`, `messaging.classified`); 22 new tests (3 + 1 + 8 + 1 + 5 + 4); suite 423 → 447 passed; `verify_invariants.sh` exit 0; UT-11 closed; refactored prompt committed to repo at `prompts/10b-i-identity-and-noise.md`, 320 lines — first deviation from PM-21's paste-only convention)**, **10b-ii-α (PR #41, merged 2026-04-28 — reactive pipelines `commitment_extraction` (parties-DB seam wired through `PipelineContext.parties_conn_factory`) + skill packs `classify_commitment_candidate@3.0.0` + `extract_commitment_fields@2.1.0` (full 09b shape); one new event schema at v1 (`commitment.suppressed` with closed `Literal["below_confidence_threshold", "dedupe_hit", "skill_failure_defensive_default"]`); 26 new tests on `tests/` testpath + 9 pack-internal tests via explicit path; suite 447 → 464 passed, 2 skipped; F-2 carry-forward CLOSED defense-in-depth; UT-12 CLOSED; `verify_invariants.sh` exit 0; refactored prompt committed to repo at `prompts/10b-ii-alpha-commitment-extraction.md`, 370 lines — second consecutive deviation from PM-21's paste-only convention; PM-21 graduates from SOFT-watch to HARD convention this round)**.
+
+**Sequence updates merged (infrastructure, not build):** **PR #37 `sequence-update-10b-split` (merged 2026-04-26)** — splits 10b into 10b-i / 10b-ii per `docs/01-split-memo-10b.md`. **PR #39 `sequence-update-10b-ii-split` (merged 2026-04-27)** — splits 10b-ii into 10b-ii-α / 10b-ii-β per `docs/02-split-memo-10b-ii.md`; surfaced PM-24 (long static markdown via GitHub web UI) and PM-25 (markdown autolinker defense). **PR #40 `update-partner-handoff` (merged 2026-04-27)** — partner-state snapshot lands `docs/partner_handoff.md` updates (PM-23/24/25 + UT-12 CLOSING + UT-13 + next-task-queue advance). All three are single-purpose infrastructure PRs per PM-22 — no four-commit discipline, no BUILD_LOG entries, no tests.
 
 **Checkpoints landed:** **07.5 (`docs/checkpoints/07.5-projection-consistency.md`, 2026-04-25)** — projection consistency audit across the 07a/07b/07c-α/07c-β cohort plus L1-adjacent reverse daemon. Verdict: PASS with 1 non-critical finding (C-1: Raw Data builder `ALWAYS_DERIVED` missing `is_manual` while descriptor `always_derived` includes it; deferred to sidecar PR `sidecar-raw-data-is-manual-derived`). UT-1 closes here.
 
-**Prompts with PR open, not yet merged:** none.
+**Prompts with PR open, not yet merged:** none on the build-prompt cohort. Prep PR for 10b-ii-β (creates `prompts/10b-ii-beta-thank-you-detection.md`, replaces `docs/partner_handoff.md`, replaces `docs/build_log.md`) is queued for James to drive — single-purpose PR per PM-22 — followed by Claude Code execution of the 10b-ii-β build prompt.
 
-**Prompts drafted, ready for Claude Code execution:** **10b-ii-β** — refactored prompt produced 2026-04-28 in this Partner session, ready for prep PR + Claude Code execution. Artifact at `prompts/10b-ii-beta-thank-you-detection.md` (330 lines, well under the 350-line ceiling). Per `docs/02-split-memo-10b-ii.md` §"10b-ii-β" scope: ships `extract_thank_you_fields` skill pack at v1.0.0 + `thank_you_detection` pipeline pack at v1.0.0; reuses 10b-ii-α's parties-DB seam, defensive-default exception tuple, and per-member-overrides config shape literally; reuses 09b's `classify_thank_you_candidate@1.3.0` as upstream classifier; **no new infrastructure, no new event types**; emits `commitment.proposed` with `kind="other"` (default v1 disposition; do NOT silently extend the Literal) or `commitment.suppressed`. F-5 carry-forward addressed: pipeline early-returns on `messaging.sent` (vs. `commitment_extraction`'s defensive-default-suppress path). 4-commit decomposition: (1) skill pack, (2) pipeline pack + handler-direct unit tests, (3) per-member-overrides + classify-output-shape edge cases, (4) integration round-trip + BUILD_LOG + push.
+**Prompts drafted, ready for Claude Code execution:** **10b-ii-β** at `prompts/10b-ii-beta-thank-you-detection.md` (refactored 2026-04-28; 330 lines; quality bar = 10b-ii-α; reuses parties-DB seam, defensive-default exception tuple, per-member-overrides config skeleton; default `kind="other"` for thank-you `commitment.proposed` per F-5 carry-forward; subscription-discipline early-return on outbound `messaging.sent` if subscribed). Prep PR lands the prompt file + this updated partner_handoff.md + the updated build_log.md in one commit per PM-22; James drives Claude Code execution of the build prompt as a separate PR with four-commit discipline per PM-2.
 
-**Sidecar PRs queued (non-blocking):** none. Most recent sidecar `sidecar-raw-data-is-manual-derived` merged as PR #35 on 2026-04-26 (closed 07.5 finding C-1). Most recent sequence updates: `sequence-update-10b-split` merged as PR #37 on 2026-04-26; `sequence-update-10b-ii-split` merged as PR #39 on 2026-04-27. Most recent partner_handoff snapshot update: PR #40 merged 2026-04-27.
+**Sidecar PRs queued (non-blocking):** none. Most recent sidecar `sidecar-raw-data-is-manual-derived` merged as PR #35 on 2026-04-26 (closed 07.5 finding C-1). Most recent sequence updates `sequence-update-10b-split` (PR #37, 2026-04-26), `sequence-update-10b-ii-split` (PR #39, 2026-04-27), and partner-state snapshot `update-partner-handoff` (PR #40, 2026-04-27) all merged. Recorded here so future Partner sessions see the full PR landscape.
 
 **Next task queue (in order):**
 
-1. **James: drive prep PR for 10b-ii-β refactored prompt + housekeeping for 10b-ii-α merge.** Single PR landing three changes in one commit on a fresh branch (e.g. `prep-10b-ii-beta`):
-   - Create `prompts/10b-ii-beta-thank-you-detection.md` (the artifact produced by this Partner session).
-   - Update `docs/build_log.md` in two places: (a) fill the placeholders in the prompt 10b-ii-α entry — `PR #41`, `<sha1>..<sha4>`, `<merge-date>`, change `Outcome: IN FLIGHT (PR open)` to `Outcome: MERGED`; (b) append the sequence-update-10b-ii-split + partner_handoff PRs (#39, #40) to the "Sidecar PRs" section per PM-22.
-   - Update `docs/partner_handoff.md` with this Partner session's snapshot (the file Partner produced 2026-04-28).
-   No four-commit discipline (this is the prep + housekeeping PR, not a build prompt). No tests. Per PM-22 it's a planning-artifact PR.
+1. **James: drive prep PR for 10b-ii-β.** Single-purpose PR per PM-22 — no four-commit discipline, no BUILD_LOG, no tests. Three changes in one commit: create `prompts/10b-ii-beta-thank-you-detection.md` from the 2026-04-28 Partner session output; replace `docs/partner_handoff.md` with the updated full file (this file); replace `docs/build_log.md` with the updated full file. **No file deletions.** Per PM-24 if the prompt file is long enough that `create_file` proves slow, prep via GitHub web UI then surgical edits.
 
-2. **James: drive Claude Code session to execute 10b-ii-β.** Paste the refactored prompt verbatim into Claude Code; it self-executes the four commits + opens PR per the "PR creation with gh/MCP fallback" rule. Single Type 3 (refactor-only) Partner session next, after the 10b-ii-β PR merges, to QC + refactor 10c.
+2. **Claude Code session: execute 10b-ii-β.** James drives. Ships `extract_thank_you_fields@1.0.0` skill pack at full 09b shape + `thank_you_detection` pipeline pack (reuses 10b-ii-α's `PipelineContext.parties_conn_factory`, defensive-default `except` list, per-member-overrides config skeleton); zero new infrastructure. Subscription discipline per F-5 carry-forward (early-return on outbound `messaging.sent` if subscribed). Default `kind="other"` for thank-you `commitment.proposed` events; do NOT silently extend `CommitmentProposedV1.kind`'s Literal — STOP and report if `BUILD.md §1150` strictly requires extension.
 
-3. **No out-of-band `D-prompt-tier-and-pattern-index.md` update needed for 10b-ii-β** — that file already has the "Was split on arrival" disposition with both 10b-ii-α and 10b-ii-β rows from the prior secondary-split sequence update.
+3. **Partner session: QC of 10b-ii-β merge + 10c orientation** (Type 1 combined session — 10c is the next refactor target but is itself a pre-split candidate per UT-13, so the session opens with a Tier C split-forecast in the orientation report before any drafting begins). 10c covers proactive pipelines (`morning_digest`, `paralysis_detection`, `reminder_dispatch`, `reward_dispatch`, plus possibly `recurrence_extraction`, `closeness_scoring`, `relationship_summarization`); split shape will depend on whether grouping is by trigger mechanism (reactive vs proactive — natural coupling to OpenClaw standing-order registration) or by capability axis. **UT-2 must be resolved before 10c can be refactored** — the AGENTS.md-prose + `openclaw cron add` registration path is currently underspecified.
 
-4. **Watch: 10c orientation** — pre-split candidate per `D-prompt-tier-and-pattern-index.md`. The Partner session that opens 10c MUST forecast the split before drafting any prompt content (PM-23). UT-2 (proactive pipeline registration: AGENTS.md concatenation path) resolves at 10c orientation. UT-13 (10c is the next pre-split candidate) tracks this.
+4. Continuing through prompt 18 (Phase A build-complete), then 19 (Phase B smoke test).
+
+**Pre-merge verification James should run before committing any PR with placeholders:**
+
+```bash
+gh pr list --state merged --limit 10 --json number,title,mergedAt,mergeCommit
+```
+
+…and find-and-replace `<PR-09b>`, `<commit4-09b>`, `<merge-date-09b>` in `docs/build_log.md` with the actual values. Same applies to the still-pending `<PR-08a>` / `<PR-08b>` / `<sha1-08a>` etc. placeholders inherited from prior sessions. (PR #38 / commits 22c6195 / 73880d4 / 4c19c80 / 0a3250f / 2026-04-26 are the 10b-i values, already filled in. PR #41 / commits a8e1e09 / 2995d13 / 5e37a27 / 8671d06 / 2026-04-28 are the 10b-ii-α values, now filled in.)
+
+**Prompts drafted but not yet refactored:** 10c, 10d, 11, 12, 13a, 13b, 14a, 14b, 14c, 14d, 14e, 15, 15.5, 16, 17, 18, 19. (10a, 10b-i, 10b-ii-α moved to "merged to main"; 10b retired per PR #37; 10b-ii retired per PR #39; 10b-ii-β refactored 2026-04-28 and queued.) The slim preamble means each refactor is shorter than 07a/07b were. 15, 16 remain pre-split candidates; per `D-prompt-tier-and-pattern-index.md`, 10c, 11, 14b, 17 are also pre-split candidates.
+
+**Note on on-disk vs. shipped 10b-ii-α (PM-21 graduation):** **PM-21 graduates from SOFT-watch to HARD convention this round.** Two consecutive build-prompt rounds (10b-i PR #38, 10b-ii-α PR #41) committed the refactored prompt to repo as part of the build PR. Going forward, refactored prompts ship in the build PR — the on-disk file is the canonical record of what Claude Code executed against. The `prompts/10a-pipeline-runner.md` file on main remains the unrefactored 90-line v1 draft from the historical paste-only era and is NOT a blocker — historical and out of scope for current work.
+
+**Prompts not yet drafted:** 10c onward exists in unrefactored form. 10b-ii-β is drafted (2026-04-28) and queued for the prep PR.
 
 ---
 
-## Prompt-writing decisions (PM)
+## Prompt-writing decisions (meta, not architecture)
 
-PM = "prompt-method" decisions surfaced during refactor sessions. Tagged HARD (binding) or SOFT (advisory).
+These are conventions about *how Partner writes prompts for Claude Code*. They are not in `docs/DECISIONS.md` because they're not codebase architecture — they govern the prompt-refactor process.
 
-### PM-1: Single canonical PROMPT_SEQUENCE.md — HARD (RESOLVED)
+Each tagged **HARD** (treat as immutable) or **SOFT** (current convention; reconsider if costing more than saving).
 
-The root-level duplicate was removed via `sidecar-prompt-sequence-version-drift`. Only `prompts/PROMPT_SEQUENCE.md` is canonical. Status: **RESOLVED**.
+### PM-1: Prompt files live in `prompts/` — HARD
 
-### PM-2: 9 constitutional docs are not cached between sessions — HARD
+`prompts/PROMPT_SEQUENCE.md` is the **single canonical copy**. The root-level duplicate was removed when the `sidecar-prompt-sequence-version-drift` sidecar merged — single source of truth now enforced. Do NOT recreate the root duplicate. Any reference to `PROMPT_SEQUENCE.md` in this file or any future prompt refactor means `prompts/PROMPT_SEQUENCE.md`.
 
-Reading them is a per-session activity. Step 3 of session start.
+### PM-2: Four-commit discipline per build prompt — HARD
 
-### PM-3: Sidecar discipline — HARD
+Every prompt structures as four incremental commits: schema/plumbing, first-module build, second-module build, integration+verification+BUILD_LOG+push. Each commit independently verifiable. If Claude Code times out mid-session, no recovery heroics — James re-launches, Claude Code picks up from `git log`.
 
-Defects in already-merged code that bleed forward get sidecar PRs (single-purpose, single branch, separate from the build sequence). 15-25 minute ceiling. If the fix is bigger, it's a split, not a sidecar. Sidecar memos use the convention `prompts/NN.5-<slug>.md`.
+### PM-3: Citations are compression, not ornament — HARD
 
-### PM-4: Carry-forwards are first-class state — HARD
+Use `[§N]` / `[DN]` / `[BUILD.md §X]` / `[arch §N]` / `[cheatsheet Qn]` / `[CONSOLE_PATTERNS.md §N]` / `[REFERENCE_EXAMPLES.md §N]` / `[DIAGRAMS.md §N]`. One token replaces a paragraph of justification.
 
-Each prompt's BUILD_LOG entry includes "Carry-forward for prompt X" sections. These are how the system shares state without a database. Future Partner sessions read them, not just the code.
+### PM-4: BUILD_LOG append lives inside Commit 4 — HARD
 
-### PM-5: Tier C memos for non-trivial decisions — HARD
+Introduced in 07a. Prevents forgotten BUILD_LOG updates. Template lives in `qc_rubric.md`. Partner fills in `PR #<N>` / `<commit4>` / `<merge date>` / `Outcome: MERGED` during post-merge QC housekeeping.
 
-A "split" or "structural reorganization" is a Tier C decision; it gets a memo (`docs/NN-split-memo-<original>.md`) before any sequence update. Provides the durable record of why the change was made.
+### PM-5: "Out of scope" section names specific prompts that handle deferred work — SOFT
 
-### PM-6: Quality bar references — HARD
+Claude Code extends scope helpfully unless told otherwise. Format: "Do not X — prompt 10b handles X." Standardize across all prompt refactors.
 
-Each refactored prompt cites the previous prompt as the quality bar in its header. Forces explicit comparison; prevents drift.
+### PM-6: Stub event-type schemas for events emitted by later pipelines — SOFT
+
+First used in prompt 05 (registers `party.merged` v1 schema stub even though prompt 10b emits it). Trade-off: schema shape changes when pipeline is built pay upcaster cost (D7). Accepted so far.
 
 ### PM-7: Carry-forwards firing in 3+ prompts graduate to universal preamble — HARD (EXECUTED)
 
@@ -166,11 +189,11 @@ See `docs/universal_preamble_extension.md`. CF-1..CF-7 accumulated in 07a/07b an
 
 ### PM-8: Inline implementation code in prompts is a warning sign — SOFT
 
-If Deliverables section runs over 5K tokens, it's spec-heavy rather than contract-heavy — trading Claude Code's judgment for Partner's specificity. Describe contract (inputs, outputs, invariants, errors) when possible; inline bodies only when they're spec (regex patterns a canary must use). **HARD ceiling: ≤40 lines of inline code (whole prompt) per E-session-protocol §Per-prompt size budgets.**
+If Deliverables section runs over 5K tokens, it's spec-heavy rather than contract-heavy — trading Claude Code's judgment for Partner's specificity. Describe contract (inputs, outputs, invariants, errors) when possible; inline bodies only when they're spec (regex patterns a canary must use).
 
 ### PM-9: Sheets / features needing unregistered event types get TODO markers, not deferred prompts — HARD
 
-Prompt 07b shipped Lists/Members/Assumptions/Dashboard/Balance Sheet/Pro Forma/Budget vs Actual as sheet-builder TODOs. They populate when emitting prompts ship. Fragmenting into more prompts destroys cohesion. Same pattern in 10b-ii-α: `telephony.voicemail_transcribed` / `calendar.event.concluded` / `capture.note_created` listed as TODO comments in the manifest, not as separate sub-prompts.
+Prompt 07b ships Lists/Members/Assumptions/Dashboard/Balance Sheet/Pro Forma/Budget vs Actual as sheet-builder TODOs. They populate when emitting prompts ship. Fragmenting into more prompts destroys cohesion.
 
 ### PM-10: Stub files from earlier scaffold prompts need explicit disposition — SOFT (07c resolved xlsx stubs)
 
@@ -178,7 +201,7 @@ Prompt 02 scaffolded `xlsx_workbooks/forward.py`, `reverse.py`, `schemas.py` as 
 
 ### PM-11: Load only what the session needs from the zip — HARD
 
-Partner sessions that ingest the whole codebase run out of headroom before producing refactored prompts. Load minimum per rule-of-thumb table in Step 6. Constitutional docs are separate — always loaded fully. Code files are selective.
+Partner sessions that ingest the whole codebase run out of headroom before producing refactored prompts. Load minimum per rule-of-thumb table in Session 1 Step 5. Constitutional docs are separate — always loaded fully. Code files are selective.
 
 ### PM-12: Prompt refactor is additive AND subtractive — SOFT
 
@@ -197,42 +220,50 @@ Introduced in 07c. The xlsx reverse daemon is architecturally an L1-adjacent ada
 
 The forward xlsx daemon is the exception: it lives in `adminme/projections/xlsx_workbooks/` because it IS a projection (consumes events, regenerates derived state). It only EMITS system events; that's what §2.2 permits.
 
-Future adapter prompts (11, 12) will populate `adminme/adapters/` for adapters that don't share the daemon characteristic (Gmail, Plaid, etc.). The naming convention is therefore: `daemons/` for long-running file/clock-based watchers; `adapters/` for request/response or pull-based external integrations. Both emit domain events; both live outside the projections audit scope. **Pipelines** (10a, 10b-i, 10b-ii-α) live under `packs/pipelines/` and are also outside the projections audit scope.
+Future adapter prompts (11, 12) will populate `adminme/adapters/` for adapters that don't share the daemon characteristic (Gmail, Plaid, etc.). The naming convention is therefore: `daemons/` for long-running file/clock-based watchers; `adapters/` for request/response or pull-based external integrations. Both emit domain events; both live outside the projections audit scope.
 
 ### PM-15: Two-prompt splits when a draft asks for both new infrastructure AND a long-running daemon consuming it — HARD
 
 Surfaced by 07c. The original `prompts/07c-xlsx-workbooks-reverse.md` draft asked Claude Code to land schema additions, sidecar I/O, descriptors, diff core, full reverse daemon class, watchdog→asyncio bridge, lock contention, undo window, integration round-trip, and smoke script in one session. That overruns Claude Code's session window — proven empirically by two attempts that died partway through.
 
-Resolution: split into 07c-α (foundations: schema, sidecar I/O, descriptors, diff core, forward sidecar writer) and 07c-β (daemon class + watchdog + integration round-trip + smoke). Each fits a session; together they close the round-trip. Both PR descriptions and BUILD_LOG entries label the prompt "Part 1 of 2" / "Part 2 of 2." Same pattern reapplied at 10b-ii-α/β: infrastructure (parties-DB seam) ships with first consumer (`commitment_extraction`); second consumer (`thank_you_detection`) reuses the seam without further infrastructure work.
+Resolution: split into 07c-α (foundations: schema, sidecar I/O, descriptors, diff core, forward sidecar writer) and 07c-β (daemon class + watchdog + integration round-trip + smoke). Each fits a session; together they close the round-trip. Both PR descriptions and BUILD_LOG entries label the prompt "Part 1 of 2" / "Part 2 of 2."
 
-### PM-16: Symbol-name verification at consumer-prompt boundary — HARD
+Existing examples of the same pattern: 01 → 01a/01b/01c (architecture + cheatsheet + invariants), 07 → 07a/07b/07c-α/07c-β (ops projections + xlsx forward + xlsx round-trip foundations + xlsx reverse daemon), **10b → 10b-i/10b-ii (identity+noise / commitments+thank-you, per PR #37 sequence update 2026-04-26), then 10b-ii → 10b-ii-α/10b-ii-β (parties-DB seam + commitment_extraction / thank_you_detection, per PR #39 sequence update 2026-04-27)**.
 
-When prompt N's draft cites symbols that prompt N-1 was supposed to land (e.g., `TASKS_DESCRIPTOR`, `find_party_by_identifier`, `ctx.parties_conn_factory`), Partner verifies against what actually shipped on main, not against what the producer prompt's draft text said would land. Public vs. private API drifts are a frequent silent-failure mode at the consumer-prompt boundary. Confirmed working in 10b-ii-α (verified `PipelineContext` shape, `find_party_by_identifier` signature, `CommitmentProposedV1` Literal values against on-main code before drafting); reapplied for 10b-ii-β (verified `parties_conn_factory` is on main, `commitment.suppressed` registered at v1, `classify_thank_you_candidate@1.3.0` output shape).
+PM-15 supersedes the implicit assumption that every numbered prompt fits one session. PM-2 (four-commit discipline) is per-PR, not per-prompt-number; a split prompt ships two PRs of four commits each.
 
-### PM-17: Skill packs use a fully-fledged 09b shape — HARD
+### PM-16: Descriptor public-API discipline — SOFT
 
-Established in 09b: every skill pack ships `pack.yaml` (id, version, kind, optional model block) + `SKILL.md` (YAML frontmatter with name/namespace/version/description/input_schema/output_schema/provider_preferences/max_tokens/temperature/sensitivity_required/context_scopes_required/timeout_seconds/outbound_affecting/on_failure, plus markdown body) + `schemas/input.schema.json` + `schemas/output.schema.json` + optional `prompt.jinja2` + `handler.py` (post_process function) + `tests/test_skill.py` (pack-loader canary + handler-direct cases). 10b-i (`classify_message_nature@2.0.0`) and 10b-ii-α (`classify_commitment_candidate@3.0.0` + `extract_commitment_fields@2.1.0`) all reused this shape. 10b-ii-β reuses it again for `extract_thank_you_fields`.
+07c-α landed sheet descriptors as private symbols (`_TASKS`, `_COMMITMENTS`, `_RECURRENCES`, `_RAW_DATA`) accessible only through `descriptor_for(workbook, sheet)`, `editable_columns_for(descriptor, row)`, and the `BIDIRECTIONAL_DESCRIPTORS` tuple. The original 07c-β draft Read-first referred to them as `TASKS_DESCRIPTOR` etc. — symbols that don't exist. Neither approach is wrong on its own; the drift is the issue.
 
-### PM-18: Pipeline packs use a 10a-shape manifest + 10b-i-shape handler — HARD
+Partner discipline: when prompt N specifies module API surface, and prompt N+1 consumes that surface, prompt N+1's depth-read at refactor time must verify symbol names against what landed, not against what prompt N's draft text said would land. The Read-first block of prompt N+1 cites import paths AND symbol names; both are checked.
 
-Pipeline pack shape: `pipeline.yaml` (manifest with pack/runtime/triggers/depends_on/events_emitted/optional config blocks) + `handler.py` (implements `Pipeline` Protocol) + `tests/test_pack_load.py` (pack-loader canary). `commitment_extraction` extends with `config.example.yaml` + `config.schema.json` for per-member overrides; `thank_you_detection` reuses that shape literally. Future pipelines that don't need configurable thresholds (e.g. `recurrence_extraction`) can omit the config files.
+When the consumer prompt expects public symbols and the producer shipped private ones, either prompt N+1's refactor uses the public accessor (`descriptor_for`) or a single-purpose follow-on PR re-exports the symbols. 07c-β chose the accessor approach (cheaper; no module re-edit needed).
 
-### PM-19: Wrappers introduce field-shape stubs to verify against contract — HARD
+### PM-17: Single-seam enforcement invariants verified by exclusion-grep — HARD
 
-Surfaced in 09a. Prompts that introduce a seam must check the merged stub against the contract and fold any field-shape drift into Commit 1, not a separate PR. Reapplied for 10b-ii-α: parties-DB seam shipped in Commit 1 with `parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None` field added to `PipelineContext` AND simultaneous runner-side wiring change.
+Surfaced by 08b QC. When an invariant takes the form "X must only ever happen at one place" — e.g. [§6.13/§6.14] "every outbound call goes through `outbound()` in `lib/observation.py`; emitting `external.sent` anywhere else is a bug" — the QC verification is an exclusion-grep, not an inclusion-check. Pattern: `grep -rnE "log\.append.*external\.sent|log\.append.*observation\.suppressed" adminme/lib/ adminme/products/ adminme/projections/ adminme/daemons/ adminme/pipelines/` must return zero hits outside the single seam (`adminme/lib/observation.py`). The same pattern applies to UT-7 closure (`_ACTOR` literal grep returns 0), [§2.2] (only allowed projections emit, only allowed system events), and [§15] (no `~/.adminme` literals outside fixtures).
 
-### PM-20: HTTP-seam tests — `httpx.MockTransport` or `respx` — SOFT
+These are already mechanized in `scripts/verify_invariants.sh` for the four invariants the script covers. PM-17 generalizes the pattern: any time a future prompt introduces a new "this happens at exactly one place" rule, the prompt's Commit 4 verification block adds the exclusion-grep AND adds the canary to `verify_invariants.sh`'s permanent set. Future PMs that surface another single-seam invariant should expect to extend the script rather than duplicate the grep inline.
 
-Surfaced in 09a. Prompt 09a specified "use respx (or httpx.MockTransport)." Claude Code's tests used `httpx.MockTransport` directly. Both are acceptable. Decision deferred to first 11+ adapter prompt that adds an HTTP wrapper.
+The 08b refactor did NOT extend `verify_invariants.sh` for `external.sent` / `observation.suppressed` — the canary lives in `tests/unit/test_observation.py` instead. This is acceptable because the test asserts the seam directly (it imports `outbound` and confirms it's the only function emitting these types in observation.py's namespace), but a future Partner session may decide to lift it into the script for cross-codebase enforcement. Track: candidate for `verify_invariants.sh` extension when 09a or 11+ adds the next outbound-callable subsystem.
+
+### PM-19: Schema/contract conflicts surfaced during refactor go in the prompt's Commit 1, not in a separate sidecar — when the prompt activates the seam — HARD
+
+A prompt that introduces a new external seam (09a is the first AdministrateMe→OpenClaw HTTP seam) will surface contract drift between merged stub schemas and the actual contract the prompt is about to honor. When the drift is field-shape only (no schema-version bump, no callers to migrate), fold the fix into the prompt's Commit 1 with explicit citation in the schema docstring. Spinning a separate sidecar is correct when the drift affects merged code that's already in flight elsewhere; folding is correct when the prompt itself is the first consumer of the corrected shape. The 09a refactor demonstrates the folding path: `SkillCallRecordedV2.input_tokens` (and friends) was registered as required `int` but ADR-0002 mandates `int | None` — fix lands in 09a Commit 1 because 09a is the first emitter. PM-19 generalizes: future prompts that introduce a seam must check the merged stub against the contract and fold any field-shape drift into Commit 1, not a separate PR.
+
+### PM-20: When a wrapper introduces an HTTP seam to an external service, the test pyramid mocks the HTTP layer with `httpx.MockTransport` rather than `respx` — SOFT
+
+Surfaced in 09a. Prompt 09a specified "use respx (or httpx.MockTransport)." Claude Code's tests used `httpx.MockTransport` directly (subclassed to record requests for body-shape assertions). `respx` was added to dev deps but unused. Both are acceptable; `httpx.MockTransport` is slightly closer to the underlying library and avoids a dep when the test only needs request recording + canned responses. PM-20: future "wrapper around external service" prompts can either (a) prefer `httpx.MockTransport` directly and drop `respx` from the dep list, or (b) standardize on `respx` for fluent route assertions. Decision deferred to first 11+ adapter prompt that adds an HTTP wrapper; 09a left both available.
 
 ### PM-21: Refactored prompts ship in the build PR — HARD (graduated 2026-04-28)
 
-Surfaced in 10a QC (2026-04-26). Originally SOFT — refactored prompts were paste-only and held in chat; build_log entries served as the durable QC record. **Tracking history:**
+Surfaced in 10a QC (2026-04-26) as SOFT in flux. Historical pattern (07a–10a era) was paste-only — Partner's refactored text held in chat, James pasted into Claude Code without committing to repo. Trade-off: the on-disk file lagged what Claude Code actually executed against, but the build_log entries served as durable QC record. **Two consecutive build-prompt rounds graduated the convention to HARD:**
 
-- **10b-i (PR #38, 2026-04-26):** refactored 320-line prompt committed to repo at `prompts/10b-i-identity-and-noise.md` as part of the build PR. **First** deviation from the historical paste-only convention.
-- **10b-ii-α (PR #41, 2026-04-28):** refactored 370-line prompt committed at `prompts/10b-ii-alpha-commitment-extraction.md` as part of the build PR (separately from the four-commit phase work — Partner produced the file 2026-04-28 and James pre-loaded it onto the working branch via the same prep-PR pattern PM-24 established for long static markdown).
+- **10b-i (PR #38, merged 2026-04-26)** — refactored 320-line prompt committed to repo at `prompts/10b-i-identity-and-noise.md` as part of the build PR. First deviation from paste-only.
+- **10b-ii-α (PR #41, merged 2026-04-28)** — refactored 370-line prompt committed to repo at `prompts/10b-ii-alpha-commitment-extraction.md` as part of the build PR. Second consecutive deviation; convention graduates.
 
-**Two consecutive merges following the pattern.** PM-21 graduates from SOFT-watch to **HARD convention**: refactored prompts ship as part of the build PR's prep step. The on-disk prompt file is now authoritative for QC archaeology. **The prep PR pattern:** James creates a fresh branch, lands `prompts/<NN>-<slug>.md` via GitHub web UI (per PM-24 for long static markdown), then opens Claude Code with the build prompt for the four-commit phase work. Two PRs sequentially: prep PR with the refactored prompt + Partner-side housekeeping (build_log placeholders, partner_handoff snapshot), then build PR with the four-commit phase work.
+Going forward, **refactored prompts ship in the build PR**. The on-disk file is the canonical record of what Claude Code executed against, providing (a) file-on-disk matches build_log evidence, (b) permanent QC artifact for future Partner sessions to depth-read, (c) a single source of truth for "what shipped in this PR" — at the cost of one extra committed file per build PR (negligible). The historical paste-only files (07a through 10a) remain as unrefactored v1 drafts on disk; not blocking, not in scope for any current work, and explicitly out of scope for backfill. Partner sessions producing prompts going forward expect Claude Code to commit the refactored prompt as part of Commit 1 of the build PR, alongside whatever other Commit 1 work the prompt specifies.
 
 ### PM-22: Sequence-update and split-memo prep PRs are infrastructure, not build prompts — HARD
 
@@ -247,7 +278,7 @@ Surfaced by PR #37 (`sequence-update-10b-split`, merged 2026-04-26). When Partne
 The same convention applies to:
 - `D-prompt-tier-and-pattern-index.md` updates (which live in Partner setup, NOT in repo per James's split-memo instruction — handled out-of-band by James after the sequence PR merges).
 - Future split memos that ship as `docs/01-split-memo-NN.md` style files (the on-disk record of the Partner's Tier C decision).
-- Partner-handoff snapshot updates (PR #40 was the canonical example) — single-commit, no BUILD_LOG, planning-artifact PR.
+- Partner-state snapshot PRs that update `docs/partner_handoff.md` and/or `docs/build_log.md` outside a build session (PR #40 demonstrated this; the same pattern applies to any future "re-sync repo state to what's been Project-knowledge-uploaded" PR).
 
 PM-22 distinguishes these from the build-prompt cohort that has full ledger entries and BUILD_LOG appends in Commit 4.
 
@@ -275,25 +306,49 @@ Surfaced 2026-04-27 by three consecutive Claude Code timeouts attempting to writ
 
 **Cost / benefit.** Cost: ~60 seconds of paste-and-commit work for James in the GitHub web UI. Benefit: zero session-timeout risk on the slow operation; zero burned Claude Code sessions; clean PR on the first try. PM-24 is an admission that Claude Code's `create_file` for long markdown is not currently a reliable seam, and that routing around it is cheaper than fighting it.
 
-**Reapplication for 10b-ii-α prep PR:** James used the web-UI path for `prompts/10b-ii-alpha-commitment-extraction.md` (370 lines of static prompt prose). Same pattern recommended for the 10b-ii-β prep PR.
+### PM-25: Markdown autolinker defense for paste-targeted artifacts — HARD
 
-### PM-25: Artifact paste-render risk → ship long artifacts as downloadable files — HARD
+Surfaced 2026-04-28 by James reporting that the prep-PR Claude Code micro-prompt for 10b-ii-α arrived at the Claude Code session with autolinker artifacts: bare filenames like `02-split-memo-10b-ii.md` had been transformed into `[02-split-memo-10b-ii.md](http://02-split-memo-10b-ii.md)` by the chat client's markdown-aware renderer. The transform happens because `.md` is a valid TLD (Moldova); same failure mode hits `.io`, `.co`, `.sh`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `.html`. Claude Code receives malformed content and either fetches nonexistent URLs or treats the bracketed text as hyperlinks instead of paths. Silent failure mode that wastes the Claude Code session.
 
-Surfaced 2026-04-28 by the 10b-ii-α prep-PR micro-prompt — the artifact looked clean in the chat UI source view but rendered with autolinker brackets when copied via the chat UI. Discipline: **for any artifact > ~50 lines containing code, YAML, or JSON, Partner produces it as a downloadable file via the `create_file` + `present_files` tools, not as inline chat content.** James downloads, opens in a plain text editor, copies from there into Claude Code or the GitHub web UI, bypassing the chat client's renderer entirely. Inline chat content is acceptable only for short artifacts where the render-then-copy pathway is confirmed safe (paragraph-level guidance, BUILD_LOG entry templates James commits via text editor anyway, `partner_handoff.md` update fragments).
+**The two-belt rule.** Every Partner artifact destined to be pasted into Claude Code applies BOTH defenses:
 
-The full discipline lives in `E-session-protocol.md` §2.10 (the rule itself + the §2.9 delivery-gate item) and `C-context-loading-spec.md` ("Artifact production discipline" section).
+- **Belt 1 — backtick every bare filename in prose.** Outside fenced code blocks, any filename or dotted-path token gets single backticks: `prompts/10b-i-identity-and-noise.md`, `scripts/verify_invariants.sh`, `pyproject.toml`, `BUILD.md` §L4.
+- **Belt 2 — fence every command line.** All `git`, `gh`, `bash`, `poetry`, `mcp__github__*`, `sed -n`, `grep`, `cat <<EOF` lines live inside triple-backtick fenced blocks, never in prose.
+
+**Mandatory grep pass at §2.9.** The Job 3 delivery-gate self-check now has a seventh item: Partner runs (or simulates) the autolinker grep against every draft and reports the result before the artifact ships. The grep:
+
+```
+grep -nE '[^`]([a-zA-Z0-9_./-]+\.(md|sh|py|yaml|yml|json|toml|io|co|html))[^`]' <draft>
+```
+
+Zero matches = autolinker-safe. Any matches must be wrapped in backticks or moved into a fenced block before the artifact ships.
+
+**Distribution discipline.** Refactored prompts, prep-PR micro-prompts with embedded prompt bodies, sequence-update micro-prompts, sidecar prompts — anything James will paste into Claude Code — are produced as downloadable files via the file-creation tool, NOT as inline chat content. James downloads the file, opens in a plain text editor, copies from there into Claude Code, bypassing the chat client's renderer entirely. Inline chat content is acceptable only for short artifacts where the render-then-copy pathway is confirmed safe (paragraph-level guidance, BUILD_LOG entry templates James commits via text editor anyway, `partner_handoff.md` update fragments).
+
+The full discipline lives in `E-session-protocol.md` §2.10 (the rule itself + the §2.9 delivery-gate item) and `C-context-loading-spec.md` ("Artifact production discipline" section). Both Partner setup files were updated in the same Project-knowledge refresh that introduced this PM. Future Partner sessions are expected to apply both belts on every artifact, run the §2.9 item-7 grep, and ship paste-targeted artifacts as downloadable files.
 
 **Canonical failure case:** the 2026-04-28 prep-PR micro-prompt for 10b-ii-α — the artifact looked clean in the chat UI source view but rendered with autolinker brackets when copied. Fix shipped same-day: `E-session-protocol.md` §2.10 + `C-context-loading-spec.md` artifact-production section + this PM-25 entry.
 
 ### PM-26: Post-PM-7 byte-budget calibration drift in E-session-protocol §2.9 — SOFT (proposed)
 
-Surfaced 2026-04-28 during 10b-ii-β refactor self-check. The current `E-session-protocol.md` §Per-prompt size budgets table sets `Total prompt size: ≤ 25 KB` with rationale "token economy in Claude Code's reading pass." Empirically, the universal preamble alone (post-PM-7 slim form) is ~5 KB; a 17-item Read-first block is another ~5 KB; Operating Context plus Deliverables put any well-formed post-PM-7 prompt at ~30–40 KB. 10b-ii-α (370 lines, ~40 KB) shipped successfully; 10b-ii-β (330 lines, ~39 KB) is forecast to ship successfully on the same empirical basis.
+Surfaced 2026-04-28 during Job 3 delivery-gate self-check on the 10b-ii-β refactored prompt. The gate's per-prompt 25KB ceiling was calibrated against pre-PM-7 prompts (07a, 07b at ~600 lines / 25KB) when each prompt re-stated its own preamble. Post-PM-7 (slim universal preamble + `scripts/verify_invariants.sh`), refactored prompts should be smaller per PM-12, and they are by line count — but per-character byte size has not collapsed proportionally because each prompt now needs richer Read-first citations (filenames, line ranges, symbol names) that the preamble removed from boilerplate.
 
-**The 25 KB ceiling appears to be a measurement artifact** of the budget-table calibration predating universal-preamble extraction. Line count remains the operationally relevant signal; the line-count budget (≤350 lines) is consistent with empirical session-window observations.
+**Empirical evidence:**
 
-**Proposed fix (deferred — not blocking 10b-ii-β):** at the next E-session-protocol revision (Partner setup file refresh), update the byte-budget row to `Total prompt size: ≤ 45 KB` OR replace it with a deliverables-density metric (e.g., new modules per prompt, which is already captured at "≤4 net-new modules"). Until then, line-count is the binding signal at §2.9.
+- 10b-i refactored prompt: 320 lines / ~37KB.
+- 10b-ii-α refactored prompt: 370 lines / ~42KB.
+- 10b-ii-β refactored prompt: 330 lines / ~39KB.
 
-**Why SOFT, not HARD:** the budget-table is in Partner setup, not in repo, so the fix is a Partner-side documentation refresh rather than a sequence-update PR. Defer until 10c orientation surfaces another data point or until a Partner setup refresh cycle naturally rolls.
+All three exceed the 25KB ceiling. All three are within the 350-line ceiling (10b-ii-α exceeds slightly but was accepted by James as scoped to its multi-pack scope). All three QC-validated cleanly through Claude Code with zero session-window-overrun observations.
+
+**Disposition (proposed for Tier C decision):**
+
+The 25KB ceiling is artifact-of-calibration drift. The line-count ceiling (350) remains the binding signal of session-budget pressure; KB ceiling tracks the same dimension less reliably post-PM-7 because the line-cost-per-fact has dropped while character-cost-per-fact has grown. Two options:
+
+- **(a) Recalibrate the byte ceiling upward** (proposal: 50KB) to match post-PM-7 empirical prompt sizes. Keeps the dual-signal gate but at properly-calibrated thresholds.
+- **(b) Demote byte ceiling to a SOFT signal**, retain line-count as the HARD ceiling, and add a session-window canary (e.g., "if Partner can articulate the prompt's scope in three sentences, it fits one session" — qualitative but cheap).
+
+PM-26 status: **proposed; Partner sessions through 10c apply line-count as the binding gate and treat byte size as informational only.** Decision can be taken at any future Type 0 (workflow-only) Partner session by James in consultation with Partner; not blocking any current build work.
 
 ---
 
@@ -303,31 +358,89 @@ Surfaced 2026-04-28 during 10b-ii-β refactor self-check. The current `E-session
 
 Original 07.5 assumed 11 projections in one prompt. After 07a/07b/07c-α/07c-β split, it audits four ops prompts together as a cohort. Audit landed at `docs/checkpoints/07.5-projection-consistency.md` on 2026-04-25 post-07c-β merge. Verdict PASS with one non-critical sidecar finding (C-1, queued as `sidecar-raw-data-is-manual-derived`). Status: **CLOSED**.
 
-### UT-2: Proactive pipeline registration path (10c) — OPEN
+### UT-2: Proactive pipeline registration path (10c)
 
-`[D1]` confirmed: proactive pipelines register via workspace-prose `AGENTS.md` + `openclaw cron add`. Prompt 10c will generate both. Concrete question: does bootstrap §8 concatenate per-pipeline markdown into AGENTS.md and issue cron adds, or ship AGENTS.md pre-written? Answer lands when 10c is refactored. Tracked in UT-13 since the broader split shape for 10c is the larger open question.
+`[D1]` confirmed: proactive pipelines register via workspace-prose `AGENTS.md` + `openclaw cron add`. Prompt 10c will generate both. Concrete question: does bootstrap §8 concatenate per-pipeline markdown into AGENTS.md and issue cron adds, or ship AGENTS.md pre-written? Answer lands when 10c is refactored.
 
 ### UT-3 (RESOLVED 2026-04-25): Prompt 08 split executed
 
-Prompt 08 split into **08a (Session + scope, read side)** and **08b (governance + observation + UT-7 closure, write side)**. Status: **RESOLVED**.
+Prompt 08 split into **08a (Session + scope, read side)** and **08b (governance + observation + UT-7 closure, write side)**. The architectural decision is recorded at `docs/2026-04-25-prompt-08-split.md` (the on-repo split memo from a prior Partner session). The `prompts/PROMPT_SEQUENCE.md` sequence-table and dependency-graph updates landed in an earlier commit. The `split-08-2026-04-25` PR closed the gap by landing `prompts/08a-session-and-scope.md` and `prompts/08b-governance-and-observation.md` and updating this handoff state.
 
-### UT-4 through UT-10 — all RESOLVED in earlier sessions.
+The 60 attention sites catalogued by the 07.5 audit (48 explicit `# TODO(prompt-08)` markers across 10 sqlite projection `queries.py` files + 12 implicit attribution sites in `adminme/daemons/xlsx_sync/reverse.py`) split: 48 to 08a (projection query integration), 12 to 08b (reverse-daemon attribution). Status: **RESOLVED**. UT-7 carries forward into 08b (or 08.5 if the reverse-daemon rewrite triggers the sidecar hedge per 08b's Commit 3).
 
-(See git history of this file for closure dates and contexts.)
+### UT-4: Placeholder values in xlsx protection passwords
 
-### UT-11: Pipeline pack location — CLOSED 2026-04-26
+07b uses `"adminme-placeholder"` as sheet-protection password. Real secret flow lands in prompt 16 (bootstrap wizard §5). Do not resolve earlier.
 
-Convention `packs/pipelines/<n>/` confirmed by 10b-i shipping there with no friction; mirrors 09b's `packs/skills/<n>/`. Status: **CLOSED**.
+### UT-5: `<commit4>` and `<merge date>` placeholders in BUILD_LOG — current
 
-### UT-12: Parties-DB seam decision — CLOSED 2026-04-28
+07a and 07b entries had literal `<commit4>` and `<merge date>` placeholders. **Filled post-merge during Partner's QC pass per the rubric.** 07c-α entry filled with PR #20, commits aa395dd / 7305acd / fcdb592 / 1d770ec, merge date 2026-04-24. 07c-β entry filled with PR #21, commits ffa6d9c / bf649ed / 00bff7d / 2788761, merge date 2026-04-25. **08a and 08b entries advanced 2026-04-25 QC**: merge date filled (`2026-04-25`) and `Outcome` flipped to `MERGED`. PR numbers and commit SHAs left as `<PR-08a>` / `<PR-08b>` / `<sha1-08a>` etc. placeholders for James to find-and-replace from `gh pr list --state merged --limit 5` before committing the housekeeping PR. **10b-ii-α entry advanced this session (2026-04-28 QC)**: filled with PR #41, commits a8e1e09 / 2995d13 / 5e37a27 / 8671d06, merge date 2026-04-28. **10b-ii-β entry has placeholders pending merge.** Expected sequence: PR #21 = 07c-β; PR #22 = split-08 prep (drafts only, no code); PR #23 = 08a; PR #24 = 08b; PR #29 = 09a; PR #33 = 10a; PR #38 = 10b-i; PR #41 = 10b-ii-α. UT-5 will surface again after the 10b-ii-β merge.
 
-Three options surfaced during 10b-i QC: (a) thread `parties_conn_factory` through `PipelineContext`; (b) use 10b-i's injectable-loader pattern for `commitment_extraction` too (degenerate-clean); (c) split 10b-ii into 10b-ii-α and 10b-ii-β. Resolution baked into the split: **option (c)+(a)** — split itself is option (c); parties-DB seam wired through `PipelineContext` as 10b-ii-α's Commit 1 is option (a). PR #41 (10b-ii-α) shipped this resolution 2026-04-28. Status: **CLOSED**.
+### UT-6: Sidecar-state JSON pathway for xlsx round-trip — RESOLVED 2026-04-25
+
+Per BUILD.md §3.11 line 1009 + line 1015, the sidecar is written by both daemons: forward writes it after each regeneration (in the same lock as the xlsx write), and reverse rewrites it at the end of each cycle. Sidecar lives at `<instance_dir>/projections/.xlsx-state/<workbook>/<sheet>.json` (sibling to xlsx files).
+
+07c-α landed the forward half (PR #20, merged 2026-04-24); 07c-β landed the reverse half (PR #21, merged 2026-04-25). The 07.5 audit confirmed the pathway is closed at both ends with three canaries: `tests/unit/test_xlsx_forward_writes_sidecar.py`, `tests/unit/test_xlsx_reverse_cold_start.py`, `tests/integration/test_xlsx_roundtrip.py`. Status: **RESOLVED**.
+
+### UT-7: Reverse-daemon emit path bypasses Session / guardedWrite — RESOLVED 2026-04-25
+
+The xlsx reverse daemon (07c-β, merged 2026-04-25 via PR #21) emitted domain events through `EventLog.append()` directly, with `actor_identity="xlsx_reverse"` as a documented placeholder, without routing through Session/guardedWrite/scope checks.
+
+**Closed by 08b (PR #&lt;PR-08b&gt;, merged 2026-04-25).** The reverse-daemon rewrite stayed in 08b's Commit 3 — the **sidecar hedge to 08.5 was NOT activated** because the rewrite proved mechanical (single `_append` helper signature change + new `_session_for(workbook)` per-cycle helper + per-pathway plumbing through eight `_emit_*` methods, all hanging off the existing seam). The 08b Evidence section enumerates the closure precisely:
+
+- `_ACTOR = "xlsx_reverse"` literal at line 91 removed; `grep -nE "_ACTOR\s*=" adminme/daemons/xlsx_sync/reverse.py` returns 0.
+- `_append` helper now takes `session: Session`, derives `actor_identity` from `session.auth_member_id`, returns `str | None` to support guarded-write refusals.
+- New `XlsxReverseDaemon.__init__` parameters: `guarded_write: GuardedWrite | None`, `principal_member_id_resolver: Callable[[str], str | None] | None`. Both optional for backward compatibility; when wired, every `_append` routes through the three-layer check before append.
+- New helper `_session_for(workbook)` constructs the per-cycle Session via `build_session_from_xlsx_reverse_daemon(detected_member_id, config)` (added to `adminme/lib/session.py` line 367).
+- Each of the eight `_emit_*` methods threads the cycle's session through and replaces literal `"xlsx_reverse"` references in `*_by_party_id` payload fields with `session.auth_member_id`.
+- Cycle-terminus `xlsx.reverse_projected` and skip-cycle `xlsx.reverse_skipped_during_forward` events stay system-attributed (`actor_identity="xlsx_reverse"`) per [§13] — they are system observability signals, not domain events.
+- Closure canary: `tests/integration/test_xlsx_roundtrip.py` UT-7 case asserts `actor_identity == principal_member_id` (NOT `"xlsx_reverse"`) for the principal-attributed domain emits. Test passes.
+
+Status: **RESOLVED 2026-04-25**.
+
+### UT-8: vector_search privileged-exclusion is a per-projection carve-out — RESOLVED 2026-04-25
+
+Per `[§13.9]` and `[§6.10]`, `vector_search` excludes privileged events outright (not just redacts). 08a's uniform `privacy_filter` does not handle this; the projection needed a per-projection carve-out.
+
+**Closed by 08a (PR #&lt;PR-08a&gt;, merged 2026-04-25).** The carve-out shipped inline in `adminme/projections/vector_search/queries.py` exactly as the 08a draft anticipated — Claude Code did NOT need to surface a more general pattern, so the carve-out stayed local to `vector_search` rather than lifting to a named function in `scope.py`. The implementation is **three layers of defense**:
+
+1. **Handler refuses to insert privileged rows at write time.** Privileged content never reaches the vector index in the first place.
+2. **SQL filter at read time** — every `nearest()` query has hardcoded `WHERE vi.sensitivity != 'privileged'`. The exclusion is NOT session-controlled — even a principal-as-owner query for their own privileged content returns empty here, because `vector_search` is permanently privileged-free per [§13.9].
+3. **`scope.allowed_read` re-check** as a defense-in-depth third line — if a privileged row somehow leaked into the index, the filter would still drop it from results.
+
+The `nearest()` docstring (lines 49–69) cites all three layers + `[§13.9]` + `[§6.9]` + UT-8 explicitly. Per-cell tests in `tests/unit/test_scope.py` (the privileged × ambient/principal × owner_scope cells) confirm the SQL exclusion is evaluated regardless of session role. No `ScopeViolation` is raised on a privileged-owned vector_search query — the path returns empty so coach context builders downstream cannot inadvertently leak existence through error semantics.
+
+Status: **RESOLVED 2026-04-25**.
+
+### UT-9: ALLOWED_EMITS per-file allowlisting in scripts/verify_invariants.sh
+
+09a Commit 4 extends `ALLOWED_EMITS` to permit three new event types from `adminme/lib/skill_runner/wrapper.py`. The xlsx single-seam pattern (`ALLOWED_EMIT_FILES`) was carried forward as a comment in 07c-α. 09a ships using the same pattern if the script structure supports it cleanly; if not, falls back to test-side enforcement per PM-17 (the path 08b chose for `external.sent`/`observation.suppressed`). After 09a merges, Partner reviews which path was taken and decides whether to harden the script's per-file allowlist support — a candidate single-purpose PR. Status: **partially resolved 2026-04-26**. 09a took the script-side path: `scripts/verify_invariants.sh` now contains a `SKILL_EMITS` block that greps for `skill.call.{recorded,failed,suppressed}` outside the wrapper file. Pattern is grep-based (matches `event_type="..."` literals) rather than the more elaborate per-file allowlist 07c-α deferred. Future Partner sessions can lift `external.sent` / `observation.suppressed` from test-side to script-side using this same pattern when convenient. Tracked as a future single-purpose PR; not blocking.
+
+### UT-9: Pack-root resolution accepts three forms; production should converge on one — RESOLVED 2026-04-26
+
+Introduced in 09a. `adminme/lib/skill_runner/wrapper.py::_resolve_pack_root` accepts three forms of `skill_id`: absolute path, repo-relative slug (test convenience), and `namespace:name` form. Production callers (pipeline runner from 10a onward) were tracked to pass absolute paths derived from `InstanceConfig.packs_dir` so the resolver only sees one shape in production.
+
+**Closed by 10a (PR #33, merged 2026-04-26).** `PipelineRunner.discover(builtin_root, installed_root)` takes both roots as explicit absolute `Path` arguments — callers (production = the future bootstrap §7 wiring; tests = `tests/integration/test_pipeline_runner_integration.py`) pass absolute paths and the loader does not fall back to slug resolution. The runner's `_make_callback` constructs `PipelineContext.run_skill_fn` bound to `run_skill` directly, and pipelines call `await ctx.run_skill_fn(skill_id, inputs, SkillContext(...))` — when production pipelines start landing in 10b-i, they pass absolute paths via `InstanceConfig.packs_dir / "skills" / "<pack-name>"` (the convention is to be confirmed in 10b-i's refactor). The slug fallback in `_resolve_pack_root` remains as test-convenience only; not retired in a sidecar this session because it is not blocking and the convention is now load-bearing in 10a's discovery contract. Status: **RESOLVED 2026-04-26**. If a future Partner session wants to delete the slug fallback for cleanliness, that is a single-purpose PR; not blocking.
+
+### UT-10: Pipeline pack shape vs. skill pack shape — distinct loaders by design
+
+Surfaced in 10a (2026-04-26). `adminme/lib/skill_runner/pack_loader.py` parses the canonical *skill pack* shape (`pack.yaml` + `SKILL.md` frontmatter + `schemas/{input,output}.schema.json` + `prompt.jinja2` + optional `handler.py:post_process`). 10a introduced `adminme/pipelines/pack_loader.py` parsing the *pipeline pack* shape (`pipeline.yaml` + `handler.py` exposing the class named in `runtime.class`, no SKILL.md, no prompt.jinja2). Both loaders cache by `(pack_id, version)`; both expose `invalidate_cache()` for tests; both use `importlib.util.spec_from_file_location` with a sanitized module-name prefix to avoid cross-pack import collisions. **Status: not a tension — by-design distinct.** Logged so future Partner sessions don't try to unify them: pipeline packs structurally cannot reuse the skill-pack loader (no SKILL.md, no input/output schemas, an instantiable class instead of a function). UT-10 stays open as a tracking entry until 10b-i / 10b-ii-α / 10b-ii-β / 10c confirm the dual-loader pattern is comfortable in practice.
+
+### UT-11: Pipeline pack location — `packs/pipelines/` vs `adminme/pipelines/` — RESOLVED 2026-04-26
+
+Surfaced by PR #37 QC (2026-04-26). The 10b split memo at `docs/01-split-memo-10b.md` specifies pipeline packs at `packs/pipelines/identity_resolution/` etc., mirroring 09b's `packs/skills/`. 10a's `PipelineRunner.discover(builtin_root, installed_root)` walks two roots: in-tree `adminme/pipelines/` (builtin) and `instance_config.packs_dir / "pipelines"` (installed). The split memo's path is consistent with the `installed_root` second arg if `instance_config.packs_dir == "packs/"` — probable but unconfirmed without depth-reading 10a's runner.py. The 10b-i refactor session must verify the path convention against shipped 10a code before drafting Read first / Deliverables. Resolution lands when 10b-i refactor confirms or reconciles. Status: ~~OPEN, blocking 10b-i refactor~~ **RESOLVED 2026-04-26 by 10b-i merging.** 10b-i shipped `packs/pipelines/identity_resolution/` and `packs/pipelines/noise_filtering/` with no friction; the split memo's path matched 10a's `installed_root = instance_config.packs_dir / "pipelines"` once `packs_dir` resolves to the repo's `packs/` (or the instance's `packs/` post-bootstrap). Convention now confirmed: pipeline packs live at `packs/pipelines/<n>/` mirroring 09b's `packs/skills/<n>/`. 10b-ii-α and 10b-ii-β continue this exact convention.
+
+### UT-12: Parties-DB seam through PipelineContext — CLOSED 2026-04-28
+
+Surfaced by 10b-i QC (2026-04-27); closed by 10b-ii-α merge (PR #41, 2026-04-28). 10b-i shipped `identity_resolution` in degenerate-clean mode — `_default_candidate_loader` returns `[]` because `PipelineContext` did not expose a parties-projection connection. Three options were on the table: (a) thread `parties_conn_factory` through `PipelineContext` as 10b-ii's Commit 1, (b) use 10b-i's injectable-loader pattern again, (c) split 10b-ii into 10b-ii-α and 10b-ii-β. The Partner session of 2026-04-27 selected **option (c)+(a)** — split 10b-ii into 10b-ii-α (parties-DB seam wiring + commitment_extraction) and 10b-ii-β (thank_you_detection reusing the seam). 10b-ii-α merged 2026-04-28 with `parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None` on `PipelineContext`, threaded through `PipelineRunner.__init__` as an optional kwarg with default `None` for backward compatibility (all 5 existing 10a runner-integration construction sites stay green without modification). The seam is now generally available to any pipeline that needs read access to the parties projection; 10b-ii-β is the second consumer.
+
+Status: **CLOSED 2026-04-28**.
 
 ### UT-13: 10c is the next pre-split candidate — OPEN
 
-`D-prompt-tier-and-pattern-index.md` flags 10c (proactive pipelines: `morning_digest`, `paralysis_detection`, `reminder_dispatch`, `reward_dispatch`, plus possibly `recurrence_extraction`, `closeness_scoring`, `relationship_summarization`) as a pre-split candidate. Per `docs/architecture-summary.md` §5, several are reactive and several are proactive. The split shape will depend on whether they group by trigger mechanism (reactive vs. proactive — natural coupling to OpenClaw standing-order registration) or by capability axis (commitment-flavored vs. recurrence-flavored vs. relationship-flavored). The Partner session that opens 10c orientation will forecast the split before drafting per PM-23. UT-2 (AGENTS.md concatenation path for proactive pipeline registration) is a sub-question that splits along with 10c.
+`D-prompt-tier-and-pattern-index.md` flags 10c (proactive pipelines: `morning_digest`, `paralysis_detection`, `reminder_dispatch`, `reward_dispatch`, plus possibly `recurrence_extraction`, `closeness_scoring`, `relationship_summarization`) as a pre-split candidate. Per `docs/architecture-summary.md` §5, several of these are reactive (`recurrence_extraction`, `closeness_scoring`, `relationship_summarization`) and several are proactive (`morning_digest`, `reminder_dispatch`, `reward_dispatch`). The split shape will depend on whether they group by trigger mechanism (reactive vs. proactive — natural coupling to OpenClaw standing-order registration in 10c's case) or by capability axis (commitment-flavored vs. recurrence-flavored vs. relationship-flavored). The Partner session that opens 10c orientation will forecast the split before drafting per PM-23.
 
-**Status:** OPEN, resolves at 10c orientation. **Becomes the active focus once 10b-ii-β merges.**
+**Status:** OPEN, resolves at 10c orientation. UT-2 (AGENTS.md concatenation path for proactive pipeline registration) is a sub-question that splits along with 10c.
 
 ---
 
@@ -341,8 +454,6 @@ Big cases (07b onward): two sessions. Session 1 runs QC of latest merge, writes 
 
 Mirrors Claude Code's incremental-commit discipline: cap per-session cognitive load, make handoffs explicit.
 
-**For 10b-ii-α → 10b-ii-β specifically:** the QC was clean and the refactor was small (sub-prompt of a secondary split, no new infrastructure, no new event types), so a Type 1 combined session worked cleanly 2026-04-28.
-
 ### End every Chat session by updating this file
 
 Under "Current build state": update "last updated" date, move merged prompts from "PR open" to "merged," update "next task queue."
@@ -355,4 +466,96 @@ Rule: if a future Partner session would benefit from knowing this, write it here
 
 ### Don't trust cached readings across sessions
 
-The 9 constitutional docs are not cached between Chat sessions. Fresh instance hasn't read them. Re-read as needed via `project_knowledge_search`.
+The 9 constitutional docs are not cached between Chat sessions. Fresh instance hasn't read them. Every new session re-reads them in full in Step 1. Non-negotiable.
+
+Similarly, don't trust your cached reading of the **codebase** across sessions. The zip is the source of truth for code state. If session N built code, session N+1 verifies it in the zip before referencing it.
+
+### Always produce full file replacements for build_log.md and partner_handoff.md — HARD (James, 2026-04-28)
+
+Partner does NOT produce patch instructions for `docs/build_log.md` or `docs/partner_handoff.md`. Ever. Always full and complete files ready to upload to repo as drop-in replacements for the current files. James pastes full files into the GitHub web UI per PM-24, or commits via local clone — but the artifacts Partner produces are always whole files.
+
+This rule was made explicit by James 2026-04-28 after a Partner session produced a build_log patch when a full-file replacement was wanted. "Now and always" — bake into Partner discipline indefinitely.
+
+---
+
+## File layout quick reference
+
+```
+<repo root>/
+├── ADMINISTRATEME_BUILD.md                      # constitutional
+├── ADMINISTRATEME_CONSOLE_PATTERNS.md           # constitutional
+├── ADMINISTRATEME_CONSOLE_REFERENCE.html        # constitutional
+├── ADMINISTRATEME_DIAGRAMS.md                   # constitutional
+├── ADMINISTRATEME_REFERENCE_EXAMPLES.md         # constitutional
+├── ADMINISTRATEME_FIELD_MANUAL.md               # for James (not Partner)
+├── README.md                                    # for James
+├── docs/
+│   ├── SYSTEM_INVARIANTS.md                     # constitutional
+│   ├── DECISIONS.md                             # constitutional
+│   ├── architecture-summary.md                  # constitutional
+│   ├── openclaw-cheatsheet.md                   # constitutional
+│   ├── build_log.md                             # LIVE: Claude Code's record
+│   ├── partner_handoff.md                       # THIS FILE
+│   ├── qc_rubric.md                             # companion
+│   ├── universal_preamble_extension.md          # PM-7 proposal (EXECUTED)
+│   ├── preflight-report.md                      # prompt 00's artifact
+│   ├── 01-split-memo-10b.md                     # MERGED (Tier C split memo for 10b → 10b-i / 10b-ii)
+│   ├── 02-split-memo-10b-ii.md                  # MERGED 2026-04-27 (Tier C secondary-split memo for 10b-ii → 10b-ii-α / 10b-ii-β)
+│   ├── 2026-04-25-prompt-08-split.md            # earlier Tier C split memo (08 → 08a / 08b)
+│   ├── adrs/                                    # ADRs (longer form than DECISIONS entries)
+│   ├── checkpoints/                             # checkpoint audit memos (Tier C — landed via partner-state PRs)
+│   │   └── 07.5-projection-consistency.md       # MERGED 2026-04-25 (closes UT-1)
+│   └── reference/                               # mirrored external docs
+├── scripts/
+│   ├── verify_invariants.sh                     # canonical invariant-grep (PM-7)
+│   ├── demo_event_log.py
+│   ├── demo_projections.py
+│   ├── demo_xlsx_forward.py
+│   └── demo_xlsx_roundtrip.py                   # added by 07c-β
+├── prompts/
+│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy; slim preamble; 10b row split via PR #37; 10b-ii row split via PR #39)
+│   ├── 00-preflight.md ... 19-phase-b-smoke-test.md
+│   ├── 07a-projections-ops-spine.md
+│   ├── 07b-xlsx-workbooks-forward.md
+│   ├── 07c-alpha-foundations.md                # MERGED (PR #20, 2026-04-24)
+│   ├── 07c-beta-reverse-daemon.md              # MERGED (PR #21, 2026-04-25)
+│   ├── 07.5-checkpoint-projection-consistency.md  # source contract; audit memo at docs/checkpoints/
+│   ├── 08-session-scope-governance.md          # RETIRED (superseded by 08a + 08b)
+│   ├── 08a-session-and-scope.md                # MERGED (PR #&lt;PR-08a&gt;, 2026-04-25)
+│   ├── 08b-governance-and-observation.md       # MERGED (PR #&lt;PR-08b&gt;, 2026-04-25)
+│   ├── 09a-skill-runner.md                     # MERGED (PR #29, 2026-04-26)
+│   ├── 09b-first-skill-pack.md                 # MERGED
+│   ├── 10a-pipeline-runner.md                  # MERGED (PR #33, 2026-04-26; on-disk file is unrefactored v1 per PM-21 historical note)
+│   ├── 10b-reactive-pipelines.md               # RETIRED 2026-04-26 (PR #37; superseded by 10b-i + 10b-ii)
+│   ├── 10b-i-identity-and-noise.md             # MERGED (PR #38, 2026-04-26; refactored 320-line prompt committed per PM-21)
+│   ├── 10b-ii-alpha-commitment-extraction.md   # MERGED (PR #41, 2026-04-28; refactored 370-line prompt committed per PM-21)
+│   ├── 10b-ii-beta-thank-you-detection.md      # PENDING (refactored 2026-04-28; queued for prep PR; PR # / merge date upon merge)
+│   ├── d01-*.md ... d08-*.md                    # diagnostic prompts
+│   ├── prompt-01a-openclaw-cheatsheet.md
+│   ├── prompt-01b-architecture-summary.md
+│   ├── prompt-01c-system-invariants.md
+│   └── sidecar-prompt-sequence-version-drift.md
+├── adminme/
+│   ├── events/{log,bus,envelope,registry}.py
+│   ├── events/schemas/{ingest,crm,domain,governance,ops,system,messaging}.py
+│   ├── projections/{base,runner}.py + 11 subdirs (10 sqlite + xlsx_workbooks)
+│   ├── daemons/                                 # PM-14: adapters/daemons that emit domain events
+│   │   └── xlsx_sync/                           # populated by 07c: diff.py, sheet_schemas.py, reverse.py
+│   ├── pipelines/                              # MERGED 10a (base.py, pack_loader.py, runner.py); 10b-ii-α extended PipelineContext + PipelineRunner with parties_conn_factory; pipeline PACKS live under packs/pipelines/ — UT-11 CLOSED 2026-04-26
+│   ├── lib/instance_config.py
+│   ├── lib/session.py                          # MERGED 08a (Session dataclass, 3 constructors + xlsx_reverse_daemon constructor)
+│   ├── lib/scope.py                            # MERGED 08a (allowed_read, privacy_filter, coach_column_strip, child_hidden_tag_filter, ScopeViolation, CHILD_FORBIDDEN_TAGS)
+│   ├── lib/governance.py                       # MERGED 08b (GuardedWrite three-layer; ActionGateConfig, RateLimiter, AgentAllowlist)
+│   ├── lib/observation.py                      # MERGED 08b (outbound() single seam per [§6.13/§6.14]; ObservationManager default-on)
+│   ├── lib/skill_runner/                       # MERGED 09a (wrapper.py, pack_loader.py)
+│   └── (products, openclaw_plugins, cli, adapters — stubs or partial)
+├── tests/{unit,integration,fixtures,e2e}/
+├── console/  bootstrap/  packs/                 # packs/skills/{classify_thank_you_candidate, classify_message_nature, classify_commitment_candidate, extract_commitment_fields}; packs/pipelines/{identity_resolution, noise_filtering, commitment_extraction}; thank_you_detection pending 10b-ii-β
+└── pyproject.toml  poetry.lock  .gitignore
+```
+
+---
+
+## End of handoff document
+
+Partner: steps 1–6 before any real work. Orient before acting.

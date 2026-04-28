@@ -123,13 +123,6 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `adminme/lib/skill_runner/wrapper.py` — `run_skill()` 9-step flow per [BUILD.md L4-continued] + [ADR-0002]. Provider-preference fallback iterates inside the wrapper; one POST per provider per attempt; deterministic 4xx and malformed 200 short-circuit the loop. Module-level event-log DI via `set_default_event_log()` mirrors 08b's `outbound()` pattern.
   - `adminme/lib/skill_runner/pack_loader.py` — parses `pack.yaml` + `SKILL.md` frontmatter + `schemas/input.schema.json` + `schemas/output.schema.json` + optional `handler.py`. Schemas validated with `Draft202012Validator.check_schema()`; cache by `(pack_id, version)`; `invalidate_cache()` test hook.
   - `packs/skills/classify_test/` — full pack scaffold for tests; trivial `(text) -> (is_thing, confidence)` classifier.
-  - `adminme/events/schemas/domain.py` — `SkillCallRecordedV2.input_tokens`, `output_tokens`, `cost_usd`, and `openclaw_invocation_id` relaxed to Optional per `[ADR-0002]` graceful-degradation clause.
-  - `adminme/events/schemas/system.py` — `SkillCallFailedV1` (closed-enum `failure_class`) and `SkillCallSuppressedV1` (closed-enum `reason`) registered at v1.
-  - `scripts/verify_invariants.sh` — extended with a single-seam check that `skill.call.recorded`, `skill.call.failed`, `skill.call.suppressed` are emitted only from `adminme/lib/skill_runner/wrapper.py`. Same single-seam pattern as the xlsx forward projector.
-  - `pyproject.toml` — `jsonschema >=4.21` (runtime, used by wrapper + pack_loader) and `respx` (dev) added; mypy `ignore_missing_imports` overrides for both. `markers = ["requires_live_services: ..."]` declared so the integration stub doesn't warn.
-  - 14 unit tests (`tests/unit/test_skill_wrapper.py`) covering the full failure-mode pyramid: happy path with body-shape assertion, input invalid, sensitivity refused, scope insufficient, provider fallback (5xx → next provider), all providers 5xx, malformed 200 envelope, timeout, handler raises (defensive default returned + raw response saved), output validation fails, observation-mode short-circuit, dry-run short-circuit, large-input spillover, token/cost graceful degradation. All HTTP routed through `httpx.MockTransport` (the AdministrateMe sandbox has no live OpenClaw gateway).
-  - 10 pack-loader tests (`tests/unit/test_pack_loader.py`) — manifest fields, schema validation samples, no-handler / handler-loaded / handler-without-`post_process`, cache hit, cache invalidation, malformed yaml, invalid JSON Schema.
-  - 6 schema tests (`tests/unit/test_event_schemas.py`) — `SkillCallRecordedV2` accepts `None` tokens and cost; `SkillCallFailedV1` round-trip + rejects bad `failure_class`; `SkillCallSuppressedV1` round-trip + rejects bad `reason`.
   - `tests/integration/test_skill_wrapper_live.py` — live integration stub marked `requires_live_services`, skipped in Phase A.
   - `[§7]`/`[D7]`: `skill.call.failed` and `skill.call.suppressed` registered at v1.
   - `[§8]`/`[D6]`: zero new SDK imports; `verify_invariants.sh` clean.
@@ -212,10 +205,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `packs/pipelines/noise_filtering/{pipeline.yaml,handler.py,tests/test_pack_load.py}` — `NoiseFilteringPipeline` calls `classify_message_nature` once per inbound; emits `messaging.classified` with full skill provenance; defensive-default = "personal" / confidence 0.0 on skill failure (does NOT propagate exceptions per [§7.7]).
   - `packs/skills/classify_message_nature/` — full 09b-shape skill pack at v2.0.0 ([BUILD.md §1136] names it `classify_message_nature@v2`). 3 unit tests via pack-loader canary + handler-direct. **Minor undershoot vs 09b reference** (`classify_thank_you_candidate` ships 4 handler-direct cases; this pack folds the non-dict-input case into the `coerces_when_classification_missing` test). Cosmetic; coverage is the same.
   - `adminme/events/schemas/crm.py` — appended `IdentityMergeSuggestedV1` registered at v1; `candidate_kind` is closed `Literal["email", "phone", "imessage_handle"]`.
-  - `adminme/events/schemas/ingest.py` — appended `MessagingClassifiedV1` registered at v1; `classification` is closed `Literal["noise", "transactional", "personal", "professional", "promotional"]`.
-  - Integration tests at `tests/integration/test_pipeline_10b_i_integration.py` — 4 round-trip tests against the live runner.
-  - **Total new tests: 22** (3 skill-pack handler-direct + 1 identity_resolution pack-load + 8 unit + 1 noise_filtering pack-load + 5 unit + 4 integration). Suite tally: 423 → 447 passed. **QC F-1 (cosmetic):** the original BUILD_LOG entry written in the merged Commit 4 claimed 24 tests; actual is 22 (the breakdown overcounted identity_resolution unit by 1 and noise_filtering unit by 1). Corrected here.
-  - **QC F-3 (overshoot, positive signal):** extra unit test `test_exact_match_returns_without_emit` shipped beyond the prompt's Commit 2 plan — covers the case where an existing identifier already owns the inbound's `value_normalized` (return without emit; the parties projection already has the link). Smart addition; logged.
+  - `adminme/events/schemas/messaging.py` — appended `MessagingClassifiedV1` registered at v1; `nature` is closed `Literal["personal", "transactional", "promotional", "noise"]`; full skill provenance fields on the envelope per [REFERENCE_EXAMPLES.md §3 footer pattern].
+  - **Total new tests: 22** (3 schema-registry + 1 pack-load identity + 8 identity_resolution unit + 1 pack-load noise + 5 noise_filtering unit + 4 integration). Suite tally 423 → 447 passed; 1 skipped. (BUILD_LOG entry initially claimed 24; QC found 22; corrected post-merge per Partner Type 2 QC pass 2026-04-27.)
   - `[§7.3]` (no projection direct writes): pipelines emit only via `ctx.event_log.append`; pipeline→projection canary in `verify_invariants.sh` clean.
   - `[§7.4]` / `[§8]` / `[D6]`: zero new SDK imports (heuristics are pure-Python; the one skill call goes through `ctx.run_skill_fn` per [ADR-0002]).
   - `[§7.7]` (pipeline failure does not halt bus): `noise_filtering` catches `SkillInputInvalid` / `SkillOutputInvalid` / `OpenClawTimeout` / `OpenClawUnreachable` / `OpenClawResponseMalformed` and emits the defensive default. **QC F-2 (soft-watch for 10b-ii):** does NOT catch `SkillSensitivityRefused` or `SkillScopeInsufficient` (also exported from `adminme.lib.skill_runner`). For 10b-i these can't fire (`classify_message_nature` has `sensitivity_required: normal`, `context_scopes_required: []`), so it's clean today. 10b-ii's `classify_commitment_candidate` and `extract_commitment_fields` should either match the same sensitivity/scopes shape OR widen the `except` list. Verify during 10b-ii refactor.
@@ -242,8 +233,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10b-ii-α — reactive pipelines (parties-DB seam + commitment_extraction)
 - **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10b-ii-alpha-commitment-extraction.md` (~370 lines, quality bar = 10b-i + parties-DB seam). Secondary-split memo at `docs/02-split-memo-10b-ii.md`.
-- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge-date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #41, commits a8e1e09 / 2995d13 / 5e37a27 / 8671d06, merged 2026-04-28.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/pipelines/base.py` — `PipelineContext` extended with `parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None` per `docs/02-split-memo-10b-ii.md` §10b-ii-α. Closes UT-12 via option (a)+(c).
   - `adminme/pipelines/runner.py` — `PipelineRunner.__init__` gains optional `parties_conn_factory` kwarg; `_make_callback` threads into `PipelineContext`. Backward compatible (default `None`) — all 5 existing 10a runner-integration construction sites stay green without modification.
@@ -273,6 +264,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `commitment.proposed` with `kind="other"` is the default thank-you path. If `BUILD.md §1150` implies thank_you should be its own kind in `CommitmentProposedV1.kind`'s Literal, that's a Literal-extension migration (forward-only per `[D7]`); flag as 10b-ii-β's open question — do NOT silently extend the enum.
   - 09b's `classify_thank_you_candidate@1.3.0` is already on main. 10b-ii-β only ships `extract_thank_you_fields` (smaller because the binary classify already happened upstream).
   - Sender-unresolvable + factory-missing currently emit `commitment.suppressed` with `reason="skill_failure_defensive_default"`. If 10b-ii-β finds this overloads the reason enum, the future migration path is to extend `CommitmentSuppressedV1.reason`'s Literal forward (per `[D7]`).
+  - **Subscription discipline (carry-forward from QC F-5):** `messaging.sent` is the outbound counterpart of `messaging.received` and IS in `messaging.py`'s schema set. If `thank_you_detection` subscribes to both inbound and outbound (because thank-yous land in both directions), the handler must early-return on the outbound case at the top — do not let outbound events flow through the same defensive-default suppression path that's intended for skill failure on inbound. Different from `commitment_extraction` which subscribes inbound-only.
 - **Carry-forward for prompt 10c** (proactive pipelines):
   - Per-member-overrides config shape shipped here is reusable for proactive pipelines that have member-specific cadence (e.g., `morning_digest` per-member quiet hours).
   - The parties-DB seam is now generally available to any pipeline that needs read access to the parties projection; pass `parties_conn_factory=...` at runner construction.
@@ -282,8 +274,17 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 - **Carry-forward for prompt 16** (bootstrap wizard):
   - Bootstrap §7 wires `PipelineRunner` lifecycle. The new `parties_conn_factory` is constructed by bootstrap from `instance_config.projection_db_path("parties")` + the encryption key (derived from secrets) and passed at runner construction.
   - The pipeline's `config.example.yaml` is copied to `<instance_dir>/packs/pipelines/commitment_extraction/config.yaml` on first run; bootstrap §3 collects per-member overrides during the wizard.
+  - **F-8 (soft, carry-forward to prompt 16):** the runner currently re-reads each pipeline pack's `config.yaml` per dispatch via the handler's local helper. Cache at runner-construction time (mirror the pattern bootstrap will use for skill-pack manifests) when bootstrap §7 wires the runner, so per-event config reads collapse to a single load on supervisor start. Not blocking; reserved as a clean-up under bootstrap's runner-wiring step.
 - **Carry-forward for prompt 19** (Phase B smoke test):
   - Confirm `commitment_extraction` correctly resolves a real sender against the live parties projection and proposes a commitment from a seeded test message.
+
+### Prompt 10b-ii-β — reactive pipelines (thank_you_detection)
+- **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10b-ii-beta-thank-you-detection.md` (~330 lines, quality bar = 10b-ii-α). Secondary-split memo at `docs/02-split-memo-10b-ii.md`.
+- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge-date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - (Filled post-merge during Partner Type 2 QC. Expected scope per refactored prompt: `packs/skills/extract_thank_you_fields/` at v1.0.0 — full 09b-shape skill pack consuming 09b's `classify_thank_you_candidate@1.3.0`; `packs/pipelines/thank_you_detection/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/test_pack_load.py}` — `ThankYouDetectionPipeline` reusing 10b-ii-α's parties-DB seam, defensive-default suppression pattern, per-member-overrides config skeleton, and `commitment.proposed` emit path with `kind="other"` (no Literal extension); subscription discipline per F-5 carry-forward (early-return on outbound `messaging.sent` at top of handler if subscribed); ~12–15 new tests; zero new event-type registrations. **Open question for orientation**: whether `BUILD.md §1150` strictly requires extending `CommitmentProposedV1.kind`'s `Literal` to add `"thank_you"` — if YES, that's a forward-only schema migration with downstream consumer audit costs and the prompt must STOP and report; if NO (default reading), `kind="other"` ships and the question reserves to a future Literal-extension migration only if necessary.)
+
 ---
 
 ## Sidecar PRs (out-of-band, no four-commit discipline)
@@ -315,4 +316,24 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
   - `prompts/10b-reactive-pipelines.md`: deleted (the unrefactored 26-line v1 draft is superseded by the upcoming 10b-i and 10b-ii sub-prompts).
 - **Verification**: post-PR check returned status `pending` (no CI configured on this branch), zero reviews, zero comments. Stopped per the "Post-PR: one check, then stop" rule.
 - **Closes**: Pre-condition for the 10b-i refactor session. The `D-prompt-tier-and-pattern-index.md` 10b row needs a separate update from "Pre-split candidate — Tier C memo first" to "Was split on arrival" with 10b-i and 10b-ii listed beneath; that file lives in Partner setup (NOT in repo per the split memo §10 and PM-22), so James updates it out of band.
+- **Outcome**: MERGED.
+
+### sequence-update-10b-ii-split (PR #39, merged 2026-04-27) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Sequence update / secondary-split-memo prep PR. No code touched. No BUILD_LOG entry by design — recorded here per PM-22.
+- **Surfaced by**: Tier C secondary-split memo at `docs/02-split-memo-10b-ii.md` (Partner, 2026-04-27) per the watch flag in `docs/01-split-memo-10b.md` §10b-ii. The Partner session of 2026-04-27 confirmed at orientation that 10b-ii's original scope plus UT-12's parties-DB seam infrastructure exceeded the empirical one-session budget, hitting exactly the secondary-split watch condition. Per PM-23.
+- **Branch**: `claude/finish-10b-ii-split-VlBFQ` (harness-assigned in the second of two Claude Code sessions; the first session created a working branch via web UI for the static memo file per PM-24 — three timeouts were observed on `create_file` before the routing-around was adopted).
+- **Diff scope**: 2 files across 2 commits.
+  - `docs/02-split-memo-10b-ii.md` (133 lines): created via GitHub web UI per PM-24 — Partner produced canonical text in chat, James pasted via "Add file → Create new file", second Claude Code session inherited the branch.
+  - `prompts/PROMPT_SEQUENCE.md`: surgical `str_replace` edits — replaced the single 10b-ii row in the sequence table with two rows for 10b-ii-α and 10b-ii-β; updated the dependency-graph ASCII to read `10a → 10b-i → 10b-ii-α → 10b-ii-β → 10c → 10d`; updated the hard-sequential-dependency line to note "10b-ii-α consumes identity_resolution output" + "Parties-DB seam ships in 10b-ii-α" + "thank_you_detection in 10b-ii-β reuses it" + "downstream prompts that depended on 10b-ii now depend on 10b-ii-β."
+  - **No file deletions** — the unrefactored 10b-ii draft was never landed on disk; the only on-repo record of 10b-ii's intended scope was `docs/01-split-memo-10b.md` itself, which stays.
+- **Verification**: post-PR check returned status `pending` (no CI configured on this branch), zero reviews, zero comments. Stopped per the "Post-PR: one check, then stop" rule.
+- **Closes**: Pre-condition for the 10b-ii-α refactor session. Surfaced PM-24 (long static markdown via GitHub web UI) and PM-25 (markdown autolinker defense for paste-targeted artifacts) as new HARD entries — both shipped same-day to `partner_handoff.md`.
+- **Outcome**: MERGED.
+
+### update-partner-handoff (PR #40, merged 2026-04-27) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Partner-state snapshot PR. No code touched. No BUILD_LOG entry by design — `partner_handoff.md` and `D-prompt-tier-and-pattern-index.md` updates are planning-artifact PRs per PM-22. Recorded here per the same convention.
+- **Surfaced by**: Standing requirement that `docs/partner_handoff.md` is re-uploaded to Project knowledge after each Partner session ends, so the next Partner session reads the latest state. PR #40 lands the on-disk version that mirrors what's been Project-knowledge-uploaded.
+- **Diff scope**: 1 file. `docs/partner_handoff.md` — Current build state advance, PM-23 / PM-24 / PM-25 entries added, UT-12 status flip from OPEN → CLOSING, UT-13 added, next-task-queue advance to land the 10b-ii-α refactor as the active target.
+- **Verification**: lint-only file; ruff clean (markdown is not lint-target).
+- **Closes**: Project-knowledge / repo state-drift gap between Partner sessions. No code-side closure.
 - **Outcome**: MERGED.
