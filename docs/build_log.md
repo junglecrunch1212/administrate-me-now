@@ -312,6 +312,31 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 - **Soft-watch for future:**
   - The five inlined helpers (`_classify_identifier`, `_load_config`, `_thresholds_for_member`, `_new_commitment_id`, `_emit_suppressed`) are now duplicated across two pipeline handlers (`commitment_extraction` and `thank_you_detection`). A future refactor (no specific prompt assigned) should extract them to `adminme/pipelines/_helpers.py` once a third pipeline needs them. Until then, the duplication is accepted per the 10b-ii-α split-memo guidance.
 
+### Prompt 10c-i — Standing-orders infrastructure + reward_dispatch
+- **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10c-i-standing-orders-infra-and-reward-dispatch.md` (~440 lines, quality bar = 10b-ii-α). Tier C split memo at `docs/03-split-memo-10c.md`.
+- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `bootstrap/openclaw/programs/<six>.md` — one full (`reward_dispatch`), five stubs (`morning_digest`, `paralysis_detection`, `reminder_dispatch`, `crm_surface`, `custody_brief`). Per [D1] Corollary.
+  - `bootstrap/openclaw/cron.yaml` — five scheduled-program entries (NOT `reward_dispatch`, which is reactive in-runner).
+  - `bootstrap/openclaw/README.md` — documents the §8 consumption contract.
+  - `adminme/events/schemas/domain.py` — `RewardReadyV1` registered at v1 per [D7]. Naming follows [BUILD.md §1620, CONSOLE_PATTERNS.md §8]; the §1210 `adminme.reward.dispatched` text is a stale typo not registered.
+  - `packs/pipelines/reward_dispatch/` — pipeline.yaml + handler.py + pack-loader canary. `triggers.events: [task.completed, commitment.completed]` — reactive; PipelineRunner picks it up.
+  - 28 new tests across `tests/unit/bootstrap/` (8), `tests/unit/events/` (3), `tests/unit/packs/` (13), `tests/integration/` (4). Total suite: 480 → 508 passed, 2 skipped (the +2 pack-internal tests live under `packs/` and run via explicit path per the per-commit verification commands).
+  - `verify_invariants.sh` exit 0; ruff + mypy clean.
+- **Carry-forward for prompt 10c-ii**:
+  - The `bootstrap/openclaw/programs/morning_digest.md` and `paralysis_detection.md` files exist as stubs. 10c-ii rewrites them as full programs (Scope already populated; Execution steps replace the TODO marker).
+  - `cron.yaml` `morning_digest` and `paralysis_detection` entries already exist; cron schedule strings are placeholders that bootstrap §8 substitutes per-member at install time.
+  - **No runner change needed** in 10c-ii. Proactive packs (`triggers.proactive: true`, no `triggers.events`) are skipped by `discover()` per `runner.py:131-138`.
+- **Carry-forward for prompt 10c-iii**:
+  - Same as 10c-ii but for `reminder_dispatch.md`, `crm_surface.md`, `custody_brief.md` stubs and their `cron.yaml` entries.
+- **Carry-forward for prompt 14a/14b** (console framework + views):
+  - The console's SSE layer consumes `reward.ready` per CONSOLE_PATTERNS.md §8. Pipeline emits the canonical event; console fans out via the dual-path described in §8.
+- **Carry-forward for prompt 16** (bootstrap wizard):
+  - Bootstrap §8 reads `bootstrap/openclaw/programs/*.md` and concatenates into `~/Chief/AGENTS.md` per [D1] Corollary; reads `bootstrap/openclaw/cron.yaml` and runs `openclaw cron add --cron "<cron>" --message "<message>"` per entry. Per-member cron substitution (e.g. morning_digest's `0 7 * * *` placeholder → member's actual wake time) is bootstrap §8's responsibility.
+- **Carry-forward for profile/persona loaders** (no specific prompt assigned yet):
+  - The `RewardDispatchPipeline.__init__` accepts `profile_loader` and `persona_loader` callables, defaulting to no-op loaders that exercise the defensive-default path. When real loader modules ship, the wiring point is the runner's pack instantiation (or a later constructor injection). The integration test sets these via attribute assignment on the loaded pack instance — the same hook a future bootstrap-side wiring would use.
+
 ---
 
 ## Sidecar PRs (out-of-band, no four-commit discipline)
