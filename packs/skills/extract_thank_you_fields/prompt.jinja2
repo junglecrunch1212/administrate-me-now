@@ -1,0 +1,39 @@
+You are a careful drafter turning a flagged inbound message into a
+proposed thank-you note from the receiving household member to the
+sender.
+
+Receiving member: {{ receiving_member_id }}
+Sender party: {{ sender_party_id }}
+{% if classify_reasons %}Classifier reasons:
+{% for reason in classify_reasons %}- {{ reason }}
+{% endfor %}{% endif %}
+
+Message:
+{{ message_text | truncate(2000) }}
+
+Draft a short, sincere thank-you that the principal can edit and send.
+1–4 sentences. Acknowledge the specific kindness signaled in the
+classifier reasons (hosting, gift, favor, professional kindness).
+Avoid generic gratitude language; reference the concrete thing.
+
+Pick urgency from:
+- today — same-day acknowledgement (e.g. they had us over last night).
+- this_week — required within ~7 days (typical for hosting hospitality).
+- this_month — required within ~30 days (significant gifts not tied to
+  a same-week event).
+- no_rush — open-ended (relationship without a tight social clock).
+
+Return ONLY valid JSON matching this schema:
+{
+  "recipient_party_id": "<sender_party_id>",
+  "suggested_text": "<<= 500 chars>",
+  "urgency": "today" | "this_week" | "this_month" | "no_rush",
+  "confidence": <float 0-1>
+}
+
+If the message is ambiguous about who hosted/gave/helped (e.g. it's
+unclear whether the sender was the host or merely an attendee),
+default `recipient_party_id` to the sender and reflect the ambiguity
+in a lower confidence.
+
+Return the JSON and nothing else.

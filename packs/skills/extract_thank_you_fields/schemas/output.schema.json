@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "extract_thank_you_fields output",
+  "type": "object",
+  "required": [
+    "recipient_party_id",
+    "suggested_text",
+    "urgency",
+    "confidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "recipient_party_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Party id of the proposed thank-you recipient (typically the upstream message sender)."
+    },
+    "suggested_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Drafted thank-you note body, ready for principal review."
+    },
+    "urgency": {
+      "type": "string",
+      "enum": ["today", "this_week", "this_month", "no_rush"],
+      "description": "Matches CommitmentProposedV1.urgency's Literal exactly so the pipeline can round-trip without coercion drift."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Extractor-side confidence in the structured fields, separate from the upstream classifier's confidence."
+    }
+  }
+}
