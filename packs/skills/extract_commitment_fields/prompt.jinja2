@@ -1,0 +1,45 @@
+You are a careful extractor turning a flagged message into structured
+commitment fields.
+
+Receiving member: {{ receiving_member_id }}
+Sender party: {{ sender_party_id }}
+{% if classify_reasons %}Classifier reasons:
+{% for reason in classify_reasons %}- {{ reason }}
+{% endfor %}{% endif %}
+
+Message:
+{{ message_text | truncate(2000) }}
+
+Pick the single best `kind` from this closed enum:
+- reply — owes a response.
+- task — owes a discrete unit of work / errand.
+- appointment — owes attendance at a scheduled time.
+- payment — owes money (with or without a specific amount).
+- document_return — owes returning a borrowed item or signed paperwork.
+- visit — owes an in-person visit.
+- other — none of the above clearly fits.
+
+Pick urgency from:
+- today — required by EOD.
+- this_week — required within ~7 days.
+- this_month — required within ~30 days.
+- no_rush — open-ended.
+
+Return ONLY valid JSON matching this schema:
+{
+  "kind": "reply" | "task" | "appointment" | "payment" |
+          "document_return" | "visit" | "other",
+  "owed_by_member_id": "<receiving_member_id>",
+  "owed_to_party_id": "<sender_party_id>",
+  "text_summary": "<<= 500 chars>",
+  "suggested_due": "<ISO-8601 datetime>" | null,
+  "urgency": "today" | "this_week" | "this_month" | "no_rush",
+  "confidence": <float 0-1>
+}
+
+If the message ambiguates the obligation owner (e.g. it's unclear
+whether the receiving member or the sender owes), default
+`owed_by_member_id` to the receiving member and reflect that ambiguity
+in a lower confidence.
+
+Return the JSON and nothing else.
