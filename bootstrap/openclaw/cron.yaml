@@ -1,0 +1,36 @@
+# OpenClaw cron sidecar — proactive standing-order schedules.
+#
+# Per [D1] Corollary, AdministrateMe ships this YAML alongside
+# bootstrap/openclaw/programs/*.md. Bootstrap §8 (prompt 16) reads each
+# entry and runs:
+#
+#   openclaw cron add --cron "<cron>" --message "<message>"
+#
+# Cron schedule strings here are PLACEHOLDERS. Bootstrap §8 substitutes
+# per-member configured times (e.g. morning_digest's "0 7 * * *" → the
+# household's actual wake time per [BUILD.md §1202], paralysis_detection's
+# "0 15,17 * * *" → the ADHD member's configured fog-window times per
+# [BUILD.md §1216]).
+#
+# `reward_dispatch` is intentionally NOT in this file: it has
+# `triggers.events` declared in its `pipeline.yaml`, so the
+# AdministrateMe `PipelineRunner` picks it up via the in-process bus.
+# OpenClaw cron does NOT invoke it. Its program file
+# (programs/reward_dispatch.md) exists for documentation continuity only.
+
+entries:
+  - program_id: morning_digest
+    cron: "0 7 * * *"  # placeholder; bootstrap §8 substitutes per-member configured times
+    message: "Execute morning_digest per standing orders"
+  - program_id: paralysis_detection
+    cron: "0 15,17 * * *"  # placeholder; bootstrap §8 may override per ADHD-profile members
+    message: "Execute paralysis_detection per standing orders"
+  - program_id: reminder_dispatch
+    cron: "*/15 * * * *"
+    message: "Execute reminder_dispatch per standing orders"
+  - program_id: crm_surface
+    cron: "0 19 * * 0"  # Sunday 19:00
+    message: "Execute crm_surface per standing orders"
+  - program_id: custody_brief
+    cron: "0 20 * * *"
+    message: "Execute custody_brief per standing orders"
