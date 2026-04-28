@@ -1,0 +1,33 @@
+pack:
+  id: pipeline:thank_you_detection
+  name: Thank-you detection
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: ThankYouDetectionPipeline
+triggers:
+  events:
+    - messaging.received
+    # NOTE: messaging.sent intentionally excluded — thank-yous are
+    # extracted from inbound only (per F-5 build_log carry-forward
+    # from prompt 10b-ii-α). Outbound is what the household sent;
+    # there's no thank-you to extract from it.
+    # TODO(prompt-XX): subscribe to telephony.voicemail_transcribed,
+    # calendar.event.concluded, capture.note_created,
+    # financial.money_flow_recorded once those event types register.
+depends_on:
+  skills:
+    - classify_thank_you_candidate@^1.3.0
+    - extract_thank_you_fields@^1.0.0
+  projections:
+    - parties              # for find_party_by_identifier
+    - commitments          # for future dedupe (TODO)
+events_emitted:
+  - commitment.proposed
+  - commitment.suppressed
+config:
+  schema: config.schema.json
+  example: config.example.yaml
