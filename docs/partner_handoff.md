@@ -311,6 +311,29 @@ Surfaced 2026-04-27 by three consecutive Claude Code timeouts attempting to writ
 
 **Cost / benefit.** Cost: ~60 seconds of paste-and-commit work for James in the GitHub web UI. Benefit: zero session-timeout risk on the slow operation; zero burned Claude Code sessions; clean PR on the first try. PM-24 is an admission that Claude Code's `create_file` for long markdown is not currently a reliable seam, and that routing around it is cheaper than fighting it.
 
+### PM-25: Markdown autolinker defense for paste-targeted artifacts — HARD
+
+Surfaced 2026-04-28 by James reporting that the prep-PR Claude Code micro-prompt for 10b-ii-α arrived at the Claude Code session with autolinker artifacts: bare filenames like `02-split-memo-10b-ii.md` had been transformed into `[02-split-memo-10b-ii.md](http://02-split-memo-10b-ii.md)` by the chat client's markdown-aware renderer. The transform happens because `.md` is a valid TLD (Moldova); same failure mode hits `.io`, `.co`, `.sh`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `.html`. Claude Code receives malformed content and either fetches nonexistent URLs or treats the bracketed text as hyperlinks instead of paths. Silent failure mode that wastes the Claude Code session.
+
+**The two-belt rule.** Every Partner artifact destined to be pasted into Claude Code applies BOTH defenses:
+
+- **Belt 1 — backtick every bare filename in prose.** Outside fenced code blocks, any filename or dotted-path token gets single backticks: `prompts/10b-i-identity-and-noise.md`, `scripts/verify_invariants.sh`, `pyproject.toml`, `BUILD.md` §L4.
+- **Belt 2 — fence every command line.** All `git`, `gh`, `bash`, `poetry`, `mcp__github__*`, `sed -n`, `grep`, `cat <<EOF` lines live inside triple-backtick fenced blocks, never in prose.
+
+**Mandatory grep pass at §2.9.** The Job 3 delivery-gate self-check now has a seventh item: Partner runs (or simulates) the autolinker grep against every draft and reports the result before the artifact ships. The grep:
+
+```
+grep -nE '[^`]([a-zA-Z0-9_./-]+\.(md|sh|py|yaml|yml|json|toml|io|co|html))[^`]' <draft>
+```
+
+Zero matches = autolinker-safe. Any matches must be wrapped in backticks or moved into a fenced block before the artifact ships.
+
+**Distribution discipline.** Refactored prompts, prep-PR micro-prompts with embedded prompt bodies, sequence-update micro-prompts, sidecar prompts — anything James will paste into Claude Code — are produced as downloadable files via the file-creation tool, NOT as inline chat content. James downloads the file, opens in a plain text editor, copies from there into Claude Code, bypassing the chat client's renderer entirely. Inline chat content is acceptable only for short artifacts where the render-then-copy pathway is confirmed safe (paragraph-level guidance, BUILD_LOG entry templates James commits via text editor anyway, `partner_handoff.md` update fragments).
+
+The full discipline lives in `E-session-protocol.md` §2.10 (the rule itself + the §2.9 delivery-gate item) and `C-context-loading-spec.md` ("Artifact production discipline" section). Both Partner setup files were updated in the same Project-knowledge refresh that introduced this PM. Future Partner sessions are expected to apply both belts on every artifact, run the §2.9 item-7 grep, and ship paste-targeted artifacts as downloadable files.
+
+**Canonical failure case:** the 2026-04-28 prep-PR micro-prompt for 10b-ii-α — the artifact looked clean in the chat UI source view but rendered with autolinker brackets when copied. Fix shipped same-day: `E-session-protocol.md` §2.10 + `C-context-loading-spec.md` artifact-production section + this PM-25 entry.
+
 ---
 
 ## Open tensions / unresolved things
