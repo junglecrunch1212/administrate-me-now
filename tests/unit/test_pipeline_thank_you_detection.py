@@ -570,3 +570,117 @@ async def test_extract_failure_emits_suppressed(tmp_path: Path) -> None:
     envelope = log.calls[0].envelope
     assert envelope.type == "commitment.suppressed"
     assert envelope.payload["reason"] == "skill_failure_defensive_default"
+
+
+# ---------------------------------------------------------------------------
+# per-member overrides (REFERENCE_EXAMPLES.md §2 lines 651-666)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_per_member_override_lowers_threshold(tmp_path: Path) -> None:
+    """Override `min_confidence` to 0.40 for `member_alpha`; an event with
+    confidence 0.45 emits commitment.proposed (would be suppressed under
+    the global 0.55 threshold)."""
+    db_path = _seed_party(tmp_path)
+    log = _FakeEventLog()
+
+    async def stub_run_skill(
+        skill_id: str, inputs: dict[str, Any], skill_ctx: SkillContext
+    ) -> SkillResult:
+        if skill_id == _handler.CLASSIFY_SKILL_ID:
+            return _classify_result(confidence=0.45)
+        return _extract_result()
+
+    ctx = _make_ctx(
+        log, stub_run_skill, parties_factory=_make_factory(db_path)
+    )
+    pipeline = ThankYouDetectionPipeline()
+    pipeline._config_override = {
+        **_DEFAULT_CONFIG,
+        "per_member_overrides": {
+            "member_alpha": {"min_confidence": 0.40, "review_threshold": 0.70}
+        },
+    }
+    await pipeline.handle(
+        _messaging_received_event(to_id="member_alpha"), ctx
+    )
+
+    assert len(log.calls) == 1
+    envelope = log.calls[0].envelope
+    assert envelope.type == "commitment.proposed"
+    assert envelope.payload["confidence"] == 0.45
+    # 0.45 is below 0.70 review_threshold → weak.
+    assert envelope.payload["strength"] == "weak"
+    assert envelope.payload["kind"] == "other"
+
+
+@pytest.mark.asyncio
+async def test_per_member_override_disables_via_high_threshold(
+    tmp_path: Path,
+) -> None:
+    """Override `min_confidence` to 1.1 for `member_omega` — impossibly
+    high disables the pipeline for that member per
+    `REFERENCE_EXAMPLES.md §2 line 666`."""
+    db_path = _seed_party(tmp_path)
+    log = _FakeEventLog()
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        # Confidence 0.99 — extremely high but still below the 1.1
+        # impossibly-high override.
+        return _classify_result(confidence=0.99)
+
+    ctx = _make_ctx(
+        log, stub_run_skill, parties_factory=_make_factory(db_path)
+    )
+    pipeline = ThankYouDetectionPipeline()
+    pipeline._config_override = {
+        **_DEFAULT_CONFIG,
+        "per_member_overrides": {"member_omega": {"min_confidence": 1.1}},
+    }
+    await pipeline.handle(
+        _messaging_received_event(to_id="member_omega"), ctx
+    )
+
+    assert len(log.calls) == 1
+    envelope = log.calls[0].envelope
+    assert envelope.type == "commitment.suppressed"
+    assert envelope.payload["reason"] == "below_confidence_threshold"
+    assert envelope.payload["threshold"] == 1.1
+
+
+# ---------------------------------------------------------------------------
+# classify-output-shape edge case
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_classify_output_without_urgency_when_is_candidate_false(
+    tmp_path: Path,
+) -> None:
+    """Per `classify_thank_you_candidate@1.3.0`'s JSON Schema if/then,
+    `urgency` and `suggested_medium` are present only when
+    `is_candidate=true`. The pipeline must not crash when those fields
+    are absent on the False path — the suppressed branch never reads
+    them. Asserts robustness against the conditional output shape."""
+    db_path = _seed_party(tmp_path)
+    log = _FakeEventLog()
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        return _classify_result(
+            confidence=0.95,
+            is_candidate=False,
+            include_urgency_fields=False,
+        )
+
+    ctx = _make_ctx(
+        log, stub_run_skill, parties_factory=_make_factory(db_path)
+    )
+    pipeline = ThankYouDetectionPipeline()
+    pipeline._config_override = dict(_DEFAULT_CONFIG)
+    await pipeline.handle(_messaging_received_event(), ctx)
+
+    assert len(log.calls) == 1
+    envelope = log.calls[0].envelope
+    assert envelope.type == "commitment.suppressed"
+    assert envelope.payload["reason"] == "below_confidence_threshold"
