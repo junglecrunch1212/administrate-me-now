@@ -239,6 +239,51 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
   - `bootstrap §8` runs `PipelineRunner.discover(builtin_root=adminme/pipelines/pipeline_packs, installed_root=instance_config.packs_dir/"pipelines")`. The path layout is `packs/pipelines/<name>/pipeline.yaml`. Bootstrap copies builtin packs into the instance dir on first run. **UT-11 closed by 10b-i shipping under `packs/pipelines/`.**
 - **Carry-forward for prompt 19** (Phase B smoke test):
   - Confirm `identity_resolution` correctly resolves a test sender against a seeded party (requires the parties-DB seam to be threaded by then), and `noise_filtering` calls real OpenClaw and classifies a transactional receipt as `transactional`.
+
+### Prompt 10b-ii-α — reactive pipelines (parties-DB seam + commitment_extraction)
+- **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10b-ii-alpha-commitment-extraction.md` (~370 lines, quality bar = 10b-i + parties-DB seam). Secondary-split memo at `docs/02-split-memo-10b-ii.md`.
+- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge-date>.
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `adminme/pipelines/base.py` — `PipelineContext` extended with `parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None` per `docs/02-split-memo-10b-ii.md` §10b-ii-α. Closes UT-12 via option (a)+(c).
+  - `adminme/pipelines/runner.py` — `PipelineRunner.__init__` gains optional `parties_conn_factory` kwarg; `_make_callback` threads into `PipelineContext`. Backward compatible (default `None`) — all 5 existing 10a runner-integration construction sites stay green without modification.
+  - `adminme/events/schemas/domain.py` — appended `CommitmentSuppressedV1` registered at v1 per `[D7]`; `reason` is closed `Literal["below_confidence_threshold", "dedupe_hit", "skill_failure_defensive_default"]`.
+  - `packs/skills/classify_commitment_candidate/` — full 09b-shape skill pack at v3.0.0 (`BUILD.md §L4` names it `@^3.0.0`). 4 unit tests via pack-loader canary + handler-direct.
+  - `packs/skills/extract_commitment_fields/` — full 09b-shape skill pack at v2.1.0 (`BUILD.md §L4` names it `@^2.1.0`). Output schema round-trips into `CommitmentProposedV1` without coercion drift (`kind` and `urgency` enums match the Literal exactly). 4 unit tests.
+  - `packs/pipelines/commitment_extraction/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/test_pack_load.py}` — `CommitmentExtractionPipeline` per `BUILD.md §L4` + `REFERENCE_EXAMPLES.md §2` architecture; resolves sender via `find_party_by_identifier` using `ctx.parties_conn_factory`; calls classify → extract; emits `commitment.proposed` (above review_threshold = confident; between min and review_threshold = weak) or `commitment.suppressed` (below or on skill failure / sender unresolvable / factory missing); per-member overrides config-driven; tenant-agnostic (placeholder member ids in `config.example.yaml`).
+  - `tests/unit/test_pipeline_commitment_extraction.py` — 11 handler-direct unit tests covering threshold paths, suppression reasons, F-2 defensive widening (`SkillSensitivityRefused`), and per-member overrides (lower-threshold + impossibly-high disable per `REFERENCE_EXAMPLES.md §2 line 666`).
+  - `tests/unit/test_pipeline_runner.py` — 3 new tests covering `parties_conn_factory` default-`None` backward-compat + threading + same-object-per-dispatch semantics.
+  - `tests/integration/test_pipeline_10b_ii_alpha_integration.py` — 3 round-trip tests against the live runner with a seeded parties DB and monkeypatched skill runner.
+  - **Total new tests: 26** (4 classify_commitment_candidate + 4 extract_commitment_fields + 1 commitment_extraction pack-load + 11 commitment_extraction unit + 3 runner unit + 3 integration). Suite tally on the `tests/` testpath: 447 → 464 passed, 2 skipped (the +9 pack-internal tests live under `packs/` and run via explicit path per the per-commit verification commands).
+  - **F-2 carry-forward CLOSED**: both new skill packs declare `sensitivity_required: normal` and `context_scopes_required: []`; pipeline's `except` list nonetheless catches `SkillSensitivityRefused` and `SkillScopeInsufficient` defense-in-depth so that future skill-spec changes don't silently widen the failure surface.
+  - `[§7.3]` (no projection direct writes): pipeline emits only via `ctx.event_log.append`; pipeline→projection canary in `verify_invariants.sh` clean.
+  - `[§7.4]` / `[§8]` / `[D6]`: zero new SDK imports; the two skill calls go through `ctx.run_skill_fn` per `[ADR-0002]`.
+  - `[§7.7]`: skill failure on either call does NOT raise — emits `commitment.suppressed` with `reason="skill_failure_defensive_default"`. Bus checkpoint advances normally.
+  - `[D7]`: new event type `commitment.suppressed` registers at v1.
+  - `[§12.4]`: per-member-override config uses placeholder member ids (`member_id_example_*`); verify script clean.
+  - `[§15]`/`[D15]`: parties-DB path resolved through `InstanceConfig.projection_db_path("parties")` in the integration test harness; no hardcoded literal in handler or runner.
+  - Causation-id wiring: every emit uses `causation_id=ctx.triggering_event_id` per the 10a echo_emitter canary contract.
+  - `verify_invariants.sh` exit 0.
+  - **Pre-existing ruff baseline (NOT introduced by this prompt)**: `poetry run ruff check .` reports 2 F401 errors in `docs/reference/plaid/python-sdk-plaid_api.py` (pre-existing on main since PR #17). `poetry run ruff check adminme/ packs/ tests/` is clean — all code shipped by this prompt is ruff-clean.
+  - UT-12 CLOSED by this merge per `docs/02-split-memo-10b-ii.md` §"Self-check" — option (c)+(a) shipped: split is option (c), parties-DB seam wired through `PipelineContext` is option (a).
+- **Carry-forward for prompt 10b-ii-β** (`thank_you_detection` + `extract_thank_you_fields`):
+  - Parties-DB seam already in `PipelineContext` from this prompt. `thank_you_detection` constructs its handler the same way: `with ctx.parties_conn_factory() as conn:` for sender resolution.
+  - The defensive-default-on-skill-failure pattern (suppress, do not raise) is now established for two-skill-chain pipelines; thank_you_detection's pipeline reuses the F-2-widened `except` list literally.
+  - The per-member-overrides config shape is settled (`min_confidence` / `review_threshold` / `dedupe_window_hours` / `per_member_overrides` / `skip_party_tags`). thank_you_detection reuses the same skeleton.
+  - `commitment.proposed` with `kind="other"` is the default thank-you path. If `BUILD.md §1150` implies thank_you should be its own kind in `CommitmentProposedV1.kind`'s Literal, that's a Literal-extension migration (forward-only per `[D7]`); flag as 10b-ii-β's open question — do NOT silently extend the enum.
+  - 09b's `classify_thank_you_candidate@1.3.0` is already on main. 10b-ii-β only ships `extract_thank_you_fields` (smaller because the binary classify already happened upstream).
+  - Sender-unresolvable + factory-missing currently emit `commitment.suppressed` with `reason="skill_failure_defensive_default"`. If 10b-ii-β finds this overloads the reason enum, the future migration path is to extend `CommitmentSuppressedV1.reason`'s Literal forward (per `[D7]`).
+- **Carry-forward for prompt 10c** (proactive pipelines):
+  - Per-member-overrides config shape shipped here is reusable for proactive pipelines that have member-specific cadence (e.g., `morning_digest` per-member quiet hours).
+  - The parties-DB seam is now generally available to any pipeline that needs read access to the parties projection; pass `parties_conn_factory=...` at runner construction.
+- **Carry-forward for prompt 14b** (inbox surface):
+  - `commitment.suppressed` events with `reason="below_confidence_threshold"` and confidence between, e.g., 0.40 and 0.55 may surface in the inbox as "near-miss" entries for principal calibration. Decide at 14b refactor.
+  - The `dedupe_hit` value of `commitment.suppressed.reason` is registered but currently unused; the projection-side dedupe prompt will start emitting it.
+- **Carry-forward for prompt 16** (bootstrap wizard):
+  - Bootstrap §7 wires `PipelineRunner` lifecycle. The new `parties_conn_factory` is constructed by bootstrap from `instance_config.projection_db_path("parties")` + the encryption key (derived from secrets) and passed at runner construction.
+  - The pipeline's `config.example.yaml` is copied to `<instance_dir>/packs/pipelines/commitment_extraction/config.yaml` on first run; bootstrap §3 collects per-member overrides during the wizard.
+- **Carry-forward for prompt 19** (Phase B smoke test):
+  - Confirm `commitment_extraction` correctly resolves a real sender against the live parties projection and proposes a commitment from a seeded test message.
 ---
 
 ## Sidecar PRs (out-of-band, no four-commit discipline)
