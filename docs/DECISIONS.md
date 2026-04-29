@@ -156,6 +156,24 @@ Additionally, `event_id` is **TEXT** (prompt 03's 17-char Crockford base32 strin
 
 The BUILD.md §L2 `append()` signature uses keyword-only `correlation_id` and `causation_id` per D8 addition 2. Prompt 03's `append(event: dict)` accepts them as optional dict fields instead. Prompt 04 shifts the signature to `append(envelope: EventEnvelope, *, correlation_id: str | None = None, causation_id: str | None = None)` as part of the typed-envelope rollout. This is a breaking change for the two prompt-03 demo files; prompt 04 updates them.
 
+### D17 — Personal knowledge ingestion is L1-bridge-shaped, not L5-product-shaped
+
+**Decided:** 2026-04-29. **Status:** CONFIRMED. **Resolves:** drift between BUILD.md §L5-continued / architecture-summary.md §9 framing of Capture as a quick-capture / triage / voice-ingest input pipeline and the binding intent that personal knowledge is ingested per-member from each member's own knowledge tools (Apple Notes by default; Voice Notes; Obsidian opt-in; connector packs for other systems).
+
+Personal knowledge captures live in each family member's own tooling on their own device. AdministrateMe ingests this knowledge via **member bridges**: a Mac Mini per Apple-using family member, on the household tailnet, signed into that member's iCloud account, running an `adminme-bridge` daemon with knowledge-source adapters (Apple Notes, Voice Notes, optionally Obsidian). Bridges emit owner-scoped `note.*` and `voice_note.*` events to the central CoS Mac Mini's `:3337 bridge` ingest endpoint, where Tailscale identity binds the owner_scope.
+
+The Capture product (`:3335`) is a **read surface** over the resulting knowledge layer + the CRM projections — not an input pipeline. Quick-capture prefix routing, triage queues, and central voice-note ingest are explicitly retired.
+
+Tasks, commitments, recurrences, and relationships flow through the existing reactive pipelines (`commitment_extraction`, `recurrence_extraction`, `relationship_summarization`), with `note.*` and `voice_note.*` added to their subscription lists. There is no "polling" of Capture; pipelines react to events as they always have.
+
+Connector packs for non-Apple knowledge sources (Notion, Logseq, Roam, etc.) install on bridges as `kind: adapter, subkind: knowledge-source` packs.
+
+**Kid-bridge variant.** Bridges assigned to child members run a restricted adapter set: Apple Notes + Voice Notes only, no Obsidian. Cross-member knowledge graph derivation that touches kid-owned events is sandboxed per the Conception-C amendment §2.5. This is the physical-layer reinforcement of [§6.12].
+
+**Corollary 1:** D4 ("products own surfaces, projections own data, events move state") still applies. Knowledge events are just one more event family flowing into the projection layer.
+
+**Corollary 2:** [§6.12] (identity-first privacy) is **strengthened** by this decision. Each member's private knowledge is physically segregated on their own bridge's iCloud account; the central system never holds member iCloud key material.
+
 ---
 
 ## How to use this file
