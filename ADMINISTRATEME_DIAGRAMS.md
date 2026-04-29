@@ -97,11 +97,12 @@ Not exhaustive by design — these are the ten diagrams that earn their place be
    ┌─────────────────────┐  ┌────────────────────┴──────────────────┐
    │   L1 : ADAPTERS     │  │            L3 : PROJECTIONS           │
    │                     │  │                                       │
-   │  messaging (Gmail,  │  │  parties     interactions   artifacts │
-   │   BlueBubbles via   │  │  commitments tasks          recurrences│
-   │   OpenClaw plugin,  │  │  calendars   places/assets/accounts   │
-   │   SMS)              │  │  money       vector_search            │
-   │  calendaring        │  │  xlsx_workbooks  (bidirectional)      │
+   │  CENTRAL (CoS Mini):│  │  parties     interactions   artifacts │
+   │  messaging (Gmail,  │  │  commitments tasks          recurrences│
+   │   BlueBubbles via   │  │  calendars   places/assets/accounts   │
+   │   OpenClaw plugin,  │  │  money       vector_search            │
+   │   SMS)              │  │  xlsx_workbooks  (bidirectional)      │
+   │  calendaring        │  │  member_knowledge  (per-member)       │
    │   (Google, CalDAV)  │  │                                       │
    │  contacts (People,  │  │  Each projection: handlers.py +       │
    │   CardDAV)          │  │  queries.py + schema.sql. Rebuild     │
@@ -112,10 +113,22 @@ Not exhaustive by design — these are the ten diagrams that earn their place be
    │  webhook (iOS       │
    │   Shortcuts, etc.)  │
    │                     │
+   │  BRIDGE (per-member │
+   │   Mac Mini):        │
+   │  knowledge-source   │
+   │  (Apple Notes,      │
+   │   Voice Notes,      │
+   │   Obsidian opt-in,  │
+   │   connector packs)  │
+   │  emits to :3337     │
+   │   bridge endpoint   │
+   │                     │
    │  Channel adapters   │
    │  = OpenClaw plugins │
    │  Data adapters      │
    │  = standalone py    │
+   │  Knowledge adapters │
+   │  = bridge-side py   │
    └─────────────────────┘
       external world
       (read only into)
@@ -227,6 +240,86 @@ The arrows to internalize: **OpenClaw runs the conversation. AdministrateMe runs
 ```
 
 Every row in the log carries `correlation_id = c_m1_abc123`. One grep, full audit trail.
+
+---
+
+### Second canonical example: a new note in James's Apple Notes through to a confirmed commitment
+
+**Why this is parallel.** Same shape as the iMessage example: an external source emits, an adapter normalizes, the event lands in the log, pipelines and projections derive. The only structural difference is L1's two-place shape — the adapter runs on James's bridge Mac Mini, not on the central CoS Mac Mini, and emits via the bridge ingest endpoint over the tailnet.
+James writes a note in Apple Notes on his iPhone
+│
+│  iCloud sync to James's Mac (the bridge)
+▼
+┌────────────────────────────────────────────┐
+│  [1]  ADAPTER  (runs on james-bridge)      │
+│  knowledge-source:apple_notes              │
+│  watches NoteStore.sqlite changes          │
+│  emit: note.added@v1                       │     correlation_id
+│  ev_note_001                               │     assigned here:
+│  payload.owner_scope = private:james       │     c_n1_def456
+└────────────────────────────────────────────┘
+│
+│  HTTP POST over tailnet
+│  james-bridge → :3337 bridge ingest
+│  authenticated by Tailscale identity
+▼
+┌────────────────────────────────────────────┐
+│  [2]  BRIDGE INGEST  (CoS Mac Mini)        │
+│  validates payload + Tailscale identity    │
+│  appends to event log via EventStore       │
+│  (preserves owner_scope from payload)      │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch (in-process pub/sub)
+▼
+┌────────────────────────────────────────────┐
+│  [3]  PROJECTION  member_knowledge         │
+│  handler on_note_added:                    │
+│    INSERT row in notes (owner_scope=       │
+│    private:james); body indexed for        │
+│    later vector_search consumption         │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch (same event, different subscriber)
+▼
+┌────────────────────────────────────────────┐
+│  [4]  PROJECTION  vector_search            │
+│  handler embeds note body (excluded if     │
+│  sensitivity=privileged per [§6.9]) and    │
+│  upserts the index row                     │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch (same event, different subscriber)
+▼
+┌────────────────────────────────────────────┐
+│  [5]  PIPELINE  commitment_extraction      │
+│  subscribed to: messaging.received,        │
+│   note.added, voice_note.added (post-D17)  │
+│   (a) skip rules (privileged? other        │
+│       member's owner_scope? not James's    │
+│       case here)                           │
+│   (b) call skill: classify_candidate       │───► skill.call.recorded
+│   (c) call skill: extract_fields           │───► skill.call.recorded
+│   (d) emit: commitment.proposed            │
+│  ev_prop_002                               │
+└────────────────────────────────────────────┘
+│
+(continues identically to the iMessage example
+from this point — proposal lands in
+commitments projection + inbox surface,
+James confirms, reward dispatch fires.)
+Total events emitted from this one Apple Note:
+1  note.added
+2  skill.call.recorded
+1  commitment.proposed
+1  commitment.confirmed   (after James clicks confirm)
+1  reward.ready
+───
+6 events · 1 correlation_id · traceable end to end
+physical knowledge segregation: the note's audio source
+never left James's bridge Mac Mini's iCloud account.
+
+The arrows to internalize: bridges are L1's two-place shape — central adapters at process scope on the CoS Mac Mini, bridge adapters at member-bridge scope. Both emit into the same event log; neither writes projections or calls pipelines directly. The bridge is the privacy boundary at the physical layer.
 
 ---
 
@@ -612,12 +705,34 @@ Every row in the log carries `correlation_id = c_m1_abc123`. One grep, full audi
                                       │  all traffic over
                                       │  WireGuard (tailscale)
                                       │
-                                ┌─────▼─────┐
-                                │           │
-                                │  MAC MINI │  the hub
-                                │   (hub)   │  ~/.adminme/ lives here
-                                │           │
-                                └─────┬─────┘
+       ─── Shelf at the household site ─────────────────────────
+       │                                                       │
+   ┌───┴───────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
+   │ james-    │  │ laura-    │  │ charlie-  │  │  CoS      │  │
+   │  bridge   │  │  bridge   │  │  bridge   │  │ MAC MINI  │  │
+   │ (Mac Mini)│  │ (Mac Mini)│  │ (kid var.)│  │  (hub)    │  │
+   │           │  │           │  │           │  │           │  │
+   │ iCloud:   │  │ iCloud:   │  │ iCloud:   │  │~/.adminme/│  │
+   │  james    │  │  laura    │  │ charlie   │  │ lives here│  │
+   │           │  │           │  │           │  │           │  │
+   │ Apple     │  │ Apple     │  │ Apple     │  │ no member │  │
+   │  Notes    │  │  Notes    │  │  Notes    │  │  iCloud   │  │
+   │ Voice     │  │ Voice     │  │ Voice     │  │  signin   │  │
+   │  Notes    │  │  Notes    │  │  Notes    │  │           │  │
+   │ Obsidian* │  │ Obsidian* │  │ (kid: no  │  │           │  │
+   │           │  │           │  │  Obsidian)│  │           │  │
+   └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  │
+         │              │              │              │        │
+         └──────────────┴──────────────┴──────────────┘        │
+                              │                                │
+                              │  bridge-ingest                 │
+                              │  HTTP POST /api/bridge/        │
+                              │  over tailnet                  │
+                              │                                │
+                              ▼                                │
+                       (CoS Mac Mini :3337)                    │
+                                                               │
+       ─── (* Obsidian opt-in per member) ────────────────────
                                       │
                                       │
    ┌──────────────────────────────────┴──────────────────────────────────┐

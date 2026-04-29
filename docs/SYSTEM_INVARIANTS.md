@@ -116,6 +116,10 @@ Security is defense-in-depth across the session layer, scope enforcement at ever
 17. Admin surfaces are enforced two ways for child sessions: a **client-side nav filter** (canonical list in `console/lib/nav.js`) AND a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES`); client-side is UX, server-side is security, and the two arrays are deliberately independent. [arch §6, CONSOLE_PATTERNS.md §7]
 18. Child sessions see only `today` and `scoreboard` in the nav; `/api/inbox`, `/api/crm`, `/api/capture`, `/api/finance`, `/api/calendar`, `/api/settings`, `/api/tasks`, `/api/chat`, and `/api/tools` all return 403 for children regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7]
 
+**Bridge sovereignty:**
+
+19. Each member bridge runs only its assigned member's adapter set; a bridge Mac Mini that runs more than one member's adapter set is a misconfiguration. The central CoS Mac Mini never signs into a family member's iCloud account; cross-member knowledge access happens only through projection queries on the central CoS Mac Mini, never through bridge-to-bridge access. Kid bridges run Apple Notes + Voice Notes only — Obsidian is excluded for child-owned bridges. This is the physical-layer reinforcement of [§6.12] identity-first privacy. [BUILD.md §MEMBER BRIDGES, D17]
+
 ## Section 7: Pipelines — reactive and proactive
 
 Pipelines at L4 turn events into derived events, proposals, and skill calls; they never write projections directly. The reactive/proactive split is a scheduling question, not a capability question — both kinds emit the same kinds of events. [arch §5, BUILD.md §L4]
@@ -142,6 +146,7 @@ AdministrateMe and OpenClaw are two independent systems that meet at exactly fou
 6. Slash-command handlers live in **AdministrateMe** as HTTP endpoints inside the Python product APIs; OpenClaw dispatches to them when a user types the command, but the business logic is AdministrateMe's. [arch §2, arch §9, cheatsheet Q2]
 7. OpenClaw's approval gates (tool-execution boundary, host-local, after tool policy and before exec) and AdministrateMe's `guardedWrite` (HTTP API boundary inside the Node console) are **independent** gates — both must pass and neither substitutes for the other. [arch §2, cheatsheet Q7]
 8. OpenClaw memory stays in `~/.openclaw/`; AdministrateMe event log stays in `~/.adminme/`; the two systems **never share a database** and there is no shared SQLite file or symlink between them. [arch §2, cheatsheet Q8]
+9. L1 adapters run in **two places**: central adapters (messaging, calendaring, financial, etc.) run as standalone Python processes on the CoS Mac Mini at `:333x` process scope, and bridge adapters (knowledge-source: Apple Notes, Voice Notes, Obsidian, connector packs) run on member bridges per BUILD.md §MEMBER BRIDGES. Bridges emit owner-scoped events into the central event log via the `:3337 bridge` HTTP ingest endpoint over the tailnet; Tailscale identity binds the inbound owner_scope at the endpoint. The bridge daemon does not hold the AdministrateMe SQLCipher master key and does not write to the central event log directly. [BUILD.md §MEMBER BRIDGES, D17, arch §1, arch §9]
 
 ## Section 9: Console is a rendering + authorization layer
 
