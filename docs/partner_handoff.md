@@ -18,14 +18,14 @@ These define the codebase's architecture. They are binding on every prompt. They
 
 James has attached them to this Chat session as documents. Read each one in full:
 
-1. **ADMINISTRATEME_BUILD.md** — the canonical build specification. Cite as `[BUILD.md §X]`.
+1. **ADMINISTRATEME_BUILD.md** — the canonical build specification. Cite as `[BUILD.md §X]`. **Now includes top-level §MEMBER BRIDGES section + Capture demotion + new Product E (`:3337 bridge`) per the Conception-C amendment of 2026-04-29.**
 2. **ADMINISTRATEME_CONSOLE_PATTERNS.md** — 12 console patterns. Cite as `[CONSOLE_PATTERNS.md §N]`.
-3. **ADMINISTRATEME_DIAGRAMS.md** — 10 architecture diagrams. Cite as `[DIAGRAMS.md §N]`.
+3. **ADMINISTRATEME_DIAGRAMS.md** — 10 architecture diagrams. Cite as `[DIAGRAMS.md §N]`. **§1 L1 ASCII extends with bridge-side adapters; §2 has a second canonical example (Apple Note → confirmed commitment); §7 topology adds bridge Mac Mini shelf row — all per the Conception-C amendment.**
 4. **ADMINISTRATEME_REFERENCE_EXAMPLES.md** — 7 worked examples. Cite as `[REFERENCE_EXAMPLES.md §N]`.
 5. **ADMINISTRATEME_CONSOLE_REFERENCE.html** — interactive design reference. Skim for structure; read the specific sections the prompt you're working on touches.
-6. **docs/SYSTEM_INVARIANTS.md** — 15 sections of binding invariants. Cite as `[§N]`.
-7. **docs/DECISIONS.md** — D1 through D16+ decisions. Cite as `[DN]`.
-8. **docs/architecture-summary.md** — five-layer model + the 11 projections table. Cite as `[arch §N]`.
+6. **docs/SYSTEM_INVARIANTS.md** — 15 sections of binding invariants + §6.19 (bridge sovereignty) + §8.9 (L1 two-place adapter family) post-amendment. Cite as `[§N]`.
+7. **docs/DECISIONS.md** — D1 through D17 decisions. Cite as `[DN]`. **D17 (personal knowledge ingestion is L1-bridge-shaped) added 2026-04-29.**
+8. **docs/architecture-summary.md** — five-layer model + the **12 projections** table (post-amendment: `member_knowledge` is the 12th). Cite as `[arch §N]`.
 9. **docs/openclaw-cheatsheet.md** — 8 Q&As. Cite as `[cheatsheet Qn]`.
 
 Yes — in full. These are Partner's contract. Partner's opinions about "what the codebase should do" are worthless without them.
@@ -92,6 +92,8 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
+**Last updated:** 2026-04-29 (PR-α `arch-amendment-doc-updates-pr-alpha` merged — 5 constitutional doc amendments per `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md` §4. **Two-commit landing per PM-24 hybrid pattern (first execution; ran cleanly):** Commit 1 (Claude Code, str_replace) — 4 files (`docs/architecture-summary.md`, `docs/SYSTEM_INVARIANTS.md`, `docs/DECISIONS.md`, `ADMINISTRATEME_DIAGRAMS.md`); Commit 2 (GitHub web UI per PM-24) — `ADMINISTRATEME_BUILD.md` 7 edits (B.1 §THE ARCHITECTURE L1 box, B.2 §MACHINE TOPOLOGY adds adminme-bridge-{member}, B.3 §L1 "Three adapter runtimes", B.4 §L5 Capture full rewrite, B.5 new §L5 Product E `:3337 bridge`, B.6 new top-level §MEMBER BRIDGES section, B.7 §BOOTSTRAP WIZARD §10). PR-α landed 13 modifications total: D17 added; §6.19 bridge sovereignty added; §8.9 L1 two-place adapter family added; `member_knowledge` as 12th projection (architecture-summary §1 sentence + §4 row 3.12); bridge product `:3337` as fifth Python product; §10 Bridge enrollment in bootstrap wizard; arch-summary §11 #4 closed per D17. Partner session of 2026-04-29 ran Type 2 QC on PR-α. **Findings:** all 13 spec'd modifications present on main with correct content. **Positive signals:** PR description proactively flagged 3 placement-renumber decisions (memo's "§13.18" → §6.19; memo's "§3 Adapters" → §8.9; memo's `[§13.12]` → `[§6.12]`) — all correct against actual main HEAD numbering, high-quality refactor discipline. Memo §9 widening (kid bridges run Apple Notes + Voice Notes only; no Obsidian) integrated three-place-consistently into BUILD.md §MEMBER BRIDGES + DECISIONS.md D17 + SYSTEM_INVARIANTS.md §6.19. **F-1 (SOFT/cosmetic):** DIAGRAMS.md §2 second canonical example missing surrounding ` ```text ` code fence — renders as plain text instead of preformatted ASCII art. **F-2 (SOFT/cosmetic):** DIAGRAMS.md §7 topology bridge-shelf row → MAC MINI PROCESSES box has visual ASCII-art disjoint (the original single-MAC-MINI box's tee at the bottom hangs off thin air after the shelf-row replacement). Both findings are rendering-only, no content drift, no code is wrong, no downstream prompt is blocked. **Disposition:** single sidecar PR `sidecar-diagrams-rendering-cleanup` queued (option 1 of three considered — bundled fix, single str_replace operation per finding, ~5-min scope). **(2) Invariant audit Clean** — narrow scope on a doc-only PR; D17 affirms D4 (Corollary 1); §6.19 strengthens [§6.12] identity-first privacy; §8.9 does NOT introduce a new OpenClaw seam (the four canonical seams remain skills/slash/standing-orders/channels — the bridge ingest endpoint is L1-to-L2, not an OpenClaw integration). All future-prompt obligations (event schemas at v1, subscription-list extensions, projection implementation, bridge daemon code under `bridge/`) properly scoped to prompt 11c per the memo. **(3) Next-prompt calibration on 10c-ii Clean** — D17 does not change 10c-ii's deliverables; 10c-ii's `morning_digest` and `paralysis_detection` read existing projections (`tasks`, `commitments`, `parties`); they don't subscribe to knowledge events. No coupling. The amendment cycle does NOT delay 10c-ii. **New PMs and UTs:** **PM-28 added (HARD)** — when constitutional documents drift from binding architectural intent, Partner pauses the build, flags the drift, and runs an architecture-amendment cycle (Tier C memo + 3 single-purpose PRs) before resuming. The Conception-C amendment of 2026-04-29 is the canonical example. **PM-29 added (SOFT)** — knowledge-source adapters live on member bridges, not on the central CoS Mac Mini; future prompts that add knowledge-source adapters land in `bridge/`, not `adminme/`. **UT-15 OPEN (NEW)** — bridge daemon and central system share event-schema models via editable install or vendored copy; decide at 11c orientation. **UT-16 OPEN (NEW)** — kid-event routing-restriction enforcement mechanism (`owner_scope_excludes` in pipeline manifests vs `kid_bridge: true` payload flag); decide at 11c orientation OR earlier if a downstream prompt needs to know. **UT-17 OPEN (NEW)** — `member_knowledge` as a new (12th) projection vs extending `artifacts`; recommendation per memo §3.3 is the new projection, already encoded in arch-summary §4 row 3.12 and DIAGRAMS.md §1 ASCII; final decision at the projection-prompt orientation. **UT-18 OPEN (NEW)** — Apple Notes read mechanism (SQLite direct vs AppleScript vs hybrid); recommendation per memo §1.3 is hybrid (SQLite for bulk, AppleScript fallback); final decision at 11c orientation. **Next:** PR-β (sequence updates per memo §5.2 — new prompt 11c, modifications to 13b/14b/16) is the next Partner Type 0 session; PR-γ (this partner-state snapshot) closes the cycle. 10c-ii orientation comes after the amendment cycle closes per memo §6 step 10.)
+
 **Last updated:** 2026-04-29 (10c-i merged as PR #44 — standing-orders infrastructure (six `bootstrap/openclaw/programs/<id>.md` files: one full `reward_dispatch`, five stubs morning_digest / paralysis_detection / reminder_dispatch / crm_surface / custody_brief) + `bootstrap/openclaw/cron.yaml` (five scheduled-program entries; `reward_dispatch` correctly absent because reactive in-runner) + `bootstrap/openclaw/README.md` (consumption contract for bootstrap §8) + `RewardReadyV1` event schema at v1 in `adminme/events/schemas/domain.py` per [D7] + reactive pipeline pack `packs/pipelines/reward_dispatch/` subscribing to `task.completed` and `commitment.completed`. Partner session of 2026-04-29 ran Type 2 QC on the merged 10c-i. **Findings:** all clean / positive. **(1) Contract check Match-with-overshoot** — every Deliverable from the 10c-i prompt shipped at the specified shape. F-1 cosmetic: BUILD_LOG entry says "28 new tests" but `def test_` count totals 30 across the six listed files (8 bootstrap + 3 events + 13 unit packs + 2 pack-internal canary + 4 integration). Floor was 24; shipped 30 → +25% positive overshoot. Suite tally: **480 → 508 passed, 2 skipped** (the +2 pack-internal tests live under `packs/` per the per-commit verification commands). Out-of-scope guards held: no `compose_zeigarnik_teaser` skill (correctly deferred to 10c-ii); no `adminme.reward.dispatched` event registered (the §1210 BUILD.md typo is documented as superseded in handler.py docstring + reward_dispatch.md "What NOT to do"); no `outbound()` call in handler.py; no bootstrap §8 implementation; no console SSE consumer. **(2) Invariant audit Clean** — `verify_invariants.sh` exit 0; `[§7.3]` (no projection direct writes — pipeline emits via `ctx.event_log.append` only); `[§7.4]` / `[§8]` / `[D6]` (zero LLM/embedding SDK imports; zero `run_skill_fn` call — reward dispatch is deterministic); `[§7.7]` (defensive defaults applied for missing profile, missing persona, missing tier template, missing member_id; handler does not raise); `[§15]` / `[D15]` (zero hardcoded `~/.adminme` literals; integration test resolves runtime path via `tmp_path / "config" / "runtime.yaml"`); `[§12.4]` (zero tenant identity in platform code or in 10c-i tests; fixtures use `member-a` / `member-b`); `[D7]` (`reward.ready` registered at v1, not v2-skip-v1); `[§2.2]` (the new emit `reward.ready` is from a *pipeline*, not a projection — pipelines are not subject to the projection-emit allowlist per PM-14; ALLOWED_EMITS not extended, correct); causation/correlation discipline asserted by both unit tests and integration round-trip; `adminme.reward.dispatched` is mentioned only in citation context in handler docstrings + reward_dispatch.md "What NOT to do" — NOT registered. **(3) Next-prompt calibration on 10c-ii Clean with one minor refresh** — every Carry-forward from 10c-i is consistent with current main: `bootstrap/openclaw/programs/morning_digest.md` and `paralysis_detection.md` exist as stubs with `TODO(prompt-10c-ii)` markers; `cron.yaml` `morning_digest` (`0 7 * * *`) and `paralysis_detection` (`0 15,17 * * *`) entries already present as placeholders; runner does not need modification (`discover()` lines 131-138 already skip non-reactive packs). **F-1 (minor refresh):** the 10c-i carry-forward says proactive packs declare `triggers.proactive: true`. The runner skip is *actually* keyed on the **absence** of `triggers.events`, not the presence of `triggers.proactive: true` (per `runner.py:131-138`). Either shape achieves the same skip result, but 10c-ii must not assert the affirmative-flag form in tests. Logged for 10c-ii's depth-read. **New PMs and UTs:** **PM-26 added (SOFT)** — Pipeline emit names that bypass a stale BUILD.md draft must cite the supersession explicitly; 10c-i is the canonical example (`reward.ready` from §1620 / CONSOLE_PATTERNS.md §8 wins over `adminme.reward.dispatched` from §1210 typo). **PM-27 added (SOFT)** — Pipeline classes that need future on-disk loaders accept callable injectors with no-op defaults; `RewardDispatchPipeline.__init__(profile_loader, persona_loader)` is the canonical example. **UT-13 CLOSED** — 10c orientation produced split memo `docs/03-split-memo-10c.md` (10c-i / 10c-ii / 10c-iii) and 10c-i has now merged. **UT-2 CLOSED** — AGENTS.md concatenation path resolved by 10c-i's bootstrap/openclaw/programs/ + cron.yaml + README.md artifacts; bootstrap §8 (prompt 16) is the consumer; contract documented in `bootstrap/openclaw/README.md`. **UT-14 OPEN (NEW)** — profile / persona on-disk loader modules are not yet on main; three pipelines now (10c-i's `reward_dispatch`, 10c-ii's planned `morning_digest` + `paralysis_detection`) need them; constructor-injection pattern (PM-27) lets pipelines ship before the loader infrastructure exists. **Next refactor target:** **10c-ii** (proactive pipelines `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas at v1; rewrites stub program files morning_digest.md + paralysis_detection.md from stub → full)).
 
 **Last updated:** 2026-04-28 (10c orientation Partner session produced split memo `docs/03-split-memo-10c.md` per PM-23 — 10c is a pre-split candidate per UT-13. Type 0 session at James's direction. **No code touched** — output is the Tier C split memo plus a Claude Code micro-prompt for the sequence-update PR. **Verdict:** 10c splits into **10c-i** (standing-orders infrastructure: `bootstrap/openclaw/programs/<six>.md` + `bootstrap/openclaw/cron.yaml` + `bootstrap/openclaw/README.md` + `reward_dispatch` reactive pipeline pack + `RewardReadyV1` event schema at v1), **10c-ii** (proactive pipelines `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas at v1; rewrites stubs from 10c-i), and **10c-iii** (proactive pipelines `reminder_dispatch` + `crm_surface` + `custody_brief` + 3 compose_* skill packs + 3 event schemas at v1; rewrites remaining stubs from 10c-i). UT-2 resolution lives at the artifact level: `bootstrap/openclaw/programs/<id>.md` + `bootstrap/openclaw/cron.yaml` are the AGENTS.md-prose + `openclaw cron add` shape per [D1] Corollary; bootstrap §8 (prompt 16) consumes them.)
@@ -110,21 +112,27 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Prompts merged to main:** 00, 00.5, 01 (01a/01b/01c), 02, 03, 03.5, 04, 05, 06, 07a, 07b, **PM-7 infrastructure PR (slim preamble + scripts/verify_invariants.sh)**, **07c-α (PR #20, merged 2026-04-24)**, **07c-β (PR #21, merged 2026-04-25)**, **08a (PR #&lt;PR-08a&gt;, merged 2026-04-25)**, **08b (PR #&lt;PR-08b&gt;, merged 2026-04-25)**, **09a (PR #29, merged 2026-04-26)**, **09b (PR #&lt;PR-09b&gt;, merged &lt;merge-date-09b&gt;)**, **10a (PR #33, merged 2026-04-26)**, **10b-i (PR #38, merged 2026-04-26)**, **10b-ii-α (PR #41, merged 2026-04-28)**, **10b-ii-β (PR #&lt;PR-10b-ii-beta&gt;, merged 2026-04-28)**, **10c-i (PR #44, merged 2026-04-29 — standing-orders infrastructure: six `bootstrap/openclaw/programs/<id>.md` files (1 full `reward_dispatch` + 5 stubs `morning_digest`/`paralysis_detection`/`reminder_dispatch`/`crm_surface`/`custody_brief`); `bootstrap/openclaw/cron.yaml` (five scheduled-program entries; `reward_dispatch` correctly absent because reactive in-runner); `bootstrap/openclaw/README.md` documenting the bootstrap §8 consumption contract per [D1] Corollary; `RewardReadyV1` event schema at v1 in `adminme/events/schemas/domain.py` per [D7] (canonical name per [BUILD.md §1620, CONSOLE_PATTERNS.md §8] — supersedes the §1210 `adminme.reward.dispatched` typo per PM-26); reactive pipeline pack `packs/pipelines/reward_dispatch/` subscribing to `task.completed` + `commitment.completed`, deterministic-tier sampling seeded from source `event_id`, persona-template lookup with done-tier fallback, no `outbound()` call (console SSE layer consumes per [CONSOLE_PATTERNS.md §8]); `RewardDispatchPipeline.__init__` accepts `profile_loader` and `persona_loader` callables defaulting to no-ops per PM-27; 30 new tests (8 bootstrap + 3 events + 13 unit packs + 2 pack-internal canary + 4 integration); suite 480 → 508 passed, 2 skipped; `verify_invariants.sh` exit 0; ruff + mypy clean; refactored prompt committed to repo at `prompts/10c-i-standing-orders-infra-and-reward-dispatch.md` (~440 lines) per PM-21; UT-2 + UT-13 both CLOSED on this merge)**.
 
-**Sequence updates merged (infrastructure, not build):** **PR #37 `sequence-update-10b-split` (merged 2026-04-26)** — splits 10b into 10b-i / 10b-ii per `docs/01-split-memo-10b.md`. **PR #39 `sequence-update-10b-ii-split` (merged 2026-04-27)** — splits 10b-ii into 10b-ii-α / 10b-ii-β per `docs/02-split-memo-10b-ii.md`. **PR #40 `update-partner-handoff` (merged 2026-04-27)** — partner-state snapshot. **PR #&lt;PR-sequence-update-10c-split&gt; `sequence-update-10c-split` (merged &lt;merge-date&gt;)** — splits 10c into 10c-i / 10c-ii / 10c-iii per `docs/03-split-memo-10c.md`. All four are single-purpose infrastructure PRs per PM-22 — no four-commit discipline, no BUILD_LOG entries, no tests.
+**Sequence updates merged (infrastructure, not build):** **PR #37 `sequence-update-10b-split` (merged 2026-04-26)** — splits 10b into 10b-i / 10b-ii per `docs/01-split-memo-10b.md`. **PR #39 `sequence-update-10b-ii-split` (merged 2026-04-27)** — splits 10b-ii into 10b-ii-α / 10b-ii-β per `docs/02-split-memo-10b-ii.md`. **PR #40 `update-partner-handoff` (merged 2026-04-27)** — partner-state snapshot. **PR #&lt;PR-sequence-update-10c-split&gt; `sequence-update-10c-split` (merged &lt;merge-date&gt;)** — splits 10c into 10c-i / 10c-ii / 10c-iii per `docs/03-split-memo-10c.md`. **PR #&lt;PR-α&gt; `arch-amendment-doc-updates-pr-alpha` (merged &lt;merge-date-α&gt;)** — Conception-C architecture amendment per `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md` §4: 5 constitutional doc amendments landed via two-commit PM-24 hybrid (Claude Code str_replace on 4 files + GitHub web UI on `ADMINISTRATEME_BUILD.md`); 13 modifications total; D17 added; §6.19 + §8.9 added; `member_knowledge` as 12th projection; `:3337 bridge` as fifth Python product; new top-level §MEMBER BRIDGES section. All five are single-purpose infrastructure PRs per PM-22 — no four-commit discipline, no BUILD_LOG entries, no tests.
 
 **Checkpoints landed:** **07.5 (`docs/checkpoints/07.5-projection-consistency.md`, 2026-04-25)** — projection consistency audit. Verdict PASS with 1 non-critical finding C-1 (closed by sidecar PR #35). UT-1 closes here.
 
-**Prompts with PR open, not yet merged:** none on the build-prompt cohort. (10c-i prep PR + Claude Code build PR both merged 2026-04-29.)
+**Prompts with PR open, not yet merged:** none on the build-prompt cohort. (10c-i prep PR + Claude Code build PR both merged 2026-04-29; PR-α arch-amendment merged 2026-04-29.)
 
-**Prompts drafted, ready for Claude Code execution:** none. The next refactor target is **10c-ii** — the next Partner session opens orientation on 10c-ii as a Type 3 (refactor-only) session per `docs/03-split-memo-10c.md`. UT-14 (profile/persona on-disk loaders) is open and may interact with 10c-ii's scope; the orientation Partner session evaluates whether loaders ship in 10c-ii or are deferred to a later prompt and forecasts a possible secondary split (10c-ii-α / 10c-ii-β) per PM-23 if loaders push 10c-ii over budget.
+**Prompts drafted, ready for Claude Code execution:** none. The next refactor target is **10c-ii** — but 10c-ii orientation does NOT come next per the Conception-C amendment cycle. The amendment-cycle remaining sessions take priority: PR-β (sequence-update for new prompt 11c + modifications to 13b/14b/16 per memo §5.2), then PR-γ has already closed via this artifact, then 10c-ii orientation. UT-14 (profile/persona on-disk loaders) remains open and may interact with 10c-ii's scope; the orientation Partner session evaluates whether loaders ship in 10c-ii or are deferred to a later prompt and forecasts a possible secondary split (10c-ii-α / 10c-ii-β) per PM-23 if loaders push 10c-ii over budget.
 
-**Sidecar PRs queued (non-blocking):** none. Most recent sidecar `sidecar-raw-data-is-manual-derived` merged as PR #35 on 2026-04-26 (closed 07.5 finding C-1). Most recent sequence updates `sequence-update-10b-split` (PR #37, 2026-04-26), `sequence-update-10b-ii-split` (PR #39, 2026-04-27), `update-partner-handoff` (PR #40, 2026-04-27), and `sequence-update-10c-split` (PR #&lt;N&gt;, &lt;date&gt;) all merged. Recorded here so future Partner sessions see the full PR landscape.
+**Sidecar PRs queued (non-blocking):** **`sidecar-diagrams-rendering-cleanup`** (queued 2026-04-29 from PR-α QC findings F-1 + F-2; cosmetic-only; ASCII art rendering fixes in `ADMINISTRATEME_DIAGRAMS.md` §2 second canonical example + §7 topology bridge-shelf row; ~5-min scope; sidecar memo + Claude Code micro-prompt produced in PR-α QC closing artifacts). Most recent merged sidecar: `sidecar-raw-data-is-manual-derived` merged as PR #35 on 2026-04-26 (closed 07.5 finding C-1). Most recent merged sequence updates: `sequence-update-10b-split` (PR #37, 2026-04-26), `sequence-update-10b-ii-split` (PR #39, 2026-04-27), `update-partner-handoff` (PR #40, 2026-04-27), `sequence-update-10c-split` (PR #&lt;N&gt;, &lt;date&gt;), and `arch-amendment-doc-updates-pr-alpha` (PR #&lt;PR-α&gt;, merged 2026-04-29) all merged. Recorded here so future Partner sessions see the full PR landscape.
 
 **Next task queue (in order):**
 
-1. **James: drive partner-state snapshot prep PR for this session's QC results.** Single-purpose PR per PM-22 — no four-commit discipline, no BUILD_LOG, no tests. Two changes in one commit: replace `docs/partner_handoff.md` with the updated full file (this file); replace `docs/build_log.md` with the updated full file (with `<sha1-10c-i>` / `<sha2-10c-i>` … `<sha4-10c-i>` placeholders find-and-replaced from `gh pr view 44 --json commits` first; `<merge date>` filled with `2026-04-29`; `Outcome: IN FLIGHT (PR open)` flipped to `Outcome: MERGED` for 10c-i). **No file deletions.**
+1. **James: drive partner-state snapshot prep PR for this session's QC results.** PR-γ of the Conception-C amendment cycle. Single-purpose PR per PM-22 — no four-commit discipline, no BUILD_LOG, no tests. Branch: `update-partner-handoff-knowledge-amendment`. Two changes in one commit: replace `docs/partner_handoff.md` with the updated full file (this file); replace `docs/build_log.md` with the updated full file (with `<sha1-10c-i>` / `<sha2-10c-i>` … `<sha4-10c-i>` placeholders find-and-replaced from `gh pr view 44 --json commits` first; `<merge date>` filled with `2026-04-29`; `Outcome: IN FLIGHT (PR open)` flipped to `Outcome: MERGED` for 10c-i). Find-and-replace placeholders before committing: `<PR-α>` → actual PR number from `gh pr list --state merged | grep arch-amendment`; `<merge-date-α>` → actual merge date. **No file deletions.**
 
-2. **Partner session: 10c-ii orientation + refactor.** Type 3 (refactor-only) Partner session per `docs/03-split-memo-10c.md`. **Pre-orientation evaluation:** check whether profile/persona loader infrastructure (UT-14) must ship in 10c-ii alongside `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas, or whether constructor-injection (PM-27) lets the loaders defer to a later prompt. If loaders ship in 10c-ii and push the prompt over the §2.9 budget (350 lines / 25KB / ≤4 net-new modules), forecast a secondary split into 10c-ii-α (loaders + morning_digest + compose_morning_digest skill + adminme.digest.composed event schema) and 10c-ii-β (paralysis_detection + compose_zeigarnik_teaser skill + adminme.paralysis.triggered event schema) per PM-23. Otherwise output is a single refactored 10c-ii prompt at `prompts/10c-ii-morning-digest-and-paralysis.md` per PM-21.
+2. **James: drive `sidecar-diagrams-rendering-cleanup` PR.** Single-purpose sidecar PR per PM-15. Branch: `sidecar-diagrams-rendering-cleanup`. Two `str_replace` operations in `ADMINISTRATEME_DIAGRAMS.md` (fix F-1: add code fence around §2 second canonical example; fix F-2: clean up §7 topology connector tee). 5-minute Claude Code session; sidecar memo + micro-prompt produced in PR-α QC closing artifacts.
+
+3. **Partner session: PR-β drafting.** Type 0 session per memo §6 step 5. Output: line-by-line replacement blocks for `prompts/PROMPT_SEQUENCE.md` (new row for prompt 11c, modifications to 13b / 14b / 16 rows) and `D-prompt-tier-and-pattern-index.md` (new 11c row, modified 13b / 14b / 16 rows, new pre-split disposition entries). All per memo §5.2.
+
+4. **Claude Code session: execute PR-β.** Lands the sequence updates.
+
+5. **Partner session: 10c-ii orientation + refactor.** Type 3 (refactor-only) Partner session per `docs/03-split-memo-10c.md`. **Pre-orientation evaluation:** check whether profile/persona loader infrastructure (UT-14) must ship in 10c-ii alongside `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas, or whether constructor-injection (PM-27) lets the loaders defer to a later prompt. If loaders ship in 10c-ii and push the prompt over the §2.9 budget (350 lines / 25KB / ≤4 net-new modules), forecast a secondary split into 10c-ii-α (loaders + morning_digest + compose_morning_digest skill + adminme.digest.composed event schema) and 10c-ii-β (paralysis_detection + compose_zeigarnik_teaser skill + adminme.paralysis.triggered event schema) per PM-23. Otherwise output is a single refactored 10c-ii prompt at `prompts/10c-ii-morning-digest-and-paralysis.md` per PM-21.
 
    10c-ii's depth-read points (from `D-prompt-tier-and-pattern-index.md` 10c-ii row + 10c-i's BUILD_LOG carry-forwards):
    - `ADMINISTRATEME_BUILD.md` §1202 (morning_digest scheduling + validation guard) and §1216 (paralysis_detection deterministic + persona templates).
@@ -136,13 +144,13 @@ This section is the live baton between sessions. Update it at the end of every P
    - `adminme/lib/observation.py` `outbound()` (since 08b) — `morning_digest` and `paralysis_detection` MUST call this to deliver the brief / nudge through the channel layer; observation-mode default-on suppresses the dispatch and emits `observation.suppressed`.
    - **F-1 carry-forward from 10c-i QC:** 10c-ii pipeline.yaml manifests must NOT assert `triggers.proactive: true` as the affirmative skip-marker in tests. The runner's `discover()` skip is keyed on **absence** of `triggers.events`, not presence of `triggers.proactive: true`. Either shape works at runtime; tests must not assert the affirmative form.
 
-3. **Claude Code session: execute 10c-ii.** Following the prep PR (with the refactored prompt committed). Four-commit discipline per PM-2.
+6. **Claude Code session: execute 10c-ii.** Following the prep PR (with the refactored prompt committed). Four-commit discipline per PM-2.
 
-4. **Partner session: QC of 10c-ii merge + 10c-iii orientation.** Type 1 combined session expected; 10c-iii is a clean extension per `docs/03-split-memo-10c.md`.
+7. **Partner session: QC of 10c-ii merge + 10c-iii orientation.** Type 1 combined session expected; 10c-iii is a clean extension per `docs/03-split-memo-10c.md`.
 
-5. **Claude Code session: execute 10c-iii.** Closes the 10c cohort.
+8. **Claude Code session: execute 10c-iii.** Closes the 10c cohort.
 
-6. **Partner session: QC of 10c-iii merge + 10d (checkpoint) refactor.** Type 1 combined or Type 0 session — 10d is a Tier C audit memo, not a build prompt.
+9. **Partner session: QC of 10c-iii merge + 10d (checkpoint) refactor.** Type 1 combined or Type 0 session — 10d is a Tier C audit memo, not a build prompt.
 
 ---
 
@@ -262,17 +270,18 @@ Going forward, **refactored prompts ship in the build PR**.
 
 ### PM-22: Sequence updates and split-memo prep PRs are infrastructure, not build prompts — HARD
 
-Surfaced 2026-04-26 by PR #37 `sequence-update-10b-split` (and reaffirmed by PR #39 `sequence-update-10b-ii-split` 2026-04-27, PR #40 `update-partner-handoff` 2026-04-27, and the upcoming `sequence-update-10c-split` PR). These PRs:
+Surfaced 2026-04-26 by PR #37 `sequence-update-10b-split` (and reaffirmed by PR #39 `sequence-update-10b-ii-split` 2026-04-27, PR #40 `update-partner-handoff` 2026-04-27, the `sequence-update-10c-split` PR, and PR #&lt;PR-α&gt; `arch-amendment-doc-updates-pr-alpha` 2026-04-29). These PRs:
 
-- Update planning artifacts (`prompts/PROMPT_SEQUENCE.md`, split memos at `docs/NN-split-memo-<N>.md`, partner-state snapshots).
+- Update planning artifacts (`prompts/PROMPT_SEQUENCE.md`, split memos at `docs/NN-split-memo-<N>.md`, partner-state snapshots, **architecture-amendment doc updates per PM-28**).
 - Have no four-commit discipline.
 - Have no BUILD_LOG entry by design — they don't ship runtime behavior.
-- Are NOT sidecars in the PM-15 sense (sidecar = defect-fix in already-merged code). Sequence updates are forward-looking planning artifacts; they create the conditions for the next refactor session to proceed.
+- Are NOT sidecars in the PM-15 sense (sidecar = defect-fix in already-merged code). Sequence updates and architecture amendments are forward-looking planning artifacts; they create the conditions for the next refactor session to proceed.
 
 The same convention applies to:
 - `D-prompt-tier-and-pattern-index.md` updates (which live in Partner setup, NOT in repo per James's split-memo instruction — handled out-of-band by James after the sequence PR merges).
 - Future split memos that ship as `docs/NN-split-memo-<original>.md` style files (the on-disk record of the Partner's Tier C decision).
 - Partner-state snapshot PRs that update `docs/partner_handoff.md` and/or `docs/build_log.md` outside a build session.
+- **Architecture-amendment cycle PRs** (PR-α / PR-β / PR-γ per PM-28).
 
 PM-22 distinguishes these from the build-prompt cohort that has full ledger entries and BUILD_LOG appends in Commit 4.
 
@@ -291,6 +300,8 @@ Surfaced by `docs/02-split-memo-10b-ii.md` 2026-04-27. **The discipline:** when 
 ### PM-24: Long static markdown files (split memos, partner_handoff, build_log) ship via GitHub web UI when Claude Code times out on `create_file` — HARD
 
 Surfaced 2026-04-27 during the 10b-ii sequence-update PR. Three timeouts on Claude Code's `create_file` for the static `docs/02-split-memo-10b-ii.md` (133 lines) before the routing-around landed: Partner produced canonical text in chat, James pasted via GitHub web UI's "Add file → Create new file", a second Claude Code session inherited the branch for the surgical `prompts/PROMPT_SEQUENCE.md` `str_replace` edits. Discipline now: Partner produces full text in chat for static-content files; James pastes via web UI; Claude Code is reserved for code edits + `str_replace` operations on existing files.
+
+**PR-α confirmed PM-24 hybrid pattern works on first execution (2026-04-29).** PR-α landed 4 files via Claude Code str_replace (Landing 1) + 1 file (`ADMINISTRATEME_BUILD.md`, 7 edits including new top-level §MEMBER BRIDGES section ~41 lines) via GitHub web UI (Landing 2) on the same branch as a second commit. Single PR opened after both landings. The pattern is now battle-tested for the architecture-amendment-cycle PR-α scenario where the largest doc edit (BUILD.md §MEMBER BRIDGES + Capture full replacement) exceeds Claude Code's `create_file`/`str_replace` reliability threshold.
 
 ### PM-25: Markdown autolinker defense for paste-targeted artifacts — HARD
 
@@ -311,6 +322,26 @@ Surfaced 2026-04-29 during 10c-i. `RewardDispatchPipeline.__init__(profile_loade
 **The discipline:** pipeline packs that need cross-cutting infrastructure not yet on main can ship without the infrastructure by accepting callable injectors with safe no-op defaults. The defaults exercise the defensive-default code path so the pipeline is testable and shippable; production wiring lands when the infrastructure does. This pattern preserves session-window discipline (don't pile loader infrastructure into the same session as a pipeline that uses it) without delaying the pipeline.
 
 PM-27 is the convention 10c-ii's `morning_digest` and `paralysis_detection` should follow if profile/persona loaders are not yet on main when 10c-ii lands. The orientation Partner session decides whether loaders ship in 10c-ii or defer; if they defer, 10c-ii's pipelines use this pattern.
+
+### PM-28: When constitutional documents drift from binding architectural intent, Partner pauses the build, flags the drift, and runs an architecture-amendment cycle — HARD
+
+Surfaced 2026-04-29 by the Conception-C amendment cycle (memo at `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md`). **The discipline:** if Partner detects drift between what the constitutional docs say and the operator's binding intent — signaled by an operator clarification, a depth-read finding, or a recognized contradiction in the docs — Partner does NOT continue the in-progress build prompt's refactor. Partner produces a Tier C architecture-amendment memo at `docs/NN-architecture-amendment-<topic>.md`. James reviews, approves or revises. On approval, the cycle is **three single-purpose PRs in order**:
+
+- **PR-α (constitutional doc amendments)** — modifications to `ADMINISTRATEME_BUILD.md`, `docs/architecture-summary.md`, `docs/SYSTEM_INVARIANTS.md`, `docs/DECISIONS.md`, and (typically) `ADMINISTRATEME_DIAGRAMS.md` per the memo's §4. **Per PM-24, the largest file in this set typically lands via GitHub web UI as a second commit on the same branch; the other files land via Claude Code `str_replace` as the first commit.**
+- **PR-β (prompt-sequence + D-index updates)** — modifications to `prompts/PROMPT_SEQUENCE.md` and `D-prompt-tier-and-pattern-index.md` per the memo's §5.2 (new prompts inserted, modified prompts re-scoped, new pre-split disposition entries).
+- **PR-γ (partner-state snapshot)** — modifications to `docs/partner_handoff.md` (this file) per the memo's §5.3, plus typically `docs/build_log.md` if any build-prompt QC findings are outstanding.
+
+All three are infrastructure / planning-artifact PRs per PM-22 — no four-commit discipline, no BUILD_LOG entries, no tests. The Conception-C amendment of 2026-04-29 (knowledge vaults + member bridges) is the canonical example. Partner's QC of PR-α is a Type 2 session walking the memo §4 spec line-by-line against what landed; QC of PR-β is similarly a Type 2 against memo §5.2; PR-γ is the closing session, typically combined with the next QC turn.
+
+**When NOT to use this:** a single ambiguity that can be resolved by a single decision in `docs/DECISIONS.md` is a one-line addition, not an amendment cycle. The cycle is reserved for cross-document drift requiring coordinated changes to 3+ constitutional docs.
+
+### PM-29: Knowledge-source adapters live on member bridges, not on the central CoS Mac Mini — SOFT
+
+Surfaced 2026-04-29 by the Conception-C amendment. Knowledge-source adapters (Apple Notes, Voice Notes, Obsidian, third-party connector packs) are bridge-side L1 adapters running on per-member Mac Mini bridges, not central-host adapters running on the CoS Mac Mini. Future prompts that add knowledge-source adapters land in `bridge/`, not `adminme/`. The two directories enforce a structural distinction parallel to PM-14 (`adminme/daemons/` vs `adminme/projections/`) but at the cross-machine level: `bridge/` is bridge-Mac-Mini-side runtime, `adminme/` is CoS-Mac-Mini-side runtime. Per memo §3.6 and BUILD.md §MEMBER BRIDGES.
+
+**The discipline:** when refactoring a future prompt that adds a knowledge-source adapter, place the adapter under `bridge/adminme_bridge/adapters/<source>/`, NOT `adminme/adapters/`. The bridge daemon and the central system share event-schema models via editable install or vendored copy (UT-15, decided at 11c orientation). The convention parallels PM-14: code lives in the directory whose runtime owns the work.
+
+PM-29 is SOFT because the bridge codebase has not yet been instantiated (prompt 11c lands first bridge code). Promote to HARD once 11c merges and the convention is concretely demonstrated.
 
 ---
 
@@ -388,6 +419,49 @@ The orientation Partner session for 10c-ii **must evaluate this** before draftin
 
 Status: **OPEN, resolves at the prompt that lands the loaders. No build blocker.**
 
+### UT-15: Bridge daemon and central system event-schema sharing mechanism — OPEN
+
+Surfaced 2026-04-29 by the Conception-C amendment (memo §5.3). The bridge daemon (under `bridge/adminme_bridge/`, prompt 11c) needs the same event-schema Pydantic models that the central system uses (`adminme/lib/event_types/`) so bridge emissions match the central event log's expected shape. Two viable approaches:
+
+- **(a) Editable install** — make `adminme/lib/event_types/` pip-installable as a small package (`adminme-events`), depend on it from `bridge/pyproject.toml` via `path = "../adminme/..."` editable. Pro: single source of truth; bridge always sees latest schemas. Con: development-mode setup is more complex; deployment requires the source tree present on each bridge.
+- **(b) Vendored copy** — bridge `pyproject.toml` includes a snapshot of `adminme/lib/event_types/` as `bridge/adminme_bridge/event_types/`. Pro: bridge ships standalone. Con: drift risk between central and bridge versions; needs CI guardrail against schema drift.
+
+**Decision deferred to 11c orientation.** Partner's 11c-orientation depth-read at refactor time picks one. Both options preserve all event-schema invariants ([D7] register at v1; upcasters compose forward) regardless of choice.
+
+Status: **OPEN, resolves at 11c orientation. No build blocker until 11c drafts.**
+
+### UT-16: Kid-event routing-restriction enforcement mechanism — OPEN
+
+Surfaced 2026-04-29 by the Conception-C amendment (memo §2.5). Kid bridges emit owner-scoped events (`owner_scope=private:<child_id>`); these events are explicitly excluded from cross-member knowledge-graph derivation (`vector_search`, `graph_miner`, `commitment_extraction`, `recurrence_extraction`, `relationship_summarization`, `closeness_scoring`). Two viable enforcement mechanisms:
+
+- **(a) `owner_scope_excludes` in pipeline manifests** — each excluded pipeline's `pipeline.yaml` lists `owner_scope_excludes: ["private:<child_id>"]`. Pro: explicit at the consumer side; manifests are the canonical place for subscription declarations. Con: requires updating every excluded pipeline's manifest when a new child member is added; manifest maintenance scales linearly with child count.
+- **(b) `kid_bridge: true` payload field (or envelope flag)** — the bridge-ingest endpoint flags kid-bridge events with `kid_bridge: true` (or, equivalently, `derived_from_kid_bridge` envelope flag); excluded consumers check this flag in their `apply()` / handler. Pro: child-set-membership is a runtime question, not a manifest question; new children inherit the rule automatically; consumers opt-in to checking. Con: every excluded consumer has to remember to check; the rule is enforced at consumer code, not at subscription time.
+
+The trade-off is **manifest discipline (a) vs code discipline (b).** Decision deferred to 11c orientation OR earlier if a downstream prompt (e.g. 10c-ii's `morning_digest` if it ever needs to subscribe to knowledge events) needs to know.
+
+Status: **OPEN, resolves at 11c orientation. No build blocker until then.**
+
+### UT-17: `member_knowledge` as new (12th) projection vs extending `artifacts` — OPEN
+
+Surfaced 2026-04-29 by the Conception-C amendment (memo §3.3). PR-α already encoded `member_knowledge` as the 12th projection (architecture-summary.md §1 sentence + §4 row 3.12; DIAGRAMS.md §1 ASCII as `member_knowledge (per-member)`). Final implementation decision is at the projection-prompt orientation. Two viable shapes remain:
+
+- **(a) New projection `member_knowledge`** (memo's recommendation; PR-α encoding) — dedicated 12th projection. Tables: `notes`, `note_versions`, `voice_notes`. Subscribes to `note.*` and `voice_note.*` events. Owner-scope-partitioned per [§1.6]. One DB, `owner_scope` column. Pro: notes are first-class knowledge units, query patterns differ from artifacts. Con: one more projection to maintain.
+- **(b) Extend the existing `artifacts` projection** — add `note` and `voice_note` as artifact kinds in the existing artifacts projection. Pro: fewer projections; reuses existing queryability. Con: notes are not really "artifacts" in the user-facing sense.
+
+Status: **OPEN, resolves at the projection-prompt orientation. No build blocker until then. Recommendation per memo §3.3 is option (a); already encoded in PR-α; reversal would require a follow-up amendment.**
+
+### UT-18: Apple Notes read mechanism — SQLite direct vs AppleScript vs hybrid — OPEN
+
+Surfaced 2026-04-29 by the Conception-C amendment (memo §1.3 + §3.6). The Apple Notes adapter on a member bridge needs to read `NoteStore.sqlite` (the local Apple Notes database) and detect changes. Three viable approaches:
+
+- **(a) SQLite direct** — open `~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite` read-only; query for new/changed notes since cursor. Pro: fast bulk reads; good for initial backfill. Con: schema can change on macOS major-version updates; requires Full Disk Access.
+- **(b) AppleScript** — drive Apple Notes via AppleScript bridge; ask Notes for the current state. Pro: schema-stable across macOS versions; no Full Disk Access needed for many operations. Con: slow; brittle on large vaults; requires Notes UI process.
+- **(c) Hybrid** — SQLite direct for bulk reads + initial backfill; AppleScript fallback when SQLite schema fingerprint doesn't match a known version. Pro: best of both worlds; degraded mode rather than hard failure on macOS update. Con: more code; two code paths to maintain.
+
+**Recommendation per memo §1.3:** option (c) hybrid. Final decision at 11c orientation.
+
+Status: **OPEN, resolves at 11c orientation. No build blocker until then.**
+
 ---
 
 ## Workflow norms
@@ -428,17 +502,17 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 
 ```
 <repo root>/
-├── ADMINISTRATEME_BUILD.md                      # constitutional
+├── ADMINISTRATEME_BUILD.md                      # constitutional (post-PR-α: §MACHINE TOPOLOGY adds adminme-bridge-{member}; §L1 "Three adapter runtimes"; §L5 Capture full rewrite + new Product E :3337 bridge; new top-level §MEMBER BRIDGES section; §BOOTSTRAP WIZARD §10)
 ├── ADMINISTRATEME_CONSOLE_PATTERNS.md           # constitutional
 ├── ADMINISTRATEME_CONSOLE_REFERENCE.html        # constitutional
-├── ADMINISTRATEME_DIAGRAMS.md                   # constitutional
+├── ADMINISTRATEME_DIAGRAMS.md                   # constitutional (post-PR-α: §1 L1 ASCII bridge-side adapters; §2 second canonical example; §7 topology bridge shelf row)
 ├── ADMINISTRATEME_REFERENCE_EXAMPLES.md         # constitutional
 ├── ADMINISTRATEME_FIELD_MANUAL.md               # for James (not Partner)
 ├── README.md                                    # for James
 ├── docs/
-│   ├── SYSTEM_INVARIANTS.md                     # constitutional
-│   ├── DECISIONS.md                             # constitutional
-│   ├── architecture-summary.md                  # constitutional
+│   ├── SYSTEM_INVARIANTS.md                     # constitutional (post-PR-α: §6.19 bridge sovereignty + §8.9 L1 two-place adapter family)
+│   ├── DECISIONS.md                             # constitutional (D1–D17; D17 added 2026-04-29)
+│   ├── architecture-summary.md                  # constitutional (post-PR-α: 12 projections; §9 5 products incl. :3337 bridge; §10 wizard §10; §11 #4 closed)
 │   ├── openclaw-cheatsheet.md                   # constitutional
 │   ├── build_log.md                             # LIVE: Claude Code's record
 │   ├── partner_handoff.md                       # THIS FILE
@@ -448,6 +522,7 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 │   ├── 01-split-memo-10b.md                     # MERGED (Tier C split memo for 10b → 10b-i / 10b-ii)
 │   ├── 02-split-memo-10b-ii.md                  # MERGED 2026-04-27 (Tier C secondary-split memo for 10b-ii → 10b-ii-α / 10b-ii-β)
 │   ├── 03-split-memo-10c.md                     # MERGED 2026-04-28 (Tier C split memo for 10c → 10c-i / 10c-ii / 10c-iii)
+│   ├── 04-architecture-amendment-knowledge-vaults-and-member-bridges.md  # MERGED 2026-04-29 (Tier C arch-amendment memo per PM-28; PR-α executed §4)
 │   ├── 2026-04-25-prompt-08-split.md            # earlier Tier C split memo (08 → 08a / 08b)
 │   ├── adrs/                                    # ADRs (longer form than DECISIONS entries)
 │   ├── checkpoints/                             # checkpoint audit memos (Tier C — landed via partner-state PRs)
@@ -460,7 +535,7 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 │   ├── demo_xlsx_forward.py
 │   └── demo_xlsx_roundtrip.py                   # added by 07c-β
 ├── prompts/
-│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy; slim preamble; 10b row split via PR #37; 10b-ii row split via PR #39; 10c row split via `sequence-update-10c-split` PR)
+│   ├── PROMPT_SEQUENCE.md                       # CANONICAL (single copy; slim preamble; 10b row split via PR #37; 10b-ii row split via PR #39; 10c row split via `sequence-update-10c-split` PR; PR-β will land 11c row + modifications to 13b/14b/16 rows)
 │   ├── 00-preflight.md ... 19-phase-b-smoke-test.md
 │   ├── 07a-projections-ops-spine.md
 │   ├── 07b-xlsx-workbooks-forward.md
@@ -479,8 +554,9 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 │   ├── 10b-ii-beta-thank-you-detection.md      # MERGED (PR #&lt;PR-10b-ii-beta&gt;, 2026-04-28; refactored 330-line prompt committed per PM-21)
 │   ├── 10c-proactive-pipelines.md              # RETIRED 2026-04-28 (sequence-update-10c-split PR; superseded by 10c-i + 10c-ii + 10c-iii)
 │   ├── 10c-i-standing-orders-infra-and-reward-dispatch.md   # MERGED (PR #44, 2026-04-29; ~440-line prompt committed per PM-21)
-│   ├── 10c-ii-morning-digest-and-paralysis.md  # PENDING (next refactor target)
+│   ├── 10c-ii-morning-digest-and-paralysis.md  # PENDING (next refactor target after PR-β closes)
 │   ├── 10c-iii-reminder-crm-custody.md         # PENDING
+│   ├── 11c-bridge-daemon-and-knowledge-adapters.md  # PENDING (new prompt landing in PR-β per memo §5.2; bridge daemon + knowledge-source adapters + 5 new event schemas at v1 + member_knowledge projection + bridge-ingest endpoint at :3337)
 │   ├── d01-*.md ... d08-*.md                    # diagnostic prompts
 │   ├── prompt-01a-openclaw-cheatsheet.md
 │   ├── prompt-01b-architecture-summary.md
@@ -488,7 +564,7 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 ├── adminme/
 │   ├── events/{log,bus,envelope,registry}.py
 │   ├── events/schemas/{ingest,crm,domain,governance,ops,system,messaging}.py    # domain.py extended 10c-i with RewardReadyV1 at v1
-│   ├── projections/{base,runner}.py + 11 subdirs (10 sqlite + xlsx_workbooks)
+│   ├── projections/{base,runner}.py + 11 subdirs (10 sqlite + xlsx_workbooks); member_knowledge subdir lands in 11c
 │   ├── daemons/                                 # PM-14: adapters/daemons that emit domain events
 │   │   └── xlsx_sync/                           # populated by 07c: diff.py, sheet_schemas.py, reverse.py
 │   ├── pipelines/                              # MERGED 10a (base.py, pack_loader.py, runner.py); 10b-ii-α extended PipelineContext + PipelineRunner with parties_conn_factory; pipeline PACKS live under packs/pipelines/ — UT-11 CLOSED 2026-04-26
@@ -499,6 +575,7 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 │   ├── lib/observation.py                      # MERGED 08b (outbound() single seam per [§6.13/§6.14]; ObservationManager default-on)
 │   ├── lib/skill_runner/                       # MERGED 09a (wrapper.py, pack_loader.py)
 │   └── (products, openclaw_plugins, cli, adapters — stubs or partial)
+├── bridge/                                     # PENDING — lands in 11c per PM-29: bridge-side daemon + knowledge-source adapters (Apple Notes, Voice Notes, Obsidian, connector-pack slot) + ingest client to central :3337; separate Poetry project sharing event-schema models with adminme/ (UT-15)
 ├── tests/{unit,integration,fixtures,e2e}/      # tests/unit/{bootstrap,events,packs}/ added by 10c-i
 ├── console/  bootstrap/  packs/                 # packs/skills/{classify_thank_you_candidate, classify_message_nature, classify_commitment_candidate, extract_commitment_fields, extract_thank_you_fields}; packs/pipelines/{identity_resolution, noise_filtering, commitment_extraction, thank_you_detection, reward_dispatch}
 │                                                # bootstrap/openclaw/{programs/<six>.md, cron.yaml, README.md} added by 10c-i per [D1] Corollary
