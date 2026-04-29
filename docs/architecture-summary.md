@@ -31,7 +31,7 @@ Per BUILD.md §OPENCLAW IS THE ASSISTANT SUBSTRATE, AdministrateMe is not a stan
 - **Standing orders.** AdministrateMe registers proactive rules (paralysis detection, morning digest, reward dispatch, reminder dispatch, CRM gap nudges, coparent brief). Per `openclaw-cheatsheet.md Q3`, OpenClaw's standing-orders mechanism is **workspace prose in `AGENTS.md` paired with cron jobs** (`openclaw cron add ...`) — not a typed registration API. See §11 for the open question about how AdministrateMe writes these programs.
 - **Channels.** The `openclaw-memory-bridge` plugin ingests OpenClaw conversation state into L2 as `messaging.received` and `conversation.turn.recorded` events. Outbound drafts composed by AdministrateMe get delivered through OpenClaw's channel plugins (per `openclaw-cheatsheet.md Q4`).
 
-**What OpenClaw provides vs. what AdministrateMe adds.** OpenClaw: gateway daemon, agent loop, channel plugins, skill runner, slash dispatcher, sessions with `dmScope: per-channel-peer` (per `openclaw-cheatsheet.md Q6`), standing orders, cron, hooks, approval gates, SOUL.md, nodes, memory-core/memory-wiki. AdministrateMe: event log, 11 projections, 17 pipelines, data adapters (Gmail, Calendar, Plaid, Reminders, CalDAV, etc.), skill packs, slash-command handlers, Node console, 4 Python product APIs, persona packs compiled into SOUL.md, profile packs.
+**What OpenClaw provides vs. what AdministrateMe adds.** OpenClaw: gateway daemon, agent loop, channel plugins, skill runner, slash dispatcher, sessions with `dmScope: per-channel-peer` (per `openclaw-cheatsheet.md Q6`), standing orders, cron, hooks, approval gates, SOUL.md, nodes, memory-core/memory-wiki. AdministrateMe: event log, 12 projections, 17 pipelines, data adapters (Gmail, Calendar, Plaid, Reminders, CalDAV, etc.) + bridge-side knowledge-source adapters (Apple Notes, Voice Notes, Obsidian per D17), skill packs, slash-command handlers, Node console, 5 Python product APIs (core, comms, capture, automation, bridge), persona packs compiled into SOUL.md, profile packs.
 
 **State boundary.** OpenClaw's memory stays in OpenClaw at `~/.openclaw/` (per `openclaw-cheatsheet.md Q8`); AdministrateMe's event log stays in AdministrateMe at `~/.adminme/`. The two are bridged one-way through the memory-bridge plugin; they never share a database.
 
@@ -55,9 +55,9 @@ The event log is the source of truth for AdministrateMe (per BUILD.md §L2 and p
 
 Per DIAGRAMS.md §2, one inbound iMessage flows through adapter → bus → extraction pipeline → 2 skill calls → projection updates → console confirm → `commitment.confirmed` → reward dispatch — six events, one correlation_id, full audit trail by `grep correlation_id`.
 
-## 4. The 11 projections
+## 4. The 12 projections
 
-Each projection is a deterministic pure function from event subsets to a set of tables (or files) — per BUILD.md §L3 (§3.1–§3.11). Each has a name, a version (bumped to trigger rebuild), a subscription list, a cursor, an idempotent `apply(event)`, and a `rebuild()` that truncates and replays from event 0. CLI: `adminme projections list|rebuild|lag`.
+Each projection is a deterministic pure function from event subsets to a set of tables (or files) — per BUILD.md §L3 (§3.1–§3.11) and the Conception-C amendment for `member_knowledge` (currently spec'd in this summary's row 3.12 plus D17; the BUILD.md §3.12 subsection lands with prompt 11d). Each has a name, a version (bumped to trigger rebuild), a subscription list, a cursor, an idempotent `apply(event)`, and a `rebuild()` that truncates and replays from event 0. CLI: `adminme projections list|rebuild|lag`.
 
 | # | Name | Subscribes to | Key tables/files | Notable properties |
 |---|---|---|---|---|
