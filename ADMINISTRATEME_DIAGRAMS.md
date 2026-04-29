@@ -246,6 +246,8 @@ Every row in the log carries `correlation_id = c_m1_abc123`. One grep, full audi
 ### Second canonical example: a new note in James's Apple Notes through to a confirmed commitment
 
 **Why this is parallel.** Same shape as the iMessage example: an external source emits, an adapter normalizes, the event lands in the log, pipelines and projections derive. The only structural difference is L1's two-place shape — the adapter runs on James's bridge Mac Mini, not on the central CoS Mac Mini, and emits via the bridge ingest endpoint over the tailnet.
+
+```text
 James writes a note in Apple Notes on his iPhone
 │
 │  iCloud sync to James's Mac (the bridge)
@@ -318,6 +320,7 @@ Total events emitted from this one Apple Note:
 6 events · 1 correlation_id · traceable end to end
 physical knowledge segregation: the note's audio source
 never left James's bridge Mac Mini's iCloud account.
+```
 
 The arrows to internalize: bridges are L1's two-place shape — central adapters at process scope on the CoS Mac Mini, bridge adapters at member-bridge scope. Both emit into the same event log; neither writes projections or calls pipelines directly. The bridge is the privacy boundary at the physical layer.
 
@@ -732,8 +735,9 @@ The arrows to internalize: bridges are L1's two-place shape — central adapters
                               ▼                                │
                        (CoS Mac Mini :3337)                    │
                                                                │
-       ─── (* Obsidian opt-in per member) ────────────────────
+       ─── (* Obsidian opt-in per member) ────────────────────┘
                                       │
+                                      │  loopback (Node ↔ Python)
                                       │
    ┌──────────────────────────────────┴──────────────────────────────────┐
    │                                                                     │
