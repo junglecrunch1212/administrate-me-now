@@ -299,12 +299,20 @@ Every file you write belongs to exactly one layer. Layer violations are build fa
 │                      via the openclaw-memory-bridge plugin.          │
 ├──────────────────────────────────────────────────────────────────────┤
 │  L1  Adapters        Channel-family-specific translators from        │
-│                      external sources to typed events. Never write   │
+│                      external sources to typed events. Two places:   │
+│                      central (on CoS Mac Mini) for messaging /       │
+│                      calendaring / financial / etc.; bridge (on      │
+│                      member Mac Minis) for knowledge sources         │
+│                      (Apple Notes, Voice Notes, Obsidian, connector  │
+│                      packs). Bridges emit owner-scoped events into   │
+│                      the central event log via the :3337 bridge      │
+│                      ingest endpoint over the tailnet. Never write   │
 │                      projections; never call pipelines; never        │
 │                      compose outbound (that's the send path via      │
 │                      OpenClaw's outbound channels for messaging,     │
 │                      or adapter-specific outbound for Plaid writes,  │
-│                      Apple Reminders writes, etc.)                   │
+│                      Apple Reminders writes, etc.) See §MEMBER       │
+│                      BRIDGES below.                                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -316,7 +324,8 @@ Every file you write belongs to exactly one layer. Layer violations are build fa
 - The CLI (`adminme`) orchestrates but contains no business logic; it shells out to product APIs or invokes pipeline/skill runners directly.
 
 **Machine layout** (these are L1/L0, beneath the five layers):
-- **adminme-hub** — Mac Mini (Apple Silicon, macOS Sequoia+ or Tahoe), always-on. Primary host. Runs Python L1-L4 services, Node console, OpenClaw gateway, BlueBubbles server, all LaunchAgents, local SQLCipher event log + projections.
+- **adminme-hub** — Mac Mini (Apple Silicon, macOS Sequoia+ or Tahoe), always-on. Primary host. Runs Python L1-L4 services, Node console, OpenClaw gateway, BlueBubbles server, all LaunchAgents, local SQLCipher event log + projections. Does **not** sign into any family member's iCloud account.
+- **adminme-bridge-{member}** — Mac Mini per Apple-using family member, on the household tailnet, signed into that member's iCloud account. Runs the `adminme-bridge` daemon and its assigned knowledge-source adapters (Apple Notes, Voice Notes, optionally Obsidian, optional connector packs). Emits owner-scoped `note.*` and `voice_note.*` events to the central CoS Mac Mini's `:3337 bridge` ingest endpoint. See §MEMBER BRIDGES below for full spec.
 - **adminme-vault** — optional Linux VPS or Raspberry Pi 5 on the same tailnet. Runs nightly backups, graph miner, read replica. Not required for v1.
 - **adminme-edge** — wall displays (kitchen iPad, old iPhones) running the scoreboard surface. Tailscale-authenticated but not mapped to a member.
 
@@ -1347,9 +1356,15 @@ An adapter is a translator from an external source to typed events. Adapters:
 - Declare their **sensitivity floor** (a privileged-email adapter enforces `sensitivity: privileged` on all events it emits; cannot be lowered)
 - Emit **structured errors** as events (`adapter.error` with diagnostic payload) — never silently fail
 
-**Two adapter runtimes.** Some adapters live as standalone Python processes (`adminme/adapters/<family>/<n>/`) supervised by the AdministrateMe adapter supervisor. Others live as **OpenClaw plugins** — specifically, the channel adapters that OpenClaw already has first-class support for (iMessage via BlueBubbles, Telegram, Discord, web). For those channels, AdministrateMe ships an `openclaw-to-adminme` bridge plugin that translates OpenClaw's inbound message events into AdministrateMe `messaging.received` events. The bridge direction is: OpenClaw channel → OpenClaw plugin → AdministrateMe event log. The reverse direction for outbound messaging (AdministrateMe composes a draft → OpenClaw channel sends it) goes through OpenClaw's send API, not via adapter code.
+**Three adapter runtimes.** Adapters live in one of three runtimes based on what they're translating from:
 
-Decision rule for new adapters: **if OpenClaw already has the channel, use OpenClaw + bridge plugin. If it doesn't (Gmail API, Plaid, CalDAV, Apple Reminders, Google Calendar), write a standalone Python adapter.**
+1. **Standalone Python processes** on the CoS Mac Mini (`adminme/adapters/<family>/<n>/`) supervised by the AdministrateMe adapter supervisor. These cover data sources: Gmail API, Plaid, CalDAV, Apple Reminders, Google Calendar, etc.
+
+2. **OpenClaw plugins** — the channel adapters that OpenClaw already has first-class support for (iMessage via BlueBubbles, Telegram, Discord, web). For those channels, AdministrateMe ships an `openclaw-to-adminme` bridge plugin that translates OpenClaw's inbound message events into AdministrateMe `messaging.received` events. The bridge direction is: OpenClaw channel → OpenClaw plugin → AdministrateMe event log. The reverse direction for outbound messaging (AdministrateMe composes a draft → OpenClaw channel sends it) goes through OpenClaw's send API, not via adapter code.
+
+3. **Bridge-side Python adapters** — running on member bridges (per §MEMBER BRIDGES), reading per-member personal knowledge. Built-in: Apple Notes (reads `NoteStore.sqlite` + AppleScript fallback), Voice Notes (watches Voice Memos folder), Obsidian (filesystem watcher on configured vault path). Connector packs add additional knowledge sources (Notion, Logseq, Roam, etc.). Bridge adapters emit `note.*` and `voice_note.*` events to the central `:3337 bridge` ingest endpoint over the tailnet — they do not write to the central event log directly and do not hold the AdministrateMe SQLCipher master key.
+
+Decision rule for new adapters: **(a) if OpenClaw already has the channel, use OpenClaw + bridge plugin; (b) if the source is per-member personal knowledge on the member's own device, write a bridge-side adapter; (c) otherwise (data sources reachable from any member's identity — Gmail, Plaid, etc.), write a standalone Python adapter.**
 
 ```python
 class Adapter(Protocol):
@@ -1713,36 +1728,35 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 
 **No scheduled jobs of its own**; all work is event-driven. Adapters poll on their own schedules and emit events; pipelines subscribe and react.
 
-### Product C: `capture` — Working Memory + CRM Surfaces (FastAPI at :3335)
+### Product C: `capture` — Knowledge Surfaces + CRM Surfaces (FastAPI at :3335)
 
-**Owns:** Quick-capture, voice-note ingest, triage queue, recipes, CRM surfacing (overdue contacts, birthdays, hosting balance), Party detail views, Place/Asset/Account views.
+**Owns:** Read surfaces over the personal knowledge layer (per-member knowledge view, household knowledge view), recipes, CRM surfacing (overdue contacts, birthdays, hosting balance), Party detail views, Place/Asset/Account views, and semantic + structured search across Interactions/Artifacts/Parties/Notes.
+
+**Capture is a read surface, not an input pipeline (per D17).** Personal knowledge is captured by family members in their own knowledge tools — Apple Notes by default, Voice Notes, optionally Obsidian, optional third-party connector packs — and ingested via member bridges (see §MEMBER BRIDGES). Tasks, commitments, recurrences, and relationships flow through the existing reactive pipelines (`commitment_extraction`, `recurrence_extraction`, `relationship_summarization`), which have `note.*` and `voice_note.*` added to their subscription lists. There is no quick-capture prefix routing, no central voice-note ingest, no triage queue.
 
 **Routers:**
-- `/api/capture/capture` — quick-capture ingest (prefix-routed)
-- `/api/capture/voice` — audio file upload → transcription → triage
-- `/api/capture/triage` — triage queue, one at a time
-- `/api/capture/recipes` — recipes as captures
+- `/api/capture/knowledge` — current member's knowledge view: notes + voice-note transcripts, owner_scope=private:<member_id>, paginated
+- `/api/capture/knowledge/household` — household knowledge view: shared:household scope only (member-private content excluded), paginated
+- `/api/capture/recipes` — recipes view (a saved-query over notes tagged `recipe` and the structured-recipe artifact family)
 - `/api/capture/parties` — CRM Party list + detail (the primary CRM UI)
 - `/api/capture/parties/:id` — Party detail: interactions, commitments, tagged artifacts, relationships, relationship summary, closeness tier, contact gap, hosting balance, upcoming birthday/anniversary, linked assets/accounts/places
 - `/api/capture/places` — Places view
 - `/api/capture/assets` — Assets view
 - `/api/capture/accounts` — Accounts view
-- `/api/capture/search` — semantic + structured search over Interactions/Artifacts/Parties
+- `/api/capture/search` — semantic + structured search over Interactions/Artifacts/Parties/Notes
 
 **Skills used:**
-- `classify_capture_intent@v2` (routing unclassified captures)
-- `extract_structured_from_capture@v3` (recipes, CRM updates, task proposals)
 - `summarize_relationship@v2`
 - `score_relationship_tier@v2`
 
-**Slash commands:** `/capture`, `/triage`, `/recipe`, `/party`, `/birthdays`, `/thank`, `/hosted`
+**Slash commands:** `/recipe`, `/party`, `/birthdays`, `/thank`, `/hosted`
 
 **Scheduled jobs:**
 - `relationship_summarization` nightly 02:00 over 90-day window
 - `closeness_scoring` weekly Sunday 04:00
 - `crm_surface` daily 09:00 + on-demand
 - `graph_miner` nightly 03:00 (runs on adminme-vault if present)
-- `recurrence_extraction` daily 04:00 across new artifacts and contact changes
+- `recurrence_extraction` daily 04:00 across new artifacts, contact changes, and notes
 
 ### Product D: `automation` — Ambient Signal Layer (FastAPI at :3336)
 
@@ -1776,6 +1790,23 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 - Subscription audit monthly 1st 08:00
 - Budget pace check Mon/Thu 10:00
 - Balance sheet rollup nightly 06:00
+
+### Product E: `bridge` — Knowledge Ingest (FastAPI at :3337)
+
+**Owns:** the inbound endpoint that receives owner-scoped knowledge events from member bridges (per §MEMBER BRIDGES and D17). Bridge is non-interactive — no slash commands, no scheduled jobs, no human-facing UI — just an authenticated ingest endpoint.
+
+**Routers:**
+- `/api/bridge/ingest` — single-event ingest. Body: `{event_type, schema_version, payload, occurred_at, correlation_id}`. Tailscale-User-Login header binds the inbound `owner_scope` to the bridge's assigned member; mismatch (e.g. a bridge tries to emit on another member's owner_scope) returns 403.
+- `/api/bridge/ingest/batch` — batch ingest. Body: `{events: [...]}` up to N events per call (debounced bulk emit on a long-idle bridge that just woke up).
+- `/api/bridge/health` — bridge → central health check; returns `{server_time, last_event_received_at}`. Polled by the bridge daemon every 30s.
+
+**Skills used:** none. The bridge product is pure transport.
+
+**Slash commands:** none.
+
+**Scheduled jobs:** none. All work is bridge-driven.
+
+**Authentication.** Tailscale identity at the tailnet edge. Each bridge has a tailnet identity (e.g. `james-bridge@<tailnet>`) bound at bridge enrollment to a `member_id`. The ingest endpoint reads the `Tailscale-User-Login` header, looks up the binding in `party_tailscale_binding`, and uses that `member_id` to derive the inbound `owner_scope`. The bridge cannot override `owner_scope` — bridges submit events; the central system assigns scope based on tailnet identity.
 
 ### Cross-product event flow (illustration)
 
@@ -2050,6 +2081,51 @@ Session scope: `dmScope: per-channel-peer` (not main) — multi-principal isolat
 
 ---
 
+## MEMBER BRIDGES
+
+Personal knowledge — notes, voice notes, optionally Obsidian vaults — is captured by each family member in their own tools on their own device. AdministrateMe ingests this knowledge via **member bridges**: a Mac Mini per Apple-using family member, physically present on the shelf next to the central CoS Mac Mini, signed into that member's iCloud account, running an `adminme-bridge` daemon. This is the physical-layer reinforcement of identity-first privacy ([§6.12]) and the architecture of D17.
+
+**Why bridges, not central ingestion.** Apple Notes has no public API; reading a member's notes requires their iCloud signin on a Mac with Full Disk Access. A central CoS Mac Mini signed into multiple members' iCloud accounts would be a single-point-of-failure for household privacy. The bridge model puts each member's iCloud key material on a physically distinct machine, with no cross-member knowledge access path.
+
+**Physical arrangement.** All member bridges + the CoS Mac Mini sit on the same shelf at the household site, on the household tailnet, on the same power. Family-member personal Macs (separate from bridges) remain ordinary tailnet endpoints, used by their member for their normal computing. Bridges are dedicated AdministrateMe infrastructure; they have no role in the member's personal computing.
+
+**What the bridge runs:**
+
+- `adminme-bridge` daemon (`~/.adminme-bridge/`) — the supervisor process. Manages the adapters, the `:3337 bridge` ingest connection, and bridge-side state (cursors, last-seen ids).
+- **Apple Notes adapter** — reads the local `NoteStore.sqlite` database (bulk reads + initial backfill) and falls back to AppleScript for live edit detection on changed notes. Emits `note.added@v1` / `note.updated@v1` / `note.deleted@v1` events. The exact read mechanism (SQLite direct vs AppleScript vs hybrid) is finalized at prompt 11c orientation; recommendation per memo §1.3 is hybrid.
+- **Voice Notes adapter** — watches the Voice Memos recordings folder (`~/Library/Application Support/com.apple.voicememos/Recordings/`); emits `voice_note.added@v1` events with the audio artifact reference. Transcription is central-side (per memo §8) — the bridge uploads the audio artifact to the central artifact store and emits the event; the central skill runner transcribes via the existing skill-call provenance path.
+- **Obsidian adapter** — filesystem watcher on a configured vault path; emits `note.added@v1` events with `source_kind=obsidian`. Built-in but only active if the member has configured a vault path. **Excluded from kid-bridge variant.**
+- **Connector-pack slot** — the extension point for additional knowledge-source adapters (Notion, Logseq, Roam, etc.) shipped as packs. Connector packs install on bridges as `kind: adapter, subkind: knowledge-source`. The exact pack interface is finalized at prompt 11c refactor time.
+- **Tailscale client** — the bridge is a tailnet device with its own identity (e.g. `james-bridge@<tailnet>`). Tailscale identity is what binds the bridge's emissions to the member's `owner_scope` at the central ingest endpoint.
+
+**What the bridge does NOT run:**
+
+- No event log. Events are emitted over the tailnet to the central CoS Mac Mini's `:3337 bridge` ingest endpoint. The bridge does not hold the AdministrateMe SQLCipher master key.
+- No projections.
+- No console.
+- No pipelines, no skill runner, no OpenClaw.
+- **No iCloud credentials for any other member.** James's bridge has James's iCloud, only James's. **Hard.** A bridge configured with multiple members' iCloud signins is a misconfiguration and is detected at bootstrap (per [§6.19]).
+
+**Kid-bridge variant.** A bridge assigned to a child member runs a restricted adapter set: Apple Notes + Voice Notes only. Obsidian is excluded. Cross-member knowledge graph derivation that touches kid-owned events is sandboxed per the Conception-C amendment §2.5. Otherwise the bridge model is identical — kid-bridges are first-class bridges; they emit to the same `:3337 bridge` ingest endpoint, with `owner_scope=private:<kid_member_id>`.
+
+**Bridge enrollment.** During bootstrap §10 (per §BOOTSTRAP WIZARD), the central wizard generates an enrollment package per bridge — a tarball containing the per-member identity, the tailnet auth key, the adapter set, and the bridge bootstrap mini-wizard. The operator copies the package to each bridge Mac Mini (rsync over the tailnet, or sneakernet on initial setup). The mini-wizard runs on the bridge: verifies macOS version, iCloud signin (must be the right member's account), Tailscale auth, Apple Notes accessibility (Full Disk Access permission); installs the bridge daemon under `launchd`; configures which adapters are active (Apple Notes always; Voice Notes by default; Obsidian if a vault path is configured); tests the `:3337 bridge` ingest endpoint roundtrip (submits a `bridge.enrollment_completed` event); hands control back to the central wizard. Each successful enrollment emits `bridge.enrolled {member_id, bridge_node_id, adapters_active}`.
+
+**Bridge daemon code.** Bridge daemon code lives in `bridge/` at the repo root (parallel to `adminme/`), NOT in `adminme/adapters/` — bridges are a separate machine and a separate runtime. Per PM-29: future prompts that add knowledge-source adapters land in `bridge/`, not `adminme/`. The bridge daemon and the central system share event-schema models via editable install or vendored copy (UT-15, decided at 11c orientation).
+
+**The five new event schemas** (registered at v1; finalized in prompt 11c):
+
+- `note.added@v1` — payload: `note_id` (bridge-source-stable), `source_kind` (`apple_notes`/`obsidian`/`<connector-pack>`), `title`, `body`, `tags`, `created_at`, `modified_at`, `folder_path`.
+- `note.updated@v1` — same payload + `prior_modified_at`.
+- `note.deleted@v1` — payload: `note_id`, `deleted_at`.
+- `voice_note.added@v1` — payload: `voice_note_id`, `source_kind` (`apple_voice_memos`), `audio_artifact_ref`, `duration_seconds`, `recorded_at`. Transcript becomes available later via `skill.call.recorded` once central-side transcription completes.
+- `bridge.enrollment_completed@v1` — payload: `bridge_node_id`, `member_id`, `adapters_active`, `bridge_daemon_version`.
+
+All five register at v1 per [§7]/[D7]. Migrations and upcasters land in prompt 11c.
+
+**The bridge is the privacy boundary.** Cross-member knowledge access happens only through projection queries on the central CoS Mac Mini (read-time scope predicates, identity-first privacy, privileged-content exclusion from `vector_search` per [§6.9]). Bridge-to-bridge access is forbidden by [§6.19] and is not implementable: bridges cannot reach each other's iCloud accounts, and the bridge daemon does not expose any inbound HTTP surface beyond its own loopback management interface.
+
+---
+
 ## AUTHORITY, OBSERVATION, GOVERNANCE
 
 ### `config/authority.yaml`
@@ -2187,6 +2263,8 @@ The bootstrap wizard takes a fresh machine from zero to a running AdministrateMe
 **Section 8: Channel pairing.** Interactive pairing per selected channel. Each paired channel is registered with OpenClaw via its channel API (see OpenClaw's `channels/pairing` docs). For iMessage: verify assistant's Apple ID signin on the Mac Mini, install BlueBubbles, register the BlueBubbles channel with OpenClaw, test send. For Telegram/Discord: create bot, exchange tokens, register with OpenClaw. For Apple Reminders: list iCloud lists (standalone Python adapter, not OpenClaw), configure mapping, test bidirectional. For Gmail: OAuth flow with assistant's Workspace, PubSub setup, Funnel endpoint (standalone Python adapter). This section also installs AdministrateMe's skill packs + plugins into OpenClaw (`openclaw skill install <path>`, `openclaw plugin install <path>` for each) and registers AdministrateMe's slash commands and standing orders via OpenClaw's CLI.
 
 **Section 9: Observation briefing.** Explain observation mode, how to review, how to flip live. First outbound message sent (to primary adult via their preferred channel — routed through OpenClaw, suppressed if observation mode is on, which it is by default so this first message actually shows as a suppression event the tenant reviews in Settings → Observation).
+
+**Section 10: Bridge enrollment.** Per §MEMBER BRIDGES. The central wizard generates an enrollment package per member bridge — a tarball containing the per-member identity, the tailnet auth key, the adapter set (Apple Notes + Voice Notes always; Obsidian if the member configures a vault path; kid-bridge variant excludes Obsidian per [§6.19]), and the bridge bootstrap mini-wizard. The operator copies this package to each bridge Mac Mini (rsync over the tailnet, or sneakernet on initial setup). The bridge bootstrap mini-wizard runs on the bridge: verifies macOS + iCloud signin (must be the assigned member's account) + Tailscale auth + Apple Notes Full Disk Access; installs the bridge daemon under `launchd`; configures active adapters; submits a `bridge.enrollment_completed` event to the central `:3337 bridge` ingest endpoint; hands control back to the central wizard. Each successful enrollment emits `bridge.enrolled {member_id, bridge_node_id, adapters_active}`. **§10 is required for any household with at least one Apple-using member.** A household with no Apple-using members has no §10. Households running OpenClaw-based knowledge sources only (no Apple ID, no Voice Notes, no Obsidian) skip §10 entirely.
 
 **Implementation:** Textual/Rich TUI. Idempotent; resumable via encrypted `~/.adminme/bootstrap-answers.yaml.enc`. Bootstrap report at `~/.adminme/bootstrap-report.md`.
 
