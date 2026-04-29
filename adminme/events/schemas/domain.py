@@ -188,6 +188,26 @@ class RecurrenceUpdatedV1(BaseModel):
     field_updates: dict[str, Any]
 
 
+class RewardReadyV1(BaseModel):
+    """Reward toast contract emitted by ``reward_dispatch`` reactive
+    pipeline on ``task.completed`` / ``commitment.completed``.
+
+    Canonical event name per [BUILD.md §1620, CONSOLE_PATTERNS.md §8 —
+    supersedes §1210 typo `adminme.reward.dispatched`]; the console's
+    SSE layer consumes by this name. Registered at v1 per [D7].
+
+    Either ``triggering_task_id`` or ``triggering_commitment_id`` is set
+    (whichever event triggered the dispatch); the other is None."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1)
+    tier: Literal["done", "warm", "delight", "jackpot"]
+    template_id: str = Field(min_length=1)
+    template_text: str = Field(min_length=1)
+    triggering_task_id: str | None = None
+    triggering_commitment_id: str | None = None
+
+
 class SkillCallRecordedV2(BaseModel):
     """First version actually emitted. v1 is reserved — see module docstring.
 
@@ -225,4 +245,5 @@ registry.register("task.deleted", 1, TaskDeletedV1)
 registry.register("recurrence.added", 1, RecurrenceAddedV1)
 registry.register("recurrence.completed", 1, RecurrenceCompletedV1)
 registry.register("recurrence.updated", 1, RecurrenceUpdatedV1)
+registry.register("reward.ready", 1, RewardReadyV1)
 registry.register("skill.call.recorded", 2, SkillCallRecordedV2)
