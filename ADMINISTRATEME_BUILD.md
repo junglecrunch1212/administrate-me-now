@@ -662,7 +662,9 @@ CREATE TABLE tasks (
   created_by       TEXT,                    -- party_id or adapter id
   completed_at     TEXT,
   completed_by     TEXT,
-  source_system    TEXT,                    -- 'manual' | 'reminders' | 'siri' | 'skill' | 'recurring'
+  source_system    TEXT,                    -- 'manual' | 'list_item_promotion' | 'siri' | 'skill' | 'recurring'
+                                            -- 'reminders' value retired per [D18] (UT-22 closure);
+                                            -- list-item-derived tasks now use 'list_item_promotion'
   notes            TEXT,
   owner_scope      TEXT NOT NULL,
   visibility_scope TEXT NOT NULL,
@@ -1080,6 +1082,80 @@ This means the xlsx files remain a first-class human surface, but the event log 
 
 ---
 
+### 3.13 `lists` projection — household-mirrored lists
+
+Per [D18], the `lists` projection mirrors household lists from Cat-B external-state-mirror adapters (Apple Reminders, Google Tasks, Apple Notes-checklists) plus CoS-native lists. Three tables: `lists`, `list_items`, `list_shares`. (Subsection numbering note: `member_knowledge` lands as §3.12 with prompt 11d per [D17] / Conception-C amendment; `lists` lands as §3.13 with prompt 11f per [D18] / Amendment-2.)
+
+```sql
+CREATE TABLE lists (
+  list_id              TEXT PRIMARY KEY,    -- Crockford ULID
+  external_id_kind     TEXT,                -- 'apple_reminders' | 'google_tasks' |
+                                            -- 'apple_notes_checklist' | NULL for cos_native
+  external_list_id     TEXT,                -- upstream id; NULL for cos_native
+  source_kind          TEXT NOT NULL,       -- discriminator: matches external_id_kind
+                                            -- when external_id_kind IS NOT NULL,
+                                            -- 'cos_native' otherwise
+  title                TEXT NOT NULL,
+  list_kind            TEXT NOT NULL,       -- 'shopping' | 'todo' | 'errands' |
+                                            -- 'travel_prep' | 'project' | 'other'
+  owner_party          TEXT REFERENCES parties(party_id),
+  owner_scope          TEXT NOT NULL,
+  visibility_scope     TEXT NOT NULL,
+  sharing_model        TEXT NOT NULL,       -- 'private' | 'shared_household' |
+                                            -- 'icloud_shared_list' | 'google_shared_list'
+  created_at           TEXT NOT NULL,
+  archived_at          TEXT,                -- non-null = soft-deleted
+  last_event_id       BLOB NOT NULL,
+  UNIQUE (external_id_kind, external_list_id)  -- Cat-B dedup invariant per [PM-31]
+);
+
+CREATE TABLE list_items (
+  item_id              TEXT PRIMARY KEY,
+  list_id              TEXT NOT NULL REFERENCES lists(list_id),
+  external_item_id     TEXT,
+  parent_item_id       TEXT REFERENCES list_items(item_id),  -- subtask hierarchy
+  body                 TEXT NOT NULL,
+  status               TEXT NOT NULL,       -- 'open' | 'completed' | 'removed'
+  position             INTEGER,             -- ordering within list, NULL for adapters
+                                            -- that don't expose order
+  added_by_party       TEXT REFERENCES parties(party_id),
+  added_at             TEXT NOT NULL,
+  completed_at         TEXT,
+  completed_by_party   TEXT REFERENCES parties(party_id),
+  removed_at           TEXT,
+  promoted_task_id     TEXT REFERENCES tasks(task_id),  -- non-null when promoted per [D18]
+  notes                TEXT,
+  owner_scope          TEXT NOT NULL,       -- inherited from parent list at apply time
+  visibility_scope     TEXT NOT NULL,
+  last_event_id       BLOB NOT NULL,
+  UNIQUE (list_id, external_item_id)
+);
+
+CREATE TABLE list_shares (
+  share_id             TEXT PRIMARY KEY,
+  list_id              TEXT NOT NULL REFERENCES lists(list_id),
+  invited_party        TEXT NOT NULL REFERENCES parties(party_id),
+  invitation_status    TEXT NOT NULL,       -- 'pending' | 'accepted' | 'declined' | 'expired'
+  invited_at           TEXT NOT NULL,
+  accepted_at          TEXT,
+  external_invitation_ref TEXT,             -- opaque upstream invitation handle
+                                            -- (iCloud share URL, Google sharing token)
+  last_event_id       BLOB NOT NULL,
+  UNIQUE (list_id, invited_party)
+);
+```
+
+**Subscriptions.** `list.created`, `list.updated`, `list.deleted`, `list.shared`, `list.share_invited`, `list_item.added`, `list_item.updated`, `list_item.checked`, `list_item.unchecked`, `list_item.removed`, `list_item.promoted_to_task`. Eleven domain event types at v1. Plus three system observability events scoped to the Notes-checklist write-back path (`note.write_attempted@v1`, `note.write_succeeded@v1`, `note.write_failed@v1`) registered in `adminme.events.schemas.system` alongside `xlsx.regenerated`. (These three system events are added to `ALLOWED_EMITS` in `scripts/verify_invariants.sh` when prompt 11c-ii lands the Notes-checklist write-back code, NOT in this PR.)
+
+**Cross-link to `tasks`.** The `promoted_task_id` column on `list_items` is the sole structural link to the `tasks` projection. Per [D18], promoting a list item to a task does NOT modify the list item — the item retains its open/completed state in upstream-mirror semantics; the resulting task is a new row in `tasks` with `created_by = '<source-list-item-promotion>'` and `source_system = 'list_item_promotion'`, carrying `source_list_item_id` payload provenance on the originating `list_item.promoted_to_task` event. See [§LISTS] for the codified invariant.
+
+**Rebuild.** Standard projection rebuild: truncate all three tables, replay the event log filtering on the subscription list. The `(external_id_kind, external_list_id)` UNIQUE constraint guarantees that even if multiple bridges observe the same iCloud-shared list and emit independent `list.created` events, the upsert collapses to one row. CLI: `adminme projections rebuild lists`.
+
+**Lands at prompt 11f.** The reactive Cat-B adapters (Apple Reminders dual-deployment in 11b post-Amendment-2, Apple Notes-checklists B-half in 11c-ii, Google Tasks central in 11b post-Amendment-2) start emitting `list.*` and `list_item.*` events; the projection materializes from those.
+
+
+---
+
 ## L3 CONTINUED: THE SESSION & SCOPE ENFORCEMENT
 
 There is no "global database connection" in Python code. All reads and writes go through a `Session` object constructed with `(current_user: PartyId, requested_scopes: list[Scope])`. The Session rejects queries whose data is not in an allowed scope.
@@ -1356,15 +1432,25 @@ An adapter is a translator from an external source to typed events. Adapters:
 - Declare their **sensitivity floor** (a privileged-email adapter enforces `sensitivity: privileged` on all events it emits; cannot be lowered)
 - Emit **structured errors** as events (`adapter.error` with diagnostic payload) — never silently fail
 
-**Three adapter runtimes.** Adapters live in one of three runtimes based on what they're translating from:
+**Adapter classification is by epistemic role per [D19] / §ADAPTER TAXONOMY.** Five categories:
 
-1. **Standalone Python processes** on the CoS Mac Mini (`adminme/adapters/<family>/<n>/`) supervised by the AdministrateMe adapter supervisor. These cover data sources: Gmail API, Plaid, CalDAV, Apple Reminders, Google Calendar, etc.
+- **Cat-A — Communication.** People-talking-to-people surfaces (Gmail, BlueBubbles/iMessage, Telegram, Discord). Bidirectional required.
+- **Cat-B — External-State-Mirror.** Round-trip mirrors of state the principal directly maintains in an external system (Apple Reminders, Google Tasks, Apple Calendar, Google Calendar, Apple Contacts, Google Contacts).
+- **Cat-C — Inbound-Only Data.** Read-only ingestion from external sources the principal does not maintain (Plaid; future Stelo/Apple Health/weather/market).
+- **Cat-D — Personal-Knowledge.** Per-member knowledge captures from each member's own preferred tool (Apple Notes prose, Voice Memos, Obsidian). Owner-scope is always `private:<member_id>`.
+- **Cat-E — Outbound-Action.** System acts in the world (Twilio outbound, Home Assistant service calls). `observation_mode_required: true` is the framework default per [§6.20].
 
-2. **OpenClaw plugins** — the channel adapters that OpenClaw already has first-class support for (iMessage via BlueBubbles, Telegram, Discord, web). For those channels, AdministrateMe ships an `openclaw-to-adminme` bridge plugin that translates OpenClaw's inbound message events into AdministrateMe `messaging.received` events. The bridge direction is: OpenClaw channel → OpenClaw plugin → AdministrateMe event log. The reverse direction for outbound messaging (AdministrateMe composes a draft → OpenClaw channel sends it) goes through OpenClaw's send API, not via adapter code.
+**Runtime substrate is an orthogonal axis.** Three runtimes — central / bridge / dual-deployment — apply across categories per the manifest's `runtime` field:
 
-3. **Bridge-side Python adapters** — running on member bridges (per §MEMBER BRIDGES), reading per-member personal knowledge. Built-in: Apple Notes (reads `NoteStore.sqlite` + AppleScript fallback), Voice Notes (watches Voice Memos folder), Obsidian (filesystem watcher on configured vault path). Connector packs add additional knowledge sources (Notion, Logseq, Roam, etc.). Bridge adapters emit `note.*` and `voice_note.*` events to the central `:3337 bridge` ingest endpoint over the tailnet — they do not write to the central event log directly and do not hold the AdministrateMe SQLCipher master key.
+- **Central runtime.** Standalone Python processes on the CoS Mac Mini (`adminme/adapters/<family>/<n>/`) supervised by the AdministrateMe adapter supervisor. Used by Cat-A messaging plugins (via OpenClaw's plugin system, residing under `adminme/openclaw-plugins/`), Cat-B central variants (Google Tasks, Google Calendar, Google Contacts), Cat-C all (Plaid), Cat-E all (Twilio, Home Assistant).
+- **Bridge runtime.** Per-member Mac Mini bridges (per §MEMBER BRIDGES). Used by Cat-D all (Apple Notes prose, Voice Memos, Obsidian) and the bridge half of Cat-B dual-deployment adapters.
+- **Dual-deployment runtime.** A single adapter pack ships two variants — one central, one bridge — declared in the manifest's `deployment_variants` block. Used by Cat-B adapters with a per-member Apple-ID dimension (Apple Reminders, Apple Calendar, Apple Contacts, Apple Notes-checklists B-half).
 
-Decision rule for new adapters: **(a) if OpenClaw already has the channel, use OpenClaw + bridge plugin; (b) if the source is per-member personal knowledge on the member's own device, write a bridge-side adapter; (c) otherwise (data sources reachable from any member's identity — Gmail, Plaid, etc.), write a standalone Python adapter.**
+**Multi-capability adapters** declare each capability as its own seam per [PM-35]: Apple Notes-checklists is Cat-D + Cat-B; Home Assistant is Cat-C + Cat-E. Each capability has its own `kind`, `event_families`, `write_capabilities`, `sensitivity_default`, and `observation_mode_required` declaration. See §ADAPTER TAXONOMY §2.2 for the canonical pattern and §ADAPTER FRAMEWORK §3.1 for the manifest schema.
+
+Bridge adapters emit owner-scoped events to the central `:3337 bridge` ingest endpoint over the tailnet — they do not write to the central event log directly and do not hold the AdministrateMe SQLCipher master key.
+
+Decision rule for new adapters: **(a) classify by epistemic role first** — what is the system learning or doing through this adapter? Then **(b) pick a runtime** consistent with the category constraints in §ADAPTER TAXONOMY §2.1 (e.g. Cat-D requires bridge runtime; Cat-A messaging plugins require central runtime; Cat-B with per-member Apple-ID dimension requires dual-deployment).
 
 ```python
 class Adapter(Protocol):
@@ -1442,6 +1528,164 @@ Standalone Python adapters are loaded via `adminme.adapters` entry point → bui
 
 **Stubs are real code.** Each stub implements the Adapter protocol, registers metadata with `available: false` + reason, fails fast with `NotSupported` if invoked, and includes a preparedness check (e.g., `iMessage chatdb` stub checks for Full Disk Access on macOS and reports readiness in `hearth adapters status`).
 
+**Amendment-2 inventory cleanup per [D25].** From the v1 status block above: `messaging:sms_twilio` is reframed as Cat-E outbound-only (Twilio per [D21]); `iot:homeassistant` is reframed as Cat-C+E multi-capability (per [D24]) and lands as full implementation at prompt 11g; `manual:ios_shortcuts` is **retired** (knowledge-source ingestion via member bridges supersedes the Shortcuts webhook pattern per [D17] / [D25]); `calendaring:caldav`, `documents:google_drive`, `financial:privacy_com`, and Lob (postal mail) are **deferred to v2 community packs** per [D25]. New Phase A v1 entries per [D22] / [D23] / [D24]: `calendaring:apple_calendar` (dual-deployment Cat-B), `contacts:apple_contacts` (bridge per-member Cat-B), `contacts:google_contacts` (central Cat-B), `iot:homeassistant` (full Cat-C+E reference). The Apple Notes adapter gains a Cat-B checklist seam per [D18] (the prose half remains Cat-D).
+
+---
+
+## ADAPTER TAXONOMY
+
+Per [D19] (2026-04-29-B), L1 adapters are classified by **epistemic role** — what kind of knowledge the adapter brings into the system or what kind of action it executes through it. Runtime substrate (central / bridge / dual-deployment) is an orthogonal secondary axis. This section is the canonical reference; memo `docs/05-architecture-amendment-personal-data-layer.md` §1 + §2 are the historical motivation.
+
+### §1.1 The framing change
+
+Pre-Amendment-2 inventory grouped adapters by runtime substrate (channel adapters as OpenClaw plugins; data adapters as standalone Python; knowledge-source adapters on member bridges per Conception-C). The runtime-substrate framing produced wrong groupings for design decisions: Plaid (a standalone-Python data adapter) and Apple Reminders (also standalone-Python on the central Mac Mini) lived in the same runtime bucket, but Plaid is read-only inbound data while Reminders is bidirectional state mirror with round-trip semantics — closer in shape to Apple Calendar than to Plaid. Amendment-2 reorganizes L1 along five epistemic categories; runtime is the orthogonal axis (per §ADAPTER FRAMEWORK §3.1 manifest spec).
+
+### §1.2 The five categories
+
+Each category is defined by its epistemic role with a distinguishing property that separates it from adjacent categories. Category letters (A–E) are mnemonic only — they have no precedence ordering.
+
+**Cat-A — Communication.** People-talking-to-people surfaces. The unit of work is conversation between humans; the adapter faithfully represents both inbound and outbound sides, preserving thread structure and party identity. Bidirectionality required (inbound-only is structurally incomplete; outbound-only is meaningless). Canonical members: Gmail, BlueBubbles/iMessage, Telegram, Discord. Default `sensitivity: normal`; default `owner_scope: shared:household` for household-shared accounts and `private:<member_id>` for member-scoped accounts.
+
+**Cat-B — External-State-Mirror.** Round-trip mirrors of state the principal directly maintains in an external system. AdministrateMe both reads from AND writes back to the external system; conflicts are possible and must be handled per the per-source-kind capability matrix. Bidirectionality default is "where upstream API allows" with explicit per-operation `write_capabilities` (some Cat-B adapters are full CRUD — Apple Reminders, Google Tasks; some are toggle+add only — Apple Notes-checklists per [D18] / UT-19; some are read-only-with-narrow-write — Apple Contacts identifier merges only). Canonical members: Apple Reminders, Google Tasks, Apple Calendar, Google Calendar, Apple Contacts, Google Contacts. Cat-B projections universally include the `sharing_model` discriminator column per §2.5 below. Default `sensitivity: normal`; default `owner_scope` depends on deployment configuration.
+
+**Cat-C — Inbound-Only Data.** External data the principal does not directly maintain. Read-only from AdministrateMe's side; the external system is authoritative; no write-back path. Distinguishing property: the principal's relationship to the data is observation, not maintenance. Canonical members: Plaid (financial data ingestion). Future Cat-C: Stelo / Dexcom CGM, Apple Health, weather, market data — all v2 community packs per [D25]. Default `sensitivity` varies by sub-domain (financial: `sensitive`; health: `privileged` per [§6.9]; weather/market: `normal`).
+
+**Cat-D — Personal-Knowledge.** The principal's own knowledge work — prose notes, voice notes, personal vaults, personal annotations. The data is the member's own thinking, captured in the member's own preferred tool. Owner-scope is **always** `private:<member_id>`; cross-member knowledge derivation happens at the projection / pipeline layer (graph_miner, vector_search), not at the adapter layer. Bridge-only by privacy default per [§6.19] (the central CoS Mac Mini does not sign into family members' iCloud accounts). Canonical members: Apple Notes (prose half), Apple Voice Memos, Obsidian (opt-in per-member). Cat-D adapters can declare additional cross-cat capabilities (Apple Notes-checklists is Cat-D + Cat-B per §2.2 below). Default `sensitivity: sensitive`; default `owner_scope: private:<member_id>` non-overridable.
+
+**Cat-E — Outbound-Action.** The system acts in the world via the adapter. Outbound-primary with minimal-confirmation inbound (a service-call response, a delivery confirmation). The action is the unit of work. Discriminator from Cat-B: Cat-B is roughly equally read and write; Cat-E is heavily skewed to write with read-only-as-confirmation. Canonical members: Twilio (outbound voice/SMS — recategorized from Cat-A per [D21]), Home Assistant (service calls — Cat-C+E multi-capability per [D24]). `observation_mode_required: true` is the framework default for any Cat-E capability per [§6.20]; the install-time validator refuses to register a Cat-E capability with `observation_mode_required: false` unless the manifest explicitly justifies the override.
+
+### §2.1 Two-axis model
+
+Every adapter is a point on a two-dimensional grid: epistemic role (Cat-A through Cat-E) on one axis × runtime substrate (central / bridge / dual-deployment) on the other. The pack manifest declares both axes as `kind: adapter` + `runtime: central|bridge|dual` + a list of one or more `capabilities`, each with its own `kind: cat_a|cat_b|cat_c|cat_d|cat_e` per §ADAPTER FRAMEWORK §3.1.
+
+### §2.2 Capabilities-as-list (multi-capability adapters)
+
+Capabilities are a list, not a singleton. Some adapters genuinely span multiple categories — Apple Notes is Cat-D for prose ingestion AND Cat-B for checklist round-trip; Home Assistant is Cat-C for state-read AND Cat-E for service-call. Each capability is its own seam with its own:
+
+- `kind` — one of `cat_a_communication`, `cat_b_external_state_mirror`, `cat_c_inbound_data`, `cat_d_personal_knowledge`, `cat_e_outbound_action`.
+- `event_families` — list of event-type prefixes the capability emits or consumes.
+- `write_capabilities` — list of supported write operations (empty for Cat-C, varies for Cat-B/Cat-D-cross-cat/Cat-E).
+- `sensitivity_default` — per-capability default; can differ from the adapter's overall pack default.
+- `observation_mode_required` — per-capability boolean; default `true` for Cat-E, default `false` for Cat-A/Cat-B/Cat-C/Cat-D.
+
+The install-time validator per [§3.4] checks capability-runtime coherence (e.g. Cat-D capabilities cannot ship with `runtime: central` without an explicit override; Cat-E capabilities require `observation_mode_required: true` in their default declaration), event-schema registration, projection-subscription compatibility, and base-class conformance for each capability.
+
+### §2.3 Asymmetric write-capabilities
+
+Cat-B and Cat-D-cross-cat adapters declare `write_capabilities` as an explicit per-operation list, NOT a boolean `bidirectional`. The list is a discrete set of verbs the adapter can perform against its upstream:
+
+- Apple Reminders: `[create, update, delete, toggle_completion, reorder, add_item, remove_item]` — full CRUD.
+- Google Tasks: `[create, update, delete, toggle_completion, reorder, add_item, remove_item]` — full CRUD.
+- Apple Notes-checklists: `[toggle_completion, add_item]` — toggle+add only per [D18] / UT-19; no remove, no in-place text edit, no reorder.
+- Apple Contacts: `[update_party_identifier]` — sparse; most contacts work is reading; writes back when the operator merges/de-merges identifiers in the AdministrateMe Parties view.
+
+CoS-side requests for an unsupported capability are rejected at the request layer with a typed error (`AdapterCapabilityNotDeclared`); surfaces gate UI affordances by reading the adapter's manifest. See [§LISTS] for the codified invariant.
+
+### §2.4 Sensitivity-default and observation-mode-required
+
+Two manifest fields, both per-capability, both with category-default fallback:
+
+- `sensitivity_default` — `normal` | `sensitive` | `privileged`. Defaults: Cat-A `normal`, Cat-B `normal`, Cat-C `normal` (financial: `sensitive`; health: `privileged`), Cat-D `sensitive`, Cat-E `normal` (Cat-E events themselves don't carry the action's sensitivity; the requesting context does).
+- `observation_mode_required` — boolean. Defaults: Cat-A messaging: `true` (already integrated via `outbound()` per [§6.14]); Cat-E: `true` per [§6.20]; Cat-B / Cat-C / Cat-D: `false` (these are read-or-mirror operations, not external side effects).
+
+The install-time validator enforces that any Cat-E capability with `observation_mode_required: false` carries an explicit justification key in the manifest (`observation_override_reason`), which is recorded in the install event for audit.
+
+### §2.5 Sharing-model discriminator
+
+Cat-B projections (`lists`, `calendars`, `parties.identifiers` for contacts-sourced rows) carry a `sharing_model` discriminator column distinguishing how upstream sharing is implemented: `private` | `shared_household` | `icloud_shared_list` | `icloud_shared_calendar` | `google_shared_list` | `google_shared_calendar` | `apple_shared_contact_group`. The discriminator is orthogonal to `owner_scope` (which is the standard projection-level scope field): an iCloud-shared-list is `shared:household` in scope but `icloud_shared_list` in mechanism, and the mechanism dictates which bridge sees which list updates per [§6.19] / [§LISTS].
+
+### §2.6 Owner-scope-overridability at install
+
+Cat-A / Cat-B / Cat-C / Cat-E adapters' `owner_scope_default` is overridable at install time per the manifest's `owner_scope_overridable_at_install: true` flag. Operator can change `shared:household` to `private:<member_id>` for a specific deployment (e.g. an `apple-reminders-james-personal` install variant on the central Mac Mini that mirrors only James's private Reminders, not the shared-household lists). Cat-D `owner_scope` is **NOT** overridable — privacy-first invariant per [§6.19] / [D17] / [§8.10].
+
+---
+
+## ADAPTER FRAMEWORK
+
+The L1 adapter framework is the implementation infrastructure for §ADAPTER TAXONOMY. Five abstract base classes (one per category), a typed manifest format with capability list, an install-time validator, an `adminme adapters` CLI, and a three-tier developer-mode model.
+
+### §3.1 Manifest format
+
+Adapter packs ship under `packs/adapters/<adapter-name>/` with a `pack.yaml` manifest:
+
+```yaml
+id: <adapter-name>                 # e.g. apple-reminders, home-assistant
+kind: adapter
+version: <semver>
+runtime: central | bridge | dual    # primary runtime
+trust_tier: bundled | verified |    # per D20
+            user_authored
+capabilities:                       # list — at least one capability required
+  - kind: cat_a_communication |
+          cat_b_external_state_mirror |
+          cat_c_inbound_data |
+          cat_d_personal_knowledge |
+          cat_e_outbound_action
+    event_families: [<event-prefix>, ...]
+    write_capabilities: [<verb>, ...]  # empty list for Cat-C; varies otherwise
+    sensitivity_default: normal | sensitive | privileged
+    observation_mode_required: true | false
+    observation_override_reason: <string>  # required if Cat-E + false
+owner_scope_default: shared:household | private:<member-template>
+owner_scope_overridable_at_install: true | false
+sharing_model_discriminator: <enum-set or ~>
+deployment_variants:                # for runtime: dual
+  - variant_id: central
+    runtime: central
+    overrides: {capabilities[<idx>].owner_scope_default: shared:household}
+  - variant_id: bridge
+    runtime: bridge
+    overrides: {capabilities[<idx>].owner_scope_default: private:<member>}
+```
+
+### §3.2 Five abstract base classes
+
+Each category has a Python ABC under `adminme/adapters/_framework/`:
+
+- **`CommunicationAdapter`** (`cat_a`). Abstract methods: `async fetch_inbound() -> Iterable[InboundMessage]`, `async send_outbound(message: OutboundMessage) -> SendResult`. Outbound implementations route through OpenClaw's channel-send API per [§8.5] — a Cat-A adapter never opens a transport directly to BlueBubbles / Telegram / Discord / web (per [§8.3]). Plugin-shaped Cat-A adapters (iMessage, Telegram, Discord) compose the base class with the OpenClaw `definePluginEntry` shape per `openclaw-cheatsheet.md` Q4.
+- **`ExternalStateMirrorAdapter`** (`cat_b`). Abstract methods: `async fetch_state() -> Iterable[StateChange]`, `async apply_write_request(request: WriteRequest) -> WriteResult`. Subclasses declare their `write_capabilities` list as a class-level attribute; framework's request-layer dispatcher rejects requests for capabilities not in the list with `AdapterCapabilityNotDeclared`. Subclasses register conflict-resolution policy (default: last-writer-wins on round-trip; can be overridden for specific event types).
+- **`InboundDataAdapter`** (`cat_c`). Abstract methods: `async fetch_observations() -> Iterable[Observation]`. No write methods (the framework refuses any subclass that declares a `write_capabilities` list with non-empty contents — Cat-C is read-only by definition).
+- **`PersonalKnowledgeAdapter`** (`cat_d`). Abstract methods: `async fetch_knowledge_changes() -> Iterable[KnowledgeChange]`. Owner-scope is hard-coded to the member-bridge identity at the framework layer (the bridge daemon stamps `owner_scope: private:<bridge_member_id>` from Tailscale identity per [§6.19]); subclasses cannot override. Cross-cat-extending subclasses (Apple Notes-checklists adds Cat-B checklist round-trip) declare additional capabilities in the same manifest.
+- **`OutboundActionAdapter`** (`cat_e`). Abstract methods: `async execute_action(request: ActionRequest) -> ActionResult`. Framework wraps `execute_action` in the standard `outbound()` seam from `adminme/lib/observation.py` per [§6.20] — when `observation_mode = active`, the framework emits `observation.suppressed@v1` with the full payload and returns without calling the subclass's `execute_action` method. Subclasses do NOT need to know about observation mode; the framework handles it.
+
+A capability inherits from exactly one of the five base classes. Multi-capability adapters compose multiple capability classes within a single pack manifest, each capability instantiating its own base-class subclass.
+
+### §3.3 Discovery and registration CLI
+
+`adminme adapters <subcommand>`:
+
+- `adminme adapters list` — list all installed adapter packs with their capabilities, runtimes, and trust tier.
+- `adminme adapters install <path-or-clawhub-id>` — install an adapter pack; runs install-time validator (§3.4); if validator passes, registers event schemas, registers the pack with the runtime supervisor, emits `adapter.installed`.
+- `adminme adapters remove <id>` — soft-remove (mark inactive); does not delete event-schema registration to preserve event-log replay; emits `adapter.removed`.
+- `adminme adapters scaffold <kind> <id>` — generate a new adapter pack skeleton from a template, parameterized by category. Requires `developer_mode_enabled: true` per [D20].
+- `adminme adapters validate <path>` — run the install-time validator against a pack without installing.
+- `adminme adapters status` — runtime status per installed adapter (last successful poll, last error, queue depth for outbound).
+
+### §3.4 Install-time validation
+
+The validator checks:
+
+- **Capability-runtime coherence.** Cat-D capabilities require `runtime: bridge`; Cat-A messaging plugins require `runtime: central` (OpenClaw plugins live on the gateway host); etc. Mismatches are rejected.
+- **Event-schema registration.** Every event family declared in `capabilities[].event_families` resolves to a registered event-type schema in `adminme.events.schemas.{domain,system}`; unknown event families are rejected.
+- **Projection-subscription compatibility.** If the adapter's events feed projections, those projections must already exist on main (or be in the same install transaction as the adapter pack). Validator surfaces the dependent projections.
+- **Base-class conformance.** Each capability's implementation class is checked to inherit from its category's base class; ABC method-presence + signature matching enforced via `inspect.signature` comparison.
+- **Write_capabilities method-presence.** Every verb in `capabilities[].write_capabilities` corresponds to a method on the implementation class named `write_<verb>` with the framework's standard `WriteRequest` / `WriteResult` signature. Missing method = rejection.
+- **Cat-E observation-mode override audit.** Any Cat-E capability with `observation_mode_required: false` requires `observation_override_reason` to be present and non-empty; the validator records this in the install event.
+
+### §3.5 Three-layer developer mode
+
+Per [D20]:
+
+- **Bundled** — default-on; ships in the repo under `packs/adapters/<id>/`; code-reviewed by maintainers. The v1 adapters are all bundled.
+- **Verified third-party** — requires `developer_mode_enabled: true` in instance config plus a signed-manifest signature. Verification keys are operator-imported manually in v1 (a future ClawHub-equivalent will distribute them post-Phase-A).
+- **User-authored** — requires `developer_mode_enabled: true` AND scaffolding flag set. Cat-E declarations require explicit operator confirmation per-adapter at install time (warm-aware default).
+
+`adminme config set developer_mode_enabled true` is a one-time operator action with consent-log entry (`developer_mode.enabled` event).
+
+### §3.6 Authoring guide
+
+A future authoring guide (`docs/adapter-authoring-guide.md` — lands with prompt 11 framework expansion) walks through writing a new adapter pack from scaffold to validation. Until that guide ships, authors reference the bundled adapter packs as templates: Plaid for Cat-C, Apple Reminders for Cat-B dual-deployment, Apple Notes for Cat-D + cross-cat extension, Home Assistant for Cat-C + Cat-E multi-capability, BlueBubbles for Cat-A plugin-shaped.
+
 ---
 
 ## PLAID — DETAILED SPEC
@@ -1500,99 +1744,406 @@ Plaid is the primary financial data adapter. Enough detail to get this right mat
 
 ## APPLE REMINDERS BIDIRECTIONAL — DETAILED SPEC
 
+Apple Reminders is a **Cat-B (External-State-Mirror) adapter with dual-deployment runtime** per [D18]. Lists and list items are first-class entities in the `lists` projection (§3.13); they are NOT modeled as `tasks` entries. Promotion from list item to task happens via the `list_item.promoted_to_task@v1` event without modifying the source list item.
+
+### Manifest
+
+`packs/adapters/apple-reminders/pack.yaml`:
+
+```yaml
+id: apple-reminders
+kind: adapter
+version: 1.0.0
+runtime: dual
+trust_tier: bundled
+capabilities:
+  - kind: cat_b_external_state_mirror
+    event_families: [list.*, list_item.*]
+    write_capabilities: [create, update, delete, toggle_completion,
+                         reorder, add_item, remove_item]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: shared:household       # central variant default
+owner_scope_overridable_at_install: true
+sharing_model_discriminator:
+  - private
+  - shared_household
+  - icloud_shared_list
+deployment_variants:
+  - variant_id: central
+    runtime: central
+    overrides:
+      capabilities[0].owner_scope_default: shared:household
+    description: |
+      Runs on the CoS Mac Mini's assistant Apple ID. Mirrors household-shared
+      lists (iCloud-shared-list mechanism) plus the assistant's own lists.
+  - variant_id: bridge
+    runtime: bridge
+    overrides:
+      capabilities[0].owner_scope_default: private:<bridge_member_id>
+    description: |
+      Runs on each member's bridge Mac Mini against the member's own Apple ID.
+      Mirrors the member's private lists. Owner-scope stamped from Tailscale
+      identity at the bridge ingest endpoint per [§6.19] / [§8.10].
+```
+
 ### Identity model
 
-Reminders lives on the **assistant's iCloud account** (configured during bootstrap Section 5a). Family members share specific Reminders lists TO the assistant's Apple ID via native iCloud sharing. If a list is not shared, it is never synced. The assistant never has credentials into any family member's personal iCloud.
+Two coexisting deployments:
+- **Central variant.** Runs on the CoS Mac Mini's assistant Apple ID. Mirrors household-shared lists (those iCloud-shared TO the assistant Apple ID by family members) plus any lists owned by the assistant itself.
+- **Bridge variant.** Runs on each member's bridge Mac Mini against that member's own Apple ID. Mirrors the member's private lists. The central CoS Mac Mini never holds any family member's iCloud credentials, per [§6.19].
+
+If a household member never shares their lists to the assistant Apple ID and never runs a bridge, those lists are never synced. The same iCloud-shared list observed by both the central variant and a member's bridge collapses to ONE row in `lists` via the `(external_id_kind, external_list_id)` UNIQUE constraint — see §3.13 / [PM-31].
 
 ### Configuration
 
-`~/.adminme/config/reminders-list-mapping.yaml`:
+`~/.adminme/config/apple-reminders.yaml` (central variant):
 
 ```yaml
-lists:
-  - reminders_list_name: "Family Grocery"
-    target: list                     # 'list' | 'tasks' | 'captures'
-    list_name: grocery
-    completed_marks_checked: true
-    auto_commit: true
-    notes: Used by whole household; low-friction.
-  - reminders_list_name: "Family Packing"
-    target: list
-    list_name: packing
-    auto_commit: true
-  - reminders_list_name: "James Tasks"
-    target: tasks
-    defaults:
-      assignee_party: m-james
-      status: inbox
-      domain: tasks
-      source_system: reminders
-    auto_commit: false                # requires human confirm before promotion
-  - reminders_list_name: "Laura Tasks"
-    target: tasks
-    defaults:
-      assignee_party: m-laura
-      status: inbox
-      source_system: reminders
-  - reminders_list_name: "Shared Household"
-    target: tasks
-    defaults:
-      assignee_party: null            # null = shared
-      status: inbox
-      domain: home
-      source_system: reminders
-
-excluded_members: []                  # auto-populated from kid/ambient profiles
-
-never_sync_patterns:
-  list_name_substrings: ["Work", "Case", "Client", "Evolve"]
-  item_tags: ["#private"]
+list_filtering:
+  never_sync_substrings: ["Work", "Case", "Client", "Evolve"]
   exclude_if_item_notes_contain: ["[privileged]"]
+sharing_model_inference:
+  default: shared_household
+  rule_for_solo_assistant_lists: private  # if list is owned by assistant only,
+                                          # treat as private
 ```
+
+Bridge-variant configuration (`bridge/config/apple-reminders.yaml`) is structurally parallel, but `owner_scope_default` is auto-stamped to `private:<bridge_member_id>` from Tailscale identity at the `:3337 bridge` ingest endpoint and cannot be overridden by the bridge daemon.
 
 ### Ingest (Reminders → events)
 
-- ClawHub `apple-reminders` skill primary; `osascript` fallback
-- EventKit push notifications + 30s polling safety net
-- On new Reminder in a mapped list:
-  - Emit `reminder.created_externally` event
-  - Pipeline `reminders_router` consumes → emits `task.created` or `list_item.added` or `capture.created` per mapping
-  - For mapped-to-tasks with auto_commit=false: promotion to active Task requires human confirmation in inbox
-- On Reminder mutation (title, notes, due, completed state): emit `reminder.updated_externally`
-- On Reminder deletion: emit `reminder.deleted_externally`; pipeline dismisses corresponding Task
+- ClawHub `apple-reminders` skill primary; `osascript` (EventKit via AppleScript) fallback if ClawHub unavailable.
+- EventKit push notifications + 30s polling safety net.
+- On new Reminders list created or shared TO the deployment's Apple ID: emit `list.created@v1`. Payload: `external_id_kind: 'apple_reminders'`, `external_list_id: <icloud-list-uuid>`, `title`, `list_kind` (inferred from title patterns or defaulted to `'todo'`), `sharing_model` (`'icloud_shared_list'` if shared, `'shared_household'` for assistant-owned lists in central variant, `'private'` for member-owned lists in bridge variant).
+- On new Reminder item: emit `list_item.added@v1`. Payload: `list_id` (looked up from external_list_id), `external_item_id`, `body`, `added_by_party` (resolved from creator's Apple ID), `position`, `notes` (if any).
+- On Reminder mutation (title, notes, due, completion-state, position): emit appropriate `list_item.updated@v1` / `list_item.checked@v1` / `list_item.unchecked@v1`.
+- On Reminder deletion: emit `list_item.removed@v1`.
+- On list deletion: emit `list.deleted@v1`.
 
 ### Outbound (events → Reminders)
 
-- When Task created/updated, if its list mapping exists and `auto_commit`, update Reminder
-- When Task status transitions to done → complete Reminder
-- When Task dismissed → delete Reminder
-- When Task deferred → leave Reminder alone (no state map)
+The adapter consumes write-request events from the event log and translates them to upstream API calls:
 
-### Sync map
-
-```sql
-CREATE TABLE reminder_sync_map (
-  task_id          TEXT,
-  list_item_id     TEXT,
-  reminder_uuid    TEXT NOT NULL,
-  reminders_list   TEXT NOT NULL,
-  last_synced_at   TEXT NOT NULL,
-  last_pib_hash    TEXT,
-  last_reminder_hash TEXT,
-  UNIQUE (reminder_uuid),
-  CHECK (task_id IS NOT NULL OR list_item_id IS NOT NULL)
-);
-```
+- `list.create_requested` → EventKit `Calendar.create`; emits `list.created@v1` (round-trip echo).
+- `list_item.toggle_completion_requested` → EventKit completion mutation; emits `list_item.checked@v1` or `list_item.unchecked@v1`.
+- `list_item.add_requested`, `list_item.update_requested`, `list_item.remove_requested`, `list_item.reorder_requested` — full CRUD via EventKit. `write_capabilities` lists all seven verbs; the framework's `apply_write_request` dispatcher rejects any other verb with `AdapterCapabilityNotDeclared`.
 
 ### Conflict resolution
 
-- 5-second debounce window. If both sides change within debounce: both changes recorded as events, conflict resolver picks latest timestamp as winner, loser surfaces as `reminder.conflict` event → inbox with diff panel.
+- 5-second debounce window. Last-writer-wins on round-trip (per [PM-31] / [§LISTS]). The `lists.last_event_id` and `list_items.last_event_id` columns record the resolution; debug tooling (`adminme lists trace --list <id>`) replays the divergence.
 
 ### Observation mode
 
-- Reads proceed.
-- Writes suppress: instead of updating Reminder, emit `observation.suppressed` with the intended action.
-- Reconciliation runs after observation-off: replay suppressed events to catch up.
+Cat-B is `observation_mode_required: false` per the framework default — reading and one-way mirror writes are not external side effects in the sense observation mode guards against. (Observation mode is the safety belt against system-initiated outbound communications and Cat-E actions; mirroring a checkbox the user just clicked in their own Reminders.app is not in that category.) Reconciliation after observation-off: not needed for Cat-B because writes were never suppressed.
+
+---
+
+## APPLE CALENDAR BIDIRECTIONAL — DETAILED SPEC
+
+Apple Calendar is a **Cat-B (External-State-Mirror) adapter with dual-deployment runtime** per [D22], structurally parallel to Apple Reminders. Closes the v1 calendar gap for Apple-using households (Google Calendar covers Google-using households; CalDAV is removed from v1 per [D25]). Lands at modified prompt 11b (added scope per Amendment-2).
+
+### Manifest
+
+```yaml
+id: apple-calendar
+kind: adapter
+version: 1.0.0
+runtime: dual
+trust_tier: bundled
+capabilities:
+  - kind: cat_b_external_state_mirror
+    event_families: [calendar_event.*]
+    write_capabilities: [create, update, cancel]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: shared:household
+owner_scope_overridable_at_install: true
+sharing_model_discriminator:
+  - private
+  - shared_household
+  - icloud_shared_calendar
+deployment_variants:
+  - variant_id: central
+    runtime: central
+    overrides:
+      capabilities[0].owner_scope_default: shared:household
+  - variant_id: bridge
+    runtime: bridge
+    overrides:
+      capabilities[0].owner_scope_default: private:<bridge_member_id>
+```
+
+### Identity model
+
+Identical shape to Apple Reminders:
+- Central variant runs on the CoS Mac Mini's assistant Apple ID; mirrors household-shared calendars + the assistant's own.
+- Bridge variant runs on each member's bridge against the member's own Apple ID; mirrors the member's private calendars.
+
+### Ingest (Calendar → events)
+
+- ClawHub `apple-calendar` skill primary (wraps EventKit); `osascript` fallback.
+- EventKit push notifications + 60s polling safety net.
+- On new event in a watched calendar: emit `calendar_event.added@v1`. Payload: `external_id_kind: 'apple_calendar'`, `external_event_id`, `calendar_external_id`, `start`, `end`, `title`, `attendees`, `sharing_model` (inferred from calendar source).
+- On event mutation: emit `calendar_event.updated@v1`.
+- On event cancellation: emit `calendar_event.cancelled@v1`.
+
+### Outbound (events → Calendar)
+
+- `calendar_event.create_requested`, `calendar_event.update_requested`, `calendar_event.cancel_requested` — full CRUD via EventKit. `write_capabilities: [create, update, cancel]`.
+
+### Projection feed
+
+Events feed the existing `calendars` projection (§3.7), which gains a `sharing_model` discriminator column at the same time per the Cat-B universal pattern (§ADAPTER TAXONOMY §2.5). Deduplication on `(external_id_kind, external_event_id)`.
+
+### Conflict resolution
+
+5-second debounce, last-writer-wins, divergence recorded in `calendars.last_event_id` per [PM-31].
+
+### Observation mode
+
+`observation_mode_required: false` per the framework default — Cat-B mirror writes are not in observation mode's scope.
+
+---
+
+## GOOGLE TASKS — DETAILED SPEC
+
+Google Tasks is a **Cat-B (External-State-Mirror) adapter, central runtime** per [D18]. Structurally parallel to Apple Reminders central variant; uses Google Tasks REST API instead of EventKit. Full CRUD upstream support. Lands at modified prompt 11b.
+
+### Manifest
+
+```yaml
+id: google-tasks
+kind: adapter
+version: 1.0.0
+runtime: central
+trust_tier: bundled
+capabilities:
+  - kind: cat_b_external_state_mirror
+    event_families: [list.*, list_item.*]
+    write_capabilities: [create, update, delete, toggle_completion,
+                         reorder, add_item, remove_item]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: shared:household
+owner_scope_overridable_at_install: true
+sharing_model_discriminator:
+  - private
+  - shared_household
+  - google_shared_list
+```
+
+### Identity model
+
+Single deployment on the assistant's Google Workspace; OAuth via the same Workspace credentials Gmail/Google Calendar use. No bridge variant — Google Tasks doesn't have a per-member privacy boundary on the same scale as Apple ID.
+
+### Ingest, Outbound, Conflict, Observation
+
+Structurally identical to Apple Reminders (same event families, same write_capabilities, same dedup pattern on `(external_id_kind = 'google_tasks', external_list_id)`). Implementation differences are confined to the API surface (Google Tasks REST API at `https://tasks.googleapis.com/tasks/v1` with OAuth 2 instead of EventKit).
+
+---
+
+## APPLE CONTACTS — DETAILED SPEC
+
+Apple Contacts is a **Cat-B (External-State-Mirror) adapter, bridge per-member runtime** per [D23]. Closes the CRM-spine-empty-on-day-1 gap. Lands at new prompt 11e.
+
+### Manifest
+
+```yaml
+id: apple-contacts
+kind: adapter
+version: 1.0.0
+runtime: bridge
+trust_tier: bundled
+capabilities:
+  - kind: cat_b_external_state_mirror
+    event_families: [party.identifier_observed, party.profile_updated]
+    write_capabilities: [update_party_identifier]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: private:<bridge_member_id>
+owner_scope_overridable_at_install: false
+sharing_model_discriminator:
+  - private
+  - apple_shared_contact_group
+```
+
+### Identity model
+
+Bridge-only, per-member. Each member's bridge Mac Mini reads from that member's own iCloud Contacts via Contacts.framework (Python via `pyobjc-framework-Contacts`). The central CoS Mac Mini never reads any member's contacts.
+
+Multiple bridges observing the same Apple Shared Contact Group collapse to one party identifier in `parties.identifiers` via the dedup invariant.
+
+### Ingest, Outbound
+
+- On contacts.framework change notification: emit `party.identifier_observed@v1`.
+- Outbound `update_party_identifier` capability is sparse: writes back when the operator merges/de-merges identifiers in the AdministrateMe Parties view (e.g. operator confirms `"James" + "+15555555555" + "j@example.com"` are all the same party; the adapter writes that party-merge back to Apple Contacts).
+
+### Projection feed
+
+Feeds `parties.identifiers` (the existing identifiers table on the parties projection per §3.1).
+
+---
+
+## GOOGLE CONTACTS — DETAILED SPEC
+
+Google Contacts is a **Cat-B (External-State-Mirror) adapter, central runtime** per [D23]. Structurally parallel to Apple Contacts central-runtime sibling; uses Google People API. Lands at new prompt 11e.
+
+### Manifest
+
+```yaml
+id: google-contacts
+kind: adapter
+version: 1.0.0
+runtime: central
+trust_tier: bundled
+capabilities:
+  - kind: cat_b_external_state_mirror
+    event_families: [party.identifier_observed, party.profile_updated]
+    write_capabilities: [update_party_identifier]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: shared:household
+owner_scope_overridable_at_install: true
+sharing_model_discriminator:
+  - private
+  - shared_household
+```
+
+### Identity model
+
+Central; OAuth via the assistant's Google Workspace. No bridge variant. Reads from `https://people.googleapis.com/v1/people` with the standard Workspace OAuth scope. Feeds the same `parties.identifiers` table; deduplication on `(external_id_kind = 'google_contacts', external_contact_id)`.
+
+---
+
+## APPLE NOTES-CHECKLISTS CROSS-CAT EXTENSION
+
+Apple Notes is a multi-capability adapter per [D18] / [PM-35]: Cat-D (prose half — feeds `member_knowledge` projection §3.12, lands with prompt 11d per Conception-C) AND Cat-B (checklist half — feeds `lists` projection §3.13, lands with modified prompt 11c-ii per Amendment-2). This section documents the Cat-B half; the Cat-D half is documented in the existing Apple Notes adapter spec landing at 11c-ii.
+
+### Manifest (multi-capability)
+
+```yaml
+id: apple-notes
+kind: adapter
+version: 1.0.0
+runtime: bridge
+trust_tier: bundled
+capabilities:
+  - kind: cat_d_personal_knowledge
+    event_families: [note.added, note.updated, note.deleted]
+    write_capabilities: []
+    sensitivity_default: sensitive
+    observation_mode_required: false
+  - kind: cat_b_external_state_mirror
+    event_families: [list.*, list_item.*,
+                     note.write_attempted, note.write_succeeded, note.write_failed]
+    write_capabilities: [toggle_completion, add_item]
+    sensitivity_default: normal
+    observation_mode_required: false
+owner_scope_default: private:<bridge_member_id>
+owner_scope_overridable_at_install: false
+```
+
+### Detection
+
+The adapter detects checklist-shaped Notes content (recognizes the Notes app's native checklist syntax — bullet-with-checkbox glyphs in NoteStore.sqlite) and routes those notes through both seams: the prose body feeds the Cat-D path (`note.*` events → `member_knowledge`), and the checklist structure feeds the Cat-B path (`list.*` / `list_item.*` events → `lists` projection).
+
+### Write-back asymmetry per UT-19 / [D18]
+
+Apple Notes-checklists supports `[toggle_completion, add_item]` only:
+- `toggle_completion` works via AppleScript (`osascript`) targeting the specific checklist item by stable identifier.
+- `add_item` works via AppleScript appending to the end of the note's checklist.
+- **NOT supported.** `remove_item` is rejected because Notes doesn't expose a clean remove path that survives iCloud sync. `update_item` (in-place text edit) is rejected because AppleScript can't reliably target mid-text edits in checklist context. `reorder` is rejected because Notes doesn't expose ordering controls programmatically.
+
+CoS-side requests for unsupported capabilities are rejected at the request layer (`AdapterCapabilityNotDeclared`); UI surfaces gate affordances by reading the manifest.
+
+### System observability events
+
+The Cat-B half emits three system events on every write-back attempt:
+- `note.write_attempted@v1` — payload includes `note_uri`, `verb`, `target_item_external_id` (if applicable).
+- `note.write_succeeded@v1` — emitted on osascript success.
+- `note.write_failed@v1` — emitted on osascript failure with the error class. Common failures: iCloud sync race (write hits a stale version of the note), AppleScript permission denied, target item no longer exists.
+
+These three system events are added to `ALLOWED_EMITS` in `scripts/verify_invariants.sh` when prompt 11c-ii lands the write-back code, NOT in this PR.
+
+### Conflict resolution
+
+Last-writer-wins per the per-source-kind capability matrix (§LISTS / [PM-31]). iCloud-sync race losses are recorded in `note.write_failed` and surfaced to the operator's inbox if they persist over multiple retry attempts.
+
+---
+
+## HOME ASSISTANT — DETAILED SPEC
+
+Home Assistant is the **v1 reference implementation for Cat-E (Outbound-Action)** and is also Cat-C (Inbound-Only Data) — multi-capability per [D24]. Closes UT-23 and gives the framework its canonical Cat-E test. Lands at new prompt 11g.
+
+### Manifest
+
+```yaml
+id: home-assistant
+kind: adapter
+version: 1.0.0
+runtime: central
+trust_tier: bundled
+capabilities:
+  - kind: cat_c_inbound_data
+    event_families: [ha.state_changed]
+    write_capabilities: []
+    sensitivity_default: normal
+    observation_mode_required: false
+  - kind: cat_e_outbound_action
+    event_families: [ha.service_call_requested, action.executed, action.failed]
+    write_capabilities: [call_service]
+    sensitivity_default: normal
+    observation_mode_required: true
+owner_scope_default: shared:household
+owner_scope_overridable_at_install: true
+```
+
+### Identity model
+
+Central runtime; long-lived access token from §BOOTSTRAP §5 (becomes non-optional in installs that enable HA at §8 channel pairing per PM-32 ADDENDUM). Single deployment per instance; the HA host itself is on the home network (typically a Raspberry Pi or Home Assistant Yellow). The adapter connects to HA over the local network or tailnet — HA does not need to be Tailscale-joined but the AdministrateMe instance does need network reachability to HA's REST + WebSocket endpoints.
+
+### Cat-C state-read seam
+
+Subscribes to HA's WebSocket `subscribe_events` channel (event type `state_changed`) for live state changes, with REST `/api/states` polling as fallback. Emits `ha.state_changed@v1` on every state change. Payload: `entity_id`, `old_state`, `new_state`, `attributes`, `last_changed`, `last_updated`. The adapter maintains a local cache of latest entity state, served via `/api/automation/ha/state` per §L5 Automation product router list.
+
+### Cat-E service-call seam
+
+Subscribes to `ha.service_call_requested@v1` events from the event log. Each request consumed:
+
+```
+1. CHECK: outbound() seam per [§6.20]:
+   if observation_mode == active:
+     emit observation.suppressed@v1 with full payload + would_have_called_endpoint
+     STOP — do NOT call HA REST
+   else:
+     POST http://<ha_host>:8123/api/services/<domain>/<service>
+       Authorization: Bearer <long_lived_token>
+       body: <request payload>
+     on success: emit action.executed@v1
+     on error:   emit action.failed@v1
+```
+
+The framework's `OutboundActionAdapter` base class handles the observation-mode wrap around the subclass's `execute_action` method per §ADAPTER FRAMEWORK §3.2.
+
+### Routers (per §L5 Automation product, post-Amendment-2)
+
+- `/api/automation/ha/state` — GET; returns latest cached state per entity from the Cat-C seam's cache.
+- `/api/automation/ha/services` — POST `ha.service_call_requested` event with the request body.
+
+### Slash commands
+
+`/lights`, `/locks` (per §L5 Automation post-Amendment-2). Both route through `/api/automation/ha/services` to emit `ha.service_call_requested` events; the Cat-E seam consumes them with full observation-mode integration.
+
+### Failure modes
+
+- HA host unreachable: REST POST fails with `ConnectionError`; emit `action.failed@v1` with `reason: 'ha_unreachable'`. Operator's inbox surfaces the failure.
+- Long-lived token expired or revoked: HA returns 401; emit `action.failed@v1` with `reason: 'auth_expired'`. Operator's inbox surfaces with a refresh-credential prompt.
+- WebSocket disconnect: adapter falls back to REST polling at 30s intervals; emits `ha.state_changed@v1` events at lower frequency until WebSocket reconnects.
+
+### Observation-mode test case
+
+HA is the canonical PR-γ-2 / Phase A test case for `OutboundActionAdapter`'s observation-mode integration. Cat-A messaging-outbound and Cat-E service-call both pass through `adminme/lib/observation.py` per [§6.14] / [§6.20]; HA gives the framework a non-messaging Cat-E to exercise the same seam.
 
 ---
 
@@ -1743,6 +2294,7 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 - `/api/capture/places` — Places view
 - `/api/capture/assets` — Assets view
 - `/api/capture/accounts` — Accounts view
+- `/api/capture/lists` — Lists view (read surface over the `lists` projection §3.13; supports filtering by sharing_model, list_kind, source_kind; per [D18])
 - `/api/capture/search` — semantic + structured search over Interactions/Artifacts/Parties/Notes
 
 **Skills used:**
@@ -1772,7 +2324,8 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 - `/api/automation/pro-forma` — 5-year projection
 - `/api/automation/subscriptions` — subscription audit
 - `/api/automation/household-status` — overall financial health glance
-- `/api/automation/ha/*` — Home Assistant events (if enabled)
+- `/api/automation/ha/state` — Home Assistant cached state per entity (populated by HA adapter Cat-C state-read seam per [D24])
+- `/api/automation/ha/services` — Home Assistant service-call POSTs; emits `ha.service_call_requested@v1` events into the event log; Cat-E seam consumes them with full observation-mode integration per [§6.20]
 
 **Skills used:**
 - `categorize_transaction@v3` (with learned tenant overrides)
@@ -1780,7 +2333,7 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 - `summarize_subscription@v1` (dormant-sub audits)
 - `explain_anomaly@v1` (budget variance explanations)
 
-**Slash commands:** `/budget`, `/worth`, `/forecast`, `/txn`, `/subs`, `/plaid`
+**Slash commands:** `/budget`, `/worth`, `/forecast`, `/txn`, `/subs`, `/plaid`, `/lights`, `/locks` (per [D24] / §HOME ASSISTANT — DETAILED SPEC; both route through `/api/automation/ha/services`)
 
 **Scheduled jobs:**
 - Plaid transactions sync every 4h (live) or daily (observation)
@@ -2254,17 +2807,38 @@ The bootstrap wizard takes a fresh machine from zero to a running AdministrateMe
 
 **Section 4: Assign profiles.** Dropdown per adult (adhd_executive / minimalist_parent / power_user / custom). Dropdown per child (kid_scoreboard / ambient_entity). Tuning stays at defaults; tenant tunes later.
 
-**Section 5: Assistant credentials.** Walks through Apple ID for assistant, phone number for assistant (Mint Mobile recommended), Google Workspace email for assistant, 1Password service account token, Anthropic API key (provided to OpenClaw, not consumed by AdministrateMe directly), OpenAI (optional, for OpenClaw), Tailscale auth key, Twilio (optional), BlueBubbles (during Section 8), Telegram bot token (optional), Discord bot token (optional), Tavily or Brave Search API key, ElevenLabs (optional), Deepgram (optional), Privacy.com (optional), Lob (optional), Home Assistant token (optional), Backblaze B2, GitHub remote URL. Every credential tested. LLM provider credentials are written to OpenClaw's secret store via `openclaw secrets set`. Skippable credentials addable later via `adminme credentials add`.
+**Section 5: Assistant credentials.** Walks through Apple ID for assistant, phone number for assistant (Mint Mobile recommended), Google Workspace email for assistant, 1Password service account token, Anthropic API key (provided to OpenClaw, not consumed by AdministrateMe directly), OpenAI (optional, for OpenClaw), Tailscale auth key, Twilio (optional), BlueBubbles (during Section 8), Telegram bot token (optional), Discord bot token (optional), Tavily or Brave Search API key, ElevenLabs (optional), Deepgram (optional), Privacy.com (optional), Lob (optional), Home Assistant token (optional unless HA enabled at §8 — non-optional in installs that enable HA pairing, per PM-32 ADDENDUM / [D24]), Backblaze B2, GitHub remote URL. Every credential tested. LLM provider credentials are written to OpenClaw's secret store via `openclaw secrets set`. Skippable credentials addable later via `adminme credentials add`.
 
 **Section 6: Plaid.** Plaid account setup, client_id + sandbox secret, initial Link flow for first institution. Safe in sandbox — no real money moves.
 
 **Section 7: Seed household data.** Address, secondary properties, vehicles, mortgage, recurring bills, healthcare providers, schools, active projects, vendors, friends & family (CRM). Each answer maps to specific events (`party.created`, `place.added`, `asset.added`, `account.added`, `recurrence.added`, `relationship.added`, `task.created` for project goals). **Skipped sections create inbox tasks** prompting completion later.
 
-**Section 8: Channel pairing.** Interactive pairing per selected channel. Each paired channel is registered with OpenClaw via its channel API (see OpenClaw's `channels/pairing` docs). For iMessage: verify assistant's Apple ID signin on the Mac Mini, install BlueBubbles, register the BlueBubbles channel with OpenClaw, test send. For Telegram/Discord: create bot, exchange tokens, register with OpenClaw. For Apple Reminders: list iCloud lists (standalone Python adapter, not OpenClaw), configure mapping, test bidirectional. For Gmail: OAuth flow with assistant's Workspace, PubSub setup, Funnel endpoint (standalone Python adapter). This section also installs AdministrateMe's skill packs + plugins into OpenClaw (`openclaw skill install <path>`, `openclaw plugin install <path>` for each) and registers AdministrateMe's slash commands and standing orders via OpenClaw's CLI.
+**Section 8: Channel pairing.** Interactive pairing per selected channel. Each paired channel is registered with OpenClaw via its channel API (see OpenClaw's `channels/pairing` docs). For iMessage: verify assistant's Apple ID signin on the Mac Mini, install BlueBubbles, register the BlueBubbles channel with OpenClaw, test send. For Telegram/Discord: create bot, exchange tokens, register with OpenClaw. For Apple Reminders central variant: list iCloud lists shared TO the assistant Apple ID, configure list_filtering, test bidirectional (bridge variant per-member is handled in §10). For Gmail: OAuth flow with assistant's Workspace, PubSub setup, Funnel endpoint (standalone Python adapter). This section also installs AdministrateMe's skill packs + plugins into OpenClaw (`openclaw skill install <path>`, `openclaw plugin install <path>` for each) and registers AdministrateMe's slash commands and standing orders via OpenClaw's CLI.
+
+**Amendment-2 sub-steps (per [D18] / [D22] / [D23] / [D24]):**
+
+- **Lists auto-seed.** Wizard creates 4 CoS-owned shared lists on the assistant's Apple ID — `Family Groceries`, `Household Tasks`, `Errands`, `Travel & Trips` — and sends iCloud Shared List invitations to all adult and capable-teen family-member Apple IDs. Emits `list.created@v1` × 4 plus `list.share_invited@v1` per share invitation.
+- **Apple Calendar central variant.** Pairs Apple Calendar central variant on the assistant's Apple ID; observation set up; first calendar pull tested. Emits `calendar.paired{apple,central}`.
+- **Google Contacts central.** OAuth flow with the assistant's Workspace; first contacts pull tested. (Apple Contacts pairing is bridge-only per [D23] and is handled in §10 below.) Emits `contacts.paired{google}`.
+- **Home Assistant pairing.** Long-lived access token from §5; REST + WebSocket connection tested; `ha.state_changed` events flowing into the event log; sample `ha.service_call_requested` (e.g. flash-a-light test) tested in observation mode (suppressed and recorded). Emits `ha.paired{tested:yes}`.
 
 **Section 9: Observation briefing.** Explain observation mode, how to review, how to flip live. First outbound message sent (to primary adult via their preferred channel — routed through OpenClaw, suppressed if observation mode is on, which it is by default so this first message actually shows as a suppression event the tenant reviews in Settings → Observation).
 
-**Section 10: Bridge enrollment.** Per §MEMBER BRIDGES. The central wizard generates an enrollment package per member bridge — a tarball containing the per-member identity, the tailnet auth key, the adapter set (Apple Notes + Voice Notes always; Obsidian if the member configures a vault path; kid-bridge variant excludes Obsidian per [§6.19]), and the bridge bootstrap mini-wizard. The operator copies this package to each bridge Mac Mini (rsync over the tailnet, or sneakernet on initial setup). The bridge bootstrap mini-wizard runs on the bridge: verifies macOS + iCloud signin (must be the assigned member's account) + Tailscale auth + Apple Notes Full Disk Access; installs the bridge daemon under `launchd`; configures active adapters; submits a `bridge.enrollment_completed` event to the central `:3337 bridge` ingest endpoint; hands control back to the central wizard. Each successful enrollment emits `bridge.enrolled {member_id, bridge_node_id, adapters_active}`. **§10 is required for any household with at least one Apple-using member.** A household with no Apple-using members has no §10. Households running OpenClaw-based knowledge sources only (no Apple ID, no Voice Notes, no Obsidian) skip §10 entirely.
+**Section 10: Bridge enrollment.** Per §MEMBER BRIDGES. The central wizard generates an enrollment package per member bridge — a tarball containing the per-member identity, the tailnet auth key, the adapter set, and the bridge bootstrap mini-wizard. The adapter set per member bridge (post-Amendment-2):
+
+- **Apple Notes** (always) — Cat-D prose half + Cat-B checklist half per [D18].
+- **Voice Memos** (always) — Cat-D.
+- **Apple Calendar bridge variant** (NEW per [D22]) — Cat-B; mirrors the member's private calendars.
+- **Apple Reminders bridge variant** (NEW per [D18] dual-deployment) — Cat-B; mirrors the member's private lists.
+- **Apple Contacts** (NEW per [D23]) — Cat-B per-member; mirrors the member's private contacts.
+- **Obsidian** (if the member configures a vault path) — Cat-D; **excluded for kid bridges** per [§6.19] / [D17].
+
+**Kid-bridge restrictions** apply uniformly per [§6.19] / [D17] / [D23]:
+- Obsidian excluded.
+- Apple Contacts variant runs in restricted mode that does NOT ingest adult contact lists shared to the kid's Apple ID.
+- Apple Notes Cat-D prose can capture per-member private knowledge as designed; the kid's contacts that ARE the kid's own legitimate contacts (school friends, etc.) are ingested.
+
+The operator copies the enrollment package to each bridge Mac Mini (rsync over the tailnet, or sneakernet on initial setup). The bridge bootstrap mini-wizard runs on the bridge: verifies macOS + iCloud signin (must be the assigned member's account) + Tailscale auth + Apple Notes Full Disk Access + EventKit/Calendar/Contacts permissions; installs the bridge daemon under `launchd`; configures active adapters; submits a `bridge.enrollment_completed` event to the central `:3337 bridge` ingest endpoint; hands control back to the central wizard. Each successful enrollment emits `bridge.enrolled {member_id, bridge_node_id, adapters_active}`. **§10 is required for any household with at least one Apple-using member.** A household with no Apple-using members has no §10.
 
 **Implementation:** Textual/Rich TUI. Idempotent; resumable via encrypted `~/.adminme/bootstrap-answers.yaml.enc`. Bootstrap report at `~/.adminme/bootstrap-report.md`.
 
