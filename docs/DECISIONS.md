@@ -174,6 +174,121 @@ Connector packs for non-Apple knowledge sources (Notion, Logseq, Roam, etc.) ins
 
 **Corollary 2:** [§6.12] (identity-first privacy) is **strengthened** by this decision. Each member's private knowledge is physically segregated on their own bridge's iCloud account; the central system never holds member iCloud key material.
 
+### D18 — Lists are a 13th first-class projection; `reminder.*` retired
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** drift between BUILD.md §3.5 / arch-summary §4 row 3.5 modeling Apple Reminders state as `task.*` events feeding the `tasks` projection, and the binding intent that household lists are first-class entities distinct from tasks with round-trip mirror semantics, sharing models, and write-back asymmetries that don't fit `tasks`'s shape.
+
+Lists are a 13th first-class projection (`lists`) sitting alongside `member_knowledge` as the 12th. List items are NOT tasks: a grocery line, a household honey-do entry, a checklist item in a shared Notes document — these are list items in `lists`, not rows in `tasks`. The `tasks` projection retains its full ADHD-neuroprosthetic field set (energy, effort, micro_script, waiting_on, goal_ref, life_event); the `lists` projection has the structurally simpler list-item shape (body, status, position, notes, sharing model).
+
+Promotion from list item to task is supported via the `list_item.promoted_to_task@v1` event. Promotion does NOT modify the source list item — the item retains its upstream-mirror state; the resulting task is a new row in `tasks` carrying `source_list_item_id` provenance. `list_items.promoted_task_id` cross-links back to the materialized task.
+
+External surfaces are SSOT mirrors: Apple Reminders, Google Tasks, Apple Notes-checklists are upstream sources of truth; AdministrateMe's `lists` projection mirrors. Bidirectional where the upstream supports it. Notes-checklists supports `toggle_completion` + `add_item` only — no remove, no in-place text edit, no reorder (per UT-19). Apple Reminders + Google Tasks support full CRUD.
+
+The `tasks` projection's `reminder.*` subscription is retired (UT-22 closure). `reminder.*` events are no longer emitted; the canonical event family for list state is `list.*` / `list_item.*`. The `tasks` projection's new subscription includes `list_item.promoted_to_task` to materialize promoted tasks.
+
+**Corollary 1:** D4 ("products own surfaces, projections own data, events move state") still applies. Lists are just one more projection family.
+
+**Corollary 2:** [§6.12] (identity-first privacy) interacts with iCloud-shared-list mechanism: an `icloud_shared_list` is `shared:household` in owner_scope but per-bridge in observation surface — each invited family member's bridge sees the list independently, and the deduplication invariant `(external_id_kind, external_list_id)` ensures the shared list collapses to one `lists` row regardless of how many bridges observe it.
+
+### D19 — Adapter taxonomy is by epistemic role; runtime is orthogonal; capabilities are a list
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** taxonomy drift introduced by Conception-C amendment of 2026-04-29 — that amendment introduced a third runtime variant for L1 adapters (bridge-side knowledge adapters) alongside the two pre-existing variants (OpenClaw-plugin channel adapters; standalone-Python data adapters), but left the L1 inventory organized by runtime substrate when the more decision-relevant axis is epistemic role.
+
+Adapter classification is by **epistemic role**, not by runtime substrate. Five categories:
+
+- **Cat-A — Communication.** People-talking-to-people surfaces. Bidirectional required (inbound/outbound symmetry). Examples: Gmail, BlueBubbles/iMessage, Telegram, Discord.
+- **Cat-B — External-State-Mirror.** Round-trip mirrors of state the principal directly maintains in an external system. AdministrateMe both reads from and writes to the external system. Examples: Apple Reminders, Google Tasks, Apple Calendar, Google Calendar, Apple Contacts, Google Contacts.
+- **Cat-C — Inbound-Only Data.** External data the principal does not directly maintain. Read-only from AdministrateMe's side. Examples: Plaid (financial), Stelo / Apple Health (future Phase B+).
+- **Cat-D — Personal-Knowledge.** Per-member knowledge captures from each member's own preferred tool. Owner-scope is always `private:<member_id>`. Examples: Apple Notes (prose half), Apple Voice Memos, Obsidian.
+- **Cat-E — Outbound-Action.** System acts in the world via the adapter; outbound-primary with minimal-confirmation inbound. Examples: Twilio outbound voice/SMS (per D21), Home Assistant service calls (per D24), future brokerage trading and postal mail.
+
+Runtime substrate (central / bridge / dual-deployment) is an **orthogonal secondary axis**. A category does not dictate a runtime: Cat-B has both central (Google Tasks) and dual-deployment (Apple Reminders, Apple Calendar, Apple Contacts) variants; Cat-D is bridge-only by current convention but architecturally permits central. Multi-capability adapters declare each capability as its own seam: Apple Notes-checklists declares Cat-D (prose) + Cat-B (checklists); Home Assistant declares Cat-C (state-read) + Cat-E (service-call).
+
+**Corollary:** the framework's five abstract base classes (per BUILD.md §ADAPTER FRAMEWORK §3.2) — `CommunicationAdapter`, `ExternalStateMirrorAdapter`, `InboundDataAdapter`, `PersonalKnowledgeAdapter`, `OutboundActionAdapter` — match one-to-one with the categories. A capability inherits from exactly one base class; multi-capability adapters compose multiple capability classes within a single pack manifest.
+
+### D20 — Adapter packs ship in three developer-mode tiers
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** the question of how third-party-authored adapter packs are admitted to a running instance, given that Cat-E adapters can take outbound action and Cat-C/Cat-D adapters can ingest privileged data.
+
+Adapter packs install through the existing pack-registry infrastructure (per BUILD.md §PACK REGISTRY); the five-category taxonomy refines what manifests declare but does not replace the install lifecycle. Three layers of trust:
+
+- **Bundled adapters.** Default-on. Code-reviewed by AdministrateMe maintainers and shipped in the repo under `packs/adapters/<name>/`. Examples: every adapter in the v1 build plan.
+- **Verified third-party adapters.** Available with `developer_mode_enabled: true` in instance config. Pack manifest carries a signed-manifest signature (verification keys distributed via a future ClawHub-equivalent or by manual operator import). Verified-tier adapters can declare `kind: cat_a`, `cat_b`, `cat_c`, `cat_d`, or `cat_e` and any combination of write-capabilities subject to install-time validation.
+- **User-authored adapters.** Available with `developer_mode_enabled: true` AND scaffolding flag set; lands via `adminme adapters scaffold` CLI. Cannot declare `kind: cat_e` without explicit operator confirmation per-adapter at install time (warm-aware default — Cat-E from unverified code is the highest-risk admission).
+
+Developer mode is per-instance, not per-tenant. Bootstrap defaults to OFF; operator opts in via `adminme config set developer_mode_enabled true` and a one-time consent log entry in the event log.
+
+### D21 — Twilio is Cat-E (outbound fallback), not Cat-A
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** SMS placement ambiguity — SMS-via-Twilio was previously informally bundled with Cat-A messaging adapters, but the practical use-case is outbound-only fallback when iMessage delivery fails, plus optional outbound voice calls.
+
+Twilio is Cat-E (Outbound-Action). Inbound SMS is **deferred to v2** — the v1 use-case is "send a critical message via SMS when iMessage isn't available," which is outbound-only and matches the Cat-E shape. The Twilio adapter declares `write_capabilities: [send_sms, place_voice_call]` and `observation_mode_required: true`. iMessage-as-SMS-fallback routing logic lives at the messaging-router layer; the Twilio adapter is the bottom-of-stack Cat-E delivery seam.
+
+If a future v2 build adds inbound SMS handling (alphanumeric short codes, two-way SMS chat with non-iMessage parties), it lands as a separate Cat-A capability on the same Twilio pack manifest, declared as a second capability per [D19].
+
+### D22 — Apple Calendar is dual-deployment Cat-B; v1 scope expands
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** v1 calendar gap for Apple-using households — the pre-Amendment-2 plan had Google Calendar (central) and CalDAV (deferred to v2), leaving an Apple-using household without an Apple-side calendar adapter in v1.
+
+Apple Calendar is a Cat-B (External-State-Mirror) adapter with dual-deployment shape, parallel to Apple Reminders per [D18]. Two variants:
+
+- **Central variant.** Runs on the CoS Mac Mini's assistant Apple ID. Mirrors household-shared calendars and the assistant's own calendar.
+- **Bridge variant.** Runs on each member's bridge Mac Mini against the member's Apple ID. Mirrors the member's private calendars.
+
+Both variants emit `calendar_event.added@v1` / `.updated@v1` / `.cancelled@v1` events; deduplication uses `(external_id_kind = 'apple_calendar', external_event_id)`. Sharing-model discriminator on each row (`private` | `shared_household` | `icloud_shared_calendar`).
+
+**Modifies prompt 11b's scope** (Apple Calendar dual-deployment + Google Calendar central; CalDAV deferred per [D25]).
+
+### D23 — Apple Contacts (bridge per-member) + Google Contacts (central)
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** the CRM-spine-empty-on-day-1 gap — without a contacts adapter in v1, the `parties` projection's `identifiers` table starts empty and the CRM has no real material until messaging adapters slowly populate it from observed senders.
+
+Two contacts adapters in v1 scope:
+
+- **Apple Contacts.** Bridge runtime, per-member. Reads from each member's iCloud Contacts via Contacts.framework on the bridge Mac Mini. Cat-B with `write_capabilities: [update_party_identifier]` (sparse — most contacts work is reading; writes back when the operator merges/de-merges identifiers in the AdministrateMe Parties view).
+- **Google Contacts.** Central runtime. Reads from the assistant's Google Workspace Contacts via the People API. Cat-B; `write_capabilities` parallel.
+
+Both adapters feed `parties.identifiers`. Deduplication on `(external_id_kind, external_contact_id)`. Sharing model is implicit (Apple Contacts is per-Apple-ID; Google Contacts is per-Workspace).
+
+**Lands at new prompt 11e.**
+
+### D24 — Home Assistant is Cat-C+E reference, multi-capability, full bidirectional
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** UT-23 (Cat-E reference implementation) and the `/api/automation/ha/*` orphan in BUILD.md §L5 (router list referenced HA without a real backing adapter in Phase A scope).
+
+Home Assistant is the v1 reference implementation for Cat-E (Outbound-Action). HA is a multi-capability adapter declaring two capabilities:
+
+- **Cat-C state-read seam.** Subscribes to HA's WebSocket `subscribe_events` channel for state changes (or polls the REST `/api/states` endpoint as fallback). Emits `ha.state_changed@v1` events. `observation_mode_required: false` (reading state is internal logic).
+- **Cat-E service-call seam.** Consumes `ha.service_call_requested@v1` events from the event log; calls HA's REST `POST /api/services/<domain>/<service>`; emits `action.executed@v1` (success) or `action.failed@v1` (error). `observation_mode_required: true` (service calls are external side effects). When `observation_mode = active`, emits `observation.suppressed@v1` with the full would-have-sent payload and does NOT call HA's REST endpoint.
+
+Both seams ship in Phase A. **Lands at new prompt 11g.**
+
+The `/api/automation/ha/state` and `/api/automation/ha/services` routers in BUILD.md §L5 (Automation product) gain real backing: `ha/state` serves cached state populated by the Cat-C seam; `ha/services` accepts service-call POSTs that emit `ha.service_call_requested` events into the event log, where the Cat-E seam consumes them with full observation-mode integration per [§6.20].
+
+**Corollary:** HA is the canonical PR-γ-2 test case for `OutboundActionAdapter`'s observation-mode integration. Cat-A messaging-outbound and Cat-E service-call both pass through `adminme/lib/observation.py` per [§6.14] / [§6.20].
+
+### D25 — L1 adapter inventory cleanup (Stelo, Lob, Privacy.com, CalDAV, Drive, iOS Shortcuts)
+
+**Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** UT-24 — eleven specific drifts in the L1 inventory between BUILD.md §L1 / arch-summary §1 and the binding architectural intent post-D17 + D18 + D19.
+
+Phase A v1 inventory cleanup:
+
+- **Stelo / Dexcom CGM.** Cat-C (health-telemetry). **NOT in Phase A scope.** Architectural placeholder noted in memo §1.3; v2 community pack post-Phase-A.
+- **Lob (postal mail).** Cat-E. **DEFERRED to v2 community pack.** Removed from Phase A L1 inventory.
+- **Privacy.com (virtual cards).** Cat-E. **DEFERRED to v2 community pack.** Removed from Phase A L1 inventory.
+- **CalDAV (separate adapter).** **REMOVED from v1 per [D22].** Apple Calendar covers iCloud calendars; Google Calendar covers Google calendars; a CalDAV-server adapter is unnecessary for v1 Apple-using or Google-using households. v2 community pack if a non-iCloud-non-Google CalDAV server is needed.
+- **Google Drive.** **DEFERRED to v2.** The Drive-as-document-source role is covered for Apple-using households by Apple Notes (prose) per [D17]; Google-Workspace-only households can defer document ingestion to a later prompt without blocking the v1 CRM/inbox/lists/calendars/finance core.
+- **iOS Shortcuts webhooks.** **REMOVED.** Functionally retired by [D17] — knowledge-source ingestion via member bridges supersedes the Shortcuts webhook pattern. The webhook adapter pattern remains available in the framework (any Cat-A/B/C/D/E adapter can run a webhook receiver as its inbound source) but iOS Shortcuts as a named v1 adapter is retired.
+- **iCloud (as separate adapter).** **CLARIFIED.** iCloud is not its own adapter; it is accessed via the Apple Reminders / Apple Notes / iMessage / Apple Calendar / Apple Contacts adapters' use of the relevant Apple ID. The `iCloud` row formerly in L1 inventory is removed.
+- **Apple Reminders.** **CLARIFIED to dual-deployment per [D18].** Central variant on CoS Apple ID + bridge variant per member Apple ID.
+- **Apple Calendar.** **NEW v1 per [D22].** Dual-deployment parallel to Apple Reminders.
+- **Apple Contacts.** **NEW v1 per [D23].** Bridge runtime per-member.
+- **Google Contacts.** **NEW v1 per [D23].** Central runtime.
+
+**Net inventory delta:** −5 (CalDAV, Drive, Shortcuts, iCloud, Lob/Privacy.com as Phase A entries) +3 (Apple Calendar, Apple Contacts, Google Contacts) = −2 v1 line items + 1 multi-capability cross-cat extension (Apple Notes gains checklist B-half).
+
+**Modifies prompts 11b (Apple Calendar dual-deployment + Google Tasks central + CalDAV removed), 11c-ii (Apple Notes-checklists B-half), and adds new prompts 11e (Contacts) + 11f (lists projection) + 11g (Home Assistant).**
+
 ---
 
 ## How to use this file
