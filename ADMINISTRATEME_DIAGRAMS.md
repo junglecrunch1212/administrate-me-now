@@ -96,39 +96,47 @@ Not exhaustive by design — these are the ten diagrams that earn their place be
                   │            ▼                 │
    ┌─────────────────────┐  ┌────────────────────┴──────────────────┐
    │   L1 : ADAPTERS     │  │            L3 : PROJECTIONS           │
-   │                     │  │                                       │
-   │  CENTRAL (CoS Mini):│  │  parties     interactions   artifacts │
-   │  messaging (Gmail,  │  │  commitments tasks          recurrences│
-   │   BlueBubbles via   │  │  calendars   places/assets/accounts   │
-   │   OpenClaw plugin,  │  │  money       vector_search            │
-   │   SMS)              │  │  xlsx_workbooks  (bidirectional)      │
-   │  calendaring        │  │  member_knowledge  (per-member)       │
-   │   (Google, CalDAV)  │  │                                       │
-   │  contacts (People,  │  │  Each projection: handlers.py +       │
-   │   CardDAV)          │  │  queries.py + schema.sql. Rebuild     │
-   │  documents (Drive)  │  │  from event log at any time.          │
-   │  financial (Plaid)  │  └───────────────────────────────────────┘
-   │  reminders (Apple,  │
-   │   standalone py)    │
-   │  webhook (iOS       │
-   │   Shortcuts, etc.)  │
-   │                     │
-   │  BRIDGE (per-member │
-   │   Mac Mini):        │
-   │  knowledge-source   │
-   │  (Apple Notes,      │
-   │   Voice Notes,      │
-   │   Obsidian opt-in,  │
-   │   connector packs)  │
-   │  emits to :3337     │
-   │   bridge endpoint   │
-   │                     │
-   │  Channel adapters   │
-   │  = OpenClaw plugins │
-   │  Data adapters      │
-   │  = standalone py    │
-   │  Knowledge adapters │
-   │  = bridge-side py   │
+   │   (5 categories ×   │  │                                       │
+   │   3 runtimes)       │  │  parties     interactions   artifacts │
+   │                     │  │  commitments tasks          recurrences│
+   │  Cat-A COMMUNICATION│  │  calendars   places/assets/accounts   │
+   │   Gmail · BlueBubbl │  │  money       vector_search            │
+   │   · Telegram · Disc │  │  xlsx_workbooks  (bidirectional)      │
+   │   [central]         │  │  member_knowledge  (per-member)       │
+   │                     │  │  lists  (NEW per D18 — household-     │
+   │  Cat-B EXT-MIRROR   │  │     mirrored lists, 13th projection)  │
+   │   AppleReminders·   │  │                                       │
+   │   GoogleTasks·      │  │  Each projection: handlers.py +       │
+   │   AppleCalendar·    │  │  queries.py + schema.sql. Rebuild     │
+   │   GoogleCalendar·   │  │  from event log at any time.          │
+   │   AppleContacts·    │  └───────────────────────────────────────┘
+   │   GoogleContacts·   │
+   │   AppleNotes-cklist │   runtime axis is orthogonal:
+   │   [dual / central /  │   ┌─────────────────────────────┐
+   │    bridge per cap]  │   │  CENTRAL : on CoS Mac Mini  │
+   │                     │   │  · Cat-A all                │
+   │  Cat-C INBOUND-DATA │   │  · Cat-B Google* + central  │
+   │   Plaid             │   │    half of dual-deployment  │
+   │   [central]         │   │  · Cat-C all                │
+   │                     │   │  · Cat-E HA + Twilio        │
+   │  Cat-D PERS-KNOWL'GE│   │                             │
+   │   AppleNotes(prose)·│   │  BRIDGE : per-member Mac    │
+   │   VoiceMemos·       │   │  · Cat-D all                │
+   │   Obsidian          │   │  · Cat-B bridge half of     │
+   │   [bridge]          │   │    dual-deployment (Apple   │
+   │                     │   │    Reminders, Apple Calend, │
+   │  Cat-E OUTBOUND-ACT │   │    Apple Contacts, Notes-   │
+   │   Twilio (out only)·│   │    checklists)              │
+   │   HomeAssistant     │   │                             │
+   │   [central]         │   │  emits to :3337 bridge      │
+   │                     │   │   ingest endpoint over the  │
+   │  Multi-capability   │   │   tailnet                   │
+   │   AppleNotes = D+B  │   └─────────────────────────────┘
+   │   (prose + cklist)  │
+   │   HA = C+E          │   Adapter base classes: each
+   │   (state + service) │   capability inherits from one
+   │                     │   of the five ABCs per
+   │                     │   BUILD.md §ADAPTER FRAMEWORK
    └─────────────────────┘
       external world
       (read only into)
@@ -323,6 +331,182 @@ never left James's bridge Mac Mini's iCloud account.
 ```
 
 The arrows to internalize: bridges are L1's two-place shape — central adapters at process scope on the CoS Mac Mini, bridge adapters at member-bridge scope. Both emit into the same event log; neither writes projections or calls pipelines directly. The bridge is the privacy boundary at the physical layer.
+
+### Third canonical example: Cat-B round-trip — a new Family Groceries item
+
+**Why this is parallel.** Cat-B (External-State-Mirror) adapters are the round-trip shape: an item added on iPhone in the kitchen flows through the bridge into the central event log, then fans out via iCloud Shared List back to every other family member's Reminders.app. The `lists` projection materializes the row; surfaces refresh.
+
+```text
+Laura adds "milk" to "Family Groceries" in Reminders.app on iPhone
+│
+│  iCloud Shared List sync to Laura's Mac (her bridge)
+▼
+┌────────────────────────────────────────────┐
+│  [1]  ADAPTER  (runs on laura-bridge)      │
+│  cat_b_external_state_mirror:              │
+│    apple_reminders                         │
+│  watches EventKit reminders changes        │
+│  emit: list_item.added@v1                  │     correlation_id
+│  ev_li_004                                 │     assigned here:
+│  payload.list = "Family Groceries"         │     c_li_ghi789
+│  payload.body = "milk"                     │
+│  payload.added_by_party = laura_id         │
+│  payload.owner_scope = shared:household    │
+│  payload.external_id_kind =                │
+│    'apple_reminders'                       │
+│  payload.external_list_id = <icloud-id>    │
+│  payload.sharing_model =                   │
+│    'icloud_shared_list'                    │
+└────────────────────────────────────────────┘
+│
+│  HTTP POST over tailnet
+│  laura-bridge → :3337 bridge ingest
+│  Tailscale identity binds owner_scope check
+▼
+┌────────────────────────────────────────────┐
+│  [2]  BRIDGE INGEST  (CoS Mac Mini)        │
+│  validates payload + Tailscale identity    │
+│  appends to event log via EventStore       │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch (in-process pub/sub)
+▼
+┌────────────────────────────────────────────┐
+│  [3]  PROJECTION  lists                    │
+│  handler on_list_item_added:               │
+│    UPSERT lists row by                     │
+│      (external_id_kind, external_list_id)  │
+│      — Cat-B dedup invariant               │
+│    INSERT list_items row                   │
+│      with status='open',                   │
+│           added_by_party=laura_id          │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch (same event,
+│                    different subscriber)
+▼
+┌────────────────────────────────────────────┐
+│  [4]  XLSX FORWARD DAEMON                  │
+│  rewrites the Lists sheet of               │
+│  ~/.adminme/projections/adminme-ops.xlsx   │
+│  (debounced 5s per [§3.11])                │
+└────────────────────────────────────────────┘
+│
+│ console SSE refresh fan-out
+▼
+┌────────────────────────────────────────────┐
+│  [5]  CONSOLE  (every connected family     │
+│        member's Today view)                │
+│  Family Groceries section refreshes        │
+│  showing "milk" with Laura attribution     │
+└────────────────────────────────────────────┘
+                                              │
+                                              │  meanwhile, on the
+                                              │  iCloud-Shared-List side:
+                                              ▼
+                              ┌────────────────────────────────────┐
+                              │  iCloud propagates "milk" to every │
+                              │  family member's Reminders.app —   │
+                              │  AdministrateMe never wrote back   │
+                              │  upstream because the upstream     │
+                              │  IS the source of truth (per D18). │
+                              │  AdministrateMe is the mirror.     │
+                              └────────────────────────────────────┘
+
+Total events emitted from this one Reminders add:
+1  list_item.added
+───
+1 event · 1 correlation_id · zero round-trip churn.
+The deduplication invariant guarantees that even if a
+second bridge (e.g. James's Mac Mini, also subscribed
+to the iCloud Shared List) observes the same item and
+emits its own list_item.added, the lists projection's
+UPSERT keyed on (external_id_kind, external_list_id,
+external_item_id) collapses both observations to one row.
+```
+
+The arrows to internalize: Cat-B is a one-way ingest path on the AdministrateMe side, even though the upstream surface is bidirectional from the human's perspective. AdministrateMe writes back ONLY when a CoS-side action (slash command, console click, pipeline action) requests a write; the Cat-B adapter then emits a `list_item.toggle_completion_requested` or similar request event which the *same* adapter's handler consumes to perform the upstream write. Inbound and outbound are two distinct paths through the same adapter, both routed through the event log.
+
+### Fourth canonical example: Cat-E with observation-mode integration — `/lights off`
+
+**Why this is the framework canary.** Cat-E (Outbound-Action) is the framework's most consequential category — the system actually *does* something in the world. Observation mode is the safety belt. This example shows both the active-mode and observation-mode paths through a Cat-E adapter, with Home Assistant as the v1 reference implementation per [D24].
+
+```text
+James types `/lights off` in iMessage at 9:37 PM
+│
+▼
+┌────────────────────────────────────────────┐
+│  [1]  OPENCLAW                              │
+│  routes slash to AdministrateMe handler    │
+│  POST :3336/api/automation/ha/services      │
+│   body: {domain: "light", service: "turn_  │
+│         off", target: "all"}                │
+└────────────────────────────────────────────┘
+│
+▼
+┌────────────────────────────────────────────┐
+│  [2]  AUTOMATION PRODUCT (:3336)           │
+│  /api/automation/ha/services router        │
+│  guardedWrite three-layer check (allowlist │
+│   / governance / rate_limit) per [§6.5]    │
+│  emit: ha.service_call_requested@v1        │     correlation_id
+│  ev_ha_005                                 │     assigned here:
+│  payload.domain = "light"                  │     c_ha_jkl012
+│  payload.service = "turn_off"              │
+│  payload.target.entity_id = "all"          │
+│  payload.requested_by = james_id           │
+└────────────────────────────────────────────┘
+│
+│ event bus dispatch
+▼
+┌────────────────────────────────────────────┐
+│  [3]  HA ADAPTER, Cat-E SEAM                │
+│  subscribed to: ha.service_call_requested  │
+│  consumes payload                           │
+│                                             │
+│  CHECK: outbound() seam per [§6.20]         │
+│   ┌─────────────────────────────────────┐   │
+│   │ if observation_mode == active:       │   │
+│   │   emit observation.suppressed@v1     │   │
+│   │   payload = original request +       │   │
+│   │     would_have_called_endpoint =     │   │
+│   │     "POST /api/services/light/turn_  │   │
+│   │      off"                             │   │
+│   │   STOP — do NOT call HA REST          │   │
+│   │                                       │   │
+│   │ else (observation off):               │   │
+│   │   POST http://ha-host:8123/api/       │   │
+│   │     services/light/turn_off           │   │
+│   │     auth: long_lived_access_token     │   │
+│   │     body: {entity_id: "all"}          │   │
+│   │   on success: emit action.executed    │   │
+│   │   on error: emit action.failed        │   │
+│   └─────────────────────────────────────┘   │
+└────────────────────────────────────────────┘
+│
+▼
+( in active mode: lights actually turn off; James's chat
+  receives "Done — turned off all lights." )
+
+( in observation mode: lights stay on; James's chat
+  receives "Observation mode active — would have turned
+  off all lights. View suppressed actions in Settings →
+  Observation." Settings → Observation pane shows the
+  ev_ha_005 → observation.suppressed entry with full
+  payload for review. )
+
+Total events emitted in observation mode:
+1  ha.service_call_requested
+1  observation.suppressed
+───
+2 events · 1 correlation_id · zero side effect on
+external world. The exact same enforcement point
+([§6.20] / `adminme/lib/observation.py`) that gates
+Cat-A messaging outbound also gates Cat-E action
+outbound. Same seam, different verb.
+```
+
+The arrows to internalize: Cat-E adapters integrate observation mode at the **action verb** the same way Cat-A messaging adapters integrate it at the **message verb**. The `outbound()` seam in `adminme/lib/observation.py` is the single enforcement point for both routes per [§6.14] / [§6.20]. Cat-C (state-read) and the inbound half of any multi-capability adapter (e.g. HA's Cat-C state-read seam) are unaffected by observation mode — reading is internal logic, not external side effect.
 
 ---
 
@@ -1166,8 +1350,40 @@ The arrows to internalize: bridges are L1's two-place shape — central adapters
      │         │    signing secret                │       │
      │         └──────────────────────────────────┘       │
      │                                                    │
-     │   each channel pair → emit                         │
-     │   channel.paired {adapter, channel_id, tested:yes} │
+     │   PLUS Amendment-2 sub-steps (per D18/D22/D23/D24):│
+     │         ┌──────────────────────────────────┐       │
+     │         │ Lists auto-seed: 4 CoS-owned     │       │
+     │         │   shared lists created on        │       │
+     │         │   assistant Apple ID; iCloud     │       │
+     │         │   Shared List invitations to     │       │
+     │         │   adult+capable-teen members.    │       │
+     │         │   emit list.created (×4) +       │       │
+     │         │   list.share_invited per share.  │       │
+     │         │                                  │       │
+     │         │ Apple Calendar central variant:  │       │
+     │         │   on assistant Apple ID;         │       │
+     │         │   observation set up; first      │       │
+     │         │   pull tested. emit              │       │
+     │         │   calendar.paired{apple,central}.│       │
+     │         │                                  │       │
+     │         │ Google Contacts central:         │       │
+     │         │   OAuth assistant Workspace;     │       │
+     │         │   first contacts pull tested.    │       │
+     │         │   emit contacts.paired{google}.  │       │
+     │         │   (Apple Contacts pairing is     │       │
+     │         │   bridge-only — handled in §10.) │       │
+     │         │                                  │       │
+     │         │ Home Assistant pairing:          │       │
+     │         │   long-lived access token from   │       │
+     │         │   §5; REST + WebSocket           │       │
+     │         │   connection tested;             │       │
+     │         │   ha.state_changed events        │       │
+     │         │   flowing into log.              │       │
+     │         │   emit ha.paired{tested:yes}.    │       │
+     │         └──────────────────────────────────┘       │
+     │                                                    │
+     │   each pair emits channel.paired {adapter,         │
+     │   channel_id, tested:yes}                          │
      │                                                    │
      └──────────────────────────┬─────────────────────────┘
                                 │
@@ -1185,6 +1401,70 @@ The arrows to internalize: bridges are L1's two-place shape — central adapters
      │   ─ emit observation.enabled {default_on: true}    │
      │   ─ emit bootstrap.completed                       │
      │   ─ generate ~/.adminme/bootstrap-report.md        │
+     │                                                    │
+     └──────────────────────────┬─────────────────────────┘
+                                │
+                                ▼
+     ┌────────────────────────────────────────────────────┐
+     │                                                    │
+     │   §10  Bridge enrollment                           │
+     │   (only if household has Apple-using members,      │
+     │    per BUILD.md §MEMBER BRIDGES + D17)             │
+     │                                                    │
+     │   per member with an Apple ID:                     │
+     │         ┌──────────────────────────────────┐       │
+     │         │ central wizard generates an      │       │
+     │         │ enrollment package per bridge:   │       │
+     │         │  · per-member identity           │       │
+     │         │  · tailnet auth key              │       │
+     │         │  · adapter set:                  │       │
+     │         │     - Apple Notes (always)       │       │
+     │         │     - Voice Memos (always)       │       │
+     │         │     - Apple Calendar             │       │
+     │         │       bridge variant (NEW per    │       │
+     │         │       D22)                       │       │
+     │         │     - Apple Reminders bridge     │       │
+     │         │       variant (NEW per D18       │       │
+     │         │       dual-deployment)           │       │
+     │         │     - Apple Contacts (NEW per    │       │
+     │         │       D23)                       │       │
+     │         │     - Apple Notes-checklists     │       │
+     │         │       B-half (NEW per D18)       │       │
+     │         │     - Obsidian (if member        │       │
+     │         │       configures vault path;     │       │
+     │         │       excluded for kid bridges)  │       │
+     │         │  · bridge bootstrap mini-wizard  │       │
+     │         │                                  │       │
+     │         │ operator copies package to       │       │
+     │         │ bridge Mac Mini (rsync over      │       │
+     │         │ tailnet, or sneakernet at        │       │
+     │         │ initial setup)                   │       │
+     │         │                                  │       │
+     │         │ mini-wizard runs on bridge:      │       │
+     │         │  · verify macOS + iCloud signin  │       │
+     │         │    (must match assigned member)  │       │
+     │         │  · verify Tailscale auth         │       │
+     │         │  · verify Apple Notes Full Disk  │       │
+     │         │    Access; Calendar/Contacts     │       │
+     │         │    permissions                   │       │
+     │         │  · install bridge daemon under   │       │
+     │         │    launchd                       │       │
+     │         │  · configure active adapters     │       │
+     │         │  · submit                        │       │
+     │         │    bridge.enrollment_completed   │       │
+     │         │    to central :3337 bridge       │       │
+     │         │    ingest                        │       │
+     │         │  · hand control back to central  │       │
+     │         └──────────────────────────────────┘       │
+     │                                                    │
+     │   each bridge emits                                │
+     │   bridge.enrolled {member_id, bridge_node_id,      │
+     │     adapters_active}                               │
+     │                                                    │
+     │   kid bridges restricted: Apple Notes +            │
+     │   Voice Memos only; no Obsidian, no Apple          │
+     │   Contacts of adult contact lists, per             │
+     │   §6.19 / D17 kid-bridge restriction principle.    │
      │                                                    │
      └──────────────────────────┬─────────────────────────┘
                                 │
