@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_morning_digest output",
+  "type": "object",
+  "required": [
+    "body_text",
+    "claimed_event_ids",
+    "validation_failed",
+    "reasons"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "body_text": {
+      "type": "string",
+      "description": "Composed digest body, ready for delivery via outbound() once the validation guard passes. Empty string on the on_failure defensive default."
+    },
+    "claimed_event_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Every calendar event id, commitment id, task id, or recurrence id referenced in body_text. The pipeline's validation guard checks each entry against the input payload — fabrication zeroes the message per [BUILD.md §1289]."
+    },
+    "validation_failed": {
+      "type": "boolean",
+      "description": "Skill-side flag (true on the on_failure defensive-default path); the pipeline-side validation guard sets the canonical value on the emitted digest.composed event."
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reasons array; on_failure populates with skill_failure_defensive_default."
+    }
+  }
+}

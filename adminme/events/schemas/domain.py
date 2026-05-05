@@ -208,6 +208,48 @@ class RewardReadyV1(BaseModel):
     triggering_commitment_id: str | None = None
 
 
+class DigestComposedV1(BaseModel):
+    """Morning-digest contract emitted by ``morning_digest`` proactive
+    pipeline once per scheduled run per member.
+
+    Per [BUILD.md §1289] validation-guard discipline: ``body_text``
+    is the composed digest text or the sentinel "No morning brief
+    available; underlying data changed." when the validation guard
+    rejects the composition (every claimed calendar event /
+    commitment / task id verified against projections post-compose;
+    any fabrication zeroes the message). ``validation_failed=True``
+    on the sentinel path; ``delivered=False`` in that case (no
+    outbound() call). Registered at v1 per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1)
+    body_text: str
+    profile_format: Literal[
+        "fog_aware", "compressed", "carousel", "child", "none"
+    ]
+    validation_failed: bool
+    delivered: bool
+    today_iso: str = Field(min_length=10)
+
+
+class ParalysisTriggeredV1(BaseModel):
+    """Paralysis-detection contract emitted by the
+    ``paralysis_detection`` proactive pipeline when all
+    pre-conditions hold and a deterministic template is selected.
+
+    Per [BUILD.md §1297-1302]: NEVER invokes an LLM; template comes
+    from persona's ``paralysis_templates.yaml``; surface is
+    inbox + optional outbound (the optional-outbound branch is
+    deferred to a future per-profile-config-aware prompt — v1 emits
+    the event only). Registered at v1 per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1)
+    template_id: str = Field(min_length=1)
+    template_text: str = Field(min_length=1)
+    triggered_at: str = Field(min_length=10)
+
+
 class SkillCallRecordedV2(BaseModel):
     """First version actually emitted. v1 is reserved — see module docstring.
 
@@ -246,4 +288,6 @@ registry.register("recurrence.added", 1, RecurrenceAddedV1)
 registry.register("recurrence.completed", 1, RecurrenceCompletedV1)
 registry.register("recurrence.updated", 1, RecurrenceUpdatedV1)
 registry.register("reward.ready", 1, RewardReadyV1)
+registry.register("digest.composed", 1, DigestComposedV1)
+registry.register("paralysis.triggered", 1, ParalysisTriggeredV1)
 registry.register("skill.call.recorded", 2, SkillCallRecordedV2)

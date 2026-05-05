@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_morning_digest input",
+  "type": "object",
+  "required": [
+    "member_id",
+    "today_iso",
+    "profile_format",
+    "tasks",
+    "commitments",
+    "calendars",
+    "recurrences",
+    "inbox_count",
+    "streak_status",
+    "reward_stats"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Member id whose digest this is."
+    },
+    "today_iso": {
+      "type": "string",
+      "minLength": 10,
+      "description": "ISO date for the digest window (member-local YYYY-MM-DD or full ISO 8601 datetime)."
+    },
+    "profile_format": {
+      "type": "string",
+      "enum": ["fog_aware", "compressed", "carousel", "child", "none"],
+      "description": "Shapes tone + density of the rendered body."
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "due_at": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "commitments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "owed_to": { "type": ["string", "null"] },
+          "due_at": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "calendars": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "start_at": { "type": ["string", "null"] },
+          "end_at": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "recurrences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "next_occurrence": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "inbox_count": { "type": "integer", "minimum": 0 },
+    "streak_status": { "type": "object", "additionalProperties": true },
+    "reward_stats": { "type": "object", "additionalProperties": true }
+  }
+}
