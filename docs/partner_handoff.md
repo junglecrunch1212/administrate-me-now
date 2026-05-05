@@ -92,90 +92,7 @@ For anything beyond this summary, read the actual constitutional docs (step 1 ab
 
 ## Current build state
 
-**Last updated:** 2026-04-29-B (multi-turn out-of-band Partner consultation — Amendment-2 cycle initiated. Conception-C narrow amendment cycle (PR-α + PR-β) is FULLY LANDED on main: 12th projection `member_knowledge` in arch-summary §4 row 3.12, §MEMBER BRIDGES in BUILD.md, §6.19 + §8.9 in SYSTEM_INVARIANTS, D17 in DECISIONS, prompts 11c and 11d spec'd in PROMPT_SEQUENCE awaiting refactor. This new Amendment-2 cycle (out-of-band consultation, no code touched, no PR yet) expands the architecture to cover the five-category adapter taxonomy + adapter framework + lists projection + contacts adapters + Apple Calendar adapter + Home Assistant Cat-C+E reference. Amendment-2 runs LINEAR (not parallel) per James's 2026-04-29-B disposition: full Amendment-2 cycle completes before build cadence resumes at 10c-ii.
-
-**Eight Amendment-2 decisions confirmed by James 2026-04-29-B (D18-D25, pending PR-α-2):**
-
-- **D18 (lists first-class):** Lists are a 13th projection. List items are distinct from tasks (list items may promote to tasks via `list_item.promoted_to_task` event with `source_list_item_id` provenance, but the list item is unchanged by promotion). External surfaces (Apple Reminders, Google Tasks, Apple Notes-checklists) are SSOT mirrors. Bidirectional where upstream supports it; Notes-checklists toggle+add only (no remove, no in-place text edit, no reorder). The `tasks` projection's `reminder.*` subscription is retired in favor of `lists` projection consuming `list.*`.
-
-- **D19 (adapter taxonomy):** Adapter categorization is by epistemic role (five categories: Communication, External-State-Mirror, Inbound-Data, Personal-Knowledge, Outbound-Action), not by runtime substrate. Runtime axis (central / bridge / dual-deployment) is orthogonal secondary dimension. Capabilities are a list, not singleton — multi-capability adapters (Notion, HA, Tesla, Apple Notes-checklists, Privacy.com) declare each capability as its own seam with its own write-capability declaration and event-family scope.
-
-- **D20 (developer mode):** Three layers — bundled adapters (default-on, code-reviewed by maintainers), verified third-party adapters (developer mode flag + signed manifest), user-authored adapters (developer mode flag + scaffolding tooling via `adminme adapters scaffold`). Adapter packs use existing BUILD.md §PACK REGISTRY infrastructure; the five-category taxonomy refines pack manifests, doesn't replace the mechanism.
-
-- **D21 (SMS recategorized):** Twilio is Cat-E (outbound fallback when iMessage delivery fails), not Cat-A. Inbound SMS deferred to v2.
-
-- **D22 (Apple Calendar v1):** Apple Calendar adapter dual-deployment (central variant on CoS Apple ID + bridge variant per member Apple ID), parallel to Apple Reminders shape. Closes the v1 calendar gap for Apple-using households. Modifies prompt 11b scope.
-
-- **D23 (Contacts v1):** Apple Contacts adapter (bridge runtime, per-member iCloud via Contacts.framework) + Google Contacts adapter (central runtime, People API). Feeds `parties.identifiers`. Closes the CRM-spine-empty-on-day-1 gap. New prompt 11e.
-
-- **D24 (HA Cat-C+E reference, full bidirectional):** Home Assistant is the Cat-E reference implementation; multi-capability adapter (Cat-C state-read seam + Cat-E service-call seam). Both seams ship in Phase A. Service calls integrate with observation mode — when observation_mode is active, service calls (turn_on, turn_off, scene activation, etc.) are suppressed and emit `observation.suppressed` with the full would-have-sent payload, same pattern as messaging outbound. State-read seam is unaffected by observation mode (reading is not a side-effect). Closes UT-23. New prompt 11g.
-
-- **D25 (orphan disposition):** Lob and Privacy.com adapters deferred to v2 community packs. Credential intake at bootstrap §5 removes their lines per PM-32. CalDAV (as separate adapter) deferred to v2 community pack since Apple Calendar covers iCloud and Google Calendar covers Google. iOS Shortcuts webhook removed from L1 inventory (functionally retired by D17). Google Drive deferred to v2.
-
-**Six new PMs (PM-30 through PM-35), pending PR-γ-2:**
-
-- **PM-30 (HARD):** Architecture-amendment cycles can EXPAND mid-flight when new architectural questions surface that are coupled to the in-flight scope. Expansion is preferable to running back-to-back amendment cycles when the questions are conceptually coupled. Threshold: scope expansion is acceptable up to ~3-4× the original; beyond that, Partner pauses to confirm with James before continuing. The Amendment-2 expansion (Conception-C narrow → personal-data-layer expanded) is the canonical example.
-
-- **PM-31 (SOFT):** Cat-B (external-state-mirror) adapters follow a shared pattern — external IDs preserved as `external_<entity>_id`, source-kind discriminator on each row, bidirectional where upstream API allows, deduplication on `(kind, external_id)` when multiple adapters see the same upstream entity. Future Cat-B adapters should follow this pattern.
-
-- **PM-32 (HARD, strengthened from prior version):** Bootstrap §5 credential intake lists ONLY credentials that an active adapter or skill consumes. Optional credentials with no consumer are dead code in the bootstrap wizard and create operator confusion. ADDENDUM 2026-04-29-B: For L5 product surfaces that reference adapter-specific routers (e.g. `/api/automation/ha/*`), the adapter MUST be in Phase A scope or the routers MUST be removed. Routers without backing adapters are a stronger version of credential orphans — the surface itself promises functionality that doesn't exist.
-
-- **PM-33 (HARD):** Adapter categorization is by epistemic role (five categories: Communication, External-State-Mirror, Inbound-Data, Personal-Knowledge, Outbound-Action), not by runtime substrate. Capabilities are a list. Runtime axis (central / bridge / dual-deployment) is orthogonal. New adapters declare both axes in their pack manifest. Reference implementations exist per category; Phase A delivers the manifest format extensions, base classes, and validation framework. Post-Phase-A adapter generation is a fill-in-the-form exercise via `adminme adapters scaffold`, not a one-off artisan process.
-
-- **PM-34 (SOFT):** Adapter framework deliverables are Phase A scope: manifest format extensions (capabilities-as-list, write-capabilities, sensitivity defaults, observation-mode-required, owner-scope-overridability, sharing-model discriminator), five base classes per category, reference adapter per category, install-time validation, authoring guide (`docs/adapter-authoring-guide.md`), developer-mode gate, `adminme adapters` CLI subcommand group.
-
-- **PM-35 (SOFT):** Multi-capability adapters declare a list of capabilities in their pack manifest. Each capability is its own seam with its own write-capability declaration and event-family scope. Reference cases at amendment time: Notion (Cat-B database mode + Cat-D page mode), Home Assistant (Cat-C state-read + Cat-E service-call), Tesla (Cat-C telemetry + Cat-E lock/unlock/precondition), Apple Notes-checklists (Cat-D prose + Cat-B checklist), Privacy.com (Cat-E issue card + Cat-C transaction notification, though Plaid covers transaction observation in practice).
-
-**Twelve UTs surfaced (UT-19 through UT-30):**
-
-- **UT-19 (OPEN):** AppleScript Notes write-back conflict handling — when bridge writes to Notes-checklist via AppleScript while user edits same note on iPhone, last-writer-wins through iCloud sync. Acceptable per James 2026-04-29-B (toggle+add scope minimizes risk). Final design lands at 11c-ii orientation.
-- **UT-20 (OPEN):** iCloud Shared List invitation acceptance is async out-of-band. Bootstrap §8 emits `list.share_invited` events for each invited family member; bridges emit `list.shared` when their adapter sees the list appear post-acceptance. Pending shares surface in the inbox after bootstrap. Final design lands at Session A-2 (memo §5) + bootstrap-related prompt.
-- **UT-21 (OPEN):** Reminders dual-deployment manifest declaration — same adapter code, central variant + bridge variant. Pack manifest must declare runtime as `dual` and provide two deployment configurations. Final design lands at Session A-1 (memo §3 framework + manifest spec).
-- **UT-22 (RESOLVED 2026-04-29-B by D18):** `reminder.*` events retired in favor of `list.*` / `list_item.*`. PR-α-2 corrects the `tasks` projection subscription line in arch-summary §4 row 3.5.
-- **UT-23 (RESOLVED 2026-04-29-B by D24):** Cat-E reference implementation is Home Assistant. Closed by HA being added to Phase A scope as new prompt 11g.
-- **UT-24 (RESOLVED 2026-04-29-B by D21+D22+D23+D24+D25):** L1 adapter inventory cleanup — eleven specific drifts dispositioned in memo §4. Closed.
-- **UT-25 (DEFERRED):** Stelo / Dexcom CGM / health-telemetry as Cat-C adapter family — not Phase A scope. The adapter framework supports it; community pack post-Phase-A will add it when needed. Architectural placeholder noted in memo §4.
-- **UT-26 (OPEN):** Multi-capability adapter manifest design — list of capabilities, each with own event-family scope and write-capability declaration. Final design at Session A-1.
-- **UT-27 (OPEN):** Asymmetric write-capability manifest schema — explicit per-operation list (`create`, `update`, `delete`, `toggle_completion`, `reorder`, etc.) rather than boolean `bidirectional`. Reference cases: Things 3, Apple Notes-checklists, iCloud Shared Photos. Final design at Session A-1.
-- **UT-28 (OPEN):** Apple Calendar adapter dual-deployment shape, parallel to Apple Reminders. Modifies 11b row in PR-β-2. Resolves at Session A-2 (memo §6) + 11b refactor.
-- **UT-29 (OPEN):** Apple Contacts adapter on bridge per-member, Google Contacts central. New prompt 11e in PR-β-2. Resolves at Session A-2 (memo §7) + 11e refactor.
-- **UT-30 (OPEN):** HA adapter as Cat-C+E reference, multi-capability, full bidirectional with observation-mode integration. New prompt 11g in PR-β-2. Resolves at Session A-2 (memo §8) + 11g refactor.
-
-**Amendment-2 PR plan (4 PRs):**
-
-- **Memo PR** (`arch-amendment-2-memo-personal-data-layer`) — single new file `docs/05-architecture-amendment-personal-data-layer.md`, drafted by Sessions A-1 + A-2, single commit, doc-only.
-- **PR-α-2** (`arch-amendment-2-pr-alpha-2`) — constitutional doc updates per memo §9. Drafted by Session A-3. Two-commit hybrid landing per PM-24: Commit 1 (Claude Code str_replace) for arch-summary + SYSTEM_INVARIANTS + DECISIONS + DIAGRAMS + openclaw-cheatsheet; Commit 2 (GitHub web UI) for ADMINISTRATEME_BUILD.md large additions.
-- **PR-β-2** (`arch-amendment-2-sequence-updates`) — `prompts/PROMPT_SEQUENCE.md` updates: modify rows for 11/11a/11b/11c-i/11c-ii; add new rows for 11e/11f/11g; update dependency graph and pre-split forecasts; update total estimate. Drafted by Session A-4. Single commit, doc-only.
-- **PR-γ-2** (`arch-amendment-2-handoff-snapshot`) — `docs/partner_handoff.md` state snapshot rolling all PMs/UTs/decisions into the standing sections; next-task queue updated to "10c-ii is next refactor target." Drafted by Session A-4 alongside PR-β-2. Single commit, doc-only.
-
-**Session sequence (linear, per James 2026-04-29-B):**
-
-- Session A-1 (Type 0): foundational memo §1-§4 (taxonomy + two-axis model + framework + L1 inventory cleanup).
-- Session A-2 (Type 0): scoped sub-amendments memo §5-§9 (lists + Apple Calendar + Contacts + HA + PR plan).
-- James commits memo PR.
-- Session A-3 (Type 0): PR-α-2 replacement blocks file-by-file.
-- James commits PR-α-2 (two-commit hybrid per PM-24).
-- Session A-4 (Type 0): PR-β-2 + PR-γ-2 replacement blocks.
-- James commits PR-β-2; James commits PR-γ-2.
-- Build cadence resumes: **next refactor target is 10c-ii** (proactive pipelines `morning_digest` + `paralysis_detection`).
-
-**Phase A scope impact:**
-
-- Original Phase A: 93-123 hours.
-- New Phase A: 105-141 hours (~12-18 hour increase from Amendment-2 additions).
-- Net new prompts from Amendment-2: 11e (Contacts), 11f (lists projection), 11g (Home Assistant).
-- Modified prompts from Amendment-2: 11 (framework expansion: five base classes + manifest spec + validator + CLI + authoring guide), 11b (Apple Calendar dual-deployment added), 11c-i / 11c-ii (checklist detection emitting `list.*` + AppleScript write-back for toggle+add), 13b (capture lists router + automation HA routers gain real backing), 14b (lists view added; CRM view populated by Apple Contacts feed), 16 (§8 expansions for lists auto-seed + Apple Calendar pairing + Contacts pairing + HA pairing; §10 expansions for new bridge adapters), 17 (new `adminme adapters` CLI subcommand group).
-
-**Next-task queue (Stage 1 only; build cadence queue resumes at 10c-ii after Stage 1 closes):**
-
-1. Partner Session A-1: foundational memo §1-§4.
-2. Partner Session A-2: scoped sub-amendments memo §5-§9.
-3. James: commit memo PR.
-4. Partner Session A-3: PR-α-2 replacement blocks.
-5. James: commit PR-α-2 (PM-24 two-commit hybrid).
-6. Partner Session A-4: PR-β-2 + PR-γ-2 replacement blocks.
-7. James: commit PR-β-2; commit PR-γ-2.
-8. **Build cadence resumes at 10c-ii.** Standard Type 1/2 Partner session.)
+**Last updated:** 2026-05-04 (Amendment-2 cycle complete. Memo PR (`arch-amendment-2-memo-personal-data-layer`) landed `docs/05-architecture-amendment-personal-data-layer.md` per Sessions A-1 + A-2. PR-α-2 split into two PRs in execution per PM-24: PR #51 landed constitutional doc updates across `docs/architecture-summary.md` + `docs/SYSTEM_INVARIANTS.md` + `docs/DECISIONS.md` + `ADMINISTRATEME_DIAGRAMS.md` + `docs/openclaw-cheatsheet.md` (merged 2026-05-04); the `ADMINISTRATEME_BUILD.md` companion PR landed immediately after via GitHub web UI per PM-24 (merged 2026-05-04). PR-β-2 (`arch-amendment-2-sequence-updates`, PR #53, merged 2026-05-05) landed `prompts/PROMPT_SEQUENCE.md` row breakdown for the 11-cohort (rows 11/11a/11b/11c-i/11c-ii landed; new rows 11e/11f/11g added; rows 13b/14b/16/17 modified; dependency graph + parallelizable + hard-sequential bullets updated; total Phase A estimate 93–123 hrs → ~105–141 hrs). PR-γ-2 (this snapshot, `arch-amendment-2-handoff-snapshot`) closes the cycle: PM-30 through PM-35 landed in standing PM section; UT-19 through UT-30 landed in standing UT section (UT-19/20/21/26/27 OPEN with resolution anchors re-pointed from closed Sessions A-1/A-2 to the corresponding prompt-refactor sessions; UT-22/23/24 RESOLVED 2026-04-29-B by their D-decisions; UT-25 DEFERRED; UT-28/29/30 OPEN, resolves at the corresponding prompt's refactor); D18 through D25 already in `docs/DECISIONS.md` per PR-α-2. Eight new D-decisions confirmed and landed: **D18** (lists first-class as 13th projection; list items distinct from tasks; Notes-checklists toggle+add only); **D19** (five-category adapter taxonomy by epistemic role: Communication / External-State-Mirror / Inbound-Data / Personal-Knowledge / Outbound-Action; runtime orthogonal; capabilities-as-list); **D20** (three-layer developer mode: bundled / verified third-party / user-authored); **D21** (Twilio is Cat-E, inbound SMS deferred to v2); **D22** (Apple Calendar dual-deployment Cat-B); **D23** (Apple Contacts bridge per-member + Google Contacts central, both feeding `parties.identifiers`); **D24** (Home Assistant Cat-C+E reference, full bidirectional with observation-mode integration on the Cat-E half); **D25** (Lob/Privacy.com/CalDAV/Drive/iOS Shortcuts deferred or removed). Six new PMs (PM-30 through PM-35) and twelve new UTs (UT-19 through UT-30) landed via this PR. Phase A scope: 93–123 hrs → ~105–141 hrs. **Next refactor target: 10c-ii** (proactive pipelines `morning_digest` + `paralysis_detection`).)
 
 **Last updated:** 2026-04-29 (PR-α `arch-amendment-doc-updates-pr-alpha` merged — 5 constitutional doc amendments per `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md` §4. **Two-commit landing per PM-24 hybrid pattern (first execution; ran cleanly):** Commit 1 (Claude Code, str_replace) — 4 files (`docs/architecture-summary.md`, `docs/SYSTEM_INVARIANTS.md`, `docs/DECISIONS.md`, `ADMINISTRATEME_DIAGRAMS.md`); Commit 2 (GitHub web UI per PM-24) — `ADMINISTRATEME_BUILD.md` 7 edits (B.1 §THE ARCHITECTURE L1 box, B.2 §MACHINE TOPOLOGY adds adminme-bridge-{member}, B.3 §L1 "Three adapter runtimes", B.4 §L5 Capture full rewrite, B.5 new §L5 Product E `:3337 bridge`, B.6 new top-level §MEMBER BRIDGES section, B.7 §BOOTSTRAP WIZARD §10). PR-α landed 13 modifications total: D17 added; §6.19 bridge sovereignty added; §8.9 L1 two-place adapter family added; `member_knowledge` as 12th projection (architecture-summary §1 sentence + §4 row 3.12); bridge product `:3337` as fifth Python product; §10 Bridge enrollment in bootstrap wizard; arch-summary §11 #4 closed per D17. Partner session of 2026-04-29 ran Type 2 QC on PR-α. **Findings:** all 13 spec'd modifications present on main with correct content. **Positive signals:** PR description proactively flagged 3 placement-renumber decisions (memo's "§13.18" → §6.19; memo's "§3 Adapters" → §8.9; memo's `[§13.12]` → `[§6.12]`) — all correct against actual main HEAD numbering, high-quality refactor discipline. Memo §9 widening (kid bridges run Apple Notes + Voice Notes only; no Obsidian) integrated three-place-consistently into BUILD.md §MEMBER BRIDGES + DECISIONS.md D17 + SYSTEM_INVARIANTS.md §6.19. **F-1 (SOFT/cosmetic):** DIAGRAMS.md §2 second canonical example missing surrounding ` ```text ` code fence — renders as plain text instead of preformatted ASCII art. **F-2 (SOFT/cosmetic):** DIAGRAMS.md §7 topology bridge-shelf row → MAC MINI PROCESSES box has visual ASCII-art disjoint (the original single-MAC-MINI box's tee at the bottom hangs off thin air after the shelf-row replacement). Both findings are rendering-only, no content drift, no code is wrong, no downstream prompt is blocked. **Disposition:** single sidecar PR `sidecar-diagrams-rendering-cleanup` queued (option 1 of three considered — bundled fix, single str_replace operation per finding, ~5-min scope). **(2) Invariant audit Clean** — narrow scope on a doc-only PR; D17 affirms D4 (Corollary 1); §6.19 strengthens [§6.12] identity-first privacy; §8.9 does NOT introduce a new OpenClaw seam (the four canonical seams remain skills/slash/standing-orders/channels — the bridge ingest endpoint is L1-to-L2, not an OpenClaw integration). All future-prompt obligations (event schemas at v1, subscription-list extensions, projection implementation, bridge daemon code under `bridge/`) properly scoped to prompt 11c per the memo. **(3) Next-prompt calibration on 10c-ii Clean** — D17 does not change 10c-ii's deliverables; 10c-ii's `morning_digest` and `paralysis_detection` read existing projections (`tasks`, `commitments`, `parties`); they don't subscribe to knowledge events. No coupling. The amendment cycle does NOT delay 10c-ii. **New PMs and UTs:** **PM-28 added (HARD)** — when constitutional documents drift from binding architectural intent, Partner pauses the build, flags the drift, and runs an architecture-amendment cycle (Tier C memo + 3 single-purpose PRs) before resuming. The Conception-C amendment of 2026-04-29 is the canonical example. **PM-29 added (SOFT)** — knowledge-source adapters live on member bridges, not on the central CoS Mac Mini; future prompts that add knowledge-source adapters land in `bridge/`, not `adminme/`. **UT-15 OPEN (NEW)** — bridge daemon and central system share event-schema models via editable install or vendored copy; decide at 11c orientation. **UT-16 OPEN (NEW)** — kid-event routing-restriction enforcement mechanism (`owner_scope_excludes` in pipeline manifests vs `kid_bridge: true` payload flag); decide at 11c orientation OR earlier if a downstream prompt needs to know. **UT-17 OPEN (NEW)** — `member_knowledge` as a new (12th) projection vs extending `artifacts`; recommendation per memo §3.3 is the new projection, already encoded in arch-summary §4 row 3.12 and DIAGRAMS.md §1 ASCII; final decision at the projection-prompt orientation. **UT-18 OPEN (NEW)** — Apple Notes read mechanism (SQLite direct vs AppleScript vs hybrid); recommendation per memo §1.3 is hybrid (SQLite for bulk, AppleScript fallback); final decision at 11c orientation. **Next:** PR-β (sequence updates per memo §5.2 — new prompt 11c, modifications to 13b/14b/16) is the next Partner Type 0 session; PR-γ (this partner-state snapshot) closes the cycle. 10c-ii orientation comes after the amendment cycle closes per memo §6 step 10.)
 
@@ -209,15 +126,7 @@ This section is the live baton between sessions. Update it at the end of every P
 
 **Next task queue (in order):**
 
-1. **James: drive partner-state snapshot prep PR for this session's QC results.** PR-γ of the Conception-C amendment cycle. Single-purpose PR per PM-22 — no four-commit discipline, no BUILD_LOG, no tests. Branch: `update-partner-handoff-knowledge-amendment`. Two changes in one commit: replace `docs/partner_handoff.md` with the updated full file (this file); replace `docs/build_log.md` with the updated full file (with `<sha1-10c-i>` / `<sha2-10c-i>` … `<sha4-10c-i>` placeholders find-and-replaced from `gh pr view 44 --json commits` first; `<merge date>` filled with `2026-04-29`; `Outcome: IN FLIGHT (PR open)` flipped to `Outcome: MERGED` for 10c-i). Find-and-replace placeholders before committing: `<PR-α>` → actual PR number from `gh pr list --state merged | grep arch-amendment`; `<merge-date-α>` → actual merge date. **No file deletions.**
-
-2. **James: drive `sidecar-diagrams-rendering-cleanup` PR.** Single-purpose sidecar PR per PM-15. Branch: `sidecar-diagrams-rendering-cleanup`. Two `str_replace` operations in `ADMINISTRATEME_DIAGRAMS.md` (fix F-1: add code fence around §2 second canonical example; fix F-2: clean up §7 topology connector tee). 5-minute Claude Code session; sidecar memo + micro-prompt produced in PR-α QC closing artifacts.
-
-3. **Partner session: PR-β drafting.** Type 0 session per memo §6 step 5. Output: line-by-line replacement blocks for `prompts/PROMPT_SEQUENCE.md` (new row for prompt 11c, modifications to 13b / 14b / 16 rows) and `D-prompt-tier-and-pattern-index.md` (new 11c row, modified 13b / 14b / 16 rows, new pre-split disposition entries). All per memo §5.2.
-
-4. **Claude Code session: execute PR-β.** Lands the sequence updates.
-
-5. **Partner session: 10c-ii orientation + refactor.** Type 3 (refactor-only) Partner session per `docs/03-split-memo-10c.md`. **Pre-orientation evaluation:** check whether profile/persona loader infrastructure (UT-14) must ship in 10c-ii alongside `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas, or whether constructor-injection (PM-27) lets the loaders defer to a later prompt. If loaders ship in 10c-ii and push the prompt over the §2.9 budget (350 lines / 25KB / ≤4 net-new modules), forecast a secondary split into 10c-ii-α (loaders + morning_digest + compose_morning_digest skill + adminme.digest.composed event schema) and 10c-ii-β (paralysis_detection + compose_zeigarnik_teaser skill + adminme.paralysis.triggered event schema) per PM-23. Otherwise output is a single refactored 10c-ii prompt at `prompts/10c-ii-morning-digest-and-paralysis.md` per PM-21.
+1. **Build cadence resumes at 10c-ii.** Partner session: 10c-ii orientation + refactor. Type 3 (refactor-only) Partner session per `docs/03-split-memo-10c.md`. **Pre-orientation evaluation:** check whether profile/persona loader infrastructure (UT-14) must ship in 10c-ii alongside `morning_digest` + `paralysis_detection` + 2 compose_* skill packs + 2 event schemas, or whether constructor-injection (PM-27) lets the loaders defer to a later prompt. If loaders ship in 10c-ii and push the prompt over the §2.9 budget (350 lines / 25KB / ≤4 net-new modules), forecast a secondary split into 10c-ii-α (loaders + morning_digest + compose_morning_digest skill + adminme.digest.composed event schema) and 10c-ii-β (paralysis_detection + compose_zeigarnik_teaser skill + adminme.paralysis.triggered event schema) per PM-23. Otherwise output is a single refactored 10c-ii prompt at `prompts/10c-ii-morning-digest-and-paralysis.md` per PM-21.
 
    10c-ii's depth-read points (from `D-prompt-tier-and-pattern-index.md` 10c-ii row + 10c-i's BUILD_LOG carry-forwards):
    - `ADMINISTRATEME_BUILD.md` §1202 (morning_digest scheduling + validation guard) and §1216 (paralysis_detection deterministic + persona templates).
@@ -229,13 +138,17 @@ This section is the live baton between sessions. Update it at the end of every P
    - `adminme/lib/observation.py` `outbound()` (since 08b) — `morning_digest` and `paralysis_detection` MUST call this to deliver the brief / nudge through the channel layer; observation-mode default-on suppresses the dispatch and emits `observation.suppressed`.
    - **F-1 carry-forward from 10c-i QC:** 10c-ii pipeline.yaml manifests must NOT assert `triggers.proactive: true` as the affirmative skip-marker in tests. The runner's `discover()` skip is keyed on **absence** of `triggers.events`, not presence of `triggers.proactive: true`. Either shape works at runtime; tests must not assert the affirmative form.
 
-6. **Claude Code session: execute 10c-ii.** Following the prep PR (with the refactored prompt committed). Four-commit discipline per PM-2.
+2. **James: drive `sidecar-diagrams-rendering-cleanup` PR** if not already merged. Single-purpose sidecar PR per PM-15. Branch: `sidecar-diagrams-rendering-cleanup`. Two `str_replace` operations in `ADMINISTRATEME_DIAGRAMS.md` (fix F-1: add code fence around §2 second canonical example; fix F-2: clean up §7 topology connector tee). 5-minute Claude Code session; sidecar memo + micro-prompt produced in PR-α QC closing artifacts. Non-blocking for 10c-ii.
 
-7. **Partner session: QC of 10c-ii merge + 10c-iii orientation.** Type 1 combined session expected; 10c-iii is a clean extension per `docs/03-split-memo-10c.md`.
+3. **Claude Code session: execute 10c-ii.** Following the prep PR (with the refactored prompt committed). Four-commit discipline per PM-2.
 
-8. **Claude Code session: execute 10c-iii.** Closes the 10c cohort.
+4. **Partner session: QC of 10c-ii merge + 10c-iii orientation.** Type 1 combined session expected; 10c-iii is a clean extension per `docs/03-split-memo-10c.md`.
 
-9. **Partner session: QC of 10c-iii merge + 10d (checkpoint) refactor.** Type 1 combined or Type 0 session — 10d is a Tier C audit memo, not a build prompt.
+5. **Claude Code session: execute 10c-iii.** Closes the 10c cohort.
+
+6. **Partner session: QC of 10c-iii merge + 10d (checkpoint) refactor.** Type 1 combined or Type 0 session — 10d is a Tier C audit memo, not a build prompt.
+
+7. **Phase A continuation:** 10d → 11 (framework expansion; pre-split candidate per `D-prompt-tier-and-pattern-index.md`) → 11a / 11b / 11c-i / 11c-ii / 11d / 11e / 11f / 11g (reference-implementation cohort + projection) → 12 → 13a / 13b → 14a–14e → 15 / 15.5 → 16 (pre-split mandatory) → 17 → 18 → 19. Per `prompts/PROMPT_SEQUENCE.md` post-PR-β-2 sequence + dependency graph. Each row is its own Partner session (Type 1/2/3 as appropriate per `E-session-protocol.md`).
 
 ---
 
@@ -428,6 +341,50 @@ Surfaced 2026-04-29 by the Conception-C amendment. Knowledge-source adapters (Ap
 
 PM-29 is SOFT because the bridge codebase has not yet been instantiated (prompt 11c lands first bridge code). Promote to HARD once 11c merges and the convention is concretely demonstrated.
 
+### PM-30: Architecture-amendment cycles can EXPAND mid-flight when new architectural questions surface that are coupled to the in-flight scope — HARD
+
+Surfaced 2026-04-29-B by Amendment-2 (Conception-C narrow → personal-data-layer expanded). Expansion is preferable to running back-to-back amendment cycles when the questions are conceptually coupled. **The discipline:** scope expansion is acceptable up to ~3-4× the original; beyond that, Partner pauses to confirm with James before continuing. The Amendment-2 expansion (Conception-C narrow at memo `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md` → personal-data-layer expanded at memo `docs/05-architecture-amendment-personal-data-layer.md`) is the canonical example: the Conception-C narrow scope was member bridges + knowledge-source adapters + `member_knowledge` projection (~5 sections); the expanded Amendment-2 scope added the five-category adapter taxonomy + adapter framework + lists projection + Apple Calendar adapter + contacts adapters + Home Assistant Cat-C+E reference (~9 sections, ~3× the original). Operationally, this lengthened Amendment-2 from ~3 PRs to ~4 PRs (memo + PR-α-2 [two-commit hybrid per PM-24] + PR-β-2 + PR-γ-2) and from ~2 Partner sessions to 4 (A-1 / A-2 / A-3 / A-4).
+
+### PM-31: Cat-B (external-state-mirror) adapters follow a shared pattern — SOFT
+
+Surfaced 2026-04-29-B by Amendment-2 ([D19] / memo §2). Cat-B adapters mirror state the principal directly maintains in an external system; AdministrateMe both reads from and writes to the upstream. **The shared pattern:** external IDs preserved as `external_<entity>_id` columns on each row; source-kind discriminator on each row (e.g. `external_id_kind = 'apple_reminders' | 'google_tasks' | 'apple_notes_checklist'`); bidirectional where the upstream API allows; deduplication on `(external_id_kind, external_<entity>_id)` when multiple adapters see the same upstream entity (e.g. iCloud Shared List visible from every invited member's bridge collapses to one `lists` row). Future Cat-B adapters should follow this pattern — Apple Reminders, Google Tasks, Apple Calendar, Google Calendar, Apple Contacts, Google Contacts, Apple Notes-checklists are all reference cases.
+
+### PM-32: Bootstrap §5 credential intake lists ONLY credentials that an active adapter or skill consumes — HARD (strengthened 2026-04-29-B)
+
+Surfaced 2026-04-28 by 16 refactor scope review; **strengthened 2026-04-29-B** by Amendment-2 §3.4 + [D24]. Optional credentials with no consumer are dead code in the bootstrap wizard and create operator confusion. The wizard's §5 credential-intake list and the L5 product surfaces' router lists must stay in sync with the actual Phase A adapter inventory.
+
+**ADDENDUM 2026-04-29-B:** For L5 product surfaces that reference adapter-specific routers (e.g. `/api/automation/ha/state`, `/api/automation/ha/services`), the adapter MUST be in Phase A scope or the routers MUST be removed. Routers without backing adapters are a stronger version of credential orphans — the surface itself promises functionality that doesn't exist. Home Assistant being added to Phase A scope as new prompt 11g per [D24] resolves this for the HA routers; Lob (postal mail) and Privacy.com (virtual cards) are removed from Phase A L5 surface entirely per [D25].
+
+### PM-33: Adapter categorization is by epistemic role, not runtime substrate; capabilities are a list — HARD
+
+Surfaced 2026-04-29-B by Amendment-2 ([D19] / memo §1 + §2). Adapter classification is by **epistemic role** (five categories: Communication, External-State-Mirror, Inbound-Data, Personal-Knowledge, Outbound-Action), not by runtime substrate. Capabilities are a list (multi-capability adapters declare each capability as its own seam — see PM-35). Runtime axis (central / bridge / dual-deployment) is an **orthogonal secondary dimension**.
+
+**The discipline:** new adapters declare both axes (`kind`: Cat-A through Cat-E + `runtime`: central | bridge | dual) plus `capabilities: [...]` in their pack manifest. Reference implementations exist per category — Gmail (Cat-A central), Apple Reminders (Cat-B dual), Plaid (Cat-C central), Apple Notes (Cat-D bridge), Home Assistant (Cat-C+E central, multi-capability). Phase A delivers the manifest format extensions, five abstract base classes (one per category), install-time validation framework, and `adminme adapters` CLI subcommand group; post-Phase-A adapter generation is a fill-in-the-form exercise via `adminme adapters scaffold`, not a one-off artisan process.
+
+### PM-34: Adapter framework deliverables are Phase A scope — SOFT
+
+Surfaced 2026-04-29-B by Amendment-2 ([D19] / [D20] / memo §3). Adapter framework deliverables are explicitly Phase A scope and land in prompt 11 (the framework prompt; pre-split candidate per `D-prompt-tier-and-pattern-index.md`):
+
+- Manifest format extensions (capabilities-as-list, write-capabilities, sensitivity defaults, `observation_mode_required`, owner-scope-overridability, sharing-model discriminator).
+- Five base classes per category (`CommunicationAdapter`, `ExternalStateMirrorAdapter`, `InboundDataAdapter`, `PersonalKnowledgeAdapter`, `OutboundActionAdapter`).
+- Reference adapter per category (lands across prompts 11a / 11b / 11c-i / 11c-ii / 11g per the post-PR-β-2 sequence).
+- Install-time validation (capability-runtime coherence, event-schema registration, projection-subscription compatibility, base-class conformance, write_capabilities method-presence, signature check).
+- Authoring guide (`docs/adapter-authoring-guide.md`).
+- Three-layer developer-mode gate per [D20] (bundled / verified third-party / user-authored).
+- `adminme adapters` CLI subcommand group (lands in prompt 17 per PR-β-2 row update).
+
+### PM-35: Multi-capability adapters declare a list of capabilities — SOFT
+
+Surfaced 2026-04-29-B by Amendment-2 ([D19] / memo §2.2). Multi-capability adapters declare a list of capabilities in their pack manifest. **Each capability is its own seam** with its own write-capability declaration and event-family scope. Reference cases at amendment time:
+
+- **Notion** — Cat-B (database mode) + Cat-D (page mode).
+- **Home Assistant** — Cat-C (state-read seam) + Cat-E (service-call seam). Lands as prompt 11g.
+- **Tesla** — Cat-C (telemetry) + Cat-E (lock/unlock/precondition).
+- **Apple Notes** — Cat-D (prose half) + Cat-B (checklist half). Cat-D ships in 11c-ii alongside Cat-B checklist write-back per [D18].
+- **Privacy.com** — Cat-E (issue card) + Cat-C (transaction notification). Plaid covers transaction observation in v1; Privacy.com is deferred to v2 per [D25].
+
+**The discipline:** when refactoring a future adapter prompt with multi-capability shape, the manifest declares `capabilities: [{kind: cat_X, write_capabilities: [...], event_family: "..."}, {kind: cat_Y, ...}]` — not a single `kind`. Install-time validation checks each capability's coherence independently per PM-33 + PM-34.
+
 ---
 
 ## Open tensions / unresolved things
@@ -546,6 +503,78 @@ Surfaced 2026-04-29 by the Conception-C amendment (memo §1.3 + §3.6). The Appl
 **Recommendation per memo §1.3:** option (c) hybrid. Final decision at 11c orientation.
 
 Status: **OPEN, resolves at 11c orientation. No build blocker until then.**
+
+### UT-19: AppleScript Notes write-back conflict handling — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §5.6). When the bridge writes to a Notes-checklist via AppleScript while the user simultaneously edits the same note on iPhone, last-writer-wins through iCloud sync. Acceptable per James 2026-04-29-B because the toggle+add scope minimizes risk (no remove, no in-place text edit, no reorder per [D18]). Final design lands at 11c-ii orientation — observation hooks for write-back outcomes (success / iCloud-conflict-rejected / AppleScript-error) and the three system observability events specified in memo §5.6.
+
+Status: **OPEN, resolves at 11c-ii orientation. No build blocker until then.**
+
+### UT-20: iCloud Shared List invitation acceptance is async out-of-band — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §5.7). Bootstrap §8 (lists auto-seed sub-step) emits `list.share_invited` events for each invited family member's Apple ID; bridges emit `list.shared` when their adapter sees the list appear post-acceptance. Pending shares surface in the inbox after bootstrap. The async pattern is unavoidable — Apple's iCloud Shared List acceptance happens out of band on each invitee's device, not via API. Final design lands at 11b refactor (Apple Reminders dual-deployment shape) and 16 refactor (bootstrap §8 lists auto-seed sub-step).
+
+Status: **OPEN, resolves at 11b / 16 refactor. No build blocker until then.**
+
+### UT-21: Reminders dual-deployment manifest declaration — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §3.1 + §5.4). Same adapter code, central variant (CoS Apple ID) + bridge variant (per member Apple ID). Pack manifest must declare `runtime: dual` and provide two deployment configurations. The manifest schema for dual-deployment adapters is established by prompt 11 (framework expansion) and exercised by 11b (Cat-B adapters cohort).
+
+Status: **OPEN, resolves at 11 framework refactor. No build blocker until then.**
+
+### UT-22: `reminder.*` events retired in favor of `list.*` / `list_item.*` — RESOLVED 2026-04-29-B by D18
+
+Resolved by [D18] (lists first-class as 13th projection). PR-α-2 (merged 2026-05-04) corrected the `tasks` projection subscription line in `docs/architecture-summary.md` §4 row 3.5. The canonical event family for list state is `list.*` / `list_item.*`; the `tasks` projection's new subscription includes `list_item.promoted_to_task` to materialize promoted tasks per [D18] Corollary.
+
+Status: **RESOLVED 2026-04-29-B.**
+
+### UT-23: Cat-E reference implementation — RESOLVED 2026-04-29-B by D24
+
+Resolved by [D24] (Home Assistant is the Cat-E reference implementation; multi-capability Cat-C state-read seam + Cat-E service-call seam; both ship in Phase A; service calls integrate with observation mode per [§6.20]). Closed by HA being added to Phase A scope as new prompt 11g (landed in PR-β-2 sequence rows).
+
+Status: **RESOLVED 2026-04-29-B.**
+
+### UT-24: L1 adapter inventory cleanup — RESOLVED 2026-04-29-B by D21+D22+D23+D24+D25
+
+Eleven specific drifts dispositioned per memo §4: Twilio is Cat-E (D21); Apple Calendar dual-deployment in Phase A (D22); Apple Contacts bridge per-member + Google Contacts central (D23); Home Assistant Cat-C+E with full bidirectional + observation-mode integration (D24); Stelo/Lob/Privacy.com/CalDAV/Google Drive/iOS Shortcuts disposition (D25). All eleven drifts now reflected in the constitutional docs (PR-α-2) and the sequence table (PR-β-2).
+
+Status: **RESOLVED 2026-04-29-B.**
+
+### UT-25: Stelo / Dexcom CGM / health-telemetry as Cat-C adapter family — DEFERRED
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §1.3 + §4). NOT in Phase A scope. The five-category adapter framework (Phase A, prompt 11) supports Cat-C health-telemetry shape; a community pack post-Phase-A will add Stelo / Dexcom / Apple Health adapters when needed. Architectural placeholder noted in memo §4.
+
+Status: **DEFERRED to v2 community pack. No build action.**
+
+### UT-26: Multi-capability adapter manifest design — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §3.1 + [PM-35]). The manifest schema must support a list of capabilities, each with its own event-family scope and write-capability declaration. Reference cases: Notion (Cat-B + Cat-D), Home Assistant (Cat-C + Cat-E), Tesla (Cat-C + Cat-E), Apple Notes (Cat-D + Cat-B), Privacy.com (Cat-E + Cat-C). Final design at 11 framework refactor — install-time validator must check each capability's coherence independently.
+
+Status: **OPEN, resolves at 11 framework refactor. No build blocker until then.**
+
+### UT-27: Asymmetric write-capability manifest schema — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §3.1). The pack manifest's write-capability declaration is an **explicit per-operation list** (`create`, `update`, `delete`, `toggle_completion`, `add_item`, `reorder`, etc.) rather than a boolean `bidirectional`. Reference cases: Things 3 (read-only externally), Apple Notes-checklists (toggle_completion + add_item only per [D18]), iCloud Shared Photos (read-only on shared albums). Final design at 11 framework refactor — the validator must enforce that handler methods exist for each declared write capability per PM-34's "write_capabilities method-presence, signature check."
+
+Status: **OPEN, resolves at 11 framework refactor. No build blocker until then.**
+
+### UT-28: Apple Calendar adapter dual-deployment shape — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §6, [D22]). Apple Calendar dual-deployment shape parallel to Apple Reminders: central variant on assistant Apple ID + bridge variant per member Apple ID. EventKit access; emits `calendar_event.added@v1` / `.updated@v1` / `.cancelled@v1`; deduplication on `(external_id_kind = 'apple_calendar', external_event_id)`; sharing-model discriminator on each row (`private` | `shared_household` | `icloud_shared_calendar`). Sequence row landed in PR-β-2 (row 11b extended). Final design lands at 11b refactor.
+
+Status: **OPEN, resolves at 11b refactor. No build blocker until then.**
+
+### UT-29: Apple Contacts (bridge per-member) + Google Contacts (central) — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §7, [D23]). Apple Contacts adapter on bridge per-member (Contacts.framework against the member's iCloud); Google Contacts adapter central (People API against the assistant's Workspace). Both feed `parties.identifiers`. Closes the CRM-spine-empty-on-day-1 gap. Sequence row landed in PR-β-2 (new row 11e). Final design lands at 11e refactor.
+
+Status: **OPEN, resolves at 11e refactor. No build blocker until then.**
+
+### UT-30: HA adapter as Cat-C+E reference, multi-capability, full bidirectional — OPEN
+
+Surfaced 2026-04-29-B by Amendment-2 (memo §8, [D24]). Home Assistant is the Cat-E reference implementation; multi-capability adapter (Cat-C state-read seam emitting `ha.state_changed@v1` + Cat-E service-call seam consuming `ha.service_call_requested@v1` and emitting `action.executed@v1` / `action.failed@v1` / `observation.suppressed@v1`). Both seams ship in Phase A. Service calls integrate with observation mode per [§6.20] — when `observation_mode = active`, the Cat-E seam emits `observation.suppressed` with the full would-have-sent payload and does NOT call HA's REST endpoint; the Cat-C seam is unaffected by observation mode (reading is not a side-effect). Sequence row landed in PR-β-2 (new row 11g). Final design lands at 11g refactor.
+
+Status: **OPEN, resolves at 11g refactor. No build blocker until then.**
 
 ---
 
