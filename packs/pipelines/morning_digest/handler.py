@@ -184,10 +184,10 @@ class MorningDigestPipeline:
                 type(exc).__name__,
             )
             return None
-        outputs = getattr(result, "outputs", None)
-        if not isinstance(outputs, dict):
+        output = getattr(result, "output", None)
+        if not isinstance(output, dict):
             return None
-        return outputs
+        return output
 
     def validate(
         self,

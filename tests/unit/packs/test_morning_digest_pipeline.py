@@ -83,7 +83,7 @@ class _FakeEventLog:
 
 @dataclass
 class _FakeSkillResult:
-    outputs: dict[str, Any]
+    output: dict[str, Any]
 
 
 @dataclass
@@ -112,7 +112,7 @@ def _make_ctx(
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         if skill_raises is not None:
             raise skill_raises("simulated skill failure")
-        return _FakeSkillResult(outputs=dict(skill_outputs or {}))
+        return _FakeSkillResult(output=dict(skill_outputs or {}))
 
     async def stub_outbound_fn(*a: Any, **kw: Any) -> Any:
         raise AssertionError(
