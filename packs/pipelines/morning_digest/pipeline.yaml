@@ -1,0 +1,33 @@
+pack:
+  id: pipeline:morning_digest
+  name: Morning digest
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: MorningDigestPipeline
+# Documentation-only triggers per [BUILD.md §1289]; this is a proactive
+# pack — the in-process PipelineRunner skips it on absence of
+# triggers.events (runner.py:131-138). The cron sidecar in
+# bootstrap/openclaw/cron.yaml is the authoritative scheduling
+# wire-up; bootstrap §8 substitutes per-member configured wake times.
+triggers:
+  schedule: "0 7 * * *"
+  proactive: true
+depends_on:
+  skills:
+    - compose_morning_digest@^3.0.0
+  projections:
+    - tasks
+    - commitments
+    - calendars
+    - recurrences
+events_emitted:
+  - digest.composed
+  - observation.suppressed
+  - external.sent
+config:
+  schema: config.schema.json
+  example: config.example.yaml

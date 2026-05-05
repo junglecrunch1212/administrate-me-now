@@ -1,0 +1,27 @@
+pack:
+  id: pipeline:paralysis_detection
+  name: Paralysis detection
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: ParalysisDetectionPipeline
+# Documentation-only triggers per [BUILD.md §1297-1302]; this is a
+# proactive pack — the in-process PipelineRunner skips it on absence
+# of triggers.events (runner.py:131-138). The cron sidecar in
+# bootstrap/openclaw/cron.yaml is the authoritative scheduling
+# wire-up; bootstrap §8 may override per ADHD-profile member.
+triggers:
+  schedule: "0 15,17 * * *"
+  proactive: true
+depends_on:
+  # Deterministic — never invokes LLM per [BUILD.md §1297-1302] +
+  # operating rule 20 ([BUILD.md §124]).
+  skills: []
+  projections:
+    - tasks
+    - commitments
+events_emitted:
+  - paralysis.triggered

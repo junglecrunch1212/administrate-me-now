@@ -1,0 +1,57 @@
+You are composing a per-member morning digest for AdministrateMe.
+The recipient is the household member whose state is below.
+
+Member: {{ member_id }}
+Date: {{ today_iso }}
+Profile format: {{ profile_format }}
+Inbox count: {{ inbox_count }}
+
+Today's calendar events:
+{% for ev in calendars %}- id={{ ev.id }} | {{ ev.title }}{% if ev.start_at %} @ {{ ev.start_at }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Due commitments:
+{% for c in commitments %}- id={{ c.id }} | {{ c.title }}{% if c.due_at %} due {{ c.due_at }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Today's tasks:
+{% for t in tasks %}- id={{ t.id }} | {{ t.title }}{% if t.due_at %} due {{ t.due_at }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Due recurrences:
+{% for r in recurrences %}- id={{ r.id }} | {{ r.title }}{% if r.next_occurrence %} next {{ r.next_occurrence }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Streak status: {{ streak_status }}
+Reward stats: {{ reward_stats }}
+
+Profile-format rules:
+- fog_aware: short paragraphs, single-action framing, minimal lists.
+- compressed: dense lists, bullet-only, no narrative.
+- carousel: one item at a time, suggested order with rationale.
+- child: kid-appropriate language, short sentences.
+- none: flat plain bullets; default fallback.
+
+Write a brief morning digest in the requested profile_format style.
+
+VALIDATION-GUARD CONTRACT (non-negotiable):
+- The pipeline runs a validation guard on every projection-side id you
+  reference in body_text. Any id you reference that is NOT in the
+  input above will zero the message with a sentinel. Do NOT fabricate
+  ids, dates, or events.
+- In claimed_event_ids list every id you actually mentioned in
+  body_text. Empty array is fine if the day is empty.
+
+Return ONLY valid JSON matching this schema:
+{
+  "body_text": "<digest text>",
+  "claimed_event_ids": ["<id>", ...],
+  "validation_failed": false,
+  "reasons": []
+}
+
+Return the JSON and nothing else.

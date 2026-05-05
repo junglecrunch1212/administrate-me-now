@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "morning_digest pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["delivery_channel"],
+  "properties": {
+    "delivery_channel": {
+      "type": "string",
+      "enum": ["imessage", "email", "sms"],
+      "description": "Default outbound channel for digest delivery."
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "description": "Map of member_id → per-member overrides (delivery_channel only in v1).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "delivery_channel": {
+            "type": "string",
+            "enum": ["imessage", "email", "sms"]
+          }
+        }
+      }
+    }
+  }
+}

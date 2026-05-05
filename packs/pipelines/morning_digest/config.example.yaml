@@ -1,0 +1,18 @@
+# morning_digest example config.
+#
+# Per-member overrides shape: keys are member ids (placeholders here;
+# real ids substituted by bootstrap §8 per [§12.4] tenant-identity
+# firewall), values override top-level defaults. Tenant-agnostic
+# placeholder ids per the platform-code firewall — no specific tenant
+# names ship in this file.
+
+delivery_channel: imessage  # default outbound channel; override per member
+
+per_member_overrides: {}
+# Example shape (commented to keep this file tenant-agnostic):
+#
+# per_member_overrides:
+#   member_id_example_1:
+#     delivery_channel: email
+#   member_id_example_2:
+#     delivery_channel: imessage
