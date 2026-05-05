@@ -314,8 +314,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10c-i — Standing-orders infrastructure + reward_dispatch
 - **Refactored**: by Partner in Claude Chat, 2026-04-28. Prompt file: `prompts/10c-i-standing-orders-infra-and-reward-dispatch.md` (~440 lines, quality bar = 10b-ii-α). Tier C split memo at `docs/03-split-memo-10c.md`.
-- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #55, commits 826a02d / e5313b9 / 0a283cd / 6d69c1b, merged 2026-05-05.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `bootstrap/openclaw/programs/<six>.md` — one full (`reward_dispatch`), five stubs (`morning_digest`, `paralysis_detection`, `reminder_dispatch`, `crm_surface`, `custody_brief`). Per [D1] Corollary.
   - `bootstrap/openclaw/cron.yaml` — five scheduled-program entries (NOT `reward_dispatch`, which is reactive in-runner).
@@ -339,8 +339,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10c-ii — morning_digest + paralysis_detection (proactive pipelines)
 - **Refactored**: by Partner in Claude Chat, 2026-05-05. Prompt file: `prompts/10c-ii-morning-digest-and-paralysis-detection.md` (~480 lines, quality bar = 10c-i). Tier C split memo at `docs/03-split-memo-10c.md`.
-- **Session merged**: PR #<N>, commits <sha1> / <sha2> / <sha3> / <sha4>, merged <merge date>.
-- **Outcome**: IN FLIGHT (PR open).
+- **Session merged**: PR #55, commits 826a02d / e5313b9 / 0a283cd / 6d69c1b, merged 2026-05-05.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/events/schemas/domain.py` — `DigestComposedV1` + `ParalysisTriggeredV1` registered at v1 per `[D7]`. `DigestComposedV1` carries `delivered: bool` and `validation_failed: bool` so consumers can distinguish sentinel from happy-path emissions per `[BUILD.md §1289]`. `ParalysisTriggeredV1` carries `template_id` + `template_text` + `triggered_at` per `[BUILD.md §1297-1302]`.
   - `packs/skills/compose_morning_digest/{pack.yaml,SKILL.md,handler.py,prompt.jinja2,schemas/{input,output}.schema.json,tests/test_skill.py}` — full 09b-shape skill pack at v3.0.0 (`[BUILD.md §2242]` catalogs it as `compose_morning_digest@v3`). `on_failure` shape returns `validation_failed=true` so the pipeline's defensive-default catch lands on the sentinel path per `[§7.7]`. Output's `claimed_event_ids` field is the load-bearing hook for the validation guard.
