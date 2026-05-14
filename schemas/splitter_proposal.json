@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrate-me/schemas/splitter_proposal.json",
+  "title": "Splitter proposal",
+  "description": "Splitter agent's proposed decomposition of an oversized prompt into 2-3 children.",
+  "type": "object",
+  "required": ["parent_prompt_id", "split_count", "seam_pattern", "children", "split_memo_path", "split_memo_content", "sequence_updates_needed", "operator_notes"],
+  "properties": {
+    "parent_prompt_id": {
+      "type": "string",
+      "description": "The prompt being split, e.g. '16' or '10c'"
+    },
+    "split_count": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 3,
+      "description": "Number of children — prefer 2 if 2 suffice; 3 max"
+    },
+    "seam_pattern": {
+      "type": "string",
+      "enum": ["pipeline_pair", "infrastructure_first", "pipeline_count", "section_groups", "module_separation", "other"],
+      "description": "Which pattern this split uses. Reference the supervised build's three precedents."
+    },
+    "children": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["child_id", "slug", "scope", "not_in_scope", "loc_estimate", "test_floor", "files_touched", "seam_with_next", "depends_on_prior_children"],
+        "properties": {
+          "child_id": {"type": "string", "description": "e.g. '16-alpha', '10c-iii'"},
+          "slug": {"type": "string", "description": "short descriptive slug for the prompt filename"},
+          "scope": {"type": "string", "description": "paragraph describing what THIS child ships"},
+          "not_in_scope": {"type": "string", "description": "paragraph describing what's deferred to a later child"},
+          "loc_estimate": {"type": "integer"},
+          "test_floor": {"type": "integer"},
+          "files_touched": {"type": "array", "items": {"type": "string"}},
+          "seam_with_next": {"type": "string", "description": "what the next child reads from this one"},
+          "depends_on_prior_children": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "split_memo_path": {
+      "type": "string",
+      "description": "Path to commit the split memo, e.g. 'docs/06-split-memo-16-bootstrap-wizard.md'"
+    },
+    "split_memo_content": {
+      "type": "string",
+      "description": "Full memo text, commit-ready, matching the prose format of docs/03-split-memo-10c.md"
+    },
+    "sequence_updates_needed": {
+      "type": "boolean",
+      "description": "Almost always true for a split — prompts/PROMPT_SEQUENCE.md needs new rows"
+    },
+    "sequence_updates_summary": {
+      "type": "string",
+      "description": "What changes in PROMPT_SEQUENCE.md (rows added, dependency-graph updates)"
+    },
+    "operator_notes": {
+      "type": "string",
+      "description": "Plain-English summary: why this seam, what alternative was considered, what watch-flags carry to children"
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrate-me/schemas/preflight_verdict.json",
+  "title": "PreFlight verdict",
+  "description": "Output of the PreFlight agent — gates whether a refactored prompt can proceed to Executor.",
+  "type": "object",
+  "required": ["prompt_id", "decision", "size_check", "dependency_check", "citation_check", "ut_check", "coherence_check", "tier_c_flag", "operator_notes"],
+  "properties": {
+    "prompt_id": {
+      "type": "string",
+      "description": "The prompt being preflighted, e.g. '10c-iii' or '16-alpha'"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["execute", "split", "missing_dependency", "unresolved_ut", "halt"],
+      "description": "Top-level gate decision"
+    },
+    "size_check": {
+      "type": "object",
+      "required": ["total_loc_estimate", "test_floor", "total_files_touched", "envelope_passed"],
+      "properties": {
+        "total_loc_estimate": {"type": "integer"},
+        "test_floor": {"type": "integer"},
+        "total_files_touched": {"type": "integer"},
+        "envelope_passed": {"type": "boolean"}
+      }
+    },
+    "dependency_check": {
+      "type": "object",
+      "required": ["all_cited_files_present", "missing_files", "all_depended_prompts_merged", "missing_merges"],
+      "properties": {
+        "all_cited_files_present": {"type": "boolean"},
+        "missing_files": {"type": "array", "items": {"type": "string"}},
+        "all_depended_prompts_merged": {"type": "boolean"},
+        "missing_merges": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "citation_check": {
+      "type": "object",
+      "required": ["all_citations_valid", "invalid_citations"],
+      "properties": {
+        "all_citations_valid": {"type": "boolean"},
+        "invalid_citations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["cited_as", "reason"],
+            "properties": {
+              "cited_as": {"type": "string"},
+              "reason": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "ut_check": {
+      "type": "object",
+      "required": ["open_uts_referenced", "blocking_uts"],
+      "properties": {
+        "open_uts_referenced": {"type": "array", "items": {"type": "string"}},
+        "blocking_uts": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "coherence_check": {
+      "type": "object",
+      "required": ["issues"],
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["issue", "severity"],
+            "properties": {
+              "issue": {"type": "string"},
+              "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]}
+            }
+          }
+        }
+      }
+    },
+    "tier_c_flag": {
+      "type": "boolean",
+      "description": "True if this prompt was pre-flagged as Tier C split candidate in the D-prompt-tier-and-pattern-index"
+    },
+    "halt_reason": {
+      "type": ["string", "null"],
+      "description": "Required when decision == 'halt'. Examples: 'stale_citations', 'internal_contradiction', 'missing_review_first_file'"
+    },
+    "operator_notes": {
+      "type": "string",
+      "description": "Plain-English summary for the operator (≤500 chars). Cite file paths, section numbers, UT-numbers; don't editorialize."
+    }
+  }
+}

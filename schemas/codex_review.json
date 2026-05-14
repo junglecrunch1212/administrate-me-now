@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrate-me/schemas/codex_review.json",
+  "title": "Codex cross-model review",
+  "description": "Codex agent's cross-model second opinion at a checkpoint. Same structure as CSO; different focus (cross-prompt patterns, maintainability, test coverage).",
+  "type": "object",
+  "required": ["checkpoint", "audit_date", "total_findings_by_severity", "findings"],
+  "properties": {
+    "checkpoint": {"type": "string", "enum": ["10d", "14e", "15.5", "07.5"]},
+    "audit_date": {"type": "string", "format": "date"},
+    "model_used": {
+      "type": "string",
+      "description": "Which Claude model did Codex use? Should be different from the CSO model for cross-model diversity, e.g. 'claude-sonnet-4-6' when CSO used Opus."
+    },
+    "total_findings_by_severity": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low"],
+      "properties": {
+        "critical": {"type": "integer"},
+        "high": {"type": "integer"},
+        "medium": {"type": "integer"},
+        "low": {"type": "integer"}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "confidence", "category", "title", "description", "file_path", "constitutional_source", "recommended_fix"],
+        "properties": {
+          "id": {"type": "string"},
+          "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+          "confidence": {"type": "integer", "minimum": 0, "maximum": 10},
+          "category": {
+            "type": "string",
+            "enum": [
+              "cross_prompt_pattern_drift",
+              "code_duplication",
+              "coupling",
+              "test_coverage_gap",
+              "skill_pack_inconsistency",
+              "schema_version_mismatch",
+              "carry_forward_dropped",
+              "convention_violation",
+              "other"
+            ]
+          },
+          "title": {"type": "string"},
+          "description": {"type": "string"},
+          "file_path": {"type": "string"},
+          "line_range": {"type": ["string", "null"]},
+          "constitutional_source": {"type": "string"},
+          "recommended_fix": {"type": "string", "enum": ["sidecar", "amendment", "refactor-next", "accept_as_low"]},
+          "fix_summary": {"type": ["string", "null"]},
+          "consistent_with_prior_prompt": {
+            "type": ["string", "null"],
+            "description": "If category is cross_prompt_pattern_drift, name the prior prompt whose pattern this should match (e.g. '10c-i')"
+          }
+        }
+      }
+    },
+    "agreement_with_cso": {
+      "type": ["object", "null"],
+      "description": "If both CSO and Codex ran in the same checkpoint, summarize agreement / disagreement.",
+      "properties": {
+        "shared_findings_count": {"type": "integer"},
+        "cso_only_findings_count": {"type": "integer"},
+        "codex_only_findings_count": {"type": "integer"},
+        "disagreement_notes": {"type": "string"}
+      }
+    },
+    "operator_recommendation": {
+      "type": "string",
+      "enum": ["approve_continue", "approve_with_sidecars", "approve_with_amendment", "halt"]
+    }
+  }
+}
