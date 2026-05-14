@@ -36,18 +36,18 @@
   },
 
   "mounts": [
-    "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+    "source=claude-code-config-${devcontainerId},target=/home/codespace/.claude,type=volume"
   ],
 
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "CLAUDE_CONFIG_DIR": "/home/codespace/.claude",
     "ADMINME_BUILD_PHASE": "A",
     "ADMINME_OBSERVATION_MODE": "0",
     "ADMINME_DAILY_SPEND_CAP_USD_DEFAULT": "50"
   },
 
-  "remoteUser": "vscode",
-  "containerUser": "vscode",
+  "remoteUser": "codespace",
+  "containerUser": "codespace",
 
   "postCreateCommand": "bash .devcontainer/post-create.sh",
 
