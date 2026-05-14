@@ -1,0 +1,134 @@
+{
+  "prompt_id": "10c-iii-reminder-crm-custody",
+  "pr_number": 63,
+  "merged_date": "2026-05-14",
+  "merge_commit": "ebb29ff4c7b74ccfd345b1de4387e21f6e90d5c2",
+  "_reviewer_meta": {
+    "rubric": "docs/qc_rubric.md",
+    "schema": "schemas/reviewer_verdict.json",
+    "run_by": "Reviewer Routine (post-merge webhook, PR #63 closed event)",
+    "structural_note": "Branch 'partner/refactor-10c-iii' does not match PM-22's bare 'refactor-' excluded prefix (the 'partner/' namespace is not covered). QC ran on a prompt-only PR. This is a Partner refactor PR — single changed file is prompts/10c-iii-reminder-crm-custody.md (+406 lines). No Executor session has run. PM-22 exclude-list gap flagged as advisory. All four jobs are assessed accordingly."
+  },
+
+  "job_1_contract": {
+    "verdict": "undershoot",
+    "findings": [
+      {
+        "category": "deliverable",
+        "severity": "low",
+        "description": "ALL §7 Deliverables (Commits 1-4) unshipped: 3 event schemas (ReminderDispatchedV1, CrmSurfaceComposedV1, CustodyBriefComposedV1), 3 standing-order program files (replacing 10c-i stubs), 3 cron rows, 3 compose_* skill packs (7 files each), 3 pipeline packs (5 files each), 21 handler-direct unit tests, 6 integration round-trip tests, docs/build_log.md append. Fully expected and explicitly documented: PR body states 'Not yet executed. This PR adds the prompt file; the Executor session against it will be a separate PR.' Zero drift — this is the designed Partner-refactor-before-Executor-runs flow.",
+        "evidence": "PR diff: 1 file changed, +406 lines, 0 deletions. prompts/10c-iii-reminder-crm-custody.md is the sole change. PR body (head SHA ebb29ff4c7b74ccfd345b1de4387e21f6e90d5c2, merged 2026-05-14T23:43:38Z) explicitly calls out non-execution status.",
+        "constitutional_source": null
+      },
+      {
+        "category": "deliverable",
+        "severity": "low",
+        "description": "PM-22 EXCLUDE-LIST GAP (advisory): PM-22 lists 'refactor-' as the excluded prefix for Partner refactor PRs, but Partner's actual branch-naming convention prepends 'partner/' to all branch types ('partner/refactor-<slug>', 'partner/sidecar-<slug>', etc.). The full branch name 'partner/refactor-10c-iii' does not start with bare 'refactor-', so the exclude check passed and QC ran on a prompt-only PR. Action needed: add 'partner/refactor-' (and likely 'partner/sidecar-', 'partner/arch-amendment-') to PM-22's excluded-prefix list to cover the Partner namespace convention.",
+        "evidence": "Branch: partner/refactor-10c-iii. PM-22 exclude list checked: refactor-, sidecar-, arch-amendment-, update-partner-handoff, sequence-update-, setup-. None match the 'partner/' namespaced form.",
+        "constitutional_source": null
+      }
+    ]
+  },
+
+  "job_2_invariants": {
+    "verdict": "clean",
+    "verify_invariants_exit_code": null,
+    "findings": [
+      {
+        "severity": "low",
+        "constitutional_source": "[§6.13], [§7.3], [§7.4], [§7.7], [§8.9], [§12.4], [§15], [D6], [D7], [D14], [D17], [D22]",
+        "description": "Markdown-only diff; no code introduced; no invariant violations possible. Positive signal: the prompt's citation discipline is correct throughout. Key citations verified: (a) [§6.13]/[D22] — all three pipelines explicitly required to route through outbound.dispatcher.deliver with no bypass; observation-mode-default-on mandated for new pipelines; (b) [D17] — named 'especially load-bearing for this prompt: none of the three new handlers write to projection tables directly'; (c) [D6]/[§8.9] — no anthropic/openai SDK imports; all LLM calls via ctx.run_skill_fn through OpenClaw; (d) [§12.4] — universal preamble tenant-identity firewall enforced; (e) [§15]/[D15] — instance-path discipline covered by universal preamble + verify_invariants.sh; (f) [D7] — all three new event types at v1; (g) [D14] — async via asyncio.to_thread (inherited pattern). verify_invariants.sh exit 0 mandated in Commit 4 verification block.",
+        "file_path": "prompts/10c-iii-reminder-crm-custody.md",
+        "line_range": "1-406 (universal preamble lines ~20-130, Operating Context lines ~200-280, Commit 4 verification block lines ~380-406)",
+        "recommended_fix": "accept_as_soft_deviation"
+      }
+    ]
+  },
+
+  "job_3_next_prompt_calibration": {
+    "next_prompt_id": "10c-iii (Executor session — immediately next in sequence)",
+    "verdict": "carry_forward_needed",
+    "carry_forwards": [
+      {
+        "target_prompt": "10c-iii Executor",
+        "note": "HARD: Before writing Commit 1, the Executor must verify all 'Read first' dependencies exist on main. Critical items and their expected sources: (1) packs/pipelines/morning_digest/{pipeline.yaml,handler.py,config.example.yaml,config.schema.json,tests/test_pack_load.py} — from 10c-ii; (2) tests/unit/test_pipeline_morning_digest.py + tests/integration/test_pipeline_morning_digest_integration.py — from 10c-ii; (3) packs/skills/compose_morning_digest/{pack.yaml,SKILL.md,schemas/input.schema.json,schemas/output.schema.json,handler.py,prompt.jinja2,tests/test_skill.py} — from 10c-ii; (4) adminme/events/schemas/proactive.py containing DigestComposedV1 + ParalysisNudgeComposedV1 — from 10c-ii; (5) adminme/events/schemas/__init__.py with digest.composed + paralysis.nudge_composed registered — from 10c-ii; (6) adminme/pipelines/proactive.py (ProactivePipeline base class) — from 10c-i; (7) adminme/pipelines/runner.py (_register_proactive_pipelines) — from 10c-i; (8) adminme/outbound/dispatcher.py (deliver(member_id, channel, content, ctx)) — from 08b; (9) adminme/lib/skill_runner/openclaw_client.py (register_standing_order) — from 10c-i; (10) adminme/projections/commitments/queries.py::find_open_commitments_due_before — from 06 or 10c-ii; (11) adminme/projections/parties/queries.py::find_parties_with_stale_contact — from 05 or 10c-ii; (12) adminme/projections/members/queries.py::{find_members_with_coparent_relationship, get_member_profile_flags} — most uncertain; (13) adminme/projections/calendar/queries.py::find_events_for_child_next_day — most uncertain. Items 10-13 are highest-risk: they depend on specific query functions that may have been added in earlier prompts but may also have been deferred. If any are absent, stop and report before proceeding.",
+        "carry_severity": "HARD"
+      },
+      {
+        "target_prompt": "10c-iii Executor",
+        "note": "HARD: F-8 carry-forward from the 10c-ii build_log entry must be applied in all three new compose_* skill packs: prompt.jinja2 files for compose_reminder, compose_crm_surface, and compose_custody_brief must reference member_profile.tone for tone-matching. The prompt's 'Read first' item 23 explicitly directs the Executor to read the 10c-ii build_log entry for this carry-forward. Failure to apply F-8 is a regression against 10c-ii's standardized tone-field convention and against [VISION §ADHD-aware] (tone-matching reduces friction for neurodivergent household members).",
+        "carry_severity": "HARD"
+      },
+      {
+        "target_prompt": "10c-iii Executor",
+        "note": "SOFT: The prompt file lives at prompts/10c-iii-reminder-crm-custody.md (flat prompts/ directory), not at prompts/_active/<id>-*.md as the Reviewer rubric expects for fully-refactored prompts ready for Executor consumption. Either the _active/ convention has not been established yet, or the file should be moved before the Executor session runs. Operator should clarify convention before the Executor starts. This does not block execution — the prompt content is complete.",
+        "carry_severity": "SOFT"
+      },
+      {
+        "target_prompt": "10d (pipeline/skill consistency checkpoint)",
+        "note": "SOFT: Post-10c-iii Executor merge, 10d's consistency walk must cover all six proactive pipelines (morning_digest, paralysis_detection, reward_dispatch from 10c-i/10c-ii + reminder_dispatch, crm_surface, custody_brief from 10c-iii). Special attention: the event-log dedupe pattern in reminder_dispatch (recent reminder.dispatched events as idempotency guard, inline via ctx.event_log.read_recent) is a new pattern not present in other proactive pipelines. 10d should assess whether a shared helper (adminme/pipelines/_dedupe.py::is_duplicate_recent) is warranted; per the prompt's own carry-forward note, extraction is deferred until a third pipeline needs it.",
+        "carry_severity": "SOFT"
+      },
+      {
+        "target_prompt": "14b/14c (console primary/secondary views)",
+        "note": "SOFT: reminder.dispatched, crm_surface.composed, and custody_brief.composed events should each have a visible audit trail in the relevant console surface for suppressed-action review during the observation period. 14b/14c may want per-event-type filters or a dedicated 'proactive activity' section to make the observation log actionable.",
+        "carry_severity": "SOFT"
+      },
+      {
+        "target_prompt": "16 (bootstrap wizard)",
+        "note": "SOFT: Bootstrap §3 (per-member configuration) should collect: reminders_enabled (default true — opt-out), crm_proactive_enabled (default false — explicit opt-in required per Operating Context), custody_brief_enabled (default true when coparent_relationship_member_id is set, opt-out). Bootstrap §6 should mention that custody_brief only fires when coparent_relationship_member_id is set for the parent member.",
+        "carry_severity": "SOFT"
+      },
+      {
+        "target_prompt": "19 (Phase B smoke test)",
+        "note": "SOFT: With observation_mode flipped off, Phase B smoke test should verify one successful execution of each new pipeline: a reminder fires for a due commitment, a CRM surface lands on Sunday evening for the opted-in member, a custody brief lands at 20:00 for the parent member with a coparent relationship set.",
+        "carry_severity": "SOFT"
+      }
+    ]
+  },
+
+  "job_4_vision_check": {
+    "verdict": "aligned",
+    "findings": [
+      {
+        "vision_section": "One-liner / Chief of Staff / Proactive behavior [VISION §'One-liner']",
+        "assessment": "STRONGLY ALIGNED. All three pipelines are named explicitly or by clear description in WHAT-IS-ADMINISTRATEME.md. custody_brief appears verbatim in the 'Day in your AdministrateMe household' diagram: '8:00 PM — Custody brief composed for tomorrow'. crm_surface directly implements 'the system surfaces who you're drifting from before you notice' (landing page §3 CRM section). reminder_dispatch directly implements 'proactively does what matters' for commitment obligations. The six-pipeline proactive roster (morning_digest + paralysis_detection + reward_dispatch + reminder_dispatch + crm_surface + custody_brief) is the literal implementation of the 'household chief-of-staff that... proactively does what matters' one-liner.",
+        "drift_risk": "none"
+      },
+      {
+        "vision_section": "ADHD cognitive neuroprosthetic [VISION §'ADHD-aware']",
+        "assessment": "ALIGNED. reminder_dispatch directly reduces the executive-function load of tracking upcoming commitments — a canonical ADHD failure mode (the 'I knew it was due, I just didn't act' pattern). crm_surface reduces relationship-maintenance cognitive load ('the birthday you keep forgetting'). The per-row defensive-default on skill failure (one row's failure does not abort the full tick, only that row is skipped) is ADHD-safe: partial success over all-or-nothing aligns with the 'endowed progress' principle from the vision. crm_surface's default-false opt-in is also ADHD-appropriate: avoiding unsolicited CRM noise before the member has opted in reduces distraction.",
+        "drift_risk": "none"
+      },
+      {
+        "vision_section": "Observation-mode-default / privacy-first [VISION §'Observation mode is default']",
+        "assessment": "ALIGNED. [D22] cited throughout the Operating Context; all three pipelines explicitly required to route through outbound.dispatcher.deliver gated on InstanceConfig.observation_mode. The composed event (*.composed) still lands in the event log even when delivery is suppressed — the audit trail is intact for trust-building during the observation period. This is the exact vision promise: 'For 7 days, you review what the system would have sent. When you trust what it would have done, you flip observation off.' No outbound bypass is specified or implied anywhere in the prompt.",
+        "drift_risk": "none"
+      },
+      {
+        "vision_section": "Privacy-first / self-hosted [VISION §'It runs in your house']",
+        "assessment": "ALIGNED. No LLM SDK imports [D6]; all skill calls through OpenClaw's ctx.run_skill_fn [§8.9]; no hardcoded tenant identity [§12.4]; verify_invariants.sh exit 0 mandatory in Commit 4. The three new event types carry causation_id=tick_event.event_id (the proactive-pipeline causation pattern from 10c-i), making every LLM-produced composition traceable to a replayable standing-order tick — consistent with the event-sourced privacy promise ('every piece of LLM-derived state in the system is traceable to a replayable call').",
+        "drift_risk": "none"
+      },
+      {
+        "vision_section": "Multi-member / coparent [VISION §'Who it's for' — coparents]",
+        "assessment": "ALIGNED. custody_brief is explicitly scoped to members with coparent_relationship_member_id set — the cross-household coparenting scenario is a named target audience in the vision ('Coparents managing custody, school, medical, and child-related logistics across two households'). crm_surface is per-member (not household-global), preserving per-member privacy boundaries. reminder_dispatch supports per-member overrides including reminders_enabled opt-out.",
+        "drift_risk": "none"
+      },
+      {
+        "vision_section": "Carry-forward quality [VISION §Build spec]",
+        "assessment": "ALIGNED. The Commit 4 BUILD_LOG template's carry-forwards are vision-grounded: Phase B smoke test verifies real-world pipeline behavior (not just sandbox mocks — the vision is a live household system); console audit-trail carry-forward enables the observation-period review flow; bootstrap wizard carry-forward enables correct per-member personalization (the vision's 'set up member profiles' wizard section). None are purely defensive-coding carry-forwards. The 'soft-watch for future' items in the BUILD_LOG template (dedupe helper extraction at 3+ pipelines, per-member-overrides config extraction at 6+ pipelines) correctly defer premature abstraction until the pattern recurs — aligned with the build's 'three similar lines is better than a premature abstraction' discipline.",
+        "drift_risk": "none"
+      }
+    ]
+  },
+
+  "halt_class": "advisory",
+  "overall_verdict": "PASS_WITH_NOTES",
+
+  "_operator_actions": {
+    "pm22_update": "Add 'partner/refactor-' to PM-22 excluded-prefix list. Also consider adding 'partner/sidecar-' and 'partner/arch-amendment-' for the other Partner-namespaced branch types. This prevents QC from running on future Partner refactor PRs.",
+    "executor_precheck": "Before running the 10c-iii Executor session, verify query functions in items 10-13 of the carry_forward (find_open_commitments_due_before, find_parties_with_stale_contact, find_members_with_coparent_relationship, get_member_profile_flags, find_events_for_child_next_day) exist in projection query files. Quickcheck: grep -rn 'find_open_commitments_due_before\\|find_parties_with_stale_contact\\|find_members_with_coparent_relationship\\|get_member_profile_flags\\|find_events_for_child_next_day' adminme/projections/*/queries.py",
+    "build_log_update": "No build_log.md update needed until the 10c-iii Executor session merges. The entry goes into that PR's Commit 4 changeset."
+  }
+}
