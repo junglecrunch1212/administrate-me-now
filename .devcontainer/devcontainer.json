@@ -1,0 +1,80 @@
+{
+  "name": "AdministrateMe — Claude Code Executor",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11",
+      "installTools": true
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {}
+  },
+
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  "secrets": {
+    "CLAUDE_CODE_OAUTH_TOKEN": {
+      "description": "Claude Code OAuth token. Generated locally with 'claude setup-token' on the operator's laptop, then added as a Codespaces user secret at github.com/settings/codespaces. Required for non-interactive Claude Code auth that bills against Max subscription instead of API.",
+      "documentationUrl": "https://code.claude.com/docs/en/devcontainer#authentication"
+    },
+    "GITHUB_TOKEN": {
+      "description": "GitHub Personal Access Token. Codespaces injects this automatically with the scopes needed for the current Codespace's repo. Used by gh CLI for PR operations."
+    },
+    "ADMINME_DAILY_SPEND_CAP_USD": {
+      "description": "Optional. Hard cap on estimated daily spend. Defaults to $50. The pre-bash-spend-check.sh hook respects this. Not strictly necessary for subscription-billed work but useful as a circuit-breaker."
+    }
+  },
+
+  "mounts": [
+    "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+  ],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "ADMINME_BUILD_PHASE": "A",
+    "ADMINME_OBSERVATION_MODE": "0",
+    "ADMINME_DAILY_SPEND_CAP_USD_DEFAULT": "50"
+  },
+
+  "remoteUser": "vscode",
+  "containerUser": "vscode",
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "github.vscode-pull-request-github",
+        "ms-python.python",
+        "ms-python.black-formatter"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": false,
+        "files.trimTrailingWhitespace": true
+      }
+    },
+    "codespaces": {
+      "openFiles": [
+        "README.md",
+        "docs/build_log.md",
+        "docs/partner_handoff.md"
+      ]
+    }
+  },
+
+  "forwardPorts": [],
+
+  "shutdownAction": "stopContainer"
+}
