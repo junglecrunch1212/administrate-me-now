@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrate-me/schemas/reviewer_verdict.json",
+  "title": "Reviewer verdict",
+  "description": "Post-merge Reviewer Routine's output of the three-job QC pass per docs/qc_rubric.md.",
+  "type": "object",
+  "required": ["prompt_id", "pr_number", "merged_date", "merge_commit", "job_1_contract", "job_2_invariants", "job_3_next_prompt_calibration", "job_4_vision_check", "halt_class", "overall_verdict"],
+  "properties": {
+    "prompt_id": {"type": "string"},
+    "pr_number": {"type": "integer"},
+    "merged_date": {"type": "string", "format": "date"},
+    "merge_commit": {"type": "string", "description": "Full or short SHA"},
+
+    "job_1_contract": {
+      "type": "object",
+      "required": ["verdict", "findings"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["match", "match_with_overshoot", "undershoot", "silent_scope_change", "scope_extension_oos"]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["category", "severity", "description", "evidence"],
+            "properties": {
+              "category": {"type": "string", "enum": ["deliverable", "test", "out_of_scope"]},
+              "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+              "description": {"type": "string"},
+              "evidence": {"type": "string", "description": "Concrete cite: file path + lines or diff section"},
+              "constitutional_source": {"type": ["string", "null"], "description": "e.g. '[§7.4, D6]' if applicable"}
+            }
+          }
+        }
+      }
+    },
+
+    "job_2_invariants": {
+      "type": "object",
+      "required": ["verdict", "findings"],
+      "properties": {
+        "verdict": {"type": "string", "enum": ["clean", "violation", "soft_deviation"]},
+        "verify_invariants_exit_code": {"type": ["integer", "null"]},
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["severity", "constitutional_source", "description", "file_path", "line_range", "recommended_fix"],
+            "properties": {
+              "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+              "constitutional_source": {"type": "string"},
+              "description": {"type": "string"},
+              "file_path": {"type": "string"},
+              "line_range": {"type": "string"},
+              "recommended_fix": {"type": "string", "description": "sidecar | amendment | refactor-next | accept_as_soft_deviation"}
+            }
+          }
+        }
+      }
+    },
+
+    "job_3_next_prompt_calibration": {
+      "type": "object",
+      "required": ["next_prompt_id", "verdict", "carry_forwards"],
+      "properties": {
+        "next_prompt_id": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["clean", "carry_forward_needed", "amend_needed"]},
+        "carry_forwards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target_prompt", "note", "carry_severity"],
+            "properties": {
+              "target_prompt": {"type": "string"},
+              "note": {"type": "string"},
+              "carry_severity": {"type": "string", "enum": ["HARD", "SOFT"]}
+            }
+          }
+        }
+      }
+    },
+
+    "job_4_vision_check": {
+      "type": "object",
+      "required": ["verdict", "findings"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["aligned", "neutral", "drift_sideways", "drift_backward"],
+          "description": "aligned = merge moves toward VISION
