@@ -1,0 +1,118 @@
+name: Executor c4 only (recovery)
+
+# Standalone c4 invocation for recovery scenarios where c1/c2/c3 already
+# ran but c4 didn't complete (e.g., pre-flight check bug, aborted mid-run,
+# manual partial run). Branches claude/<prompt>-c1 through -c3 must exist
+# on origin with the proper stacked commits before running this.
+#
+# DO NOT run this workflow if c1/c2/c3 have already been merged to main.
+# After merge, the stack-integrity check (origin/main..HEAD = 0) will fail.
+#
+# Setup: docs/SETUP-AUTONOMOUS-LOOP.md must be complete first.
+#
+# Cost: ~$50 (single c-band, opus tokens, capped at --max-budget-usd 50).
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt_id:
+        description: 'Prompt ID (e.g., 10c-iii) — claude/<prompt>-c3 must exist on origin with stacked c1+c2+c3 commits'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: executor-c4-only
+  cancel-in-progress: false
+
+env:
+  ADMINME_MODEL_EXECUTOR: opus
+
+jobs:
+  c4:
+    name: c4 (integration + BUILD_LOG + PR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout c3 branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/${{ inputs.prompt_id }}-c3
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c4)'
+
+      - name: Create c4 branch
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c4"
+
+      - name: Pre-flight stack integrity check
+        run: |
+          EXPECTED_PRIORS=3
+          ACTUAL_PRIORS=$(git log --oneline origin/main..HEAD | wc -l)
+          if [ "$ACTUAL_PRIORS" -lt "$EXPECTED_PRIORS" ]; then
+            echo "::error::c4 branch has $ACTUAL_PRIORS prior commits; expected $EXPECTED_PRIORS (c1+c2+c3)."
+            echo "::error::Likely c1/c2/c3 already merged to main, or branched off wrong base."
+            echo "::error::DO NOT run this workflow after c1/c2/c3 merge."
+            exit 1
+          fi
+          echo "Stack integrity OK: $ACTUAL_PRIORS commits visible above origin/main."
+
+      - name: Run c4 (commit + push only — no PR open)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c4.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 4 only. Branch strategy: stacked per BRANCH-STRATEGY.md. After commit, push to origin via the explicit-URL token pattern in the agent. DO NOT open the PR — the workflow will open it. Stop after push completes."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --max-budget-usd 50 \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c4.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c4.log; then
+            echo "::error::c4 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c4.log; then
+            echo "::error::c4 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+
+      - name: Open c4 PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          git fetch origin "claude/${PROMPT_ID}-c4"
+          SUBJECT=$(git log -1 --format=%s)
+          BODY=$(git log -1 --format=%b)
+          if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          gh pr create \
+            --base "claude/${PROMPT_ID}-c3" \
+            --head "claude/${PROMPT_ID}-c4" \
+            --title "$SUBJECT" \
+            --body "$BODY" || \
+          echo "::warning::gh pr create returned non-zero. PR may already exist; check repo."
