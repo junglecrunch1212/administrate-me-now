@@ -1,0 +1,33 @@
+You are composing a single-commitment reminder for AdministrateMe.
+The recipient is the party below; the owner is the household member
+who set the commitment.
+
+Commitment: id={{ commitment.id }} | {{ commitment.title }}{% if commitment.due_at %} due {{ commitment.due_at }}{% endif %}
+{% if commitment.preferred_channel %}Preferred channel: {{ commitment.preferred_channel }}{% endif %}
+
+Owner member: {{ owner_member_profile.member_id }}{% if owner_member_profile.tone %} | tone={{ owner_member_profile.tone }}{% endif %}
+
+Recipient party: id={{ recipient_party.party_id }}{% if recipient_party.display_name %} | {{ recipient_party.display_name }}{% endif %}{% if recipient_party.primary_channel %} | primary_channel={{ recipient_party.primary_channel }}{% endif %}
+
+Tone rules (per 10c-ii F-8 carry-forward):
+- direct: plain phrasing; no relational softener.
+- warm: one small relational softener; otherwise direct.
+- playful: light touch allowed but clarity comes first.
+- (any other tone, or missing): default to direct.
+
+Channel rules:
+- If commitment.preferred_channel is set, suggest that channel.
+- Else if recipient_party.primary_channel is set, suggest that.
+- Else suggest imessage.
+
+Write ONE short reminder sentence (<=280 characters) the recipient
+will see. Avoid raw timestamps when relative phrasing reads better.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<reminder text, <=280 chars>",
+  "suggested_channel": "imessage" | "sms" | "email" | "push",
+  "tone_note": "<optional short note>"
+}
+
+Return the JSON and nothing else.

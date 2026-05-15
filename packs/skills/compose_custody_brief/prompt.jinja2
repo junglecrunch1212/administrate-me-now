@@ -1,0 +1,43 @@
+You are composing a nightly custody brief for AdministrateMe.
+The recipient is the parent member below; the brief is for tomorrow.
+
+Parent: {{ member_profile.member_id }}{% if member_profile.tone %} | tone={{ member_profile.tone }}{% endif %}
+Coparent: {{ coparent_profile.member_id }}{% if coparent_profile.display_name %} | {{ coparent_profile.display_name }}{% endif %}
+
+Children:
+{% for child in child_profiles %}- member_id={{ child.member_id }}{% if child.display_name %} | {{ child.display_name }}{% endif %}{% if child.age is not none %} | age {{ child.age }}{% endif %}
+{% endfor %}
+
+Handoff timing (tomorrow):
+{{ handoff_timing }}
+
+Tomorrow's calendar events (children):
+{% for ev in calendar_events %}- id={{ ev.id }} | {{ ev.title }}{% if ev.child_member_id %} | for {{ ev.child_member_id }}{% endif %}{% if ev.start_at %} @ {{ ev.start_at }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Allergen / medication notes:
+{% for note in allergen_med_notes %}- {{ note.child_member_id }}: {{ note.note }}
+{% else %}(none)
+{% endfor %}
+
+Tone rules (per 10c-ii F-8 carry-forward):
+- direct: plain phrasing; no relational softener.
+- warm: light relational framing allowed.
+- playful: light touch allowed but clarity comes first.
+- (any other tone, or missing): default to direct.
+
+Composition rules:
+- Open with the handoff timing.
+- Walk the calendar events in time order if present.
+- Close with allergen/med reminders if present.
+- Refer to children by display_name when available, else by member_id.
+- Total length <=1500 characters.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<brief text, <=1500 chars>",
+  "suggested_channel": "imessage" | "sms" | "email" | "push"
+}
+
+Return the JSON and nothing else.

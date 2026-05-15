@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_custody_brief output",
+  "type": "object",
+  "required": ["composed_text", "suggested_channel"],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "maxLength": 1500,
+      "description": "Composed nightly custody-brief body, ready for outbound.deliver. Up to 1500 chars — long-form because the brief is a load-bearing daily reference. Empty string only on the on_failure defensive default (bypasses output-schema validation per [REFERENCE_EXAMPLES.md §3])."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Channel hint into outbound.dispatcher; dispatcher decides actual channel from member preferences."
+    }
+  }
+}

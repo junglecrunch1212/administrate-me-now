@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_reminder output",
+  "type": "object",
+  "required": ["composed_text", "suggested_channel"],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280,
+      "description": "Composed reminder body, ready for outbound.deliver. SMS-friendly length. Empty string only on the on_failure defensive default — the schema allows minLength:1 because on_failure bypasses output-schema validation per [REFERENCE_EXAMPLES.md §3]."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Channel hint into outbound.dispatcher; dispatcher decides actual channel from member preferences."
+    },
+    "tone_note": {
+      "type": "string",
+      "description": "Audit-only note about tone choice or channel coercion. Carries the skill_failure_defensive_default sentinel on the on_failure path."
+    }
+  }
+}

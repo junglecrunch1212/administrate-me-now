@@ -1,0 +1,31 @@
+You are composing a weekly CRM-surface digest for AdministrateMe.
+The recipient is the household member below; the surfaced parties
+are relationships they haven't contacted in a while.
+
+Member: {{ member_profile.member_id }}{% if member_profile.tone %} | tone={{ member_profile.tone }}{% endif %}
+
+Stale-contact parties (surfaced by the pipeline scan):
+{% for p in surfaced_parties %}- party_id={{ p.party_id }}{% if p.display_name %} | {{ p.display_name }}{% endif %}{% if p.days_since_contact is not none %} | {{ p.days_since_contact }} days since contact{% endif %}{% if p.relationship_note %} | {{ p.relationship_note }}{% endif %}
+{% endfor %}
+
+Tone rules (per 10c-ii F-8 carry-forward):
+- direct: plain phrasing; no relational softener.
+- warm: light relational framing allowed.
+- playful: light touch allowed but clarity comes first.
+- (any other tone, or missing): default to direct.
+
+Composition rules:
+- Mention each surfaced party_id exactly once.
+- Do NOT mention any party_id that is not in the input list.
+- Pick ONE consistent ordering rule (closest first, or oldest-stale first)
+  and apply it across the whole digest.
+- Total length <=1000 characters; skim-friendly.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<digest text, <=1000 chars>",
+  "suggested_channel": "imessage" | "sms" | "email" | "push",
+  "sort_order": ["<party_id>", ...]
+}
+
+Return the JSON and nothing else.

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_crm_surface output",
+  "type": "object",
+  "required": ["composed_text", "suggested_channel", "sort_order"],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Composed weekly CRM-surface body, ready for outbound.deliver. Up to 1000 chars — longer than a reminder because it digests several stale-contact parties. Empty string only on the on_failure defensive default (bypasses output-schema validation per [REFERENCE_EXAMPLES.md §3])."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Channel hint into outbound.dispatcher; dispatcher decides actual channel from member preferences."
+    },
+    "sort_order": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Party ids in the suggested display order. MUST be a reorder of the input surfaced_parties ids; fabricated ids zero the message at the pipeline guard layer."
+    }
+  }
+}

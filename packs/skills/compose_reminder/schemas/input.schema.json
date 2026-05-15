@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_reminder input",
+  "type": "object",
+  "required": ["commitment", "owner_member_profile", "recipient_party"],
+  "additionalProperties": false,
+  "properties": {
+    "commitment": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "due_at": { "type": ["string", "null"] },
+        "preferred_channel": {
+          "type": ["string", "null"],
+          "enum": ["imessage", "sms", "email", "push", null]
+        }
+      },
+      "additionalProperties": true,
+      "description": "The single commitment to remind on. id round-trips into the emitted reminder.dispatched event."
+    },
+    "owner_member_profile": {
+      "type": "object",
+      "required": ["member_id"],
+      "properties": {
+        "member_id": { "type": "string", "minLength": 1 },
+        "tone": {
+          "type": ["string", "null"],
+          "description": "Per F-8 carry-forward from 10c-ii: shapes voice of the composed reminder."
+        }
+      },
+      "additionalProperties": true
+    },
+    "recipient_party": {
+      "type": "object",
+      "required": ["party_id"],
+      "properties": {
+        "party_id": { "type": "string", "minLength": 1 },
+        "display_name": { "type": ["string", "null"] },
+        "primary_channel": {
+          "type": ["string", "null"],
+          "enum": ["imessage", "sms", "email", "push", null]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
