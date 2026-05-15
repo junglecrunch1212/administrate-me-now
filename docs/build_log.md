@@ -424,3 +424,20 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
 - **Verification**: lint-only file; ruff clean (markdown is not lint-target).
 - **Closes**: Project-knowledge / repo state-drift gap between Partner sessions. No code-side closure.
 - **Outcome**: MERGED.
+
+### sidecar-github-mcp-install (proposed, not yet pushed — staged 2026-05-15) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Partner-tooling install + process-doc refactor. No production code touched. No BUILD_LOG entry by design — Partner-tooling installs are planning-artifact work per PM-22. Recorded here so future Partner sessions see the change in the PR landscape.
+- **Surfaced by**: `session-handoff-10c-iii-partner-cycle-attempt.md` §83 — "the smallest compaction-positive change is installing a GitHub MCP in the Partner Cowork Project." Closes that gap.
+- **Diff scope (staged locally)**: 6 files.
+  - `tools/github-mcp-server/github-mcp-server.exe` + `tools/github-mcp-server/LICENSE` + `tools/github-mcp-server/README.md` — extracted from `github-mcp-server_Windows_x86_64.zip` v1.0.4 (SHA-256 verified against published checksums). Workspace-folder-local; not for the on-repo tree.
+  - `PROJECT-INSTRUCTIONS.md` — replaced 7 ambiguous "via the GitHub connector" references with concrete `mcp__github__*` tool surfaces; added install-state paragraph near top.
+  - `partner_handoff.md` — PM-24 Partner-side path superseded sub-note; full-file-replacement rule (line ~611) amended to add direct-commit as default path.
+  - `qc_rubric.md` — "James can paste these" replaced with concrete `mcp__github__get_pull_request` / `mcp__github__list_commits` instructions plus pre-2026-05-15 fallback preservation.
+  - `RUNBOOK-EXECUTOR.md` — §0 scope-note added (Executor side only; Partner has parallel MCP path).
+  - `build_log.md` — this entry.
+  - `session-handoff-github-mcp-install.md` — new handoff doc capturing the inventory, decision, install state, and operator follow-ups.
+- **Verification (pending operator)**: smoke-test via `mcp__github__get_file_contents` on `docs/build_log.md` after PAT paste + Claude Desktop restart. See `session-handoff-github-mcp-install.md` §5 and §6.
+- **Constitutional touch**: none. All references to GitHub in the 9 constitutional docs + WHAT-IS-ADMINISTRATEME.md are to GitHub the service (registry repo URL, GitHub-first doc mirroring, sandbox egress allowlist). The connector/MCP path is process-doc territory only.
+- **Closes**: Partner-side leg of PM-24 ("Partner produces canonical text in chat; James pastes via GitHub web UI"). Executor-side PM-24 (Claude Code timeouts on long static markdown in the JRS Codespace) UNCHANGED.
+- **Future migration target**: when [anthropics/claude-code#52549](https://github.com/anthropics/claude-code/issues/52549) ships a fix, migrate to Anthropic's native Cowork GitHub connector (Settings → Connectors → +). Tool names should stay the same; only the auth path differs.
+- **Outcome**: STAGED — operator owns the PAT paste, Claude Desktop restart, smoke-test, and push of the `sidecar-github-mcp-install` branch.
