@@ -250,6 +250,75 @@ class ParalysisTriggeredV1(BaseModel):
     triggered_at: str = Field(min_length=10)
 
 
+class ReminderDispatchedV1(BaseModel):
+    """Reminder-dispatch contract emitted by ``reminder_dispatch``
+    proactive pipeline per due commitment within the lookahead window.
+
+    Per [§1] 10c-iii grounding the sentinel-path discipline mirrors
+    ``DigestComposedV1``: skill defensive-default leaves
+    ``composed_text=""``, ``validation_failed=True``,
+    ``delivered=False`` (no ``outbound()`` call). ``composed_text``
+    clamped to SMS-friendly length per [BUILD.md §L4 reminder_dispatch].
+    Registered at v1 per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    owner_member_id: str = Field(min_length=1)
+    recipient_party_id: str = Field(min_length=1)
+    composed_text: str = Field(max_length=280)
+    channel: Literal["imessage", "sms", "email", "push"]
+    due_at: datetime
+    delivered: bool
+    validation_failed: bool
+    scheduled_send_at: datetime | None = None
+
+
+class CrmSurfacedV1(BaseModel):
+    """CRM-surface contract emitted by ``crm_surface`` proactive
+    pipeline per opt-in member with stale-contact / upcoming-birthday /
+    hosting-imbalance signals in the weekly scan.
+
+    Per [§1] 10c-iii grounding ``gap_kind`` discriminates the three
+    sub-use-cases stub prose described; ``surfaced_party_ids`` is the
+    clamped list (at most ``max_surfaced_per_week``, default 5) of
+    parties carrying the signal. Sentinel path mirrors
+    ``DigestComposedV1``: skill failure leaves ``composed_text=""``,
+    ``validation_failed=True``, ``delivered=False``. Registered at v1
+    per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1)
+    surfaced_party_ids: list[str] = Field(min_length=1)
+    gap_kind: Literal["stale_contact", "upcoming_birthday", "hosting_imbalance"]
+    composed_text: str = Field(max_length=1000)
+    channel: Literal["imessage", "sms", "email", "push"]
+    week_of_date: str = Field(min_length=1)
+    delivered: bool
+    validation_failed: bool
+
+
+class CustodyBriefComposedV1(BaseModel):
+    """Custody-brief contract emitted by ``custody_brief`` proactive
+    pipeline once per day per parent member with a coparent
+    relationship set.
+
+    Per [§1] 10c-iii grounding long-form daily brief carries handoff
+    timing, allergen / med notes, next-day calendar. Sentinel path
+    mirrors ``DigestComposedV1``: skill failure leaves
+    ``composed_text=""``, ``validation_failed=True``,
+    ``delivered=False``. Registered at v1 per [D7]."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1)
+    coparent_member_id: str = Field(min_length=1)
+    child_member_ids: list[str] = Field(min_length=1)
+    composed_text: str = Field(max_length=1500)
+    channel: Literal["imessage", "sms", "email", "push"]
+    brief_date: str = Field(min_length=1)
+    delivered: bool
+    validation_failed: bool
+
+
 class SkillCallRecordedV2(BaseModel):
     """First version actually emitted. v1 is reserved — see module docstring.
 
@@ -290,4 +359,7 @@ registry.register("recurrence.updated", 1, RecurrenceUpdatedV1)
 registry.register("reward.ready", 1, RewardReadyV1)
 registry.register("digest.composed", 1, DigestComposedV1)
 registry.register("paralysis.triggered", 1, ParalysisTriggeredV1)
+registry.register("reminder.dispatched", 1, ReminderDispatchedV1)
+registry.register("crm.surfaced", 1, CrmSurfacedV1)
+registry.register("custody_brief.composed", 1, CustodyBriefComposedV1)
 registry.register("skill.call.recorded", 2, SkillCallRecordedV2)

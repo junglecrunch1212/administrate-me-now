@@ -3,35 +3,86 @@
 Per [D1] Corollary — workspace-prose program file, version-controlled.
 Bootstrap §8 (prompt 16) concatenates this file into `~/Chief/AGENTS.md`.
 
-**STUB**: This program file ships as a metadata stub in prompt 10c-i.
-Full execution steps are filled in by prompt 10c-iii alongside the
-`custody_brief` pipeline pack.
-
 ## Scope
 
-Daily 20:00 local if the household has a coparent Relationship (per
-[BUILD.md §1233-1236]). Composes a brief summary of the day's
-child-related events relevant to custody coordination. Owner-scoped to
-the custodial parent. Skill: `compose_custody_brief@v1`. Output
-surfaces in the parent's inbox.
+Daily per-parent-member custody brief (default 20:00 local per
+[BUILD.md §L4 custody_brief]) for members with a coparent
+`Relationship` set. The injected loader returns one row per opt-in
+parent member; row payload carries `coparent_member_id`,
+`child_member_ids`, next-day calendar events, handoff timing,
+allergen / med notes. One skill call per parent composes the
+long-form brief; emits `custody_brief.composed` v1. Per [§1] 10c-iii
+grounding the cohort discipline is a literal clone of
+`morning_digest`'s shape with substitutions; no inheritance. v1
+default loader is no-op pending UT-14 resolution.
 
 ## Triggers
 
-Scheduled daily (cron). Default schedule string `0 20 * * *`.
+Scheduled daily (cron). Default schedule string `0 20 * * *` per
+`bootstrap/openclaw/cron.yaml`. The proactive pack's `pipeline.yaml`
+carries `triggers: {schedule: "0 20 * * *", proactive: true}` and NO
+`triggers.events`; OpenClaw cron drives invocation.
 
 ## Approval gate
 
-TODO(prompt-10c-iii).
+None. The daily custody brief is a recurring routine, not a per-event
+ask. Outbound delivery routes through `outbound()` per [§6.14], which
+consults observation mode and records `observation.suppressed`
+(active) or `external.sent` (inactive) before any external send. The
+principal reviews suppressed-action logs before flipping observation
+off per [§7] operating rule 7 and [D22]. The per-member opt-out is
+`custody_brief_enabled=false` — opt-in is the default for members
+with a coparent relationship.
 
 ## Escalation
 
-TODO(prompt-10c-iii).
+A composition miss — skill failure on the 7-tuple
+(`_SKILL_FAILURE_EXCEPTIONS` per [§7.7]), missing coparent
+relationship, missing child-member roster — is absorbed by the
+defensive default: emit `custody_brief.composed` with
+`composed_text=""`, `validation_failed=true`, `delivered=false`. NO
+`outbound()` is attempted on the sentinel path. Per-row failure does
+NOT abort the tick; the next parent member is processed
+independently. The pipeline never raises into the bus.
 
 ## Execution steps
 
-TODO(prompt-10c-iii): full execution steps shipped with custody_brief
-pipeline pack.
+Proactive pack at `packs/pipelines/custody_brief/` per [BUILD.md §L4
+custody_brief]. Per-tick handler logic:
+
+1. Load eligible parent members + custody rows via injected loader
+   (PM-27 constructor injection; default no-op returns `[]` per UT-14
+   carry-forward). Each row carries `member_id`, `coparent_member_id`,
+   `child_member_ids`, next-day calendar events, handoff timing,
+   allergen / med notes.
+2. Honor per-member overrides: `custody_brief_enabled` (default
+   true for members with a coparent relationship), `lookahead_days`
+   (override default).
+3. For each eligible parent member call `compose_custody_brief@v1`
+   with the row payload; empty next-day calendar still composes
+   (handoff + allergen notes carry). On skill failure (defensive
+   default) carry the sentinel
+   `composed_text=""` / `validation_failed=true` into step 5.
+4. On valid composition call `outbound()` exactly once via the single
+   import site in `deliver()` per [§6.14]. Capture `delivered: bool`
+   from `OutboundResult.suppressed`.
+5. Emit `custody_brief.composed` v1 with `member_id`,
+   `coparent_member_id`, `child_member_ids`, `composed_text`,
+   `channel`, `brief_date`, `delivered`, `validation_failed`.
+   `causation_id=ctx.triggering_event_id` per the 10c-i causation
+   pattern.
 
 ## What NOT to do
 
-TODO(prompt-10c-iii).
+- **Do NOT call `outbound()` on the sentinel path.** Sentinel emits
+  the event with `delivered=false`.
+- **Do NOT modify any projection.** Per [§7.3] / [D17], proactive
+  pipelines emit events; projections consume them. Coparent /
+  child-roster lookups are read-only via the loader.
+- **Do NOT import an LLM SDK.** Per [§8] / [D6], all skill calls go
+  through `ctx.run_skill_fn` which wraps OpenClaw's gateway.
+- **Do NOT raise into the bus on per-row skill failure.** The
+  `_SKILL_FAILURE_EXCEPTIONS` 7-tuple is absorbed in `compose()` and
+  the next parent proceeds.
+- **Do NOT auto-confirm or state-change the source rows.** Custody
+  briefs are read-side notifications per [§6] 10c-iii out-of-scope.
