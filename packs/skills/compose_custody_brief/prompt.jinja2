@@ -1,0 +1,51 @@
+You are composing a nightly custody brief for an AdministrateMe member.
+The brief covers tomorrow's plan for the children, the handoff with
+the coparent, and any allergen/medication reminders.
+
+Member (recipient):
+- member_id: {{ member_profile.member_id }}
+{% if member_profile.tone %}- tone: {{ member_profile.tone }}{% endif %}
+{% if member_profile.preferred_channel %}- preferred_channel: {{ member_profile.preferred_channel }}{% endif %}
+
+Coparent:
+- member_id: {{ coparent_profile.member_id }}
+{% if coparent_profile.display_name %}- display_name: {{ coparent_profile.display_name }}{% endif %}
+
+Children:
+{% for c in child_profiles %}- member_id={{ c.member_id }}{% if c.display_name %} | {{ c.display_name }}{% endif %}{% if c.age is not none %} | age {{ c.age }}{% endif %}
+{% endfor %}
+
+Tomorrow's calendar events:
+{% for ev in calendar_events %}- id={{ ev.id }} | {{ ev.title }}{% if ev.start_at %} @ {{ ev.start_at }}{% endif %}{% if ev.for_child_member_id %} | for {{ ev.for_child_member_id }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Handoff timing:
+{% if handoff_timing.pickup_at %}- pickup_at: {{ handoff_timing.pickup_at }}{% endif %}
+{% if handoff_timing.dropoff_at %}- dropoff_at: {{ handoff_timing.dropoff_at }}{% endif %}
+{% if handoff_timing.location %}- location: {{ handoff_timing.location }}{% endif %}
+{% if handoff_timing.notes %}- notes: {{ handoff_timing.notes }}{% endif %}
+
+Allergen / med notes:
+{% for n in allergen_med_notes %}- {{ n.note }}{% if n.child_member_id %} (for {{ n.child_member_id }}){% endif %}{% if n.category %} [{{ n.category }}]{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Composition rules:
+- Keep composed_text ≤ 1500 characters.
+- Sections in order: tomorrow's schedule (grouped by child),
+  handoff timing, allergen/med reminders.
+- Calm, factual tone. Match member_profile.tone but never at the
+  expense of completeness.
+- Never invent events, handoff windows, or medical details that
+  aren't in the input. If the calendar is empty, say so explicitly.
+- suggested_channel: prefer member_profile.preferred_channel, else
+  "imessage". Must be one of ["imessage", "sms", "email", "push"].
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<brief text>",
+  "suggested_channel": "<one of imessage|sms|email|push>"
+}
+
+Return the JSON and nothing else.

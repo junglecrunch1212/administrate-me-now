@@ -1,0 +1,37 @@
+You are composing a short reminder for an AdministrateMe commitment.
+The reminder will be sent to the recipient party below.
+
+Commitment:
+- id: {{ commitment.id }}
+- title: {{ commitment.title }}
+{% if commitment.due_at %}- due_at: {{ commitment.due_at }}{% endif %}
+{% if commitment.preferred_channel %}- preferred_channel: {{ commitment.preferred_channel }}{% endif %}
+{% if commitment.notes %}- notes: {{ commitment.notes }}{% endif %}
+
+Owner member:
+- member_id: {{ owner_member_profile.member_id }}
+{% if owner_member_profile.tone %}- tone: {{ owner_member_profile.tone }}{% endif %}
+{% if owner_member_profile.preferred_channel %}- preferred_channel: {{ owner_member_profile.preferred_channel }}{% endif %}
+
+Recipient party:
+- party_id: {{ recipient_party.party_id }}
+{% if recipient_party.display_name %}- display_name: {{ recipient_party.display_name }}{% endif %}
+{% if recipient_party.default_channel %}- default_channel: {{ recipient_party.default_channel }}{% endif %}
+
+Composition rules:
+- SMS-friendly: keep composed_text ≤ 280 characters.
+- Warm but not saccharine. Match owner_member_profile.tone (e.g.,
+  "direct" → drop softeners; "gentle" → add one).
+- Reference the commitment by its title; do NOT invent new details.
+- suggested_channel: prefer commitment.preferred_channel, else
+  recipient_party.default_channel, else "imessage". Must be one of
+  ["imessage", "sms", "email", "push"].
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<reminder text>",
+  "suggested_channel": "<one of imessage|sms|email|push>",
+  "tone_note": "<optional one-line note>"
+}
+
+Return the JSON and nothing else.

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_reminder output",
+  "type": "object",
+  "required": [
+    "composed_text",
+    "suggested_channel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 280,
+      "description": "SMS-friendly reminder body. Empty string on the on_failure defensive default."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Suggested outbound channel; the dispatcher makes the final call based on the member's channel preferences."
+    },
+    "tone_note": {
+      "type": "string",
+      "description": "Optional one-line note about tone choices; populated with skill_failure_defensive_default on the on_failure path."
+    }
+  }
+}

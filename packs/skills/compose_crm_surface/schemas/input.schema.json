@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_crm_surface input",
+  "type": "object",
+  "required": [
+    "member_profile",
+    "surfaced_parties"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "member_profile": {
+      "type": "object",
+      "required": ["member_id"],
+      "properties": {
+        "member_id": { "type": "string", "minLength": 1 },
+        "tone": { "type": ["string", "null"] },
+        "preferred_channel": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "surfaced_parties": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["party_id", "display_name"],
+        "properties": {
+          "party_id": { "type": "string", "minLength": 1 },
+          "display_name": { "type": "string" },
+          "last_contact_at": { "type": ["string", "null"] },
+          "days_since_contact": { "type": ["integer", "null"] },
+          "desired_frequency_days": { "type": ["integer", "null"] },
+          "notes": { "type": ["string", "null"] },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

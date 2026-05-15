@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_custody_brief output",
+  "type": "object",
+  "required": [
+    "composed_text",
+    "suggested_channel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 1500,
+      "description": "Custody brief body. Empty string on the on_failure defensive default."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Suggested outbound channel; the dispatcher makes the final call based on the member's channel preferences."
+    }
+  }
+}
