@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_reminder input",
+  "type": "object",
+  "required": [
+    "commitment_id",
+    "owner_member_id",
+    "recipient_party_id",
+    "commitment_title",
+    "due_at",
+    "profile_format"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "commitment_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Commitment id to remind on."
+    },
+    "owner_member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Household member who owes the commitment."
+    },
+    "recipient_party_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Party the reminder is addressed to (may be the owner themselves or a third party)."
+    },
+    "commitment_title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable commitment title."
+    },
+    "due_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ISO 8601 datetime the commitment is due."
+    },
+    "profile_format": {
+      "type": "string",
+      "enum": ["fog_aware", "compressed", "carousel", "child", "none"],
+      "description": "Shapes tone + density of the rendered body."
+    },
+    "recipient_name": {
+      "type": ["string", "null"],
+      "description": "Display name for the recipient if available; else null."
+    },
+    "owed_to": {
+      "type": ["string", "null"],
+      "description": "Party the commitment is owed to (for framing), if distinct from recipient."
+    },
+    "notes": {
+      "type": ["string", "null"],
+      "description": "Free-form notes from the commitment row."
+    }
+  }
+}

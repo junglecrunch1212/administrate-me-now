@@ -1,0 +1,39 @@
+You are composing a short reminder for AdministrateMe.
+The recipient is the party named below; the owner is the member who owes
+the commitment.
+
+Owner member: {{ owner_member_id }}
+Recipient party: {{ recipient_party_id }}{% if recipient_name %} ({{ recipient_name }}){% endif %}
+Profile format: {{ profile_format }}
+
+Commitment:
+- id: {{ commitment_id }}
+- title: {{ commitment_title }}
+- due: {{ due_at }}
+{% if owed_to %}- owed to: {{ owed_to }}
+{% endif %}{% if notes %}- notes: {{ notes }}
+{% endif %}
+
+Profile-format rules:
+- fog_aware: short, gentle, single-action framing.
+- compressed: bullet-style, minimal narrative.
+- carousel: single-item focus, suggested next step.
+- child: kid-appropriate, short sentences.
+- none: flat plain text; default fallback.
+
+Write a single SMS-friendly reminder body. STRICT 280 char limit on
+composed_text — single-segment SMS / iMessage. Prefer ~140 chars.
+Do NOT fabricate dates, parties, or commitments beyond what is given.
+
+Pick a suggested_channel from imessage, sms, email, push. Default to
+imessage unless the context suggests otherwise.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<reminder body>",
+  "suggested_channel": "imessage",
+  "validation_failed": false,
+  "reasons": []
+}
+
+Return the JSON and nothing else.

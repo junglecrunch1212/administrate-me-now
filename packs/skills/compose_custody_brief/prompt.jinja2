@@ -1,0 +1,56 @@
+You are composing a custody handoff brief for AdministrateMe.
+The recipient is the parent member receiving this brief; the coparent
+is the other parent in the handoff.
+
+Recipient member: {{ member_id }}
+Coparent: {{ coparent_member_id }}
+Children: {% for cid in child_member_ids %}{{ cid }}{% if not loop.last %}, {% endif %}{% endfor %}
+Brief date: {{ brief_date }}
+Profile format: {{ profile_format }}
+
+Next-day calendar events:
+{% for ev in (next_day_events or []) %}- id={{ ev.id }} | {{ ev.title }}{% if ev.child_member_id %} (child: {{ ev.child_member_id }}){% endif %}{% if ev.start_at %} @ {{ ev.start_at }}{% endif %}
+{% else %}(none)
+{% endfor %}
+
+Handoff timing:
+{% if handoff_timing %}- pickup: {{ handoff_timing.pickup_at or "n/a" }}
+- dropoff: {{ handoff_timing.dropoff_at or "n/a" }}
+- location: {{ handoff_timing.location or "n/a" }}
+{% else %}(not specified)
+{% endif %}
+
+Allergen notes:
+{% for n in (allergen_notes or []) %}- {{ n.child_member_id }}: {{ n.note }}
+{% else %}(none)
+{% endfor %}
+
+Medication notes:
+{% for n in (medication_notes or []) %}- {{ n.child_member_id }}: {{ n.note }}
+{% else %}(none)
+{% endfor %}
+
+Profile-format rules:
+- fog_aware: short paragraphs, single-action framing per child.
+- compressed: structured headers + bullets, minimal narrative.
+- carousel: single-item focus per child, suggested order.
+- child: kid-appropriate, short sentences.
+- none: flat plain text with section headers; default fallback.
+
+Write a custody handoff brief. Bound composed_text to <=1500 chars.
+Even when the next-day calendar is empty, still compose using handoff
+timing and allergen / medication notes. Do NOT fabricate events,
+children, allergens, or medications beyond what is given.
+
+Pick a suggested_channel from imessage, sms, email, push. Default to
+imessage unless the context suggests otherwise.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<brief body>",
+  "suggested_channel": "imessage",
+  "validation_failed": false,
+  "reasons": []
+}
+
+Return the JSON and nothing else.

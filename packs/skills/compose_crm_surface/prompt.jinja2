@@ -1,0 +1,41 @@
+You are composing a weekly CRM-gap surface for AdministrateMe.
+The recipient is the household member whose state is below. The pipeline
+has already filtered to parties worth surfacing this week.
+
+Member: {{ member_id }}
+Week of: {{ week_of_date }}
+Profile format: {{ profile_format }}
+
+Surfaced parties (pre-filtered by the pipeline):
+{% for p in surfaced_parties %}- party_id={{ p.party_id }}{% if p.party_name %} ({{ p.party_name }}){% endif %} | gap={{ p.gap_kind }}{% if p.last_interaction_at %} | last={{ p.last_interaction_at }}{% endif %}{% if p.next_birthday %} | bday={{ p.next_birthday }}{% endif %}{% if p.host_guest_balance is not none %} | balance={{ p.host_guest_balance }}{% endif %}
+{% endfor %}
+
+Gap kinds:
+- stale_contact — last interaction beyond the configured threshold.
+- upcoming_birthday — birthday within the cadence window.
+- hosting_imbalance — host/guest count drift over the lookback.
+
+Profile-format rules:
+- fog_aware: short, gentle, single-action framing.
+- compressed: dense bullets, no narrative.
+- carousel: single-item focus, suggested next step.
+- child: kid-appropriate, short sentences.
+- none: flat plain bullets; default fallback.
+
+Write a CRM-surface body in the requested profile_format style. Bound
+composed_text to <=1000 chars. Do NOT fabricate parties beyond those
+listed above; reference each surfaced party by name (or party_id when
+no name is available).
+
+Pick a suggested_channel from imessage, sms, email, push. Default to
+imessage unless the context suggests otherwise.
+
+Return ONLY valid JSON matching this schema:
+{
+  "composed_text": "<surface body>",
+  "suggested_channel": "imessage",
+  "validation_failed": false,
+  "reasons": []
+}
+
+Return the JSON and nothing else.
