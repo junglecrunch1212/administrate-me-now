@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compose_reminder output",
+  "type": "object",
+  "required": [
+    "composed_text",
+    "suggested_channel",
+    "validation_failed",
+    "reasons"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "composed_text": {
+      "type": "string",
+      "maxLength": 280,
+      "description": "Composed reminder body, SMS-friendly (<=280 chars). Empty string on the on_failure defensive default."
+    },
+    "suggested_channel": {
+      "type": "string",
+      "enum": ["imessage", "sms", "email", "push"],
+      "description": "Skill's suggested delivery channel; the pipeline's _resolve_delivery_channel treats this as a hint and may override based on per-member overrides."
+    },
+    "validation_failed": {
+      "type": "boolean",
+      "description": "Skill-side flag (true on the on_failure defensive-default path); the pipeline-side emit guard sets the canonical value on the emitted reminder.dispatched event."
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reasons array; on_failure populates with skill_failure_defensive_default."
+    }
+  }
+}
