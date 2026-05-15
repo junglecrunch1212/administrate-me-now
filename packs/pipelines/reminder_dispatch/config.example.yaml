@@ -1,0 +1,24 @@
+# reminder_dispatch example config.
+#
+# Per-member overrides shape: keys are member ids (placeholders here;
+# real ids substituted by bootstrap §8 per [§12.4] tenant-identity
+# firewall), values override top-level defaults. Tenant-agnostic
+# placeholder ids per the platform-code firewall — no specific tenant
+# names ship in this file.
+
+lookahead_window_minutes: 60      # commitments due within this window are candidates
+min_reminder_gap_minutes: 15      # commitments due sooner than this are NOT reminded (too late)
+dedupe_window_minutes: 90         # suppress when a recent reminder.dispatched fired within this window
+skip_party_tags:                  # parties tagged with any of these are skipped
+  - test
+  - fixture
+
+per_member_overrides: {}
+# Example shape (commented to keep this file tenant-agnostic):
+#
+# per_member_overrides:
+#   member_id_example_1:
+#     reminders_enabled: false
+#   member_id_example_2:
+#     lookahead_window_minutes: 30
+#     dedupe_window_minutes: 120

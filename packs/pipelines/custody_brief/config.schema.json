@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "custody_brief pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "brief_local_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "custody_brief_enabled": {"type": "boolean"},
+          "lookahead_days": {"type": "integer", "minimum": 1, "maximum": 14}
+        }
+      }
+    }
+  }
+}

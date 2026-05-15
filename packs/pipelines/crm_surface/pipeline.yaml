@@ -1,0 +1,31 @@
+pack:
+  id: pipeline:crm_surface
+  name: CRM surface
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: CrmSurfacePipeline
+# Documentation-only triggers per [BUILD.md §1289]; this is a proactive
+# pack — the in-process PipelineRunner skips it on absence of
+# triggers.events (runner.py:131-138). The cron sidecar in
+# bootstrap/openclaw/cron.yaml is the authoritative scheduling
+# wire-up.
+triggers:
+  schedule: "0 18 * * 0"
+  proactive: true
+depends_on:
+  skills:
+    - compose_crm_surface@^1.0.0
+  projections:
+    - parties
+    - members
+events_emitted:
+  - crm_surface.composed
+  - observation.suppressed
+  - external.sent
+config:
+  schema: config.schema.json
+  example: config.example.yaml

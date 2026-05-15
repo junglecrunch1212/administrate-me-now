@@ -1,0 +1,32 @@
+pack:
+  id: pipeline:reminder_dispatch
+  name: Reminder dispatch
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: ReminderDispatchPipeline
+# Documentation-only triggers per [BUILD.md §1289]; this is a proactive
+# pack — the in-process PipelineRunner skips it on absence of
+# triggers.events (runner.py:131-138). The cron sidecar in
+# bootstrap/openclaw/cron.yaml is the authoritative scheduling
+# wire-up; bootstrap §8 substitutes per-member configured cadences.
+triggers:
+  schedule: "*/15 * * * *"
+  proactive: true
+depends_on:
+  skills:
+    - compose_reminder@^1.0.0
+  projections:
+    - commitments
+    - parties
+    - members
+events_emitted:
+  - reminder.dispatched
+  - observation.suppressed
+  - external.sent
+config:
+  schema: config.schema.json
+  example: config.example.yaml
