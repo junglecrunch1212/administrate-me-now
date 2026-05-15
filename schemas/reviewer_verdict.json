@@ -1,41 +1,36 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://administrate-me/schemas/reviewer_verdict.json",
-  "title": "Reviewer verdict",
-  "description": "Post-merge Reviewer Routine's output of the three-job QC pass per docs/qc_rubric.md.",
+  "title": "Reviewer verdict (v4)",
+  "description": "Post-merge Reviewer Routine four-job QC output. v4 adds strict Job 4 fields per DRIFT-CONTROL-CHECKLIST.md.",
   "type": "object",
   "required": ["prompt_id", "pr_number", "merged_date", "merge_commit", "job_1_contract", "job_2_invariants", "job_3_next_prompt_calibration", "job_4_vision_check", "halt_class", "overall_verdict"],
   "properties": {
     "prompt_id": {"type": "string"},
     "pr_number": {"type": "integer"},
     "merged_date": {"type": "string", "format": "date"},
-    "merge_commit": {"type": "string", "description": "Full or short SHA"},
-
+    "merge_commit": {"type": "string"},
     "job_1_contract": {
       "type": "object",
       "required": ["verdict", "findings"],
       "properties": {
-        "verdict": {
-          "type": "string",
-          "enum": ["match", "match_with_overshoot", "undershoot", "silent_scope_change", "scope_extension_oos"]
-        },
+        "verdict": {"type": "string", "enum": ["match", "match_with_overshoot", "undershoot", "silent_scope_change", "scope_extension_oos"]},
         "findings": {
           "type": "array",
           "items": {
             "type": "object",
             "required": ["category", "severity", "description", "evidence"],
             "properties": {
-              "category": {"type": "string", "enum": ["deliverable", "test", "out_of_scope"]},
+              "category": {"type": "string", "enum": ["deliverable", "test", "out_of_scope", "commit_message_format"]},
               "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
               "description": {"type": "string"},
-              "evidence": {"type": "string", "description": "Concrete cite: file path + lines or diff section"},
-              "constitutional_source": {"type": ["string", "null"], "description": "e.g. '[§7.4, D6]' if applicable"}
+              "evidence": {"type": "string"},
+              "constitutional_source": {"type": ["string", "null"]}
             }
           }
         }
       }
     },
-
     "job_2_invariants": {
       "type": "object",
       "required": ["verdict", "findings"],
@@ -53,13 +48,12 @@
               "description": {"type": "string"},
               "file_path": {"type": "string"},
               "line_range": {"type": "string"},
-              "recommended_fix": {"type": "string", "description": "sidecar | amendment | refactor-next | accept_as_soft_deviation"}
+              "recommended_fix": {"type": "string"}
             }
           }
         }
       }
     },
-
     "job_3_next_prompt_calibration": {
       "type": "object",
       "required": ["next_prompt_id", "verdict", "carry_forwards"],
@@ -80,12 +74,73 @@
         }
       }
     },
-
     "job_4_vision_check": {
       "type": "object",
-      "required": ["verdict", "findings"],
+      "description": "v4 STRICT mode. Walks 6 vision questions per DRIFT-CONTROL-CHECKLIST.md.",
+      "required": ["verdict", "vision_drift_score", "strict_block", "questions", "summary"],
       "properties": {
-        "verdict": {
-          "type": "string",
-          "enum": ["aligned", "neutral", "drift_sideways", "drift_backward"],
-          "description": "aligned = merge moves toward VISION
+        "verdict": {"type": "string", "enum": ["aligned", "neutral", "drift_sideways", "drift_backward"]},
+        "vision_drift_score": {
+          "type": "integer",
+          "enum": [0, 1, 2, 3],
+          "description": "0=aligned, 1=neutral, 2=drift_sideways (operator-eyes-on), 3=drift_backward (STRICT-FAIL block)"
+        },
+        "strict_block": {
+          "type": "boolean",
+          "description": "True iff vision_drift_score=3. Forces overall_verdict=FAIL_CRITICAL."
+        },
+        "questions": {
+          "type": "object",
+          "required": ["q1_family_utility", "q2_privacy", "q3_adhd_aware", "q4_observation_mode", "q5_channel_native", "q6_multi_member"],
+          "properties": {
+            "q1_family_utility": {"$ref": "#/definitions/question_answer"},
+            "q2_privacy": {"$ref": "#/definitions/question_answer"},
+            "q3_adhd_aware": {"$ref": "#/definitions/question_answer"},
+            "q4_observation_mode": {"$ref": "#/definitions/question_answer"},
+            "q5_channel_native": {"$ref": "#/definitions/question_answer"},
+            "q6_multi_member": {"$ref": "#/definitions/question_answer"}
+          }
+        },
+        "summary": {"type": "string", "description": "2-3 sentences. Posted in PR comment on strict_block."},
+        "recommended_action": {
+          "type": ["string", "null"],
+          "enum": [null, "operator_review", "sidecar_fix", "revert"]
+        },
+        "operator_override": {
+          "type": ["object", "null"],
+          "properties": {
+            "overridden_score": {"type": "integer"},
+            "reason": {"type": "string"},
+            "comment_id": {"type": "integer"}
+          }
+        }
+      }
+    },
+    "halt_class": {
+      "type": ["string", "null"],
+      "enum": [null, "REVIEWER_FAIL_CRITICAL", "REVIEWER_NEEDS_AMENDMENT", "REVIEWER_NEEDS_SIDECAR", "REVIEWER_STRICT_VISION_BLOCK"]
+    },
+    "overall_verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL_LOW", "FAIL_MEDIUM", "FAIL_CRITICAL", "NEEDS_AMENDMENT", "NEEDS_SIDECAR"]
+    },
+    "reviewer_session": {
+      "type": "object",
+      "properties": {
+        "model": {"type": "string", "description": "claude-opus-4-6 or opus alias. NEVER claude-opus-4-7."},
+        "elapsed_seconds": {"type": "number"},
+        "verdict_iso8601": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "definitions": {
+    "question_answer": {
+      "type": "object",
+      "required": ["answer", "evidence"],
+      "properties": {
+        "answer": {"type": "string", "enum": ["yes", "no", "unsure"]},
+        "evidence": {"type": "string", "description": "One-line file:line citation or diff quote"}
+      }
+    }
+  }
+}

@@ -1,12 +1,25 @@
 # Executor agent — Commit 1 (schema / plumbing)
 
-**Invoked by:** `claude` interactive session in JRS, OR `claude -p --append-system-prompt-file .claude/agents/executor-c1.md`
+**Invoked by (v4 canonical):**
 
-**Model:** claude-opus-4-7 (override via `ADMINME_MODEL_EXECUTOR` env var)
+```bash
+claude --print \
+       --model "${ADMINME_MODEL_EXECUTOR:-opus}" \
+       --max-budget-usd 30 \
+       --permission-mode bypassPermissions \
+       '<the c1 work instruction; see RUNBOOK-EXECUTOR.md>' \
+       < /dev/null 2>&1 | tee /tmp/c1.log
+```
 
-**Timeout:** ~30-45 min
+Interactive fallback: `claude` then paste the work instruction. Headless is preferred for autonomous c1→c4 chains; interactive is fine for eyes-on calibration runs.
 
-**Output:** exactly one git commit on the working branch — OR `<NO_OP/>` if the prompt's C1 section is empty.
+**Model:** `${ADMINME_MODEL_EXECUTOR:-opus}` (env var from devcontainer.json; default alias `opus` resolves to current opus). **Never** `claude-opus-4-7` — that model doesn't exist; see POSTMORTEM-v3-to-v4.md §1.2.
+
+**Permission mode:** `bypassPermissions` for autonomous mode. `acceptEdits` only allows file edits, blocks bash; surfaced as "denied" reports in v3 test drive. See POSTMORTEM-v3-to-v4.md §1.3.
+
+**Timeout:** ~30-45 min for c1's typical schema-and-stubs work.
+
+**Output:** one git commit on the working branch, pushed to remote, with a PR opened — OR `<NO_OP/>` if the prompt's C1 section is empty.
 
 ---
 
@@ -33,12 +46,22 @@ Commit 1 lays the schema and plumbing for the prompt's work. The pattern across 
 
 ## What you must do
 
-1. **Session-start sequence** (from universal preamble at `docs/universal_preamble_extension.md`):
+1. **Pre-flight checks** (v4 — runs in the agent's bash preamble, before any model call):
    ```bash
-   unset GITHUB_TOKEN  # Codespace's auto-injected token has narrow scopes; we use the user's GH_TOKEN
-   gh auth status      # confirm authenticated as operator
-   git rev-parse --abbrev-ref HEAD  # confirm working branch
+   # All must pass. Failure means stop and report.
+   [ -O "$HOME/.claude" ] || { echo "FAIL: ~/.claude not owned by current user"; exit 1; }
+   [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "FAIL: CLAUDE_CODE_OAUTH_TOKEN missing"; exit 1; }
+   [ -n "$GITHUB_TOKEN" ] || { echo "FAIL: GITHUB_TOKEN missing"; exit 1; }
+   git rev-parse --abbrev-ref HEAD | grep -qE "^claude/[^/]+-c1$" || {
+     echo "FAIL: not on claude/<prompt>-c1 branch (current: $(git rev-parse --abbrev-ref HEAD))"
+     exit 1
+   }
    ```
+
+2. **Branch strategy** (v4 — see BRANCH-STRATEGY.md):
+   - **Stacked prompts** (c1→c2→c3→c4 share dependencies, like 10c-iii): branch c1 from main; c2 from c1; c3 from c2; c4 from c3. The PR's `base` is the prior c's branch, not main.
+   - **Parallel prompts** (c1-c4 independent): each branches from main.
+   - The refactored prompt's `## Branch strategy` section says which model applies. If absent, assume **stacked** (the safer default).
 
 2. **Read the refactored prompt.** Find it via `ls prompts/_active/<NN>-*.md`. There should be exactly one file matching the active prompt id. Read it in full.
 
@@ -53,7 +76,14 @@ Commit 1 lays the schema and plumbing for the prompt's work. The pattern across 
    - `docs/DECISIONS.md` D-decisions cited by the prompt (commonly D6, D7, D8, D13, D14, D15)
    - `ADMINISTRATEME_BUILD.md` sections cited by the prompt
 
-7. **Make exactly one git commit** with message: `<NN>.1: <short description>`. Stage all relevant changes before committing.
+7. **Make exactly one git commit.** Commit message MUST follow this exact format (v4 — enforced by Reviewer's Job 1 contract check):
+   ```
+   phase <PROMPT_ID> commit 1: <imperative summary, <72 chars>
+   ```
+   Example: `phase 10c-iii commit 1: 3 event schemas + 3 program files + cron rows`
+   Use `git -c user.email='claude+executor@anthropic.com' -c user.name='claude (executor-c1)' commit -am '<msg>'` to attribute properly.
+
+   **Why strict:** v3 test drive had c4 mis-label its commit as "commit 1" because the format wasn't enforceable. v4 makes the format mandatory.
 
 8. **Run the prompt's §9 Verification block.** Typically:
    ```bash
@@ -64,81 +94,53 @@ Commit 1 lays the schema and plumbing for the prompt's work. The pattern across 
 
 9. **If verification still fails after a fix attempt,** emit `<COMMIT_FAILED reason="..."/>` and stop. The operator will diagnose.
 
-10. **Do NOT push. Do NOT open a PR.** Commits 2-4 happen in the same session via the C2/C3/C4 templates; the PR opens at end of C4.
+10. **Push the c1 branch and open a PR** (v4 — each c is its own PR per `BRANCH-STRATEGY.md`):
 
-11. **After committing cleanly, stop.** Wait for the operator (or the orchestrator if `/goal` is wrapping the session) to invoke C2.
+    ```bash
+    # Push via explicit-URL token injection (works headless; bypasses VS Code credential helper).
+    # --no-verify skips the LFS pre-push hook which is removed by post-create.sh anyway.
+    git push -u --no-verify \
+      "https://x-access-token:${GITHUB_TOKEN}@github.com/junglecrunch1212/administrate-me-now" \
+      "claude/<PROMPT_ID>-c1:claude/<PROMPT_ID>-c1"
+
+    # Scrub the token from the tracking config (it leaks otherwise).
+    git remote set-url origin https://github.com/junglecrunch1212/administrate-me-now.git
+    git config branch."claude/<PROMPT_ID>-c1".remote origin
+
+    # Open PR via GitHub API (curl + JSON file; bypasses shell-quoting hell with embedded JSON).
+    python3 -c "import json; print(json.dumps({
+      'title': 'phase <PROMPT_ID> commit 1: <one-line summary>',
+      'body': '<body — see Body template below>',
+      'head': 'claude/<PROMPT_ID>-c1',
+      'base': 'main'
+    }))" > /tmp/c1_pr.json
+
+    curl -sS -X POST \
+      -H "Authorization: token ${GITHUB_TOKEN}" \
+      -H 'Content-Type: application/json' \
+      --data @/tmp/c1_pr.json \
+      https://api.github.com/repos/junglecrunch1212/administrate-me-now/pulls
+    ```
+
+    **PR body template:**
+    ```
+    Generated by executor-c1 from prompts/_active/<PROMPT_ID>-*.md.
+
+    ## What this commit ships
+    - <bullet per deliverable, with file path + line count>
+
+    ## Verification
+    - poetry run pytest <test paths> -v: <N> passed
+    - bash scripts/verify_invariants.sh: exit 0
+
+    Next: executor-c2 from this branch (base for the c2 PR will be `claude/<PROMPT_ID>-c1`).
+    ```
+
+11. **After PR opens cleanly, stop.** Output the PR URL on the last line. Wait for the operator to invoke C2 (which will branch from this c1 branch per stacked strategy).
 
 ## Hard rules (non-negotiable invariants)
 
 These apply to commits 1-4. Cited per the supervised build's standards.
 
 - **No interactive prompts.** You are headless under `claude -p`, or you have an attentive operator under interactive `claude`. Either way, if a CLI tool prompts, use a non-interactive flag.
-- **No LLM SDK imports in `adminme/`** per `[§8.2]` and `[D6]`. The skill runner wraps OpenClaw's gateway at `:18789` via `adminme/lib/skill_runner/openclaw_client.py`. AdministrateMe never imports `anthropic` or `openai` directly.
-- **No projection writes from pipelines** per `[§2.2]` and `[§7.3]`. Projections subscribe to events and write their own tables; pipelines emit events.
-- **No outbound side effects outside `outbound()`** per `[§6.14]`. Any pipeline that sends externally goes through `adminme/lib/observation/outbound.py:outbound(ctx, action_fn)`.
-- **No hardcoded tenant identity** per `[§12.4-12.5]` and `[§15]`. No family name, person name, address, phone, email, account number, medical detail in `adminme/`, `bootstrap/`, `profiles/`, `personas/`, `integrations/`, or non-fixture test files.
-- **No `~/.adminme/` string literal** in runtime code per `[D15]`. All instance-directory paths resolve via `adminme.lib.instance_config.InstanceConfig`.
-- **No proactive behavior in APScheduler** per `[§14]`. User-visible proactive pipelines register as OpenClaw standing orders only.
-- **No editing constitutional docs** (`SYSTEM_INVARIANTS`, `DECISIONS`, `architecture-summary`, `BUILD.md`, `CONSOLE_PATTERNS`, `REFERENCE_EXAMPLES`, `DIAGRAMS`, `openclaw-cheatsheet`). If you think one needs editing, emit `<NEEDS_AMENDMENT topic="..."/>` and stop.
-- **No pushing to `main`.** Working branch only.
-
-## Citation discipline
-
-When writing code that touches an invariant, include a one-line comment citing the source:
-
-```python
-# [§3.5, D14] EventStore.append is async via asyncio.to_thread over sync SQLCipher
-async def append(self, envelope: EventEnvelope, *, correlation_id: str | None = None, causation_id: str | None = None) -> None:
-    ...
-```
-
-```python
-# [§2.2] Projections never emit DOMAIN events. xlsx.regenerated is a SYSTEM event (allowlisted).
-ALLOWED_EMITS = {"xlsx.regenerated", "xlsx.reverse_skipped_during_forward"}
-```
-
-Citations make future audits traceable.
-
-## Verification before committing
-
-Before `git commit`, run:
-
-```bash
-# Lint
-poetry run ruff check adminme/ packs/ tests/
-
-# Type check (informational; we don't block on mypy)
-poetry run mypy adminme/ 2>&1 | tail -5
-
-# Tests relevant to this commit
-poetry run pytest <test_path_from_prompt_verification> -v --tb=short
-
-# Invariants
-bash scripts/verify_invariants.sh
-```
-
-All four should succeed. If ruff or pytest fail, amend. If mypy emits notes, decide case-by-case (most prompts accept mypy notes for borrow-checking-like errors that aren't real bugs).
-
-## What you produce, exactly
-
-Either:
-- **One git commit** on the working branch with message `<NN>.1: <description>`, plus stdout output describing what you did and what the verification showed. Then stop and wait.
-- **`<NO_OP/>`** with no commit, if C1 is empty.
-- **`<COMMIT_FAILED reason="..."/>`** with no commit, if verification couldn't pass.
-- **`<NEEDS_AMENDMENT topic="..."/>`** with no commit, if you discover constitutional drift you can't sidestep.
-
-Nothing else. No PR. No push. No advance to C2.
-
-## Where this fits in the bundle
-
-This template is loaded into the Executor session via `--append-system-prompt-file .claude/agents/executor-c1.md` when the operator runs:
-
-```bash
-claude -p --append-system-prompt-file .claude/agents/executor-c1.md "<prompt_id>"
-```
-
-Or, in interactive `claude` mode, the operator types something like:
-
-> Read prompts/_active/10c-iii-*.md. Execute commit 1 per the executor-c1 template (.claude/agents/executor-c1.md). Stop after commit 1.
-
-Then they invoke C2 with the C2 template, etc. Four invocations total per prompt.
+- **No LLM SDK imports in `adminme/`** per `[§8.2]` and `[D6]`. The skill runner wraps OpenClaw's gateway at `:

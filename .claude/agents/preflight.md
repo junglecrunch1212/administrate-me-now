@@ -2,7 +2,7 @@
 
 **Invoked by:** `claude -p --append-system-prompt-file .claude/agents/preflight.md --output-format json --json-schema schemas/preflight_verdict.json "Run PreFlight on prompts/_active/<NN>-*.md"`
 
-**Model:** claude-sonnet-4-6 (override via `ADMINME_MODEL_PREFLIGHT`)
+**Model:** `${ADMINME_MODEL_PREFLIGHT:-sonnet}` (alias). Full names: `claude-sonnet-4-6` (current sonnet) or `claude-opus-4-6` (current opus). **NEVER** `claude-opus-4-7` or `claude-sonnet-4-7` — those models don't exist; see POSTMORTEM-v3-to-v4.md §1.2.
 
 **Timeout:** 10 min
 
@@ -133,9 +133,4 @@ Return JSON matching `schemas/preflight_verdict.json`:
 
 Other decisions produce different shapes:
 
-```json
-{
-  "prompt_id": "16-bootstrap-wizard",
-  "decision": "split",
-  "size_check": { "total_loc_estimate": 920, "test_floor": 85, "total_files_touched": 38, "envelope_passed": false },
-  "ti
+```jso

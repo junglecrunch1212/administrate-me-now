@@ -2,7 +2,7 @@
 
 **Invoked by:** `claude -p --append-system-prompt-file .claude/agents/splitter.md --output-format json --json-schema schemas/splitter_proposal.json "Propose a split for prompts/_active/<NN>-*.md"`
 
-**Model:** claude-sonnet-4-6 (override via `ADMINME_MODEL_SPLITTER`)
+**Model:** `${ADMINME_MODEL_SPLITTER:-sonnet}` (alias). NEVER `claude-sonnet-4-7` — that doesn't exist; full name is `claude-sonnet-4-6`. See POSTMORTEM-v3-to-v4.md §1.2.
 
 **Timeout:** 10 min
 
@@ -165,4 +165,4 @@ If they decline (your proposed split isn't right):
 1. They tell Partner Cowork what's wrong with the proposal
 2. Partner re-invokes Splitter with revised guidance, OR drafts a manual split
 
-You only run once per parent prompt. If the operator iterates, they iterate via Partner; you don't re-engage automatically.
+You only run once p
