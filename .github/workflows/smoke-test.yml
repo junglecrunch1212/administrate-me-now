@@ -1,0 +1,61 @@
+name: Smoke test (claude-code auth)
+
+# Manual-only. Validates CLAUDE_CODE_OAUTH_TOKEN secret + Actions plumbing
+# before running the full executor-cycle workflow.
+#
+# See docs/SETUP-AUTONOMOUS-LOOP.md for one-time setup before first run.
+#
+# Cost: ~$0 in API dollars (one Haiku call against subscription token).
+# Runs against subscription weekly cap, not API budget.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-test
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Verify CLAUDE_CODE_OAUTH_TOKEN is set
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not configured."
+            echo "::error::See docs/SETUP-AUTONOMOUS-LOOP.md §1 for setup."
+            exit 1
+          fi
+          echo "Secret is present (value masked by Actions)."
+
+      - name: One cheap Haiku call to verify auth
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -e
+          echo "Calling Haiku with a one-word prompt..."
+          claude --print \
+                 --model haiku \
+                 --max-budget-usd 1 \
+                 --permission-mode bypassPermissions \
+                 'Reply with exactly the word OK.' \
+                 < /dev/null
+          echo "---"
+          echo "Smoke test PASSED. OAuth token valid, claude-code installed, Actions plumbing works."
