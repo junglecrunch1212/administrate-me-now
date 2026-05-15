@@ -14,7 +14,7 @@ Load from the zip — minimum necessary:
 
 1. **The prompt file that specified what was to ship** (`prompts/<NN>-*.md`).
 2. **The `build_log.md` entry** for this merge (Evidence section specifically).
-3. **The actual merged PR on GitHub** — read the PR description + the commit list. James can paste these if loading GitHub directly isn't feasible.
+3. **The actual merged PR on GitHub** — read the PR description + the commit list via `mcp__github__get_pull_request` (description, metadata) and `mcp__github__list_commits` with the PR's `head` branch (commit walk). For the diff itself, prefer `mcp__github__get_pull_request_files` only when a Job 1 finding warrants it; do NOT pull the full diff by default (see "Do NOT load the full PR diff" rule below). Pre-2026-05-15 fallback: James pastes these if MCP is unavailable.
 
 Do NOT load the full PR diff. Spot-check specific files from the zip when a Job's findings warrant deeper investigation.
 
