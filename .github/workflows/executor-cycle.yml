@@ -12,13 +12,16 @@ name: Executor cycle (c1→c4)
 #   c4 branches from claude/<prompt>-c3
 # Each c-band opens its own PR. Operator merges in sequence after review.
 #
-# 2026-05-15 fixes (run #1 lessons):
+# 2026-05-15 run-1 fixes (PR #80):
 #   - c4 pre-flight uses origin/main..HEAD (was main..HEAD; actions/checkout
 #     only creates a local branch for the checked-out ref).
 #   - PR creation moved from the agent (curl in executor-cN.md) to the
-#     workflow itself (gh CLI). Agent in --print mode was terminating after
-#     the LLM's final response, before executing the curl tool call.
-#     Workflow-driven PR creation is robust and visible in Actions logs.
+#     workflow itself (gh CLI).
+#
+# 2026-05-15 run-2 fixes (this PR):
+#   - "Open cN PR" steps now fail visibly on gh pr create errors instead
+#     of swallowing them via `|| echo`. Adds gh auth status + verbose
+#     diagnostics + post-create gh pr view so logs reveal what's happening.
 #
 # Setup: docs/SETUP-AUTONOMOUS-LOOP.md must be complete first.
 # Source patterns: docs/RUNBOOK-EXECUTOR.md §1.1-§1.5 + .claude/agents/executor-c{1,2,3,4}.md
@@ -117,18 +120,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
         run: |
-          set -e
-          # Verify the branch was pushed to origin
-          git fetch origin "claude/${PROMPT_ID}-c1"
-          SUBJECT=$(git log -1 --format=%s)
-          BODY=$(git log -1 --format=%b)
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c1" --state all --json number,state,title || true
+          echo "--- fetch origin (refresh refs) ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c1"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c1")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c1")
           if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "Title to use: $SUBJECT"
+          echo "Body preview (first 3 lines):"
+          echo "$BODY" | head -3
+          echo "--- creating PR ---"
           gh pr create \
             --base main \
             --head "claude/${PROMPT_ID}-c1" \
             --title "$SUBJECT" \
-            --body "$BODY" || \
-          echo "::warning::gh pr create returned non-zero. PR may already exist; check repo."
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c1" --json number,url,state
 
   c2:
     name: c2 (module A)
@@ -190,17 +204,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
         run: |
-          set -e
-          git fetch origin "claude/${PROMPT_ID}-c2"
-          SUBJECT=$(git log -1 --format=%s)
-          BODY=$(git log -1 --format=%b)
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c2" --state all --json number,state,title || true
+          echo "--- fetch origin (refresh refs) ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c2"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c2")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c2")
           if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "Title to use: $SUBJECT"
+          echo "Body preview (first 3 lines):"
+          echo "$BODY" | head -3
+          echo "--- creating PR ---"
           gh pr create \
             --base "claude/${PROMPT_ID}-c1" \
             --head "claude/${PROMPT_ID}-c2" \
             --title "$SUBJECT" \
-            --body "$BODY" || \
-          echo "::warning::gh pr create returned non-zero. PR may already exist; check repo."
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c2" --json number,url,state
 
   c3:
     name: c3 (module B)
@@ -262,17 +288,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
         run: |
-          set -e
-          git fetch origin "claude/${PROMPT_ID}-c3"
-          SUBJECT=$(git log -1 --format=%s)
-          BODY=$(git log -1 --format=%b)
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c3" --state all --json number,state,title || true
+          echo "--- fetch origin (refresh refs) ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c3"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c3")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c3")
           if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "Title to use: $SUBJECT"
+          echo "Body preview (first 3 lines):"
+          echo "$BODY" | head -3
+          echo "--- creating PR ---"
           gh pr create \
             --base "claude/${PROMPT_ID}-c2" \
             --head "claude/${PROMPT_ID}-c3" \
             --title "$SUBJECT" \
-            --body "$BODY" || \
-          echo "::warning::gh pr create returned non-zero. PR may already exist; check repo."
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c3" --json number,url,state
 
   c4:
     name: c4 (integration + BUILD_LOG + PR)
@@ -347,14 +385,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
         run: |
-          set -e
-          git fetch origin "claude/${PROMPT_ID}-c4"
-          SUBJECT=$(git log -1 --format=%s)
-          BODY=$(git log -1 --format=%b)
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c4" --state all --json number,state,title || true
+          echo "--- fetch origin (refresh refs) ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c4"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c4")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c4")
           if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "Title to use: $SUBJECT"
+          echo "Body preview (first 3 lines):"
+          echo "$BODY" | head -3
+          echo "--- creating PR ---"
           gh pr create \
             --base "claude/${PROMPT_ID}-c3" \
             --head "claude/${PROMPT_ID}-c4" \
             --title "$SUBJECT" \
-            --body "$BODY" || \
-          echo "::warning::gh pr create returned non-zero. PR may already exist; check repo."
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c4" --json number,url,state
