@@ -77,16 +77,18 @@ For each `file::symbol`, after fetching the file, grep for the symbol literal in
 - For functions: `def <symbol_name>(` or `async def <symbol_name>(`
 - For module-level constants/registrations: `<SYMBOL_NAME>` at column 0 of any line
 
-Produce a verification table:
+Produce a verification table. **Every row must name its source.** Cite the actual tool call (or pinned-doc name) that produced the verification. A row without a named source is not a gate-pass; it is a documentation gap that blocks authorship.
 
 ```
-| Path or symbol | Verified? | Notes |
-|---|---|---|
-| `adminme/pipelines/base.py` | ✓ | exists |
-| `adminme/pipelines/proactive.py` | ✗ | NOT on main; closest match is `adminme/pipelines/base.py` |
-| `adminme/events/schemas/domain.py::DigestComposedV1` | ✓ | found at line 211 |
-| `adminme/events/schemas/proactive.py::ParalysisNudgeComposedV1` | ✗ | file does not exist; real class is `domain.py::ParalysisTriggeredV1` |
+| Path or symbol | Verified? | Source | Notes |
+|---|---|---|---|
+| `adminme/pipelines/base.py` | ✓ | `mcp__github__get_file_contents(path="adminme/pipelines/base.py", ref="main")` | exists; 102 lines |
+| `adminme/pipelines/proactive.py` | ✗ | `mcp__github__get_file_contents(path="adminme/pipelines/proactive.py", ref="main")` returned 404 | NOT on main; closest match is `adminme/pipelines/base.py` |
+| `adminme/events/schemas/domain.py::DigestComposedV1` | ✓ | live fetch of `domain.py` + grep for `class DigestComposedV1` | found at line 211 |
+| `adminme/events/schemas/proactive.py::ParalysisNudgeComposedV1` | ✗ | live fetch returned 404; module not on main | file does not exist; real class is `domain.py::ParalysisTriggeredV1` |
 ```
+
+**The Source column is load-bearing.** "I read this in the project's pinned `partner_handoff.md`" is not a valid Source for Gate 2 — pinned content is a snapshot, not live `main`. The only valid Source values are: (a) the specific `mcp__github__*` tool call that returned the content, (b) for symbol grep, the file fetched in (a) plus the grep result line number. If you cannot cite a live tool call as the Source, the row is not verified and the gate has not been satisfied for that row.
 
 ### Gate 3 — Halt on any miss; produce a Findings list
 
@@ -116,17 +118,17 @@ For each verified file::symbol, fetch the surrounding context (typically `mcp__g
 - If the prompt will say "call `ctx.<attribute>`", confirm the attribute exists on the actual `PipelineContext` (or whatever type `ctx` resolves to) on main. Do not assume attribute existence from the prompt's draft.
 - If the prompt will say "extend `<MODULE>` with three new models", confirm the module exists AND has the structural shape the extension assumes (e.g., a `BaseModel` import, an existing `registry.register(...)` call pattern). Cite the line numbers.
 
-For each cross-checked item, add a row to a contracts table:
+For each cross-checked item, add a row to a contracts table. **As with Gate 2, every row must name its source.** The Source is the specific live tool call (and the line range fetched) that produced the on-main reality column.
 
 ```
-| Cited contract | On-main reality | Match? |
-|---|---|---|
-| Subclass `ProactivePipeline` | Class `MorningDigestPipeline` in `packs/pipelines/morning_digest/handler.py` does not inherit from any base; on-main pattern is standalone class. | ✗ |
-| `ctx.commitments_conn_factory` | `PipelineContext` (`adminme/pipelines/base.py:56`) has only `parties_conn_factory: Callable[...] \| None = None`. | ✗ |
-| `outbound_fn` parameter | `PipelineContext` has `outbound_fn: Callable[..., Awaitable[Any]]` (`adminme/pipelines/base.py:80`). | ✓ |
+| Cited contract | On-main reality | Source | Match? |
+|---|---|---|---|
+| Subclass `ProactivePipeline` | Class `MorningDigestPipeline` in `packs/pipelines/morning_digest/handler.py` does not inherit from any base; on-main pattern is standalone class. | `mcp__github__get_file_contents(path="packs/pipelines/morning_digest/handler.py", ref="main")`, lines 95–110 | ✗ |
+| `ctx.commitments_conn_factory` | `PipelineContext` (`adminme/pipelines/base.py:56`) has only `parties_conn_factory: Callable[...] \| None = None`. | `mcp__github__get_file_contents(path="adminme/pipelines/base.py", ref="main")`, lines 50–90 | ✗ |
+| `outbound_fn` parameter | `PipelineContext` has `outbound_fn: Callable[..., Awaitable[Any]]` (`adminme/pipelines/base.py:80`). | same fetch as above, line 80 | ✓ |
 ```
 
-Halt on any `✗` per Gate 3.
+Halt on any `✗` per Gate 3. A row whose Source is "recalled from pinned content" is not a `✓` — it is a documentation gap that blocks authorship.
 
 ### Gate 5 — Produce the verification artifact
 
@@ -171,6 +173,8 @@ If the MCP becomes available mid-session (e.g., Claude Desktop restart), restart
 
 ---
 
-## Why this exists (one paragraph)
+## Why this exists (two paragraphs)
 
-The 10c-iii v4 test drive of 2026-05-14 produced a refactored prompt whose §2 Read first cited at least eight file paths that did not exist on `main` (`adminme/pipelines/proactive.py`, `adminme/outbound/dispatcher.py`, `adminme/lib/skill_runner/openclaw_client.py`, `adminme/projections/calendar/queries.py`, `adminme/projections/members/queries.py`, five query functions that do not exist in `adminme/`), and asserted a `ProactivePipeline` base class that is fictional (the on-main `morning_digest` handler is a standalone class with no base). The Cowork session passed its DRIFT-CONTROL checklist 6/6 (score 0=aligned) and produced an orientation report claiming "all 14 pinned docs read." Neither catch caught the structural defect. The session correctly halted at Phase A push due to the unrelated MCP-unavailability issue; had the MCP been connected and the prompt pushed, Executor would have spent its session window fabricating the missing infrastructure (the c4 mis-labeling pattern from POSTMORTEM §1.6) or halting on the first missing-file read. This checklist closes the gap.
+The 10c-iii v4 test drive of 2026-05-14 produced a refactored prompt whose §2 Read first cited at least eight file paths that did not exist on `main` (`adminme/pipelines/proactive.py`, `adminme/outbound/dispatcher.py`, `adminme/lib/skill_runner/openclaw_client.py`, `adminme/projections/calendar/queries.py`, `adminme/projections/members/queries.py`, five query functions that do not exist in `adminme/`), and asserted a `ProactivePipeline` base class that is fictional (the on-main `morning_digest` handler is a standalone class with no base). The Cowork session passed its DRIFT-CONTROL checklist 6/6 (score 0=aligned) and produced an orientation report claiming "all 14 pinned docs read." Neither catch caught the structural defect. The session correctly halted at Phase A push due to the unrelated MCP-unavailability issue; had the MCP been connected and the prompt pushed, Executor would have spent its session window fabricating the missing infrastructure (the c4 mis-labeling pattern from POSTMORTEM §1.6) or halting on the first missing-file read. v4.1 of this checklist closed that authorship-time gap.
+
+The v4.1 smoke test on 2026-05-15 surfaced a secondary failure mode: an agent that correctly followed the orient-then-pause protocol AND correctly flagged the absence of the new docs as a SOFT finding, but also reported a file path (`prompts/_active/10c-iii-reminder-crm-custody.md`) as having been merged via PR #63 on `main` when the path existed only in the local Cowork project workspace. The agent had blurred Surface 1 (pinned project content) with Surface 2 (live `main` via MCP). The DRIFT-CONTROL checklist doesn't catch this — it asks vision questions. The v4.1 verification tables didn't catch it either — they recorded `✓` or `✗` without naming the source of the verification. v4.2 adds the Source column to Gate 2 and Gate 4: every verification row cites the specific live `mcp__github__*` tool call that produced it, and pinned-content recall is explicitly disqualified as a Source. The corresponding "Three surfaces" glossary in `PROJECT-INSTRUCTIONS.md` gives the agent language for the distinction.
