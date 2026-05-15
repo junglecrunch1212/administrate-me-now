@@ -432,3 +432,11 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
 - **Verification**: no code changes; ruff/mypy not applicable. Pre-authorship checklist + orientation protocol installed; `PROJECT-INSTRUCTIONS.md` v4.1 now mandates both. Operator-side follow-up: paste v4.1 content into the Cowork app's Instructions field.
 - **Closes**: the authorship-time stale-citation gap surfaced by the 10c-iii v4 test drive. Does NOT close the 10c-iii build itself — the defective `prompts/_active/10c-iii-reminder-crm-custody.md` on main remains for Session 2 to address (deletion + re-author).
 - **Outcome**: MERGED.
+
+### partner-refactor-surface-glossary (PR #<N>, merged <date>) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Cowork bundle refactor (v4.1 → v4.2). Adds Three-surfaces glossary to `cowork-partner/PROJECT-INSTRUCTIONS.md` and Source column to Gate 2 + Gate 4 of `docs/PARTNER-PRE-AUTHORSHIP-CHECKLIST.md`. No code touched.
+- **Surfaced by**: 2026-05-15 smoke test of v4.1 bundle — agent blurred Surface 1 (pinned content) and Surface 2 (live main via MCP), reporting a local-workspace-only path as merged on main.
+- **Diff scope**: 2 replaced in place + 1 appended (this entry).
+- **Verification**: Three-surfaces glossary present. Source column present in both gate tables. Don't-blur-surfaces rule added to never-do list. Local workspace files synced in same session.
+- **Closes**: surface-conflation gap. Does NOT close the 10c-iii build (defective `prompts/10c-iii-reminder-crm-custody.md` on main remains for the next test-drive session).
+- **Outcome**: MERGED.
