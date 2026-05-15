@@ -1,0 +1,22 @@
+# crm_surface example config.
+#
+# Per-member overrides shape: keys are member ids (placeholders here;
+# real ids substituted by bootstrap §8 per [§12.4] tenant-identity
+# firewall), values override top-level defaults. crm_proactive_enabled
+# defaults to FALSE per [§7] (opt-in surface).
+
+threshold_days: 90
+max_surfaced_per_week: 5
+cadence_day_of_week: 0  # 0 = Sunday
+cadence_local_hour: 19
+
+per_member_overrides: {}
+# Example shape (commented to keep this file tenant-agnostic):
+#
+# per_member_overrides:
+#   member_id_example_1:
+#     crm_proactive_enabled: true
+#     threshold_days: 60
+#   member_id_example_2:
+#     crm_proactive_enabled: true
+#     threshold_days: 120

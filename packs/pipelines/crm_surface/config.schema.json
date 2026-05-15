@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "crm_surface pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["threshold_days", "max_surfaced_per_week"],
+  "properties": {
+    "threshold_days": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Stale-contact threshold; parties with last_interaction_at older than now-threshold are candidates."
+    },
+    "max_surfaced_per_week": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum parties surfaced per member per week. Clamps the surfaced_party_ids list."
+    },
+    "cadence_day_of_week": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6,
+      "description": "Day of week (0=Sun..6=Sat) the cadence fires; cron sidecar is the actual schedule wire-up."
+    },
+    "cadence_local_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23,
+      "description": "Local hour the cadence fires; cron sidecar is the actual schedule wire-up."
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "description": "Map of member_id → per-member overrides. crm_proactive_enabled defaults to FALSE (opt-in).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "crm_proactive_enabled": { "type": "boolean" },
+          "threshold_days": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

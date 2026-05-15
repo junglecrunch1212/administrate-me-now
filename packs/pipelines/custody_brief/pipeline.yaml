@@ -1,0 +1,31 @@
+pack:
+  id: pipeline:custody_brief
+  name: Custody brief
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: CustodyBriefPipeline
+# Documentation-only triggers per [BUILD.md §L4 custody_brief]; this is
+# a proactive pack — the in-process PipelineRunner skips it on absence
+# of triggers.events (runner.py:131-138). The cron sidecar in
+# bootstrap/openclaw/cron.yaml is the authoritative scheduling
+# wire-up (daily at 20:00 local).
+triggers:
+  schedule: "0 20 * * *"
+  proactive: true
+depends_on:
+  skills:
+    - compose_custody_brief@^1.0.0
+  projections:
+    - parties
+    - calendars
+events_emitted:
+  - custody_brief.composed
+  - observation.suppressed
+  - external.sent
+config:
+  schema: config.schema.json
+  example: config.example.yaml
