@@ -5,7 +5,6 @@
     "ghcr.io/devcontainers/features/github-cli:1": {"version": "latest"},
     "ghcr.io/devcontainers/features/python:1": {"version": "3.11", "installTools": true},
     "ghcr.io/devcontainers/features/node:1": {"version": "22"},
-    "ghcr.io/devcontainers/features/git-lfs:1": {},
     "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {}
   },
   "hostRequirements": {"cpus": 2, "memory": "8gb", "storage": "32gb"},
@@ -25,14 +24,5 @@
   },
   "remoteUser": "codespace",
   "containerUser": "codespace",
-  "postCreateCommand": "bash .devcontainer/post-create.sh",
-  "customizations": {
-    "vscode": {
-      "extensions": ["anthropic.claude-code", "github.vscode-pull-request-github", "ms-python.python", "ms-python.black-formatter"],
-      "settings": {"terminal.integrated.defaultProfile.linux": "bash", "editor.formatOnSave": false, "files.trimTrailingWhitespace": true}
-    },
-    "codespaces": {"openFiles": ["README.md", "docs/build_log.md", "docs/partner_handoff.md"]}
-  },
-  "forwardPorts": [],
-  "shutdownAction": "stopContainer"
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }
