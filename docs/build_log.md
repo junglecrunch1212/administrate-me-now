@@ -372,6 +372,55 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 - **Carry-forward for paralysis_detection optional outbound** (deferred per `[BUILD.md §1302]`):
   - v1 has NO `outbound()` call. The optional-outbound branch lands when per-profile config-aware routing is introduced (no specific prompt assigned).
 
+### Prompt 10c-iii — proactive pipelines (reminder_dispatch + crm_surface + custody_brief)
+- **Refactored**: by Partner in Claude Chat, 2026-05-14. Prompt file: `prompts/10c-iii-reminder-crm-custody.md` (~410 lines, quality bar = 10c-ii + reuse + 3× substitution).
+- **Session merged**: PR #TBD, commits 98f6a54 / 50ff500 / b2e1349 / <c4-sha>, merged TBD. (The c4 commit was the integration / BUILD_LOG / schema-alignment amendment; see below.)
+- **Outcome**: IN FLIGHT (PR open).
+- **Evidence**:
+  - `adminme/events/schemas/proactive.py` — `ReminderDispatchedV1` + `CrmSurfaceComposedV1` + `CustodyBriefComposedV1` registered at v1 per `[D7]`. c4 amendment: `model_config = {"extra": "allow"}` so the handler-side audit context (`delivered`, `tone_note`, `sort_order`) the c3 handlers actually emit validates cleanly; required-field contracts on the spec fields are preserved. Date-typed fields not emitted by the c3 handlers (`week_of_date`, `brief_date`, `scheduled_send_at`) are optional and default `None`.
+  - `adminme/events/schemas/__init__.py` — `proactive` added to the autoload module list so the registry picks the three new event types up at process start.
+  - `bootstrap/openclaw/programs/{reminder_dispatch,crm_surface,custody_brief}.md` — three full standing-order program files replacing the 10c-i stub prose. c4 amendment: each gained the missing `## Escalation` section so the per-program structural canary at `tests/unit/bootstrap/test_openclaw_programs_loadable.py` passes.
+  - `bootstrap/openclaw/cron.yaml` — three new rows; full proactive-pipeline standing-order roster now at six.
+  - `packs/skills/compose_reminder/`, `packs/skills/compose_crm_surface/`, `packs/skills/compose_custody_brief/` — three full 09b-shape skill packs at v1.0.0 each. `pack.yaml`, `SKILL.md`, `schemas/{input,output}.schema.json`, `prompt.jinja2`, `handler.py`, `tests/`.
+  - `packs/pipelines/reminder_dispatch/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/}` — `ReminderDispatchPipeline`; scans commitments for upcoming `due_at` within the lookahead window; event-log dedupe via the recent-`reminder.dispatched` loader; observation-mode gated via `adminme/lib/observation.py::outbound`.
+  - `packs/pipelines/crm_surface/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/}` — `CrmSurfacePipeline`; weekly per opt-in member; scans parties with stale contact; clamps to `max_surfaced_per_week`.
+  - `packs/pipelines/custody_brief/{pipeline.yaml,config.example.yaml,config.schema.json,handler.py,tests/}` — `CustodyBriefPipeline`; nightly per parent member with `coparent_relationship_member_id` set; per-row defensive-default discipline same as the other two.
+  - `tests/unit/test_pipeline_reminder_dispatch.py` — 6 handler-direct unit tests (due-window filter, dedupe, defensive default, per-member opt-out, observation-mode suppression, happy-path emit).
+  - `tests/unit/test_pipeline_crm_surface.py` — 6 handler-direct unit tests.
+  - `tests/unit/test_pipeline_custody_brief.py` — 6 handler-direct unit tests.
+  - `tests/integration/test_pipeline_10c_iii_integration.py` — 6 round-trip tests (3 observation-on + 3 observation-off, one per pipeline) against a real `EventBus` + `EventLog` + `ObservationManager` + tmp `InstanceConfig`. The observation-on cases assert the pipeline's `*.composed` / `reminder.dispatched` event lands with `delivered=False` AND `observation.suppressed` lands; the observation-off cases assert `delivered=True` AND `external.sent` lands AND no `observation.suppressed`.
+  - `tests/unit/test_event_schemas_proactive.py` — 12 schema-registration + required-field tests; c4 amendment flipped the three "rejects extra keys" tests to "allows handler audit extras" matching the `extra="allow"` policy change.
+  - `tests/unit/bootstrap/test_openclaw_programs_loadable.py` — `FULLY_POPULATED_PROGRAMS` set now includes all six programs; the `test_stub_programs_carry_todo_markers` test was removed since no stubs remain after 10c-iii.
+  - **Total new tests across 10c-iii: 30** (12 schema-registration / required-field + ~12 compose_* skill load + handler — counted in their pack-internal suites — + 18 handler-direct pipeline unit + 6 integration). Full `tests/` suite tally: **585 passed, 2 skipped** (up from 10c-ii's 550). `verify_invariants.sh` exit 0.
+  - `[§6.13]` observation mode verified end-to-end for all 3 pipelines; the `*.composed` / `reminder.dispatched` event still lands even when `outbound()` is suppressed.
+  - `[§7.3]` (pipelines do not write projections directly): clean. `verify_invariants.sh` passes.
+  - `[§7.4]` / `[§8]` / `[D6]` (no LLM SDK imports in `adminme/`): clean. Each pipeline routes composition through `ctx.run_skill_fn` per `[ADR-0002]`.
+  - `[§7.7]` (defensive default; per-row not per-tick): each handler catches the 7-tuple of skill-failure exception types and continues; sibling rows in the same tick still process.
+  - `[§8.9]` (skill-runner-only outbound): all three pipelines call `outbound()` (the on-main observation seam) inside a single `deliver()` method per pack.
+  - `[§12.4]` (tenant-identity firewall): all member/party/child ids in fixtures are placeholders (`member-a`, `party-1`, `child-1`); no real tenant names ship in `packs/` or `adminme/`.
+  - `[§15]`/`[D15]`: paths resolved through `InstanceConfig` in integration tests; no hardcoded literal in handlers.
+  - `[D7]`: three new event types register at v1.
+  - `[D17]`: none of the three new handlers write to projection tables directly; `verify_invariants.sh` clean.
+  - `[D22]` (observation-mode default-on for new pipelines): each integration test verifies both branches; the default-on path is the first-class case.
+  - Causation-id wiring: every emit uses `causation_id=ctx.triggering_event_id` (the standing-order tick event).
+  - F-8 carry-forward applied: all three `compose_*` skill prompts reference `member_profile.tone` for tone-matching.
+  - Six standing orders now registered: morning_digest, paralysis_detection, reward_dispatch (from 10c-i/10c-ii) + reminder_dispatch, crm_surface, custody_brief (this prompt).
+- **Carry-forward for prompt 10d** (checkpoint pipeline ↔ skill consistency):
+  - Six proactive pipelines now exist. 10d's pipeline/skill consistency walk should cover all six.
+  - Three new event types registered at v1; 10d's event-schema review should confirm round-trippability through the existing projections (members, parties, commitments, calendar).
+  - The event-log dedupe pattern (reminder_dispatch's recent-event lookup) is a new pattern. 10d may flag it as worthy of a shared helper extraction; deferred until a third pipeline needs it.
+  - Note: schema-vs-handler drift was caught at integration-test time (handlers emitted `delivered` / `tone_note` / `sort_order` that c1's strict `extra="forbid"` schemas rejected). 10d should add a CI step that runs each pipeline's emit through its schema as a sanity gate to catch this kind of c1↔c3 drift earlier.
+- **Carry-forward for prompt 14b/14c** (console surfaces):
+  - The `reminder.dispatched` / `crm_surface.composed` / `custody_brief.composed` events should each have a visible audit trail in the relevant console view. 14b/14c may want to add per-event filters or a dedicated "proactive activity" surface.
+- **Carry-forward for prompt 16** (bootstrap wizard):
+  - Bootstrap §3 collects per-member overrides for the three new pipelines (`reminders_enabled` default-true, `crm_proactive_enabled` default-false opt-in, `custody_brief_enabled` default-true when coparent relationship exists).
+  - Bootstrap §6 should mention that `custody_brief` only fires when a `coparent_relationship_member_id` is set.
+- **Carry-forward for prompt 19** (Phase B smoke test):
+  - With `observation_mode` flipped off, confirm one of each: a reminder fires for a due commitment, a CRM surface lands on Sunday evening for the opted-in member, a custody brief lands at 20:00 for the parent member with coparent.
+- **Soft-watch for future**:
+  - The event-log dedupe pattern in reminder_dispatch is the only one of its kind right now. If two more pipelines adopt it, extract `adminme/pipelines/_dedupe.py` with `is_duplicate_recent(event_log, event_type, key_field, key_value, within_minutes)`.
+  - `per_member_overrides` config shape is now duplicated across morning_digest, paralysis_detection, reminder_dispatch, crm_surface, custody_brief. The duplication is accepted; future refactor extracts to `adminme/pipelines/_config.py::load_per_member_config()` once a sixth pipeline needs it.
+
 ---
 
 ## Sidecar PRs (out-of-band, no four-commit discipline)

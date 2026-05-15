@@ -7,10 +7,9 @@ Approval gate / Escalation / Execution steps / What NOT to do). Per
 `~/Chief/AGENTS.md` — section-header presence is the contract.
 
 10c-ii filled in morning_digest.md and paralysis_detection.md
-alongside their pipeline packs. The remaining stubs (reminder_dispatch
-/ crm_surface / custody_brief) carry TODO(prompt-10c-iii) markers;
-reward_dispatch.md, morning_digest.md, and paralysis_detection.md are
-fully populated.
+alongside their pipeline packs. 10c-iii filled in reminder_dispatch.md,
+crm_surface.md, and custody_brief.md alongside their pipeline packs —
+all six programs are now fully populated.
 """
 
 from __future__ import annotations
@@ -60,13 +59,16 @@ FULLY_POPULATED_PROGRAMS = {
     "reward_dispatch",
     "morning_digest",
     "paralysis_detection",
+    "reminder_dispatch",
+    "crm_surface",
+    "custody_brief",
 }
 
 
 def test_fully_populated_programs_have_no_todo_markers() -> None:
-    """reward_dispatch (10c-i) and morning_digest / paralysis_detection
-    (10c-ii) are fully populated. Their Execution steps section MUST
-    NOT contain a TODO marker."""
+    """All six standing-order programs are fully populated after
+    10c-iii. Their Execution steps section MUST NOT contain a TODO
+    marker."""
     for name in sorted(FULLY_POPULATED_PROGRAMS):
         text = (PROGRAMS_DIR / f"{name}.md").read_text()
         match = re.search(
@@ -76,22 +78,4 @@ def test_fully_populated_programs_have_no_todo_markers() -> None:
         body = match.group(1)
         assert "TODO(" not in body, (
             f"{name}.md: Execution steps still contains TODO marker:\n{body}"
-        )
-
-
-def test_stub_programs_carry_todo_markers() -> None:
-    """The remaining stub programs (reminder_dispatch / crm_surface /
-    custody_brief) carry TODO(prompt-10c-iii) markers in their
-    Execution steps so a future reader knows they're awaiting
-    fill-in."""
-    stubs = EXPECTED_PROGRAMS - FULLY_POPULATED_PROGRAMS
-    for name in sorted(stubs):
-        text = (PROGRAMS_DIR / f"{name}.md").read_text()
-        match = re.search(
-            r"## Execution steps\n(.*?)(?=\n## |\Z)", text, re.DOTALL
-        )
-        assert match is not None, f"{name}.md: Execution steps not found"
-        body = match.group(1)
-        assert "TODO(prompt-10c-" in body, (
-            f"{name}.md: Execution steps missing TODO(prompt-10c-*) stub marker"
         )

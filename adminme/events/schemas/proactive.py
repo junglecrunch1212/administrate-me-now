@@ -30,7 +30,7 @@ of these emitted events.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -43,23 +43,29 @@ class ReminderDispatchedV1(BaseModel):
 
     Emitted before ``outbound.deliver`` so the composition is auditable
     even when observation mode suppresses delivery per [§6.13]. The
-    actual delivery outcome (``delivery.suppressed`` / ``external.sent``)
-    is logged separately by ``adminme/outbound/dispatcher.py`` per its
-    existing contract from 10c-i.
+    composition is auditable even on defensive-default rows (skill
+    failure → ``composed_text=""`` + ``tone_note`` sentinel), so
+    ``composed_text`` is not min_length-1 and ``recipient_party_id`` is
+    optional (the on-main commitments projection allows nullable
+    recipients). Optional ``delivered`` and ``tone_note`` carry the
+    pipeline's own audit context per the handler's emit shape from
+    10c-iii commit 3.
 
     Dedupe discipline per 10c-iii Operating Context: a recent
     ``reminder.dispatched`` event for the same ``commitment_id`` within
     ``dedupe_window_minutes`` suppresses re-emission. Registered at v1
     per [D7]."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}
     commitment_id: str = Field(min_length=1)
     owner_member_id: str = Field(min_length=1)
-    recipient_party_id: str = Field(min_length=1)
-    composed_text: str = Field(min_length=1)
+    recipient_party_id: str | None = None
+    composed_text: str
     channel: Literal["imessage", "sms", "email", "push"]
-    due_at: datetime
+    due_at: Any
     scheduled_send_at: datetime | None = None
+    delivered: bool | None = None
+    tone_note: str | None = None
 
 
 class CrmSurfaceComposedV1(BaseModel):
@@ -72,17 +78,21 @@ class CrmSurfaceComposedV1(BaseModel):
     proactive CRM surfacing. ``surfaced_party_ids`` carries the (clamped
     to ``max_surfaced_per_week``) ordered list of party_ids the skill
     composed about; downstream consumers can correlate to the parties
-    projection.
+    projection. Optional ``sort_order`` and ``delivered`` carry the
+    pipeline's own audit context per the handler's emit shape from
+    10c-iii commit 3.
 
     The composed text is auditable even when observation mode suppresses
     delivery per [§6.13]. Registered at v1 per [D7]."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}
     member_id: str = Field(min_length=1)
     surfaced_party_ids: list[str] = Field(min_length=1)
     composed_text: str = Field(min_length=1)
     channel: Literal["imessage", "sms", "email", "push"]
-    week_of_date: datetime
+    week_of_date: datetime | None = None
+    sort_order: list[str] | None = None
+    delivered: bool | None = None
 
 
 class CustodyBriefComposedV1(BaseModel):
@@ -94,19 +104,22 @@ class CustodyBriefComposedV1(BaseModel):
     is suppressed before emit at the pipeline boundary per the 10c-iii
     Operating Context, not allowed past the schema. The composed text
     covers next-day calendar events, handoff timing, and allergen/med
-    reminders per [BUILD.md §L4].
+    reminders per [BUILD.md §L4]. Optional ``delivered`` carries the
+    pipeline's own audit context per the handler's emit shape from
+    10c-iii commit 3.
 
     Per [D22] opt-out: ``custody_brief_enabled`` defaults true when a
     coparent relationship exists; the per-member override flips it off.
     Registered at v1 per [D7]."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "allow"}
     member_id: str = Field(min_length=1)
     coparent_member_id: str = Field(min_length=1)
     child_member_ids: list[str] = Field(min_length=1)
     composed_text: str = Field(min_length=1)
     channel: Literal["imessage", "sms", "email", "push"]
-    brief_date: datetime
+    brief_date: datetime | None = None
+    delivered: bool | None = None
 
 
 registry.register("reminder.dispatched", 1, ReminderDispatchedV1)

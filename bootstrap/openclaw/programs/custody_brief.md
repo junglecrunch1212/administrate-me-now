@@ -61,6 +61,14 @@ dispatcher returns `DeliveryResult(suppressed=True)` and emits
 appended to the log so the composition is auditable. The 10c-iii
 integration test asserts this round-trip.
 
+## Escalation
+
+A composition miss for one parent (skill failure, missing profile,
+empty child set) is absorbed by the per-row defensive default per
+[§7.7] — the handler skips that parent's emit and continues to the
+next. The pipeline never raises into the bus and sibling parents in
+the same tick are still processed.
+
 ## Failure modes
 
 Per-row (per-parent) defensive default, not per-tick. If

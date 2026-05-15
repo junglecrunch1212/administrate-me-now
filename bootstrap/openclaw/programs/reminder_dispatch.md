@@ -65,6 +65,15 @@ dispatcher returns `DeliveryResult(suppressed=True)` and emits
 appended to the log so the composition is auditable. The 10c-iii
 integration test asserts this round-trip.
 
+## Escalation
+
+A composition miss (skill failure, missing profile, missing recipient
+party) is absorbed by the defensive default per [§7.7] — the handler
+emits `reminder.dispatched` with `composed_text=""` and
+`tone_note="skill_failure_defensive_default"`. NO outbound is
+attempted on that row. The pipeline never raises into the bus and
+sibling commitments in the same tick are still processed.
+
 ## Failure modes
 
 Per-row defensive default, not per-tick. If `compose_reminder` skill

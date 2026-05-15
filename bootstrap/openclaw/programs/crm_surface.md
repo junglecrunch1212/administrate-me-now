@@ -59,6 +59,14 @@ dispatcher returns `DeliveryResult(suppressed=True)` and emits
 appended to the log so the composition is auditable. The 10c-iii
 integration test asserts this round-trip.
 
+## Escalation
+
+A composition miss for one member (skill failure, missing profile, no
+surfaced parties after clamp) is absorbed by the per-row defensive
+default per [§7.7] — the handler skips that member's emit and
+continues to the next. The pipeline never raises into the bus and
+sibling members in the same tick are still processed.
+
 ## Failure modes
 
 Per-row (per-member) defensive default, not per-tick. If
