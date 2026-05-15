@@ -4,8 +4,7 @@
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {"version": "latest"},
     "ghcr.io/devcontainers/features/python:1": {"version": "3.11", "installTools": true},
-    "ghcr.io/devcontainers/features/node:1": {"version": "22"},
-    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {}
+    "ghcr.io/devcontainers/features/node:1": {"version": "22"}
   },
   "hostRequirements": {"cpus": 2, "memory": "8gb", "storage": "32gb"},
   "secrets": {

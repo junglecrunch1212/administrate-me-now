@@ -5,6 +5,11 @@
 #   - remove broken LFS hooks if git-lfs missing
 #   - disable VS Code credential.helper (Executor pushes via explicit URL)
 #   - GREEN/YELLOW/RED verdict at end
+#
+# 2026-05-15 sidecar fix: install claude CLI via npm directly here, replacing
+# the broken ghcr.io/anthropics/devcontainer-features/claude-code feature that
+# was causing container builds to fail with error 1302. The node:1 feature is
+# already in devcontainer.json so npm is available in the build path.
 
 set -e
 echo "=== AdministrateMe Codespace post-create (v4) ==="
@@ -28,10 +33,15 @@ for tool in git gh python3 node npm; do
   echo "  $tool: $(command -v $tool) — $($tool --version 2>&1 | head -1)"
 done
 
-# 2. Verify claude CLI
+# 2. Install claude CLI via npm if not present (devcontainer feature replacement)
 if ! command -v claude >/dev/null 2>&1; then
-  echo "ERROR: 'claude' not found. Anthropic devcontainer feature failed to install."
-  red "claude CLI missing"
+  echo "--- Installing claude CLI via npm (sidecar fallback for broken ghcr.io/anthropics/devcontainer-features/claude-code) ---"
+  npm install -g @anthropic-ai/claude-code 2>&1 | tail -5 || \
+    yellow "npm install of @anthropic-ai/claude-code returned non-zero; verifying anyway"
+fi
+if ! command -v claude >/dev/null 2>&1; then
+  echo "ERROR: 'claude' not found after npm install attempt."
+  red "claude CLI install failed"
   exit 1
 fi
 echo "  claude: $(command -v claude) — $(claude --version 2>&1)"
