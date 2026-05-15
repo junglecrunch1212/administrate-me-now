@@ -11,6 +11,10 @@ Layout (prompt 04):
 - crm.py       — CRM spine (parties, identifiers, memberships, relationships)
 - domain.py    — commitments, tasks, skill calls
 - governance.py — observation-mode suppression log
+- proactive.py — proactive-pipeline composed-event payloads
+  (reminder.dispatched, crm_surface.composed, custody_brief.composed at v1
+  per 10c-iii; alongside domain.py's digest.composed +
+  paralysis.triggered).
 
 Plugin-introduced event types register via the ``hearth.event_types`` entry
 point in their own dotted namespace (DECISIONS.md §D9); they do not live
