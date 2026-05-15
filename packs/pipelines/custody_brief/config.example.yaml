@@ -1,0 +1,19 @@
+# custody_brief example config.
+#
+# Per-member overrides shape: keys are member ids (placeholders here;
+# real ids substituted by bootstrap §8 per [§12.4] tenant-identity
+# firewall), values override top-level defaults. custody_brief_enabled
+# defaults to TRUE per [§7] (opt-out surface — every parent member
+# with a coparent relationship gets the brief unless explicitly off).
+
+brief_local_hour: 20
+
+per_member_overrides: {}
+# Example shape (commented to keep this file tenant-agnostic):
+#
+# per_member_overrides:
+#   member_id_example_1:
+#     custody_brief_enabled: false
+#   member_id_example_2:
+#     custody_brief_enabled: true
+#     lookahead_days: 2
