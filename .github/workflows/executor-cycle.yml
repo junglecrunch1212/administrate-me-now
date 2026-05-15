@@ -1,0 +1,286 @@
+name: Executor cycle (c1→c4)
+
+# Runs the four-commit Executor cycle for a given prompt ID, end-to-end,
+# unattended. Replaces the JRS Codespace terminal flow described in
+# docs/RUNBOOK-EXECUTOR.md §1.1-§1.5 with a one-button click in the
+# Actions tab.
+#
+# STACKED branch strategy per docs/BRANCH-STRATEGY.md:
+#   c1 branches from main
+#   c2 branches from claude/<prompt>-c1
+#   c3 branches from claude/<prompt>-c2
+#   c4 branches from claude/<prompt>-c3
+# Each c-band opens its own PR. Operator merges in sequence after review.
+#
+# Setup: docs/SETUP-AUTONOMOUS-LOOP.md must be complete first (smoke test
+# passing on either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN).
+#
+# Source patterns this workflow implements:
+#   - docs/RUNBOOK-EXECUTOR.md §1.1-§1.5 (the canonical c1→c4 invocation)
+#   - .claude/agents/executor-c{1,2,3,4}.md (per-c-band agent behavior)
+#   - docs/BRANCH-STRATEGY.md (stacked vs parallel; this workflow is stacked-only)
+#
+# Cost per full cycle:
+#   ANTHROPIC_API_KEY: ~$60-120 (opus tokens)
+#   CLAUDE_CODE_OAUTH_TOKEN: $0 in API dollars, ~10-25% of weekly subscription cap
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt_id:
+        description: 'Prompt ID, e.g. 10c-iii (must exist as prompts/_active/<prompt_id>-*.md on main)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: executor-cycle
+  cancel-in-progress: false
+
+env:
+  ADMINME_MODEL_EXECUTOR: opus
+
+jobs:
+  c1:
+    name: c1 (schema / plumbing)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Verify prompt exists
+        run: |
+          MATCHES=$(ls prompts/_active/${{ inputs.prompt_id }}-*.md 2>/dev/null | wc -l)
+          if [ "$MATCHES" -eq 0 ]; then
+            echo "::error::No prompt file found at prompts/_active/${{ inputs.prompt_id }}-*.md"
+            exit 1
+          fi
+          ls prompts/_active/${{ inputs.prompt_id }}-*.md
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c1)'
+
+      - name: Create c1 branch
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c1"
+
+      - name: Run c1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c1.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 1 only. Branch strategy: stacked per BRANCH-STRATEGY.md. After commit, push to origin via the explicit-URL token pattern in the agent and open a PR with base=main. Stop after PR opens."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --max-budget-usd 30 \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c1.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c1.log; then
+            echo "::error::c1 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c1.log; then
+            echo "::error::c1 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+
+  c2:
+    name: c2 (module A)
+    needs: c1
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout c1 branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/${{ inputs.prompt_id }}-c1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c2)'
+
+      - name: Create c2 branch
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c2"
+
+      - name: Run c2
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c2.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 2 only. Branch strategy: stacked per BRANCH-STRATEGY.md. After commit, push to origin via the explicit-URL token pattern in the agent and open a PR with base=claude/${PROMPT_ID}-c1. Stop after PR opens."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --max-budget-usd 40 \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c2.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c2.log; then
+            echo "::error::c2 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c2.log; then
+            echo "::error::c2 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+
+  c3:
+    name: c3 (module B)
+    needs: c2
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout c2 branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/${{ inputs.prompt_id }}-c2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c3)'
+
+      - name: Create c3 branch
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c3"
+
+      - name: Run c3
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c3.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 3 only. Branch strategy: stacked per BRANCH-STRATEGY.md. After commit, push to origin via the explicit-URL token pattern in the agent and open a PR with base=claude/${PROMPT_ID}-c2. Stop after PR opens."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --max-budget-usd 50 \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c3.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c3.log; then
+            echo "::error::c3 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c3.log; then
+            echo "::error::c3 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+
+  c4:
+    name: c4 (integration + BUILD_LOG + PR)
+    needs: c3
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout c3 branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/${{ inputs.prompt_id }}-c3
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c4)'
+
+      - name: Create c4 branch
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c4"
+
+      - name: Pre-flight stack integrity check (c4 agent requirement)
+        run: |
+          EXPECTED_PRIORS=3
+          ACTUAL_PRIORS=$(git log --oneline main..HEAD | wc -l)
+          if [ "$ACTUAL_PRIORS" -lt "$EXPECTED_PRIORS" ]; then
+            echo "::error::c4 branch only has $ACTUAL_PRIORS prior commits; expected $EXPECTED_PRIORS (c1+c2+c3)."
+            echo "::error::Likely branched off wrong base. STOP per POSTMORTEM-v3-to-v4 §1.6."
+            exit 1
+          fi
+          echo "Stack integrity OK: $ACTUAL_PRIORS commits visible above main."
+
+      - name: Run c4
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c4.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 4 only. Branch strategy: stacked per BRANCH-STRATEGY.md. After commit, push to origin via the explicit-URL token pattern in the agent and open a PR with base=claude/${PROMPT_ID}-c3. Stop after PR opens."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --max-budget-usd 50 \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c4.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c4.log; then
+            echo "::error::c4 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c4.log; then
+            echo "::error::c4 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
