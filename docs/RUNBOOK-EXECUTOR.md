@@ -6,6 +6,8 @@ Run this when Partner has merged a refactored prompt to main and you're ready to
 
 This runbook assumes the v3 test-drive bugs are fixed (per POSTMORTEM-v3-to-v4.md): ~/.claude perms, LFS hooks, model alias, permission mode, branch strategy.
 
+**Scope note (2026-05-15):** This runbook covers the **Executor side only** — Claude Code running in the JRS Codespace, authenticated to GitHub via the Codespace's `$GITHUB_TOKEN` (a Codespaces secret). Partner has a separate, parallel GitHub access path via the local **github MCP server** (`github-mcp-server` v1.0.4 in `tools/github-mcp-server/`), used for prompt-refactor PRs and QC reads. Nothing in this runbook changes when Partner's MCP is installed; the two paths don't share state. See `session-handoff-github-mcp-install.md` for the Partner-side install.
+
 ---
 
 ## §0 — Prerequisites
