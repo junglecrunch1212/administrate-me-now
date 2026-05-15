@@ -2,7 +2,19 @@
 
 **Same shape as `executor-c1.md`. Read that first; only the C2-specific differences are below.**
 
-**Output:** exactly one git commit on the working branch — OR `<NO_OP/>` / `<COMMIT_FAILED/>` / `<NEEDS_AMENDMENT/>`.
+**v4 invocation** (per RUNBOOK-EXECUTOR.md):
+```bash
+git checkout claude/<PROMPT_ID>-c1     # branch from c1 per stacked BRANCH-STRATEGY.md
+git checkout -b claude/<PROMPT_ID>-c2
+
+claude --print --model "${ADMINME_MODEL_EXECUTOR:-opus}" --max-budget-usd 40 \
+       --permission-mode bypassPermissions \
+       '<c2 work instruction>' < /dev/null 2>&1 | tee /tmp/c2.log
+```
+
+**Output:** one git commit + push + PR (PR's `base` = `claude/<PROMPT_ID>-c1`) — OR `<NO_OP/>` / `<COMMIT_FAILED/>` / `<NEEDS_AMENDMENT/>`.
+
+**Commit message format (v4 mandatory):** `phase <PROMPT_ID> commit 2: <imperative summary, <72 chars>`. Example: `phase 10c-iii commit 2: 3 compose_* skill packs at v1.0.0`.
 
 ---
 
@@ -40,18 +52,4 @@ If C1 is missing, the operator either didn't run C1 yet or it failed silently. S
 5. Write the tests for module A under the corresponding `tests/unit/` or `packs/<kind>/<name>/tests/` directory.
 6. Match the test floor from §7.
 7. Apply citation discipline as in C1 (one-line `# [§N, DN]` comments on code touching invariants).
-8. Verify per §9 of the refactored prompt — typically: ruff clean, pytest on the new tests passes, `verify_invariants.sh` exits 0.
-9. Commit with message `<NN>.2: <short description>`. Amend if verification fails after a fix attempt.
-10. Stop. Do not advance to C3.
-
-## Same hard rules apply
-
-See `executor-c1.md` § Hard rules. They apply identically here.
-
-## Same citation discipline
-
-See `executor-c1.md` § Citation discipline. Apply throughout.
-
-## Output
-
-Same as C1 — exactly one commit, or one of the no-op/failed/amendment-needed sentinels. No push, no PR, no advance to C3.
+8. Verify per §9 

@@ -2,7 +2,21 @@
 
 **Same shape as `executor-c1.md` through `executor-c3.md`.**
 
-**Output:** one git commit, then `git push` and `gh pr create`. The end of the four-commit cycle.
+**v4 invocation** (per RUNBOOK-EXECUTOR.md):
+```bash
+git checkout claude/<PROMPT_ID>-c3     # branch from c3 per stacked BRANCH-STRATEGY.md
+git checkout -b claude/<PROMPT_ID>-c4
+
+claude --print --model "${ADMINME_MODEL_EXECUTOR:-opus}" --max-budget-usd 50 \
+       --permission-mode bypassPermissions \
+       '<c4 work instruction>' < /dev/null 2>&1 | tee /tmp/c4.log
+```
+
+**Output:** one git commit + push + PR (`base` = `claude/<PROMPT_ID>-c3`) — closing the four-commit cycle for this prompt.
+
+**Commit message format (v4 mandatory):** `phase <PROMPT_ID> commit 4: <imperative summary, <72 chars>`. Example: `phase 10c-iii commit 4: integration tests + BUILD_LOG`.
+
+**v3 test-drive lesson (POSTMORTEM §1.6):** if your c4 branch's history doesn't show c1/c2/c3 commits via `git log main..HEAD`, you're branched off the wrong base. STOP and report `<COMMIT_FAILED reason="c4 not stacked on c3"/>` rather than re-creating c1's work to compensate.
 
 ---
 
@@ -21,15 +35,23 @@ Commit 4 closes the prompt:
 - Schema/plumbing (already in C1)
 - Skipping pre-existing commits and merging straight to main
 
-## Pre-flight check
+## Pre-flight check (v4 — mandatory)
 
 ```bash
-git log --oneline -5     # all three earlier commits present?
+# Verify stack integrity — c1, c2, c3 commits must all be visible from this branch.
+EXPECTED_PRIORS=3
+ACTUAL_PRIORS=$(git log --oneline main..HEAD | wc -l)
+if [ "$ACTUAL_PRIORS" -lt "$EXPECTED_PRIORS" ]; then
+  echo "FAIL: c4 branch only has $ACTUAL_PRIORS prior commits; expected $EXPECTED_PRIORS (c1+c2+c3)"
+  echo "      Likely branched off wrong base. STOP and report <COMMIT_FAILED reason=\"c4 not stacked\"/>"
+  exit 1
+fi
+
 git status               # clean tree?
-gh auth status           # gh ready for PR creation?
+[ -n "$GITHUB_TOKEN" ]   # token for explicit-URL push
 ```
 
-If any fails, stop and report.
+If pre-flight fails, STOP and emit `<COMMIT_FAILED reason="c4 not stacked on c3"/>`. Do NOT re-create c1/c2/c3 work to compensate (per POSTMORTEM §1.6).
 
 ## What you do
 
@@ -55,59 +77,13 @@ If any fails, stop and report.
    bash scripts/verify_invariants.sh
    ```
    All four should succeed. If pytest fails or ruff has unfixable errors, amend C4. If still failing, emit `<COMMIT_FAILED/>` and stop.
-6. Commit `<NN>.4: <description> + BUILD_LOG entry + integration tests`.
-7. Push to the working branch:
+6. **Commit** with the v4-mandatory format:
    ```bash
-   git push -u origin <working-branch>
+   git -c user.email='claude+executor@anthropic.com' -c user.name='claude (executor-c4)' \
+       commit -am 'phase <PROMPT_ID> commit 4: integration tests + BUILD_LOG'
    ```
-8. Open the PR:
+7. **Push** via the explicit-URL token-injection pattern (handles VS Code credential helper interference + LFS hook absence per v4 §3.3):
    ```bash
-   gh pr create --base main --title "Prompt <NN>: <one-line description>" --body "$(cat <<'EOF'
-   Refactored prompt: prompts/_active/<NN>-<slug>.md
-   Four commits per the four-commit discipline (PM-4):
-   - <hash1>: schema/plumbing
-   - <hash2>: module A
-   - <hash3>: module B
-   - <hash4>: integration + BUILD_LOG entry + this PR
-
-   Test floor met: ≥XX tests (shipped YY).
-   verify_invariants.sh: exit 0
-   ruff: clean
-   mypy: <note any acceptable issues>
-   pytest: passing
-
-   Carry-forwards (see BUILD_LOG entry for full list):
-   - <one-line summaries>
-   EOF
-   )"
-   ```
-9. Tell the operator the PR number, then stop.
-
-## After the PR opens
-
-You stop. The operator reviews and merges. The Reviewer Routine then fires on the merge.
-
-## Hard rules and citations
-
-Per `executor-c1.md`. Apply identically.
-
-## Output
-
-- Exactly one git commit
-- One `git push`
-- One `gh pr create`
-- A stdout report naming the PR number and reporting verification results
-- Then stop
-
-Sentinels (`<NO_OP/>`, `<COMMIT_FAILED/>`, `<NEEDS_AMENDMENT/>`) apply if relevant.
-
-## Vision pre-commit check (true-north sanity)
-
-Before staging commit 4, ask one question: **does what I've built actually serve a real family using AdministrateMe?**
-
-This is a 30-second check, not a deep audit. Specifically:
-
-- If this prompt shipped a pipeline: would a family member actually benefit from the pipeline firing, or did I just satisfy the test floor?
-- If this prompt shipped a projection: would the projection's data be queryable in a useful way by the surfaces the prompt or upstream prompts define?
-- If this prompt shipped console code: would a family member be able to use this surface, or is it correct-but-unusable?
--
+   git push -u --no-verify \
+     "https://x-access-token:${GITHUB_TOKEN}@github.com/junglecrunch1212/administrate-me-now" \
+     "claude/<PROMPT_

@@ -2,7 +2,19 @@
 
 **Same shape as `executor-c1.md` and `executor-c2.md`.**
 
-**Output:** exactly one git commit, or sentinel.
+**v4 invocation** (per RUNBOOK-EXECUTOR.md):
+```bash
+git checkout claude/<PROMPT_ID>-c2     # branch from c2 per stacked BRANCH-STRATEGY.md
+git checkout -b claude/<PROMPT_ID>-c3
+
+claude --print --model "${ADMINME_MODEL_EXECUTOR:-opus}" --max-budget-usd 50 \
+       --permission-mode bypassPermissions \
+       '<c3 work instruction>' < /dev/null 2>&1 | tee /tmp/c3.log
+```
+
+**Output:** one git commit + push + PR (`base` = `claude/<PROMPT_ID>-c2`) — OR sentinel.
+
+**Commit message format (v4 mandatory):** `phase <PROMPT_ID> commit 3: <imperative summary, <72 chars>`. Example: `phase 10c-iii commit 3: 3 pipeline packs + handler-direct unit tests`.
 
 ---
 
@@ -19,32 +31,4 @@ Commit 3 implements **module B** — the second of two implementation modules. O
 ## What commit 3 is NOT
 
 - Anything from C1 or C2 scope (already committed)
-- Cross-module integration (commit 4)
-
-## Pre-flight check
-
-```bash
-git log --oneline -5
-git status
-```
-
-C1 and C2 commits should be present. If not, stop and report.
-
-## What you do
-
-1. Read `prompts/_active/<NN>-*.md` § C3.
-2. If `<NO_OP/>`, emit and stop.
-3. Implement module B per §7 Deliverables.
-4. Write tests for module B (~30% of test floor).
-5. Apply citation discipline.
-6. Verify (ruff, pytest, verify_invariants).
-7. Commit `<NN>.3: <description>`.
-8. Stop. Wait for C4.
-
-## Hard rules and citations
-
-Per `executor-c1.md`. Apply identically.
-
-## Output
-
-One commit or sentinel. No push, no PR, no advance to C4.
+- Cross-module integrati
