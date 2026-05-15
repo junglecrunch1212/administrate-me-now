@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "crm_surface pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["threshold_days", "max_surfaced_per_week"],
+  "properties": {
+    "threshold_days": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parties with last_contact_at older than this many days are stale."
+    },
+    "max_surfaced_per_week": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Clamp on surfaced_party_ids list length per member per week."
+    },
+    "cadence_day_of_week": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6,
+      "description": "ISO weekday (0=Mon, 6=Sun); documentation-only — cron sidecar is authoritative."
+    },
+    "cadence_local_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23,
+      "description": "Member-local hour to fire; documentation-only — cron sidecar is authoritative."
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "description": "Map of member_id → per-member overrides. crm_proactive_enabled is OPT-IN (default false).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "crm_proactive_enabled": { "type": "boolean" },
+          "threshold_days": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

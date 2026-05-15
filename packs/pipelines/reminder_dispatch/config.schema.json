@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "reminder_dispatch pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lookahead_window_minutes", "min_reminder_gap_minutes", "dedupe_window_minutes"],
+  "properties": {
+    "lookahead_window_minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Window (minutes) ahead of now() in which commitments are reminder candidates."
+    },
+    "min_reminder_gap_minutes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Commitments due sooner than this many minutes are NOT reminded (too late to be useful)."
+    },
+    "dedupe_window_minutes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Recent reminder.dispatched events within this window suppress re-emission for the same commitment_id."
+    },
+    "skip_party_tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Parties with any of these tags are skipped (test fixtures etc.)."
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "description": "Map of member_id → per-member overrides.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reminders_enabled": { "type": "boolean" },
+          "lookahead_window_minutes": { "type": "integer", "minimum": 1 },
+          "dedupe_window_minutes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

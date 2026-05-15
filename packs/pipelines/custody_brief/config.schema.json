@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "custody_brief pipeline config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "brief_local_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23,
+      "description": "Member-local hour to fire; documentation-only — cron sidecar is authoritative."
+    },
+    "per_member_overrides": {
+      "type": "object",
+      "description": "Map of member_id → per-member overrides. custody_brief_enabled defaults TRUE when coparent relationship exists.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "custody_brief_enabled": { "type": "boolean" },
+          "lookahead_days": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}
