@@ -93,6 +93,6 @@
   },
 
   "model": {
-    "default": "claude-opus-4-7"
+    "default": "opus"
   }
 }

@@ -424,3 +424,11 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
 - **Verification**: lint-only file; ruff clean (markdown is not lint-target).
 - **Closes**: Project-knowledge / repo state-drift gap between Partner sessions. No code-side closure.
 - **Outcome**: MERGED.
+
+### partner-refactor-cowork-bundle-pre-authorship-gate (PR #<N>, merged <date>) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Cowork bundle refactor PR. Updates Partner-side process docs and one model-alias fix. No code under `adminme/`/`packs/`/`bootstrap/`/`tests/` touched. No `build_log.md` Evidence section (infrastructure PR per PM-22).
+- **Surfaced by**: The 10c-iii test-drive QC of 2026-05-15. Cowork-authored `prompts/_active/10c-iii-reminder-crm-custody.md` shipped with 8+ stale file-path citations and a fictional `ProactivePipeline` base class. Drift-check and orientation report did not catch the defect because both are structurally upstream of file-existence verification.
+- **Diff scope**: 3 added (`docs/PARTNER-PRE-AUTHORSHIP-CHECKLIST.md`, `docs/SESSION-1-ORIENTATION-PROTOCOL.md`, `cowork-partner/PROJECT-INSTRUCTIONS.md` added at new path; no prior copy existed on main) + 1 modified (`.claude/settings.json` model alias, `claude-opus-4-7` → `opus` per operator direction to use the durable alias) + this `build_log.md` append.
+- **Verification**: no code changes; ruff/mypy not applicable. Pre-authorship checklist + orientation protocol installed; `PROJECT-INSTRUCTIONS.md` v4.1 now mandates both. Operator-side follow-up: paste v4.1 content into the Cowork app's Instructions field.
+- **Closes**: the authorship-time stale-citation gap surfaced by the 10c-iii v4 test drive. Does NOT close the 10c-iii build itself — the defective `prompts/_active/10c-iii-reminder-crm-custody.md` on main remains for Session 2 to address (deletion + re-author).
+- **Outcome**: MERGED.
