@@ -12,14 +12,13 @@ guide that wraps the validator ships in 11-γ. Adapter packs (Cohort C / D)
 import a base class from here and subclass it to declare their epistemic
 role explicitly.
 
-Commit 1 ships three of the five ABCs:
+The five ABCs:
 
 - :class:`CommunicationAdapter` — Cat-A bidirectional messaging.
 - :class:`ExternalStateMirrorAdapter` — Cat-B bidirectional state mirror.
 - :class:`InboundDataAdapter` — Cat-C read-only ingestion.
-
-Commit 2 adds :class:`PersonalKnowledgeAdapter` and
-:class:`OutboundActionAdapter`.
+- :class:`PersonalKnowledgeAdapter` — Cat-D per-member knowledge (bridge).
+- :class:`OutboundActionAdapter` — Cat-E outbound actions.
 """
 
 from __future__ import annotations
@@ -38,14 +37,26 @@ from adminme.lib.adapters.external_state_mirror_base import (
     WriteResult,
 )
 from adminme.lib.adapters.inbound_data_base import InboundDataAdapter
+from adminme.lib.adapters.outbound_action_base import (
+    ActionRequest,
+    ActionResult,
+    OutboundActionAdapter,
+)
+from adminme.lib.adapters.personal_knowledge_base import (
+    PersonalKnowledgeAdapter,
+)
 
 __all__ = [
+    "ActionRequest",
+    "ActionResult",
     "ChangeEnvelope",
     "CommunicationAdapter",
     "ExternalStateMirrorAdapter",
     "InboundDataAdapter",
     "InboundEnvelope",
+    "OutboundActionAdapter",
     "OutboundMessage",
+    "PersonalKnowledgeAdapter",
     "SendResult",
     "WriteCapabilityError",
     "WriteOperation",
