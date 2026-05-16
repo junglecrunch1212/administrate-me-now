@@ -18,7 +18,6 @@ Covers the Cat-A contract per memo 05 §1.2 / §3.2:
 from __future__ import annotations
 
 import inspect
-from typing import Any
 
 import pytest
 
