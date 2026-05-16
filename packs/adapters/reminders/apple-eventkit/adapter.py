@@ -327,13 +327,17 @@ class AppleEventKitAdapter:
     # ------------------------------------------------------------------
     async def start(self, *, ctx: AdapterContext) -> None:
         """Validate config, instantiate the EKEventStore, emit
-        ``adapter.authenticated``, spawn the outbound supervised task,
-        and block on it until ``stop()`` is called.
+        ``adapter.authenticated``, spawn BOTH supervised poll tasks
+        (outbound + inbound) concurrently, and block until either
+        completes or ``stop()`` is called.
 
-        c2 spawns ONLY the outbound task — inbound landing in c3.
-        ``start()`` is the supervisor-facing lifecycle hook; tests
-        exercise the underlying helpers directly to avoid blocking on
-        the loop."""
+        c4 closes the bidirectional surface: the inbound poll task
+        joins the outbound task under ``asyncio.gather`` so a single
+        ``stop()`` cancels both cleanly per BUILD.md APPLE REMINDERS
+        BIDIRECTIONAL §"Polling cadence" + §"Outbound write cadence".
+        Tests exercise the underlying helpers directly to avoid
+        blocking on the loop; this method is the supervisor-facing
+        lifecycle hook only."""
         target_list_identifier = self._config.get("target_list_identifier")
         member_id = self._config.get("member_id")
         if not isinstance(target_list_identifier, str) or not target_list_identifier:
@@ -358,8 +362,11 @@ class AppleEventKitAdapter:
         self._emit_authenticated(ctx=ctx)
 
         self._outbound_task = asyncio.create_task(self._outbound_poll(ctx=ctx))
+        self._inbound_task = asyncio.create_task(self._inbound_poll(ctx=ctx))
         try:
-            await self._outbound_task
+            await asyncio.gather(
+                self._outbound_task, self._inbound_task
+            )
         except asyncio.CancelledError:
             return
 
