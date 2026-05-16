@@ -28,10 +28,9 @@ implement the rules:
   Cat-E ``execute_action`` route through
   :mod:`adminme.lib.observation`.
 
-Commit-2 state: the aggregator currently wires the first three
-checks; subsequent commits wire the remaining three without changing
-the public signature. Test cases that exercise the not-yet-wired
-checks live in their respective commits.
+Commit-3 state: the aggregator wires all six checks. The aggregator
+does NOT short-circuit — every check runs and every finding is
+preserved on the returned :class:`ValidationResult`.
 
 AST-walk-only stance per §6 (out of scope): the validator does NOT
 ``importlib.import_module`` adapter packs during validation.
@@ -51,11 +50,17 @@ from adminme.lib.pack_registry.parser import (
     ManifestParseError,
     parse_adapter_manifest,
 )
+from adminme.lib.pack_registry.validator.base_class_conformance import (
+    check_base_class_conformance,
+)
 from adminme.lib.pack_registry.validator.capability_runtime_coherence import (
     check_capability_runtime_coherence,
 )
 from adminme.lib.pack_registry.validator.event_schema_registration import (
     check_event_schema_registration,
+)
+from adminme.lib.pack_registry.validator.observation_mode_wrapping import (
+    check_observation_mode_wrapping,
 )
 from adminme.lib.pack_registry.validator.projection_subscription_compatibility import (
     check_projection_subscription_compatibility,
@@ -64,6 +69,9 @@ from adminme.lib.pack_registry.validator.result import (
     Severity,
     ValidationFinding,
     ValidationResult,
+)
+from adminme.lib.pack_registry.validator.write_capabilities_check import (
+    check_write_capabilities,
 )
 
 
@@ -140,6 +148,9 @@ def validate_adapter_pack(
             manifest, projections_dir=projections_dir
         )
     )
+    findings.extend(check_base_class_conformance(pack_dir, manifest))
+    findings.extend(check_write_capabilities(pack_dir, manifest))
+    findings.extend(check_observation_mode_wrapping(pack_dir, manifest))
 
     return ValidationResult(pack_dir=pack_dir, findings=tuple(findings))
 
@@ -149,8 +160,11 @@ __all__ = [
     "Severity",
     "ValidationFinding",
     "ValidationResult",
+    "check_base_class_conformance",
     "check_capability_runtime_coherence",
     "check_event_schema_registration",
+    "check_observation_mode_wrapping",
     "check_projection_subscription_compatibility",
+    "check_write_capabilities",
     "validate_adapter_pack",
 ]
