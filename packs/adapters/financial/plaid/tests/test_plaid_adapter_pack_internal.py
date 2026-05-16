@@ -682,14 +682,176 @@ def test_sync_transactions_classifies_plaid_sdk_exceptions(
 
 
 # ---------------------------------------------------------------------------
-# Commit-4 stub is honest at import time
+# Institution health
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_institution_health_stub_raises_not_implemented() -> None:
-    """``_fetch_institution_health`` ships in commit 4; until then the
-    stub must raise loudly so a caller who wires it up early gets a clear
-    signal rather than a silent no-op."""
-    adapter = PlaidAdapter()
-    with pytest.raises(NotImplementedError, match="commit 4"):
-        asyncio.run(adapter._fetch_institution_health("ins_109508"))
+class _FakePlaidClientWithInstitutions(_FakePlaidClient):
+    """Variant that adds the ``institutions_get_by_id`` method the
+    institution-health probe uses. ``status_response`` is the dict the
+    real Plaid SDK returns from ``/institutions/get_by_id`` with
+    ``include_status=True``; ``raises`` lets a test exercise the
+    defensive 7-tuple catch on the institution path."""
+
+    def __init__(
+        self,
+        *,
+        status_response: dict[str, Any] | None = None,
+        raises: BaseException | None = None,
+    ) -> None:
+        super().__init__()
+        self._status_response = status_response or {}
+        self._status_raises = raises
+        self.institution_calls: list[dict[str, Any]] = []
+
+    def institutions_get_by_id(
+        self,
+        *,
+        institution_id: str,
+        country_codes: list[str],
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.institution_calls.append(
+            {
+                "institution_id": institution_id,
+                "country_codes": country_codes,
+                "options": options,
+            }
+        )
+        if self._status_raises is not None:
+            raise self._status_raises
+        return self._status_response
+
+
+def test_fetch_institution_health_emits_transient_on_degraded_product() -> None:
+    """A non-``HEALTHY`` per-product status surfaces as one
+    ``adapter.error`` per degraded product, ``severity=transient`` +
+    ``error_kind=api_changed`` per the prompt §7 deliverable. ``HEALTHY``
+    products produce no events — the adapter must not flood the inbox on
+    healthy institutions."""
+    status_response = {
+        "institution": {
+            "institution_id": "ins_109508",
+            "name": "First Platypus Bank",
+            "status": {
+                "item_logins": {"status": "HEALTHY"},
+                "transactions_updates": {"status": "DEGRADED"},
+                "auth": {"status": "HEALTHY"},
+                "identity": {"status": "DOWN"},
+            },
+        }
+    }
+    fake = _FakePlaidClientWithInstitutions(status_response=status_response)
+    adapter = PlaidAdapter(plaid_client_factory=lambda *_a: fake)
+    ctx, log = _make_ctx(_valid_config())
+
+    async def _go() -> None:
+        task = await _set_up_adapter_via_start(adapter, ctx)
+        await _tear_down(adapter, task)
+
+    asyncio.run(_go())
+
+    # The startup probe in start() already fired one institution call;
+    # subsequent calls (e.g. from backstop loop) don't happen in this
+    # test because stop() races in immediately. Assert the call landed
+    # and that exactly the degraded sub-products produced errors.
+    assert len(fake.institution_calls) == 1
+    call = fake.institution_calls[0]
+    assert call["institution_id"] == "ins_109508"
+    assert call["options"] == {"include_status": True}
+
+    errors = [e for e in log.appended if e["type"] == "adapter.error"]
+    # Two non-HEALTHY entries → two adapter.error events. HEALTHY
+    # products do not emit.
+    assert len(errors) == 2, [e["payload"] for e in errors]
+    products_flagged = sorted(
+        e["payload"]["error_message"].split("product ")[1].split(" ")[0]
+        for e in errors
+    )
+    assert products_flagged == ["'identity'", "'transactions_updates'"]
+    for err in errors:
+        payload = err["payload"]
+        assert payload["severity"] == "transient"
+        assert payload["error_kind"] == "api_changed"
+        assert payload["adapter_name"] == "financial-plaid"
+        assert payload["adapter_family"] == "financial"
+        assert "First Platypus Bank" in payload["error_message"]
+
+
+def test_fetch_institution_health_silent_on_all_healthy() -> None:
+    """The common case — all sub-product statuses ``HEALTHY`` — must
+    produce zero ``adapter.error`` events. Otherwise the inbox would
+    fill with noise from healthy institutions."""
+    status_response = {
+        "institution": {
+            "institution_id": "ins_109508",
+            "name": "First Platypus Bank",
+            "status": {
+                "item_logins": {"status": "HEALTHY"},
+                "transactions_updates": {"status": "HEALTHY"},
+                "auth": {"status": "HEALTHY"},
+            },
+        }
+    }
+    fake = _FakePlaidClientWithInstitutions(status_response=status_response)
+    adapter = PlaidAdapter(plaid_client_factory=lambda *_a: fake)
+    ctx, log = _make_ctx(_valid_config())
+
+    async def _go() -> None:
+        task = await _set_up_adapter_via_start(adapter, ctx)
+        await _tear_down(adapter, task)
+
+    asyncio.run(_go())
+
+    assert fake.institution_calls, "startup probe should have run"
+    assert not [e for e in log.appended if e["type"] == "adapter.error"]
+
+
+def test_fetch_institution_health_classifies_sdk_exception_defensively() -> None:
+    """A Plaid SDK exception inside ``/institutions/get_by_id`` must
+    classify through the same 7-tuple as ``/transactions/sync`` and not
+    crash the adapter. ``RateLimitError`` → ``transient`` /
+    ``rate_limited`` with the cached retry-after hint."""
+    fake = _FakePlaidClientWithInstitutions(
+        raises=RateLimitError("plaid status endpoint over quota")
+    )
+    adapter = PlaidAdapter(plaid_client_factory=lambda *_a: fake)
+    ctx, log = _make_ctx(_valid_config())
+
+    async def _go() -> None:
+        task = await _set_up_adapter_via_start(adapter, ctx)
+        await _tear_down(adapter, task)
+
+    asyncio.run(_go())
+
+    errors = [e for e in log.appended if e["type"] == "adapter.error"]
+    assert len(errors) == 1
+    payload = errors[0]["payload"]
+    assert payload["severity"] == "transient"
+    assert payload["error_kind"] == "rate_limited"
+    assert payload["retry_after_s"] == 60
+    assert "institutions_get_by_id" in payload["error_message"]
+    assert "RateLimitError" in payload["error_message"]
+    # Adapter remains running — defensive catch did not propagate.
+    assert adapter.status().state == "stopped"  # stop() flipped to stopped
+
+
+def test_start_skips_institution_probe_when_id_missing() -> None:
+    """If ``institution_id`` isn't in the config the startup probe is
+    a no-op — the adapter doesn't fabricate an id to call against. The
+    common cause is a partially-wired config from the wizard before the
+    Link flow completes; the adapter must come up cleanly."""
+    fake = _FakePlaidClientWithInstitutions()
+    adapter = PlaidAdapter(plaid_client_factory=lambda *_a: fake)
+    config = _valid_config()
+    del config["institution_id"]
+    ctx, log = _make_ctx(config)
+
+    async def _go() -> None:
+        task = await _set_up_adapter_via_start(adapter, ctx)
+        await _tear_down(adapter, task)
+
+    asyncio.run(_go())
+
+    assert fake.institution_calls == []
+    assert not [e for e in log.appended if e["type"] == "adapter.error"]
