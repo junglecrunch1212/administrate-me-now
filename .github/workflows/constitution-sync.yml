@@ -1,0 +1,94 @@
+name: Constitution sync check
+
+# Catches the surface-drift mode where a constitutional doc is amended
+# without cascading updates to operational docs that cite it
+# (PROMPT_SEQUENCE.md, build_log.md carry-forwards, in-flight refactored
+# prompts).
+#
+# Triggers on PRs to main that touch constitutional docs. Fails the check
+# if PROMPT_SEQUENCE.md is not also touched in the same PR, unless the PR
+# description includes a "## Cascade-exemption:" block explaining why no
+# cascade is needed.
+#
+# Rule documented in PROJECT-INSTRUCTIONS.md "What you must never do".
+# Surface: 2026-05-16 prompt-11 drift discovery.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  cascade-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect constitutional changes
+        id: const
+        run: |
+          set -euo pipefail
+          # File patterns that count as constitutional changes
+          # Note: anchored patterns where applicable; constitutional bundle docs
+          # live at repo root or docs/.
+          PATTERNS='^docs/SYSTEM_INVARIANTS\.md$|^docs/DECISIONS\.md$|^docs/architecture-summary\.md$|^ADMINISTRATEME_BUILD\.md$|^ADMINISTRATEME_CONSOLE_PATTERNS\.md$|^ADMINISTRATEME_REFERENCE_EXAMPLES\.md$|^ADMINISTRATEME_DIAGRAMS\.md$|^docs/openclaw-cheatsheet\.md$|^WHAT-IS-ADMINISTRATEME\.md$|^docs/0[1-9]-architecture-amendment-.*\.md$|^docs/0[1-9]-split-memo-.*\.md$'
+
+          # Diff against base branch
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "All changed files in PR:"
+          echo "$CHANGED"
+
+          # Filter to constitutional changes
+          CONST_CHANGED=$(echo "$CHANGED" | grep -E "$PATTERNS" || true)
+
+          if [ -z "$CONST_CHANGED" ]; then
+            echo "No constitutional doc changes detected; cascade check not required."
+            echo "has_const=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo ""
+          echo "Constitutional changes detected in this PR:"
+          echo "$CONST_CHANGED"
+          echo "has_const=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify cascade or exemption
+        if: steps.const.outputs.has_const == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          # Check 1: PROMPT_SEQUENCE.md also touched?
+          if echo "$CHANGED" | grep -q '^prompts/PROMPT_SEQUENCE\.md$'; then
+            echo "✓ Cascade satisfied: prompts/PROMPT_SEQUENCE.md is also touched in this PR."
+            exit 0
+          fi
+
+          # Check 2: Cascade-exemption block in PR description?
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body --jq .body)
+          if echo "$PR_BODY" | grep -qE '^## Cascade-exemption'; then
+            echo "✓ Cascade-exemption block documented in PR #$PR_NUMBER description."
+            echo "Exemption text:"
+            echo "$PR_BODY" | grep -A 10 '^## Cascade-exemption'
+            exit 0
+          fi
+
+          echo ""
+          echo "::error::Constitutional doc change detected without cascade to PROMPT_SEQUENCE.md or exemption."
+          echo "::error::"
+          echo "::error::Required: either"
+          echo "::error::  (a) add prompts/PROMPT_SEQUENCE.md updates to this PR (if amendments affect sub-prompt scope or citations), OR"
+          echo "::error::  (b) add a '## Cascade-exemption:' section to the PR description explaining why no cascade is needed."
+          echo "::error::"
+          echo "::error::See cowork-partner/PROJECT-INSTRUCTIONS.md 'What you must never do' for the full rule."
+          echo "::error::Surfaced by the 2026-05-16 prompt-11 drift discovery; this check closes the gap."
+          exit 1
