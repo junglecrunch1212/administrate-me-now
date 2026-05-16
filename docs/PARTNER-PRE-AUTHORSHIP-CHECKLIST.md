@@ -1,8 +1,10 @@
 # PARTNER-PRE-AUTHORSHIP-CHECKLIST.md
 
-**v4.1 — the strict authorship-time gate. Run this BEFORE writing a single line of any refactored prompt's body.**
+**v4.3 — the strict authorship-time gate. Run this BEFORE writing a single line of any refactored prompt's body.**
 
 This checklist exists because the v3 test drive surfaced the hardest-to-catch Partner failure mode: producing a confident-sounding refactored prompt whose Read-first section cites files, symbols, and contracts that do not exist on `main`. The DRIFT-CONTROL checklist catches vision drift. The §2.9 size budget catches execution-capacity blowouts. Neither catches *hallucinated codebase citations*. This checklist does.
+
+**v4.3 update (2026-05-16):** added Gate 0 (workspace-vs-main `PROMPT_SEQUENCE.md` sync check) to close the prompt-11 drift gap. v4.2 covered hallucinated citations and pinned-vs-live conflation at the path level; Gate 0 covers the same conflation at the *scope* level (when workspace and main both have a PROMPT_SEQUENCE.md but disagree on what a given prompt is supposed to ship).
 
 This is operationally distinct from the harness's PreFlight agent. PreFlight runs **after** Partner authors and **before** Executor commits. This checklist runs **before** Partner authors. PreFlight is a downstream gate; this is the upstream gate. Both fire on the same defect class. Both must pass.
 
@@ -16,9 +18,36 @@ If a draft already exists from a prior session (rare; usually means a previous P
 
 ---
 
-## The five gates
+## The six gates (Gate 0 added v4.3)
 
 Every gate is mechanical. Every gate produces an artifact the operator can audit. Halt on any miss; do NOT proceed to authorship.
+
+### Gate 0 (v4.3, 2026-05-16) — Verify PROMPT_SEQUENCE.md is in sync between surfaces
+
+Before running Gate 1, compare workspace pinned `PROMPT_SEQUENCE.md` against live main:
+
+```
+mcp__github__get_file_contents(
+  owner="junglecrunch1212",
+  repo="administrate-me-now",
+  path="prompts/PROMPT_SEQUENCE.md",
+  ref="main"
+)
+```
+
+Compare the table row for the prompt being authored (and adjacent rows). If they differ between surfaces in any way that affects the prompt being authored — different sub-prompt slugs, different scope, different cited amendments `[DN]` / `[§N]` / `[arch §N]`, different deliverables — halt and surface to operator:
+
+> "PROMPT_SEQUENCE.md surface drift detected. Workspace cites <list>. Main cites <list>. Authoring against which surface?"
+
+Do not proceed to Gate 1 until the operator confirms canon. Operator options at that decision point:
+
+- Push the workspace's updated PROMPT_SEQUENCE.md to main as a sidecar PR before authoring (workspace is canon).
+- Treat workspace as aspirational; author against main's version (main is canon).
+- Pivot scope: amend the affected prompt to reflect a different architecture than either surface implies.
+
+Until disposition, do not produce verification table or contracts table.
+
+**Rationale for Gate 0:** the 2026-05-16 prompt-11 drift discovery surfaced the gap that earlier checklist versions did not catch. PROMPT_SEQUENCE.md is uniquely susceptible to surface drift because it's referenced by every prompt's Read-first list AND because architectural amendments often invalidate the canonical sequence without an immediately-obvious cascade. Gates 1-5 verify that paths cited in the prompt exist on main; Gate 0 verifies that the prompt's overall scope is right. The downstream protection is the `.github/workflows/constitution-sync.yml` CI check that prevents future amendments from landing without a PROMPT_SEQUENCE.md cascade.
 
 ### Gate 1 — Enumerate every cited path
 
@@ -132,14 +161,15 @@ Halt on any `✗` per Gate 3. A row whose Source is "recalled from pinned conten
 
 ### Gate 5 — Produce the verification artifact
 
-Before authoring, produce two artifacts inline (no PR yet):
+Before authoring, produce three artifacts inline (no PR yet):
 
-1. **Verification table** (Gate 2 output)
-2. **Contracts table** (Gate 4 output)
+1. **Gate 0 surface-sync confirmation** (one line: "workspace and main PROMPT_SEQUENCE.md match" OR drift report + operator disposition)
+2. **Verification table** (Gate 2 output)
+3. **Contracts table** (Gate 4 output)
 
-If both are 100% `✓`, declare:
+If Gate 0 passed AND verification + contracts are 100% `✓`, declare:
 
-> **Pre-authorship gate: PASS.** All N file paths verified on main; all M cited contracts confirmed against on-main signatures. Proceeding to author `prompts/_active/<NN>-<slug>.md`.
+> **Pre-authorship gate: PASS.** Surface-sync confirmed; all N file paths verified on main; all M cited contracts confirmed against on-main signatures. Proceeding to author `prompts/_active/<NN>-<slug>.md`.
 
 If either has any `✗`, do not declare PASS. Produce the Findings list and halt.
 
@@ -155,6 +185,7 @@ This checklist is necessary, not sufficient. It does not catch:
 - **Size-envelope blowouts.** Use the §2.9 delivery-gate self-check (line count, per-commit estimate, files-to-read per commit, inline code, single-cycle judgment, autolinker grep) before declaring the refactor final.
 - **Branch-strategy mistakes.** Use `BRANCH-STRATEGY.md` and the prompt's §8.5 declaration.
 - **Constitutional citation correctness.** Use the PreFlight agent's Check 3 (citation validity) — PreFlight runs after authorship and verifies `[§N]`, `[DN]`, `[arch §N]` ranges against the current SYSTEM_INVARIANTS / DECISIONS / architecture-summary on main.
+- **Constitutional-amendment cascade enforcement** (NEW v4.3). Use `.github/workflows/constitution-sync.yml` CI check that fires on PRs touching constitutional docs without a cascade to PROMPT_SEQUENCE.md.
 
 Run all of these. They are not interchangeable.
 
@@ -173,8 +204,10 @@ If the MCP becomes available mid-session (e.g., Claude Desktop restart), restart
 
 ---
 
-## Why this exists (two paragraphs)
+## Why this exists (three paragraphs)
 
 The 10c-iii v4 test drive of 2026-05-14 produced a refactored prompt whose §2 Read first cited at least eight file paths that did not exist on `main` (`adminme/pipelines/proactive.py`, `adminme/outbound/dispatcher.py`, `adminme/lib/skill_runner/openclaw_client.py`, `adminme/projections/calendar/queries.py`, `adminme/projections/members/queries.py`, five query functions that do not exist in `adminme/`), and asserted a `ProactivePipeline` base class that is fictional (the on-main `morning_digest` handler is a standalone class with no base). The Cowork session passed its DRIFT-CONTROL checklist 6/6 (score 0=aligned) and produced an orientation report claiming "all 14 pinned docs read." Neither catch caught the structural defect. The session correctly halted at Phase A push due to the unrelated MCP-unavailability issue; had the MCP been connected and the prompt pushed, Executor would have spent its session window fabricating the missing infrastructure (the c4 mis-labeling pattern from POSTMORTEM §1.6) or halting on the first missing-file read. v4.1 of this checklist closed that authorship-time gap.
 
-The v4.1 smoke test on 2026-05-15 surfaced a secondary failure mode: an agent that correctly followed the orient-then-pause protocol AND correctly flagged the absence of the new docs as a SOFT finding, but also reported a file path (`prompts/_active/10c-iii-reminder-crm-custody.md`) as having been merged via PR #63 on `main` when the path existed only in the local Cowork project workspace. The agent had blurred Surface 1 (pinned project content) with Surface 2 (live `main` via MCP). The DRIFT-CONTROL checklist doesn't catch this — it asks vision questions. The v4.1 verification tables didn't catch it either — they recorded `✓` or `✗` without naming the source of the verification. v4.2 adds the Source column to Gate 2 and Gate 4: every verification row cites the specific live `mcp__github__*` tool call that produced it, and pinned-content recall is explicitly disqualified as a Source. The corresponding "Three surfaces" glossary in `PROJECT-INSTRUCTIONS.md` gives the agent language for the distinction.
+The v4.1 smoke test on 2026-05-15 surfaced a secondary failure mode: an agent that correctly followed the orient-then-pause protocol AND correctly flagged the absence of the new docs as a SOFT finding, but also reported a file path (`prompts/_active/10c-iii-reminder-crm-custody.md`) as having been merged via PR #63 on `main` when the path existed only in the local Cowork project workspace. The agent had blurred Surface 1 (pinned project content) with Surface 2 (live `main` via MCP). The DRIFT-CONTROL checklist doesn't catch this — it asks vision questions. The v4.1 verification tables didn't catch it either — they recorded `✓` or `✗` without naming the source of the verification. v4.2 added the Source column to Gate 2 and Gate 4: every verification row cites the specific live `mcp__github__*` tool call that produced it, and pinned-content recall is explicitly disqualified as a Source. The corresponding "Three surfaces" glossary in `PROJECT-INSTRUCTIONS.md` gave the agent language for the distinction.
+
+The 2026-05-16 prompt-11 drift discovery surfaced a tertiary failure mode: workspace pinned `PROMPT_SEQUENCE.md` described an expanded 5-abstract-base-class adapter framework architecture (citing amendments [D19]-[D25] from memos 04 and 05 which had landed on main); main's `PROMPT_SEQUENCE.md` did NOT have that expansion. A prior Partner session had updated the workspace version after amendments landed but never opened the sidecar PR to push it to main. The 2026-05-16 Partner session ran the v4.2 pre-authorship gate, which correctly verified that every path cited in the draft prompt 11 existed on main, AND correctly flagged Surface 1/2 distinctions on individual file claims — but read the workspace PROMPT_SEQUENCE.md uncritically and authored 11a against main's narrower scope without noticing the workspace described a different architecture. v4.3 adds Gate 0: explicitly compare workspace and main PROMPT_SEQUENCE.md before any other gate runs. The downstream complement is `.github/workflows/constitution-sync.yml` (added in the same 2026-05-16 sidecar) which prevents future constitutional-doc amendments from landing without a PROMPT_SEQUENCE.md cascade.
