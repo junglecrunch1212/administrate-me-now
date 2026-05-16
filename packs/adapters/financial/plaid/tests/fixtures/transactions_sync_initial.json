@@ -1,0 +1,73 @@
+{
+  "_comment": "Recorded /transactions/sync response (sandbox-shaped, no real PII). Matches the openapi.yaml /transactions/sync response schema's added/modified/removed/accounts/next_cursor/has_more structure; tests load this and feed it to a fake Plaid client to exercise the adapter's pagination + accumulation logic without a live Plaid call. Two added transactions and one modified across two depository accounts; has_more=false ends the pagination loop after the first page.",
+  "added": [
+    {
+      "transaction_id": "txn-001",
+      "account_id": "acct-checking-001",
+      "amount": -45.20,
+      "iso_currency_code": "USD",
+      "date": "2026-05-14",
+      "name": "BLUE BOTTLE COFFEE",
+      "merchant_name": "Blue Bottle Coffee",
+      "pending": false,
+      "personal_finance_category": {
+        "primary": "FOOD_AND_DRINK",
+        "detailed": "FOOD_AND_DRINK_COFFEE"
+      }
+    },
+    {
+      "transaction_id": "txn-002",
+      "account_id": "acct-savings-001",
+      "amount": 1200.00,
+      "iso_currency_code": "USD",
+      "date": "2026-05-15",
+      "name": "ACH DEPOSIT EMPLOYER PAYROLL",
+      "merchant_name": "Employer Payroll",
+      "pending": false,
+      "personal_finance_category": {
+        "primary": "INCOME",
+        "detailed": "INCOME_WAGES"
+      }
+    }
+  ],
+  "modified": [
+    {
+      "transaction_id": "txn-pending-corrected",
+      "account_id": "acct-checking-001",
+      "amount": -12.50,
+      "iso_currency_code": "USD",
+      "date": "2026-05-13",
+      "name": "AMAZON.COM",
+      "merchant_name": "Amazon",
+      "pending": false,
+      "personal_finance_category": {
+        "primary": "GENERAL_MERCHANDISE",
+        "detailed": "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES"
+      }
+    }
+  ],
+  "removed": [],
+  "accounts": [
+    {
+      "account_id": "acct-checking-001",
+      "name": "Plaid Checking",
+      "type": "depository",
+      "subtype": "checking"
+    },
+    {
+      "account_id": "acct-savings-001",
+      "name": "Plaid Savings",
+      "type": "depository",
+      "subtype": "savings"
+    }
+  ],
+  "item": {
+    "item_id": "item-sandbox-abc",
+    "institution_id": "ins_109508",
+    "institution_name": "First Platypus Bank",
+    "webhook": "https://example.test/webhooks/plaid"
+  },
+  "next_cursor": "cursor-after-initial-sync-abc",
+  "has_more": false,
+  "request_id": "req-fixture-initial"
+}
