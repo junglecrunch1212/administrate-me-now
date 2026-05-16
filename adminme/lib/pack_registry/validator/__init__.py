@@ -28,8 +28,8 @@ implement the rules:
   Cat-E ``execute_action`` route through
   :mod:`adminme.lib.observation`.
 
-Commit-1 stub state: the aggregator currently wires the first two
-checks; subsequent commits wire the remaining four without changing
+Commit-2 state: the aggregator currently wires the first three
+checks; subsequent commits wire the remaining three without changing
 the public signature. Test cases that exercise the not-yet-wired
 checks live in their respective commits.
 
@@ -56,6 +56,9 @@ from adminme.lib.pack_registry.validator.capability_runtime_coherence import (
 )
 from adminme.lib.pack_registry.validator.event_schema_registration import (
     check_event_schema_registration,
+)
+from adminme.lib.pack_registry.validator.projection_subscription_compatibility import (
+    check_projection_subscription_compatibility,
 )
 from adminme.lib.pack_registry.validator.result import (
     Severity,
@@ -97,6 +100,7 @@ def validate_adapter_pack(
     pack_dir: Path,
     *,
     registry: Any | None = None,
+    projections_dir: Path | None = None,
 ) -> ValidationResult:
     """Validate an adapter pack at ``pack_dir`` and aggregate findings.
 
@@ -108,7 +112,10 @@ def validate_adapter_pack(
 
     The ``registry`` parameter is forwarded to the event-schema
     registration check; tests inject a fake registry to avoid loading
-    the on-main schemas.
+    the on-main schemas. The ``projections_dir`` parameter is forwarded
+    to the projection-subscription-compatibility check; tests inject a
+    ``tmp_path`` containing stub projection ``__init__.py`` files to
+    avoid coupling to the full on-main projection tree.
 
     Raises :exc:`adminme.lib.pack_registry.parser.ManifestParseError`
     when ``pack.yaml`` is missing or malformed — those are not
@@ -128,6 +135,11 @@ def validate_adapter_pack(
     findings.extend(
         check_event_schema_registration(manifest, registry=registry)
     )
+    findings.extend(
+        check_projection_subscription_compatibility(
+            manifest, projections_dir=projections_dir
+        )
+    )
 
     return ValidationResult(pack_dir=pack_dir, findings=tuple(findings))
 
@@ -139,5 +151,6 @@ __all__ = [
     "ValidationResult",
     "check_capability_runtime_coherence",
     "check_event_schema_registration",
+    "check_projection_subscription_compatibility",
     "validate_adapter_pack",
 ]
