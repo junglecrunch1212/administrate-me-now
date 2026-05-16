@@ -6,11 +6,24 @@ name: Executor cycle (c1→c4)
 # Actions tab.
 #
 # STACKED branch strategy per docs/BRANCH-STRATEGY.md:
-#   c1 branches from main
-#   c2 branches from claude/<prompt>-c1
-#   c3 branches from claude/<prompt>-c2
-#   c4 branches from claude/<prompt>-c3
-# Each c-band opens its own PR. Operator merges in sequence after review.
+#   c1 work branch: branches from main
+#   c2 work branch: branches from claude/<prompt>-c1 (so c2's tests can
+#                   reference c1's code)
+#   c3 work branch: branches from claude/<prompt>-c2
+#   c4 work branch: branches from claude/<prompt>-c3
+# Each c-band opens its own PR.
+#
+# PR BASE = main for ALL FOUR c-bands. This is the 2026-05-16 fix for the
+# stacked-merge anti-pattern. Prior shape opened c2/c3/c4 PRs with
+# base=<parent c-band branch>; once c1 squash-merged, c2 would merge into
+# the stale claude/<prompt>-c1 branch unless the operator manually changed
+# the base in the GitHub UI. This bit 10c-iii (recovery PR #86), 11a (PR
+# #104), and 11b (PR #105) — three full recoveries in a row.
+#
+# With this shape: operator merges PRs in order (c1 → c2 → c3 → c4), each
+# lands on main directly. The work branches still stack so the executor
+# agents see their predecessors' code at run time; only the PR merge
+# target changed.
 #
 # 2026-05-15 run-1 fixes (PR #80):
 #   - c4 pre-flight uses origin/main..HEAD (was main..HEAD; actions/checkout
@@ -18,10 +31,14 @@ name: Executor cycle (c1→c4)
 #   - PR creation moved from the agent (curl in executor-cN.md) to the
 #     workflow itself (gh CLI).
 #
-# 2026-05-15 run-2 fixes (this PR):
+# 2026-05-15 run-2 fixes (PR #85):
 #   - "Open cN PR" steps now fail visibly on gh pr create errors instead
 #     of swallowing them via `|| echo`. Adds gh auth status + verbose
 #     diagnostics + post-create gh pr view so logs reveal what's happening.
+#
+# 2026-05-16 anti-pattern fix (this PR):
+#   - c2/c3/c4 PRs open with --base main, not --base parent-c-band-branch.
+#     Kills the recurring stacked-merge anti-pattern at the source.
 #
 # Setup: docs/SETUP-AUTONOMOUS-LOOP.md must be complete first.
 # Source patterns: docs/RUNBOOK-EXECUTOR.md §1.1-§1.5 + .claude/agents/executor-c{1,2,3,4}.md
@@ -219,9 +236,9 @@ jobs:
           echo "Title to use: $SUBJECT"
           echo "Body preview (first 3 lines):"
           echo "$BODY" | head -3
-          echo "--- creating PR ---"
+          echo "--- creating PR (base=main per 2026-05-16 anti-pattern fix) ---"
           gh pr create \
-            --base "claude/${PROMPT_ID}-c1" \
+            --base main \
             --head "claude/${PROMPT_ID}-c2" \
             --title "$SUBJECT" \
             --body "$BODY"
@@ -303,9 +320,9 @@ jobs:
           echo "Title to use: $SUBJECT"
           echo "Body preview (first 3 lines):"
           echo "$BODY" | head -3
-          echo "--- creating PR ---"
+          echo "--- creating PR (base=main per 2026-05-16 anti-pattern fix) ---"
           gh pr create \
-            --base "claude/${PROMPT_ID}-c2" \
+            --base main \
             --head "claude/${PROMPT_ID}-c3" \
             --title "$SUBJECT" \
             --body "$BODY"
@@ -400,9 +417,9 @@ jobs:
           echo "Title to use: $SUBJECT"
           echo "Body preview (first 3 lines):"
           echo "$BODY" | head -3
-          echo "--- creating PR ---"
+          echo "--- creating PR (base=main per 2026-05-16 anti-pattern fix) ---"
           gh pr create \
-            --base "claude/${PROMPT_ID}-c3" \
+            --base main \
             --head "claude/${PROMPT_ID}-c4" \
             --title "$SUBJECT" \
             --body "$BODY"
