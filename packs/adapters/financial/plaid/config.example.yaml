@@ -1,0 +1,30 @@
+# Example Plaid adapter configuration. Mirrored into config/channels.yaml
+# under an `adapters:` entry with `kind: financial-plaid`.
+#
+# Every secret-bearing field is a 1Password reference (op://<vault>/<item>/<field>)
+# per ADMINISTRATEME_BUILD.md §L1 — the adapter resolves these at start()
+# via adminme.lib.crypto. NEVER paste the raw token value here.
+#
+# The bootstrap wizard (prompt 16) will own creating the 1Password items
+# and Link-token flow; the example values below are placeholders that
+# match the JSON-schema patterns and let an operator hand-edit the config
+# until the wizard ships.
+#
+# sensitivity_floor is omitted intentionally — the pack hardcodes it to
+# `privileged` per SYSTEM_INVARIANTS.md §6 invariant 10. If present, it
+# MUST be the string "privileged"; any other value (including "normal")
+# fails JSON-schema validation at load time.
+
+item_access_token_ref: op://adminme-plaid/ins_109508/access_token
+plaid_client_id_ref: op://adminme-plaid/api-credentials/client_id
+plaid_secret_ref: op://adminme-plaid/api-credentials/secret
+
+webhook_route: /webhooks/plaid
+
+member_id: member-001
+plaid_item_id: item-sandbox-abc
+institution_id: ins_109508
+
+# Optional — defaults apply if omitted.
+dedupe_window_minutes: 90
+backstop_poll_cron: "0 4 * * *"

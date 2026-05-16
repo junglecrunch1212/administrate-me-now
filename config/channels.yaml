@@ -22,3 +22,23 @@ adapters:
       user_email: sandbox@example.test
       # Poll cadence is enforced inside the adapter; the supervisor only
       # restarts on crash. See packs/adapters/messaging/gmail/pack.yaml.
+
+  - kind: financial-plaid
+    family: financial
+    # sensitivity_floor is hardcoded `privileged` at the pack level per
+    # SYSTEM_INVARIANTS.md §6 invariant 10 — the adapter's config loader
+    # rejects any attempt to lower it. Declared here for operator
+    # visibility only.
+    sensitivity_floor: privileged
+    config:
+      item_access_token_ref: op://adminme-plaid/ins_109508/access_token
+      plaid_client_id_ref: op://adminme-plaid/api-credentials/client_id
+      plaid_secret_ref: op://adminme-plaid/api-credentials/secret
+      webhook_route: /webhooks/plaid
+      member_id: member-001
+      plaid_item_id: item-sandbox-abc
+      institution_id: ins_109508
+      # Webhooks are primary; the daily cron is a backstop in case Plaid
+      # silently drops a SYNC_UPDATES_AVAILABLE. See
+      # packs/adapters/financial/plaid/pack.yaml.
+      backstop_poll_cron: "0 4 * * *"
