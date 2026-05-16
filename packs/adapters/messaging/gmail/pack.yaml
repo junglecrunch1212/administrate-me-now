@@ -1,0 +1,32 @@
+pack:
+  id: adapter:messaging-gmail-api
+  name: Gmail messaging adapter
+  version: 1.0.0
+  kind: adapter
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: adapter.py
+  class: GmailAdapter
+family: messaging
+# Documentation-only triggers per [BUILD.md §L1]. The adapter supervisor
+# runs each adapter as a long-lived asyncio.Task; the schedule below
+# describes the in-process poll cadence the adapter enforces internally
+# (the supervisor only restarts on crash, never polls).
+triggers:
+  kind: external_poll
+  schedule: "*/2 * * * *"
+depends_on:
+  event_types:
+    - adapter.error
+    - adapter.authenticated
+    - adapter.cursor_advanced
+    - messaging.received
+events_emitted:
+  - adapter.error
+  - adapter.authenticated
+  - adapter.cursor_advanced
+  - messaging.received
+config:
+  schema: config.schema.json
+  example: config.example.yaml

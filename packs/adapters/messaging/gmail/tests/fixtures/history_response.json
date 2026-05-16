@@ -1,0 +1,18 @@
+{
+  "history": [
+    {
+      "id": "9001",
+      "messagesAdded": [
+        {"message": {"id": "msg-alice", "threadId": "thr-alice"}}
+      ]
+    },
+    {
+      "id": "9002",
+      "messagesAdded": [
+        {"message": {"id": "msg-bob", "threadId": "thr-bob"}},
+        {"message": {"id": "msg-alice", "threadId": "thr-alice"}}
+      ]
+    }
+  ],
+  "historyId": "9002"
+}

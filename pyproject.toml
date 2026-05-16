@@ -115,3 +115,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["respx", "respx.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["google", "google.*", "googleapiclient", "googleapiclient.*"]
+ignore_missing_imports = true
