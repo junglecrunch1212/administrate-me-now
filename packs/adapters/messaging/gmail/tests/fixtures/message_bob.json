@@ -1,0 +1,39 @@
+{
+  "id": "msg-bob",
+  "threadId": "thr-bob",
+  "internalDate": "1717549200000",
+  "historyId": "9002",
+  "labelIds": ["INBOX", "IMPORTANT"],
+  "snippet": "Multipart hello",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      {"name": "From", "value": "bob@example.test"},
+      {"name": "To", "value": "sandbox@example.test"},
+      {"name": "Subject", "value": "Multipart hello"}
+    ],
+    "body": {"size": 0},
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "headers": [
+          {"name": "Content-Type", "value": "text/plain; charset=UTF-8"}
+        ],
+        "body": {
+          "size": 17,
+          "data": "SGVsbG8gcGxhaW4gd29ybGQ="
+        }
+      },
+      {
+        "mimeType": "text/html",
+        "headers": [
+          {"name": "Content-Type", "value": "text/html; charset=UTF-8"}
+        ],
+        "body": {
+          "size": 22,
+          "data": "PHA-SGVsbG8gaHRtbCB3b3JsZDwvcD4="
+        }
+      }
+    ]
+  }
+}

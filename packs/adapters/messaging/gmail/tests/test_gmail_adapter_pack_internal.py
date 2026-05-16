@@ -1,9 +1,16 @@
-"""Gmail adapter pack — manifest + auth canaries.
+"""Gmail adapter pack — manifest + auth + ingest canaries.
 
 C2 ships:
   1. Pack-load canary — manifest parses, sentinel fields match.
   2. Service-account auth flow (mocked) emits ``adapter.authenticated``.
   3. Sensitivity-floor downgrade attempt is refused per [§6 invariant 10].
+
+C3 adds (recorded-fixture ingest, milestone cursor, defensive error):
+  4. ``_run_poll_cycle`` bootstraps the cursor via getProfile on first call.
+  5. History → messages.get round trip emits ``messaging.received`` per added msg.
+  6. ``adapter.cursor_advanced`` emits only when an event-count milestone fires.
+  7. Rate-limit (HTTP 429) emits ``adapter.error`` with severity=transient + retry_after.
+  8. Auth failure (HTTP 401) emits ``adapter.error`` severity=fatal and halts loop.
 
 F-3 (10c-iii): basename is unique
 (``test_gmail_adapter_pack_internal.py``) so collection from the repo
@@ -13,7 +20,8 @@ root does not collide with sibling packs.
 from __future__ import annotations
 
 import importlib.util
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +31,7 @@ import yaml
 from adminme.adapters.base import Adapter, AdapterContext
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _load_adapter_module() -> Any:
@@ -45,6 +54,11 @@ def _load_adapter_module() -> Any:
 _adapter_mod: Any = _load_adapter_module()
 GmailAdapter: Any = _adapter_mod.GmailAdapter
 GMAIL_READONLY_SCOPE: str = _adapter_mod.GMAIL_READONLY_SCOPE
+
+
+def _fixture(name: str) -> dict[str, Any]:
+    with (FIXTURES / name).open() as f:
+        return json.load(f)
 
 
 # ---------------------------------------------------------------------------
@@ -114,19 +128,161 @@ class _FakeEventLog:
         self.calls.append(kwargs)
 
 
-def _ctx(event_log: _FakeEventLog) -> AdapterContext:
+_FROZEN_NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _ctx(
+    event_log: _FakeEventLog,
+    *,
+    now: datetime | None = None,
+) -> AdapterContext:
+    """Build an AdapterContext with deterministic clock + correlation id."""
+    fixed_now = now or _FROZEN_NOW
     return AdapterContext(
         event_log=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-test",
-        now_factory=lambda: datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc),
+        now_factory=lambda: fixed_now,
     )
+
+
+class _FakeGmailService:
+    """A minimal stand-in for the ``googleapiclient`` Gmail service
+    object. Implements ``service.users().getProfile()/.history().list()
+    /.messages().get()`` chains by returning preconfigured fixture
+    responses. ``execute()`` may also be configured to raise."""
+
+    def __init__(
+        self,
+        *,
+        profile: dict[str, Any] | None = None,
+        history_pages: list[dict[str, Any]] | None = None,
+        messages: dict[str, dict[str, Any]] | None = None,
+        history_raises: Exception | None = None,
+        get_profile_raises: Exception | None = None,
+    ) -> None:
+        self._profile = profile
+        # Use a queue of responses so paging is testable.
+        self._history_pages = list(history_pages or [])
+        self._messages = dict(messages or {})
+        self._history_raises = history_raises
+        self._get_profile_raises = get_profile_raises
+        self.history_list_calls: list[dict[str, Any]] = []
+        self.messages_get_calls: list[dict[str, Any]] = []
+        self.get_profile_calls: list[dict[str, Any]] = []
+
+    def users(self) -> Any:
+        return _FakeUsers(self)
+
+
+class _FakeUsers:
+    def __init__(self, service: _FakeGmailService) -> None:
+        self._service = service
+
+    def getProfile(self, *, userId: str) -> Any:
+        self._service.get_profile_calls.append({"userId": userId})
+        return _FakeExecute(self._service, kind="getProfile")
+
+    def history(self) -> Any:
+        return _FakeHistory(self._service)
+
+    def messages(self) -> Any:
+        return _FakeMessages(self._service)
+
+
+class _FakeHistory:
+    def __init__(self, service: _FakeGmailService) -> None:
+        self._service = service
+
+    def list(self, **kwargs: Any) -> Any:
+        self._service.history_list_calls.append(kwargs)
+        return _FakeExecute(self._service, kind="history.list")
+
+
+class _FakeMessages:
+    def __init__(self, service: _FakeGmailService) -> None:
+        self._service = service
+
+    def get(self, **kwargs: Any) -> Any:
+        self._service.messages_get_calls.append(kwargs)
+        return _FakeExecute(self._service, kind="messages.get", params=kwargs)
+
+
+class _FakeExecute:
+    def __init__(
+        self,
+        service: _FakeGmailService,
+        *,
+        kind: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        self._service = service
+        self._kind = kind
+        self._params = params or {}
+
+    def execute(self) -> Any:
+        if self._kind == "getProfile":
+            if self._service._get_profile_raises is not None:
+                raise self._service._get_profile_raises
+            return dict(self._service._profile or {})
+        if self._kind == "history.list":
+            if self._service._history_raises is not None:
+                raise self._service._history_raises
+            if not self._service._history_pages:
+                return {"historyId": "0"}
+            return self._service._history_pages.pop(0)
+        if self._kind == "messages.get":
+            msg_id = self._params.get("id")
+            if msg_id not in self._service._messages:
+                raise KeyError(f"unknown message id {msg_id!r}")
+            return dict(self._service._messages[msg_id])
+        raise AssertionError(f"unhandled fake call {self._kind!r}")
+
+
+class _FakeHttpResponse:
+    """httplib2-style mapping with a ``status`` attribute. Subset
+    sufficient to exercise ``GmailAdapter._classify_gmail_error``."""
+
+    def __init__(self, *, status: int, headers: dict[str, str] | None = None) -> None:
+        self.status = status
+        self._headers = {k.lower(): v for k, v in (headers or {}).items()}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "status":
+            return self.status
+        return self._headers.get(key.lower(), default)
+
+
+class _FakeHttpError(Exception):
+    """Duck-type for ``googleapiclient.errors.HttpError`` — adapter
+    classification reads ``.resp.status`` and ``.resp.get('retry-after')``."""
+
+    def __init__(self, resp: _FakeHttpResponse, content: bytes = b"") -> None:
+        super().__init__(f"HTTP {resp.status}")
+        self.resp = resp
+        self.content = content
+
+
+def _seeded_adapter(service: _FakeGmailService) -> Any:
+    """Construct a GmailAdapter without going through start(): service
+    is pre-injected, cursor pre-seeded so _run_poll_cycle skips bootstrap.
+    Used by ingest / cursor / error tests."""
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+    )
+    adapter._service = service
+    adapter._cursor = "9000"
+    adapter._last_advance_at = _FROZEN_NOW
+    return adapter
 
 
 async def test_service_account_auth_emits_authenticated() -> None:
     """``start()`` resolves the service-account ref, builds a fake
-    Gmail service, and emits ``adapter.authenticated`` v1 — then the
-    C2 stub raises ``NotImplementedError`` for the polling loop."""
+    Gmail service, emits ``adapter.authenticated`` v1, then exits the
+    polling loop after ``max_poll_cycles=0`` cycles."""
     resolved_credentials: list[str] = []
     built_services: list[tuple[dict[str, Any], list[str], str]] = []
 
@@ -138,7 +294,7 @@ async def test_service_account_auth_emits_authenticated() -> None:
         creds: dict[str, Any], scopes: list[str], subject: str
     ) -> object:
         built_services.append((creds, scopes, subject))
-        return object()
+        return _FakeGmailService()
 
     adapter = GmailAdapter(
         config={
@@ -147,12 +303,10 @@ async def test_service_account_auth_emits_authenticated() -> None:
         },
         credentials_resolver=fake_resolver,
         service_factory=fake_factory,
+        max_poll_cycles=0,
     )
     event_log = _FakeEventLog()
-    ctx = _ctx(event_log)
-
-    with pytest.raises(NotImplementedError, match="commit 3"):
-        await adapter.start(ctx=ctx)
+    await adapter.start(ctx=_ctx(event_log))
 
     # Resolver was called with the configured op-ref.
     assert resolved_credentials == ["op://test/vault/gmail/sa"]
@@ -243,3 +397,228 @@ def test_sensitivity_floor_rejects_unknown_value() -> None:
                 "sensitivity_floor": "high",
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# 4) C3 — ingest, cursor advance, error path
+# ---------------------------------------------------------------------------
+
+
+async def test_first_poll_cycle_bootstraps_cursor_via_get_profile() -> None:
+    """On the first cycle (no cursor), the adapter MUST snapshot the
+    mailbox's current historyId via users.getProfile and emit zero
+    messages — pre-existing mail is not back-flooded into the event log."""
+    service = _FakeGmailService(profile=_fixture("profile_response.json"))
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+    )
+    adapter._service = service
+    event_log = _FakeEventLog()
+
+    emitted = await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    assert emitted == 0
+    assert adapter._cursor == "9000"
+    assert len(service.get_profile_calls) == 1
+    assert service.get_profile_calls[0]["userId"] == "me"
+    # No messages fetched on bootstrap; no events emitted.
+    assert service.history_list_calls == []
+    assert service.messages_get_calls == []
+    assert event_log.calls == []
+
+
+async def test_history_sync_emits_messaging_received_per_added_message() -> None:
+    """A history page with two ``messagesAdded`` rows triggers two
+    ``users.messages.get`` calls and two ``messaging.received`` events
+    with body/subject/from/to derived from the fixture."""
+    history = _fixture("history_response.json")
+    service = _FakeGmailService(
+        history_pages=[history],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    emitted = await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    # Fixture has msg-alice listed twice (dedup expected) + msg-bob once.
+    assert emitted == 2
+    # Cursor advances to the response's historyId.
+    assert adapter._cursor == "9002"
+    # history.list called with startHistoryId at the seeded cursor.
+    assert len(service.history_list_calls) == 1
+    assert service.history_list_calls[0]["startHistoryId"] == "9000"
+    # messages.get called twice (deduped), format=full.
+    fetched_ids = [c["id"] for c in service.messages_get_calls]
+    assert sorted(fetched_ids) == ["msg-alice", "msg-bob"]
+    assert all(c["format"] == "full" for c in service.messages_get_calls)
+
+    received = [c for c in event_log.calls if c["type"] == "messaging.received"]
+    assert len(received) == 2
+    by_thread = {c["payload"]["thread_id"]: c["payload"] for c in received}
+
+    alice = by_thread["thr-alice"]
+    assert alice["source_channel"] == "gmail"
+    assert alice["from_identifier"] == "alice@example.test"
+    assert alice["to_identifier"] == "sandbox@example.test"
+    assert alice["subject"] == "Quick note"
+    assert alice["body_text"] == "Hi sandbox"
+    assert alice["body_html"] is None
+    # 1717545600000 ms = 2024-06-05T00:00:00Z
+    assert alice["received_at"] == "2024-06-05T00:00:00Z"
+    assert alice["attachments"] == []
+
+    bob = by_thread["thr-bob"]
+    assert bob["from_identifier"] == "bob@example.test"
+    assert bob["body_text"] == "Hello plain world"
+    assert bob["body_html"] == "<p>Hello html world</p>"
+
+
+async def test_cursor_advanced_emits_on_event_milestone() -> None:
+    """When the events-since-last-advance counter hits the milestone
+    threshold (100), the adapter MUST emit ``adapter.cursor_advanced``
+    v1 with the new cursor value, then reset the counter."""
+    history = _fixture("history_response.json")
+    service = _FakeGmailService(
+        history_pages=[history],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = _seeded_adapter(service)
+    # Pre-seed counter just below the milestone so the cycle's 2 new
+    # events trips it (98 + 2 = 100, milestone is >=).
+    adapter._events_since_advance = (
+        adapter.CURSOR_MILESTONE_EVENTS - 2
+    )
+    event_log = _FakeEventLog()
+
+    await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    advances = [
+        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
+    ]
+    assert len(advances) == 1
+    payload = advances[0]["payload"]
+    assert payload["adapter_name"] == "messaging-gmail-api"
+    assert payload["adapter_family"] == "messaging"
+    assert payload["cursor_kind"] == "history_id"
+    assert payload["cursor_value"] == "9002"
+    assert payload["events_since_last"] == 100
+    assert advances[0]["schema_version"] == 1
+    # Counter was reset on emission.
+    assert adapter._events_since_advance == 0
+    assert adapter._last_advance_at == _FROZEN_NOW
+
+
+async def test_cursor_advanced_skipped_below_milestone() -> None:
+    """Anti-vision §"Quiet by default": with only a handful of events
+    in the cycle and the clock not yet past the 5-minute milestone,
+    the adapter MUST NOT emit ``adapter.cursor_advanced``."""
+    history = _fixture("history_response.json")
+    service = _FakeGmailService(
+        history_pages=[history],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    advances = [
+        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
+    ]
+    assert advances == []
+    # Counter reflects the 2 emitted events.
+    assert adapter._events_since_advance == 2
+
+
+async def test_cursor_advanced_emits_on_time_milestone() -> None:
+    """If wall-clock elapsed since the last advance exceeds 5 minutes
+    AND at least one event was emitted in the cycle, the adapter emits
+    ``adapter.cursor_advanced`` even though the event count is below
+    100."""
+    history = _fixture("history_response.json")
+    service = _FakeGmailService(
+        history_pages=[history],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = _seeded_adapter(service)
+    # Pretend the last advance was 6 minutes ago — well past the 5-min
+    # milestone window.
+    adapter._last_advance_at = _FROZEN_NOW - timedelta(minutes=6)
+    event_log = _FakeEventLog()
+
+    await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    advances = [
+        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
+    ]
+    assert len(advances) == 1
+
+
+async def test_rate_limit_emits_adapter_error_transient(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 429 response from history.list emits ``adapter.error`` with
+    severity=transient, error_kind=rate_limited, and retry_after_s
+    parsed from the Retry-After header. The loop continues (not fatal)."""
+    error = _FakeHttpError(
+        resp=_FakeHttpResponse(status=429, headers={"Retry-After": "30"})
+    )
+    service = _FakeGmailService(history_raises=error)
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    # Stub asyncio.sleep so the loop's post-cycle wait is instant AND
+    # flips stop_requested so the loop exits after one cycle. Without
+    # this the loop would block for POLL_INTERVAL_S seconds.
+    async def _instant_sleep(_seconds: float) -> None:
+        adapter._stop_requested = True
+
+    monkeypatch.setattr(_adapter_mod.asyncio, "sleep", _instant_sleep)
+
+    await adapter._poll_loop(ctx=_ctx(event_log))
+
+    errors = [c for c in event_log.calls if c["type"] == "adapter.error"]
+    assert len(errors) == 1
+    payload = errors[0]["payload"]
+    assert payload["adapter_name"] == "messaging-gmail-api"
+    assert payload["adapter_family"] == "messaging"
+    assert payload["severity"] == "transient"
+    assert payload["error_kind"] == "rate_limited"
+    assert payload["retry_after_s"] == 30
+    assert errors[0]["schema_version"] == 1
+    # Loop did NOT crash; status reflects backoff (transient).
+    assert adapter._status.state == "backoff"
+
+
+async def test_auth_failure_emits_fatal_and_halts_loop() -> None:
+    """A 401 response classifies as fatal — adapter emits
+    ``adapter.error`` severity=fatal, transitions to ``crashed`` state,
+    and exits the loop so the supervisor can restart-with-backoff."""
+    error = _FakeHttpError(resp=_FakeHttpResponse(status=401))
+    service = _FakeGmailService(history_raises=error)
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    await adapter._poll_loop(ctx=_ctx(event_log))
+
+    errors = [c for c in event_log.calls if c["type"] == "adapter.error"]
+    assert len(errors) == 1
+    assert errors[0]["payload"]["severity"] == "fatal"
+    assert errors[0]["payload"]["error_kind"] == "auth_failed"
+    assert adapter._status.state == "crashed"
