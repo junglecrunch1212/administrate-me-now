@@ -1,0 +1,682 @@
+"""Apple Reminders bidirectional adapter — outbound EventKit write path (c2).
+
+Implements the ``adminme.adapters.base.Adapter`` Protocol per the operator
+decision in ``docs/06-split-memo-11.md`` §4. Phase 11c commit 2 ships the
+outbound half only: event-log → iCloud writes on a 30s loop. The inbound
+poll (iCloud → event-log) is stubbed at ``_inbound_poll`` and raises
+``NotImplementedError``; it lands in commit 3. ``start()`` spawns the
+outbound supervised task and blocks on it; commit 4 wires both inbound +
+outbound concurrently.
+
+Bidirectional sync model [BUILD.md APPLE REMINDERS BIDIRECTIONAL —
+DETAILED SPEC]. The adapter consumes three upstream event types and
+translates each into an ``EKReminder`` write to the configured
+household list:
+
+  - ``reminder.dispatched`` → title = ``composed_text``, priority = high (1)
+  - ``task.created``        → title = ``title``, priority = medium (5)
+  - ``commitment.proposed`` → title = ``text_summary``, priority by ``urgency``
+
+Each successful save emits one ``reminder.list_item.synced`` v1 event
+with ``direction="outbound"`` and ``causation_id`` set to the upstream
+event id — round-trip traceability per BUILD.md APPLE REMINDERS
+BIDIRECTIONAL §"Outbound write cadence".
+
+Never-sync filter [BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Never-sync
+rules", VISION §"Privacy by default"]. The predicate from
+``never_sync.py`` (c1) is applied BEFORE every outbound write — three
+rules short-circuit any block: list-name substring (e.g., "Work"),
+item-tag substring (e.g., "#private"), owning-member role
+(``"child"`` / ``"ambient"``). Symmetric enforcement at the inbound
+boundary lands in c3.
+
+Sensitivity floor [§6 invariant 10]. Hardcoded ``"normal"`` at the
+class level. Adapters NEVER auto-elevate; any config attempt to set
+``"privileged"`` raises at construction. The per-item privacy boundary
+is the never-sync predicate, not the adapter-level floor — finer-
+grained but lower base-rate than Plaid's ``"privileged"``-floor
+financial adapter.
+
+Per ``[§8.2, D6]``: no LLM SDK import in this module. Channel
+transport is OpenClaw's job [§8 invariant 3]; this adapter only emits
+typed events. ``[§7.3, D17]``: adapters never write projections. The
+``reminders`` projection slice is READ-ONLY from c3's inbound dedupe
+predicate; the writer pipeline ships in a future prompt.
+"""
+
+# [§8.2, D6] no LLM SDK imports under packs/adapters/ — channel
+# transport is OpenClaw's; this module emits typed events only.
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import logging
+import sys
+import uuid
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from adminme.adapters.base import (
+    AdapterContext,
+    AdapterStatus,
+    SensitivityFloor,
+)
+
+_log = logging.getLogger(__name__)
+
+_PACK_DIR = Path(__file__).resolve().parent
+
+
+def _import_sibling(module_name: str) -> Any:
+    """Load a sibling pack-internal Python file via importlib.
+
+    Pack files do not live on Python's import path (``packs/`` isn't a
+    package); the supervisor loads ``adapter.py`` via
+    ``importlib.util.spec_from_file_location`` and pack-internal sibling
+    modules need the same treatment. Caches by name so repeated
+    invocations across test collection don't reload."""
+    cached_name = f"_apple_eventkit_pack__{module_name}"
+    cached = sys.modules.get(cached_name)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(
+        cached_name, _PACK_DIR / f"{module_name}.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load pack sibling {module_name!r}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[cached_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_never_sync_mod: Any = _import_sibling("never_sync")
+_shim_mod: Any = _import_sibling("_eventkit_shim")
+
+passes_never_sync: Callable[..., bool] = _never_sync_mod.passes_never_sync
+DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS: tuple[str, ...] = tuple(
+    _never_sync_mod.DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS
+)
+DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS: tuple[str, ...] = tuple(
+    _never_sync_mod.DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
+)
+EKEventStoreLike: Any = _shim_mod.EKEventStoreLike
+EKReminderLike: Any = _shim_mod.EKReminderLike
+NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
+
+
+# OS-level token-storage reference. EventKit access is granted at the OS
+# level via ``EKEventStore.requestFullAccessToReminders(completion:)``
+# per docs/reference/apple-eventkit/access.md; no 1Password secret is
+# involved (unlike Gmail's service-account JSON or Plaid's item access
+# token). The string is recorded on ``adapter.authenticated`` for audit.
+_OS_TOKEN_STORAGE_REF = "os://reminders-permission"
+
+_DEFAULT_INBOUND_INTERVAL_S = 30
+_DEFAULT_OUTBOUND_INTERVAL_S = 30
+
+_OUTBOUND_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "reminder.dispatched",
+        "task.created",
+        "commitment.proposed",
+    }
+)
+
+# EventKit priority ordinal scale per
+# ``docs/reference/apple-eventkit/ekreminder.md``: 0=none, 1=high,
+# 5=medium, 9=low. The Reminders adapter maps urgency strings on
+# ``commitment.proposed`` to these ordinals.
+_PRIORITY_BY_URGENCY: dict[str, Literal[0, 1, 5, 9]] = {
+    "today": 1,
+    "this_week": 5,
+    "this_month": 9,
+    "no_rush": 0,
+}
+
+MemberRoleResolver = Callable[[str], str]
+"""Maps ``member_id`` → role string (``"adult"`` / ``"child"`` /
+``"ambient"``). Production wires the ``members`` projection slice from
+prompt 05; tests inject a fake. The never-sync predicate's
+ownership-exclusion rule consults this for every outbound write
+candidate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Never-sync
+rules"."""
+
+EKEventStoreFactory = Callable[[], Any]
+"""PM-27: constructor-injected callable that returns an
+``EKEventStoreLike``. Default is ``NoopEKEventStore`` so the adapter
+constructs cleanly without pyobjc; the supervisor wires the real
+factory at startup (prompt 16 bootstrap wizard)."""
+
+
+def _noop_ek_event_store_factory() -> Any:
+    """PM-27 default factory. Returns a ``NoopEKEventStore`` that raises
+    on every operation — surfaces missing-factory bugs loudly instead of
+    silently no-op-ing writes."""
+    return NoopEKEventStore()
+
+
+def _default_member_role_resolver(_member_id: str) -> str:
+    """Permissive default — assumes ``"adult"`` so every candidate is
+    sync-eligible by role. Production reads the ``members`` projection
+    slice; this default is for tests + the Phase A operator-self-host
+    case where the projection isn't wired yet."""
+    return "adult"
+
+
+class AppleEventKitAdapter:
+    """Apple Reminders L1 standalone bidirectional adapter.
+
+    Class attributes satisfy the ``Adapter`` Protocol's required fields.
+    ``sensitivity_floor`` is hardcoded ``"normal"`` per [§6 invariant
+    10]; any config attempt to set ``"privileged"`` raises at
+    construction.
+
+    The supervisor instantiates one of these per Reminders entry in
+    ``config/channels.yaml`` and supervises ``start()``. Each adapter
+    handles a single household member's EventKit grant; multi-member
+    households run multiple supervised instances.
+    """
+
+    # [§6 invariant 10, D11 (Reminders posture)]: sensitivity floor
+    # hardcoded at the class level. Reminders adapters cannot be
+    # ELEVATED to ``privileged`` via config — adapters never
+    # auto-elevate; that's a deliberate operator decision for a future
+    # prompt. JSON-schema rejects most malformed inputs at load time;
+    # ``__init__`` is the defense-in-depth runtime check.
+    name: str = "reminders-apple-eventkit"
+    family: str = "reminders"
+    version: str = "1.0.0"
+    sensitivity_floor: SensitivityFloor = "normal"
+
+    PACK_ID: str = "adapter:reminders-apple-eventkit"
+
+    OUTBOUND_INTERVAL_S: int = _DEFAULT_OUTBOUND_INTERVAL_S
+    """In-process outbound write cadence. ``pack.yaml``'s ``*/1 * * * *``
+    cron is a heartbeat; the 30s sub-cadence is the active outbound
+    rate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Outbound write
+    cadence"."""
+
+    INBOUND_INTERVAL_S: int = _DEFAULT_INBOUND_INTERVAL_S
+    """In-process inbound poll cadence (c3). Same rationale as the
+    outbound: pack.yaml's cron is a heartbeat, the 30s sub-cadence is
+    the active polling rate per §"Polling cadence"."""
+
+    def __init__(
+        self,
+        *,
+        config: dict[str, Any],
+        ek_event_store_factory: EKEventStoreFactory = _noop_ek_event_store_factory,
+        member_role_resolver: MemberRoleResolver = _default_member_role_resolver,
+        max_outbound_cycles: int | None = None,
+    ) -> None:
+        self._config = dict(config)
+        # [§6 invariant 10] re-assert the class-level floor against the
+        # resolved config. Reminders does NOT allow raising to
+        # ``privileged`` via config (unlike Gmail) because adapter-level
+        # elevation would be a deliberate operator decision for a
+        # future prompt — finer-grained item-level privacy lives in the
+        # never-sync predicate, not the floor.
+        configured_floor = self._config.get("sensitivity_floor", "normal")
+        if configured_floor != "normal":
+            raise ValueError(
+                "Reminders adapter sensitivity_floor must be 'normal'; "
+                f"got {configured_floor!r}. [§6 invariant 10] adapters "
+                "never auto-elevate."
+            )
+
+        self._ek_event_store_factory = ek_event_store_factory
+        self._member_role_resolver = member_role_resolver
+        self._never_sync_list_substrings: tuple[str, ...] = tuple(
+            self._config.get(
+                "never_sync_list_substrings", DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS
+            )
+        )
+        self._never_sync_tag_substrings: tuple[str, ...] = tuple(
+            self._config.get(
+                "never_sync_tag_substrings", DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
+            )
+        )
+        # Test seam: bound the outbound loop. ``None`` = run forever
+        # (production); the supervisor stops the task on lifecycle events.
+        self._max_outbound_cycles = max_outbound_cycles
+
+        self._status = AdapterStatus()
+        self._ek_store: Any = None
+        self._ctx: AdapterContext | None = None
+        self._outbound_queue: deque[dict[str, Any]] = deque()
+        self._stop_requested: bool = False
+        self._outbound_task: asyncio.Task[None] | None = None
+
+    # ------------------------------------------------------------------
+    # Adapter Protocol
+    # ------------------------------------------------------------------
+    async def start(self, *, ctx: AdapterContext) -> None:
+        """Validate config, instantiate the EKEventStore, emit
+        ``adapter.authenticated``, spawn the outbound supervised task,
+        and block on it until ``stop()`` is called.
+
+        c2 spawns ONLY the outbound task — inbound landing in c3.
+        ``start()`` is the supervisor-facing lifecycle hook; tests
+        exercise the underlying helpers directly to avoid blocking on
+        the loop."""
+        target_list_identifier = self._config.get("target_list_identifier")
+        member_id = self._config.get("member_id")
+        if not isinstance(target_list_identifier, str) or not target_list_identifier:
+            raise ValueError(
+                "config.target_list_identifier must be a non-empty string "
+                "(the iCloud Reminders list AdministrateMe writes to)"
+            )
+        if not isinstance(member_id, str) or not member_id:
+            raise ValueError(
+                "config.member_id must be a non-empty string (the household "
+                "member whose EventKit grant this adapter uses)"
+            )
+
+        self._ek_store = self._ek_event_store_factory()
+        self._ctx = ctx
+        self._status.started_at = ctx.now_factory()
+        self._status.state = "running"
+
+        # [D7] adapter.authenticated registered at v1 in
+        # adminme/events/schemas/adapters.py. [D8] correlation_id is
+        # minted by the supervisor-provided factory.
+        self._emit_authenticated(ctx=ctx)
+
+        self._outbound_task = asyncio.create_task(self._outbound_poll(ctx=ctx))
+        try:
+            await self._outbound_task
+        except asyncio.CancelledError:
+            return
+
+    async def stop(self) -> None:
+        """Cancel the outbound task, release the EKEventStore handle,
+        and transition to the ``"stopped"`` state. Idempotent."""
+        self._stop_requested = True
+        task = self._outbound_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        self._ek_store = None
+        self._status.state = "stopped"
+
+    def status(self) -> AdapterStatus:
+        return self._status
+
+    # ------------------------------------------------------------------
+    # outbound: event-log → iCloud (c2)
+    # ------------------------------------------------------------------
+    def enqueue_outbound(self, event: dict[str, Any]) -> None:
+        """Append an upstream event to the outbound queue.
+
+        The supervisor's event-bus subscription routes
+        ``reminder.dispatched`` / ``task.created`` /
+        ``commitment.proposed`` events to this method; any other
+        ``type`` is filtered + dropped (this adapter does not write
+        ``crm.surfaced`` / ``digest.composed`` / etc. — those route
+        elsewhere per §6 out-of-scope). Drained on each
+        ``OUTBOUND_INTERVAL_S`` tick of ``_outbound_poll``."""
+        event_type = event.get("type")
+        if event_type not in _OUTBOUND_EVENT_TYPES:
+            _log.debug(
+                "reminders adapter: ignoring upstream type=%r "
+                "(not in outbound trigger set)",
+                event_type,
+            )
+            return
+        self._outbound_queue.append(event)
+
+    async def _outbound_poll(self, *, ctx: AdapterContext) -> None:
+        """Outbound poll loop. Each tick drains the queue once, then
+        sleeps ``OUTBOUND_INTERVAL_S``. Tests bound the loop via
+        ``max_outbound_cycles``.
+
+        Defensive catch around the drain mirrors the gmail/plaid
+        pattern: any EventKit-side exception classifies into
+        ``AdapterErrorV1`` severity + ``error_kind`` and the loop
+        continues for ``transient`` cases or halts for ``fatal`` so the
+        supervisor's restart-with-backoff takes over."""
+        cycles = 0
+        while not self._stop_requested:
+            if (
+                self._max_outbound_cycles is not None
+                and cycles >= self._max_outbound_cycles
+            ):
+                return
+            try:
+                self._drain_outbound_once(ctx=ctx)
+            except BaseException as exc:  # noqa: BLE001 — classify & emit
+                severity, error_kind = _classify_eventkit_error(exc)
+                self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
+                    error_message=str(exc) or type(exc).__name__,
+                    retry_after_s=None,
+                )
+                if severity == "fatal":
+                    self._status.state = "crashed"
+                    return
+                self._status.state = "backoff"
+            cycles += 1
+            try:
+                await asyncio.sleep(self.OUTBOUND_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+
+    def _drain_outbound_once(self, *, ctx: AdapterContext) -> int:
+        """Drain every queued upstream event in a single batch. Returns
+        the count of writes that produced a ``reminder.list_item.synced``
+        emission (i.e., the count post never-sync filter).
+
+        One ``sync_cycle_id`` per drain — every event in the batch
+        carries the same cycle id so downstream consumers can correlate
+        the batch."""
+        if self._ek_store is None:
+            return 0
+        sync_cycle_id = _next_sync_cycle_id()
+        written = 0
+        while self._outbound_queue:
+            upstream = self._outbound_queue.popleft()
+            if self._write_one_outbound(
+                ctx=ctx,
+                upstream=upstream,
+                sync_cycle_id=sync_cycle_id,
+            ):
+                written += 1
+        return written
+
+    def _write_one_outbound(
+        self,
+        *,
+        ctx: AdapterContext,
+        upstream: dict[str, Any],
+        sync_cycle_id: str,
+    ) -> bool:
+        """Translate one upstream event → EKReminder, apply the
+        never-sync filter, call ``EKEventStore.save(_:commit:)``, emit
+        ``reminder.list_item.synced`` with ``direction="outbound"``.
+        Returns True iff a synced event was emitted (False on
+        never-sync block / unmappable upstream).
+
+        [Causation invariant] ``causation_id`` is the upstream event's
+        id — every outbound emission traces back to the proactive
+        pipeline event that triggered the write."""
+        ek_store = self._ek_store
+        if ek_store is None:
+            return False
+        target_list_id = str(self._config["target_list_identifier"])
+
+        translation = self._translate_upstream(upstream)
+        if translation is None:
+            return False
+
+        member_id = translation["member_id"]
+        member_role = self._member_role_resolver(member_id)
+        target_list_name = ek_store.list_name_for_identifier(target_list_id)
+
+        # Never-sync filter at the OUTBOUND boundary — symmetric with the
+        # inbound application in c3. A reminder routed to a "Work" list,
+        # or carrying "#private", or owned by a child/ambient member,
+        # is dropped here BEFORE the EventKit write. [VISION §"Privacy
+        # by default", BUILD.md APPLE REMINDERS BIDIRECTIONAL].
+        if not passes_never_sync(
+            list_name=target_list_name,
+            title=translation["title"],
+            notes=translation.get("notes"),
+            member_role=member_role,
+            never_sync_list_substrings=self._never_sync_list_substrings,
+            never_sync_tag_substrings=self._never_sync_tag_substrings,
+        ):
+            return False
+
+        reminder = ek_store.build_reminder(
+            list_identifier=target_list_id,
+            title=translation["title"],
+            notes=translation.get("notes"),
+            due_at=translation.get("due_at"),
+            priority=translation["priority"],
+        )
+        # ``save(_:commit:)`` per docs/reference/apple-eventkit/create.md
+        # — ``commit=True`` flushes immediately rather than batching for
+        # a later ``commit()`` call. Each outbound write is its own
+        # transaction so iCloud sync churn stays per-reminder.
+        ek_store.save(reminder, commit=True)
+
+        # Apple stamps ``calendarItemIdentifier`` on save; read it back
+        # for the round-trip-traceability field on the emitted event.
+        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+        now = ctx.now_factory()
+        payload: dict[str, Any] = {
+            "member_id": member_id,
+            "remind_id": remind_id,
+            "list_identifier": target_list_id,
+            "list_name": target_list_name,
+            "title": translation["title"],
+            "notes": translation.get("notes"),
+            "due_at": _maybe_iso(translation.get("due_at")),
+            "priority": translation["priority"],
+            "completed": False,
+            "last_modified_at": _to_iso(now),
+            "direction": "outbound",
+            "sync_cycle_id": sync_cycle_id,
+        }
+        causation_id = str(upstream.get("id") or "") or None
+        self._append(
+            ctx=ctx,
+            event_type="reminder.list_item.synced",
+            payload=payload,
+            causation_id=causation_id,
+        )
+        return True
+
+    @staticmethod
+    def _translate_upstream(
+        upstream: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Map an upstream event to the field bundle the outbound
+        EKReminder write consumes. Returns None for unmappable payloads
+        (missing title / owner) so the caller drops the event quietly
+        rather than crashing the drain loop on one malformed message."""
+        event_type = upstream.get("type")
+        payload = upstream.get("payload")
+        if not isinstance(payload, dict):
+            return None
+
+        if event_type == "reminder.dispatched":
+            text = str(payload.get("composed_text") or "").strip()
+            owner = str(payload.get("owner_member_id") or "").strip()
+            if not text or not owner:
+                return None
+            return {
+                "member_id": owner,
+                "title": text[:500],
+                "notes": None,
+                "due_at": payload.get("due_at"),
+                "priority": 1,  # high — dispatched reminders are time-pressing
+            }
+        if event_type == "task.created":
+            title = str(payload.get("title") or "").strip()
+            owner = str(payload.get("owner_member_id") or "").strip()
+            if not title or not owner:
+                return None
+            description = payload.get("description")
+            notes = (
+                description[:2000]
+                if isinstance(description, str) and description
+                else None
+            )
+            return {
+                "member_id": owner,
+                "title": title[:500],
+                "notes": notes,
+                "due_at": payload.get("due"),
+                "priority": 5,  # medium — tasks default to medium urgency
+            }
+        if event_type == "commitment.proposed":
+            summary = str(payload.get("text_summary") or "").strip()
+            owner = str(payload.get("owed_by_member_id") or "").strip()
+            if not summary or not owner:
+                return None
+            urgency = str(payload.get("urgency") or "this_week")
+            preview = payload.get("source_message_preview")
+            notes = (
+                preview[:2000]
+                if isinstance(preview, str) and preview
+                else None
+            )
+            return {
+                "member_id": owner,
+                "title": summary[:500],
+                "notes": notes,
+                "due_at": payload.get("suggested_due"),
+                "priority": _PRIORITY_BY_URGENCY.get(urgency, 5),
+            }
+        return None
+
+    # ------------------------------------------------------------------
+    # inbound: stub for c3
+    # ------------------------------------------------------------------
+    async def _inbound_poll(self, *, ctx: AdapterContext) -> None:
+        """Inbound poll — iCloud → event-log.
+
+        c3 implements: fetch reminders via EventKit, apply the never-sync
+        filter, dedupe by ``remind_id`` against the ``reminders``
+        projection slice (or permissive fallback), emit
+        ``reminder.list_item.synced`` with ``direction="inbound"``,
+        advance cursor at milestones. c2 ships this stub so the class
+        layout is fixed before c3 fills in the body."""
+        raise NotImplementedError(
+            "inbound poll is implemented in phase 11c commit 3"
+        )
+
+    # ------------------------------------------------------------------
+    # emission helpers (mirror gmail / plaid patterns)
+    # ------------------------------------------------------------------
+    def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
+        """Append ``adapter.authenticated`` v1. Carries the OS-level
+        permission reference instead of a 1Password op:// ref — EventKit
+        access is granted at the OS level, no secret to store."""
+        payload = {
+            "adapter_name": self.name,
+            "adapter_family": self.family,
+            "token_storage_ref": _OS_TOKEN_STORAGE_REF,
+            "authenticated_at": _to_iso(ctx.now_factory()),
+            "scopes": ["reminders:read", "reminders:write"],
+        }
+        self._append(
+            ctx=ctx, event_type="adapter.authenticated", payload=payload
+        )
+
+    def _emit_error(
+        self,
+        *,
+        ctx: AdapterContext,
+        severity: str,
+        error_kind: str,
+        error_message: str,
+        retry_after_s: int | None,
+    ) -> None:
+        """Append ``adapter.error`` v1. Severity drives the supervisor's
+        backoff: ``transient`` stays in the loop; ``fatal`` halts the
+        loop and the supervisor restarts with backoff."""
+        payload: dict[str, Any] = {
+            "adapter_name": self.name,
+            "adapter_family": self.family,
+            "severity": severity,
+            "error_kind": error_kind,
+            "error_message": error_message[:2000],
+            "retry_after_s": retry_after_s,
+            "occurred_at": _to_iso(ctx.now_factory()),
+        }
+        self._status.last_error = dict(payload)
+        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+
+    def _append(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None = None,
+    ) -> None:
+        """Best-effort append. Mirrors the supervisor's duck-typed
+        contract: any object with ``append_sync(...)`` or ``append(...)``
+        works, and a failure on emit must not crash the adapter — the
+        log itself may be down."""
+        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
+            ctx.event_log, "append", None
+        )
+        if appender is None:
+            return
+        kwargs: dict[str, Any] = {
+            "type": event_type,
+            "schema_version": 1,
+            "payload": payload,
+            "correlation_id": ctx.correlation_id_factory(),
+        }
+        if causation_id is not None:
+            kwargs["causation_id"] = causation_id
+        try:
+            appender(**kwargs)
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception(
+                "reminders adapter failed to emit %s event", event_type
+            )
+
+
+# ----------------------------------------------------------------------
+# module-level helpers
+# ----------------------------------------------------------------------
+def _next_sync_cycle_id() -> str:
+    """Mint a fresh sync_cycle_id per drain batch. Prefix is stable so
+    log greps + dashboards can pivot on it."""
+    return f"sync-{uuid.uuid4().hex}"
+
+
+def _to_iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(value)
+
+
+def _maybe_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _to_iso(value)
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _classify_eventkit_error(exc: BaseException) -> tuple[str, str]:
+    """Map an EventKit-side exception into the ``AdapterErrorV1``
+    taxonomy. EventKit is local — most failures are transient
+    (intermittent permission revocation race, iCloud-sync hiccup);
+    auth-class errors map to fatal so the supervisor surfaces them
+    for operator action (prompt 16 wizard re-grant)."""
+    exc_name = type(exc).__name__.lower()
+    if "permission" in exc_name or "auth" in exc_name:
+        return ("fatal", "auth_failed")
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return ("transient", "network")
+    if isinstance(exc, OSError):
+        return ("transient", "network")
+    return ("transient", "unknown")
+
+
+__all__ = [
+    "AppleEventKitAdapter",
+    "EKEventStoreFactory",
+    "EKEventStoreLike",
+    "EKReminderLike",
+    "MemberRoleResolver",
+    "NoopEKEventStore",
+    "passes_never_sync",
+]
