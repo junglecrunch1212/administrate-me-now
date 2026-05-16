@@ -39,6 +39,16 @@ from the messaging-family pattern:
   per-cycle emission would defeat the cross-cutting milestone rule the
   3 cross-cutting schemas were designed for.
 
+- Institution health is queried at startup and again on the daily
+  backstop cycle via ``/institutions/get_by_id`` with
+  ``options.include_status=True``. Any non-``HEALTHY`` per-product
+  status (e.g. ``DEGRADED`` ``transactions_updates``) emits
+  ``adapter.error`` ``severity=transient`` ``error_kind=api_changed``
+  so the supervisor surfaces the institution-side outage to the
+  operator without flapping the adapter's own backoff loop. The check
+  is best-effort: a failure inside ``/institutions/get_by_id`` itself
+  classifies through the same 7-tuple as ``/transactions/sync``.
+
 - Error classification routes the Plaid SDK exception hierarchy
   (``ApiException`` body's ``error_code`` parsed into one of the 7
   in-module exception types) through ``_PLAID_SDK_EXCEPTIONS`` and
@@ -63,7 +73,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from adminme.adapters.base import (
-    Adapter,
     AdapterContext,
     AdapterStatus,
     SensitivityFloor,
@@ -75,6 +84,14 @@ logger = logging.getLogger(__name__)
 PlaidClientFactory = Callable[[str, str, str], Any]
 """Factory taking ``(client_id, secret, item_access_token)`` and returning
 a Plaid API client. Defaults to a no-op stub for tests per PM-27."""
+
+
+_DEFAULT_BACKSTOP_POLL_INTERVAL_S = 24 * 60 * 60
+"""Backstop daily-poll cadence. The ``pack.yaml`` cron (``0 4 * * *``)
+is the production scheduler entry; this in-process fallback keeps the
+adapter healthy when the supervisor's cron isn't wired (Phase A tests,
+manual ``start()`` calls). Tests override via ``backstop_poll_interval_s``
+in config to drive the loop on a sub-second budget."""
 
 WebhookVerifierFactory = Callable[[str], Callable[[dict[str, Any]], bool]]
 """Factory taking the configured ``webhook_route`` and returning a
@@ -269,13 +286,44 @@ class PlaidAdapter:
 
         self._emit_authenticated(ctx, item_access_token_ref)
 
-        # Block until stop() releases the event. Commit 4 wraps this in
-        # the daily backstop poll loop; commit 3 keeps it bare because
-        # the webhook receiver is invoked externally by the supervisor's
-        # mounted route, not from inside this task.
+        # One institution-health probe at startup so the operator sees a
+        # current DEGRADED / DOWN status in their inbox without waiting
+        # for the first backstop tick. The probe is best-effort and
+        # routes any SDK exception through the same 7-tuple defensive
+        # catch as ``/transactions/sync``.
+        institution_id = str(ctx.config.get("institution_id", ""))
+        if institution_id:
+            await self._fetch_institution_health(institution_id)
+
+        # Daily backstop poll covers silent webhook drops (Plaid has
+        # documented cases of ``SYNC_UPDATES_AVAILABLE`` getting lost in
+        # transit; ``docs/reference/plaid/_index.md`` recommends a 24-hour
+        # fallback poll). The supervisor's APScheduler-driven cron
+        # ``0 4 * * *`` from ``pack.yaml`` is the production trigger;
+        # this in-process loop is the redundant safety net per
+        # ``BUILD.md PLAID DETAILED SPEC §"Sync cursor"``.
+        interval_s = float(
+            ctx.config.get(
+                "backstop_poll_interval_s", _DEFAULT_BACKSTOP_POLL_INTERVAL_S
+            )
+        )
+        plaid_item_id = str(ctx.config.get("plaid_item_id", ""))
+
         self._stop_event = asyncio.Event()
         try:
-            await self._stop_event.wait()
+            while not self._stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), timeout=interval_s
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    if plaid_item_id:
+                        await self._sync_transactions(
+                            plaid_item_id, webhook_triggered=False
+                        )
+                    if institution_id:
+                        await self._fetch_institution_health(institution_id)
         except asyncio.CancelledError:
             self._status.state = "stopped"
             raise
@@ -436,17 +484,76 @@ class PlaidAdapter:
         self._maybe_emit_cursor_advanced(next_cursor)
 
     # ------------------------------------------------------------------
-    # commit-4 stub — kept as NotImplementedError so the Protocol surface
-    # is honest at import time. Replaced in commit 4.
+    # institution health
     # ------------------------------------------------------------------
     async def _fetch_institution_health(self, institution_id: str) -> None:
-        """Query ``/institutions/status/get`` and emit
-        ``adapter.error`` severity ``transient`` on degradation. Body
-        lands in commit 4."""
-        raise NotImplementedError(
-            "_fetch_institution_health is shipped in phase 11b commit 4; "
-            "commit 3 only wires the sync + webhook path."
-        )
+        """Query Plaid's ``/institutions/get_by_id`` with
+        ``options.include_status=True`` per
+        ``docs/reference/plaid/institutions-api.md`` §"Status object
+        structure"; for each sub-product (``item_logins``,
+        ``transactions_updates``, ``auth``, ``identity``,
+        ``investments_updates``, ``liabilities_updates``,
+        ``liabilities``, ``investments``) whose ``status`` is not
+        ``HEALTHY``, emit one ``adapter.error`` at
+        ``severity=transient`` ``error_kind=api_changed`` so the
+        supervisor surfaces the degradation without flapping the
+        adapter's own backoff loop.
+
+        Defensively catches the 7-tuple of Plaid SDK exceptions so an
+        institution-status outage cannot crash the start() path; a
+        failure inside this probe classifies through the same
+        ``(severity, error_kind)`` map as ``/transactions/sync`` and
+        the adapter keeps running."""
+        client = self._plaid_client
+        if client is None or self._ctx is None:
+            return
+        getter = getattr(client, "institutions_get_by_id", None)
+        if not callable(getter):
+            return
+        try:
+            response = getter(
+                institution_id=institution_id,
+                country_codes=["US"],
+                options={"include_status": True},
+            )
+        except _PLAID_SDK_EXCEPTIONS as exc:
+            severity, error_kind = _ERROR_KIND_BY_TYPE.get(
+                type(exc), ("transient", "unknown")
+            )
+            self._emit_adapter_error(
+                severity=severity,
+                error_kind=error_kind,
+                message=(
+                    f"institutions_get_by_id({institution_id!r}) failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                retry_after_s=_retry_after_for(type(exc)),
+            )
+            return
+
+        data = _coerce_sync_response(response)
+        institution = data.get("institution")
+        if not isinstance(institution, dict):
+            return
+        status = institution.get("status")
+        if not isinstance(status, dict):
+            return
+        institution_name = str(institution.get("name") or institution_id)
+        for product, detail in status.items():
+            if not isinstance(detail, dict):
+                continue
+            product_status = detail.get("status")
+            if product_status in (None, "HEALTHY"):
+                continue
+            self._emit_adapter_error(
+                severity="transient",
+                error_kind="api_changed",
+                message=(
+                    f"plaid institution {institution_name!r} ({institution_id}) "
+                    f"product {product!r} status={product_status!r}"
+                ),
+                retry_after_s=None,
+            )
 
     # ------------------------------------------------------------------
     # internals — emit helpers

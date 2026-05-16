@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
+from adminme.adapters.base import AdapterContext, AdapterStatus
 from adminme.daemons.adapter_supervisor import (
     INITIAL_BACKOFF_S,
     MAX_BACKOFF_S,
