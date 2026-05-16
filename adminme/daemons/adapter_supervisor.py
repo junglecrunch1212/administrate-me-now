@@ -1,16 +1,331 @@
 """
-Adapter supervisor — lifecycle manager for L1 adapters.
+Adapter supervisor — async lifecycle manager for L1 standalone adapters.
 
-Implemented in prompt 11 per ADMINISTRATEME_BUILD.md §L1 and SYSTEM_INVARIANTS.md §7.
+Per ADMINISTRATEME_BUILD.md §L1 and SYSTEM_INVARIANTS.md §7 (pipelines /
+daemons), §14 (APScheduler scope). Reads ``config/channels.yaml`` at
+startup, instantiates each configured adapter via a loader callable
+(PM-27: constructor-injected with a no-op default that returns ``[]``),
+spawns each as an ``asyncio.Task``, watches for crashes, and restarts
+with exponential backoff (1s, 2s, 4s, ..., capped at 300s; resets to 1s
+after 5+ minutes of uptime).
 
-Starts, restarts, and monitors adapter processes (Gmail, Google Calendar,
-Plaid, Apple Reminders, CalDAV, iOS Shortcuts webhooks, etc.). Each adapter
-runs as a standalone Python process; messaging-family adapters are OpenClaw
-plugins, not supervised here (§8 invariant 3).
+Emits ``adapter.error`` (severity ``transient`` or ``fatal``) on each
+crash before scheduling the restart. The supervisor itself is NOT a
+projection [§2.2], NOT a pipeline [§7], and NOT an OpenClaw plugin
+[§8 invariant 3] — it's a process-management primitive.
 
-APScheduler drives adapter poll cadences at the adapter level — these are
-internal, non-user-facing schedules and fall within the allowed APScheduler
-use per SYSTEM_INVARIANTS.md §14 invariant 3.
-
-Do not implement in this scaffolding prompt. Prompt 11 will fill in.
+The optional ``/status`` JSON endpoint is served via stdlib
+``asyncio.start_server`` to avoid pulling aiohttp; ``aiohttp`` is not a
+project dep. Port defaults to 8081 (distinct from the OpenClaw runner's
+8080). Set ``adapter_supervisor_port: 0`` in ``config/channels.yaml`` to
+disable the HTTP endpoint (tests do this).
 """
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+import yaml
+
+from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
+
+logger = logging.getLogger(__name__)
+
+
+DEFAULT_PORT = 8081
+"""Default HTTP port for the /status endpoint. Distinct from the
+OpenClaw skill-runner port (8080)."""
+
+INITIAL_BACKOFF_S = 1.0
+MAX_BACKOFF_S = 300.0
+"""Exponential-backoff window: 1s, 2s, 4s, ..., capped at 5 minutes."""
+
+UPTIME_RESET_S = 300.0
+"""Restart-counter reset threshold. After this much uptime since the
+last restart, the backoff window resets to ``INITIAL_BACKOFF_S``."""
+
+
+AdapterLoader = Callable[[dict[str, Any]], list[Adapter]]
+"""Callable that converts ``channels.yaml``'s parsed dict into adapter
+instances. PM-27: defaults to a no-op stub returning an empty list so
+the supervisor is constructible in tests without wiring real adapters;
+production injects the real loader at startup."""
+
+
+def _noop_loader(_config: dict[str, Any]) -> list[Adapter]:
+    """Default loader. Returns no adapters."""
+    return []
+
+
+@dataclass
+class _ManagedAdapter:
+    """Per-adapter bookkeeping inside the supervisor."""
+
+    adapter: Adapter
+    status: AdapterStatus = field(default_factory=AdapterStatus)
+    task: asyncio.Task[None] | None = None
+    backoff_s: float = INITIAL_BACKOFF_S
+
+
+class AdapterSupervisor:
+    """Async supervisor for L1 standalone adapters.
+
+    Usage::
+
+        sup = AdapterSupervisor(
+            config_path=Path("config/channels.yaml"),
+            ctx_factory=lambda: AdapterContext(event_log=..., config={}, ...),
+            adapter_loader=load_my_adapters,
+        )
+        await sup.start()
+        ...
+        await sup.stop()
+    """
+
+    def __init__(
+        self,
+        *,
+        config_path: Path,
+        ctx_factory: Callable[[], AdapterContext],
+        adapter_loader: AdapterLoader = _noop_loader,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self._config_path = config_path
+        self._ctx_factory = ctx_factory
+        self._loader = adapter_loader
+        self._clock = clock or _monotonic
+        self._managed: dict[str, _ManagedAdapter] = {}
+        self._config: dict[str, Any] = {}
+        self._http_server: asyncio.base_events.Server | None = None
+        self._stopping = False
+
+    # ------------------------------------------------------------------
+    # config
+    # ------------------------------------------------------------------
+    def load_config(self) -> dict[str, Any]:
+        """Parse ``channels.yaml``. Raises if file is missing or malformed."""
+        text = self._config_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(text) or {}
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"{self._config_path}: top-level YAML must be a mapping, got {type(data).__name__}"
+            )
+        self._config = data
+        return data
+
+    # ------------------------------------------------------------------
+    # lifecycle
+    # ------------------------------------------------------------------
+    async def start(self) -> None:
+        """Load config, instantiate adapters, spawn supervised tasks, and
+        (optionally) start the /status HTTP endpoint."""
+        if not self._config:
+            self.load_config()
+
+        adapters = self._loader(self._config)
+        for adapter in adapters:
+            self._managed[adapter.name] = _ManagedAdapter(adapter=adapter)
+
+        for name, managed in self._managed.items():
+            managed.task = asyncio.create_task(
+                self._run_adapter(managed), name=f"adapter:{name}"
+            )
+
+        port = int(self._config.get("adapter_supervisor_port", DEFAULT_PORT))
+        host = str(self._config.get("adapter_supervisor_host", "127.0.0.1"))
+        if port > 0:
+            self._http_server = await asyncio.start_server(
+                self._handle_http, host=host, port=port
+            )
+
+    async def stop(self) -> None:
+        """Stop the HTTP endpoint and request every managed adapter to
+        shut down. Tasks are awaited with a short grace window before
+        being cancelled."""
+        self._stopping = True
+
+        if self._http_server is not None:
+            self._http_server.close()
+            await self._http_server.wait_closed()
+            self._http_server = None
+
+        for managed in self._managed.values():
+            try:
+                await managed.adapter.stop()
+            except Exception:  # noqa: BLE001 — best-effort shutdown
+                logger.exception("adapter %s raised on stop()", managed.adapter.name)
+            if managed.task is not None and not managed.task.done():
+                managed.task.cancel()
+
+        for managed in self._managed.values():
+            if managed.task is None:
+                continue
+            try:
+                await managed.task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            managed.status.state = "stopped"
+
+    # ------------------------------------------------------------------
+    # status
+    # ------------------------------------------------------------------
+    def snapshot(self) -> dict[str, Any]:
+        """Aggregated status dict — what ``/status`` serves and what tests
+        assert against."""
+        return {
+            "supervisor": {
+                "stopping": self._stopping,
+                "adapter_count": len(self._managed),
+            },
+            "adapters": {
+                name: _status_to_dict(m.status) for name, m in self._managed.items()
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # internals
+    # ------------------------------------------------------------------
+    async def _run_adapter(self, managed: _ManagedAdapter) -> None:
+        """Per-adapter supervision loop. Calls ``start(ctx)``; on crash,
+        emits ``adapter.error`` and reschedules with exponential
+        backoff. Resets backoff after sustained uptime."""
+        adapter = managed.adapter
+        while not self._stopping:
+            ctx = self._ctx_factory()
+            started_at = self._clock()
+            managed.status.state = "starting"
+            managed.status.started_at = datetime.now(timezone.utc)
+            try:
+                managed.status.state = "running"
+                await adapter.start(ctx=ctx)
+                managed.status.state = "stopped"
+                return
+            except asyncio.CancelledError:
+                managed.status.state = "stopped"
+                raise
+            except Exception as exc:  # noqa: BLE001 — supervisor swallows on purpose
+                uptime = self._clock() - started_at
+                if uptime >= UPTIME_RESET_S:
+                    managed.backoff_s = INITIAL_BACKOFF_S
+                error_payload = {
+                    "adapter_name": adapter.name,
+                    "adapter_family": adapter.family,
+                    "severity": "transient",
+                    "error_kind": "unknown",
+                    "error_message": f"{type(exc).__name__}: {exc}",
+                    "retry_after_s": int(managed.backoff_s),
+                    "occurred_at": datetime.now(timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+                managed.status.last_error = error_payload
+                managed.status.state = "backoff"
+                managed.status.next_backoff_s = managed.backoff_s
+                managed.status.restart_count += 1
+                logger.warning(
+                    "adapter %s crashed (%s); restarting in %.1fs",
+                    adapter.name,
+                    type(exc).__name__,
+                    managed.backoff_s,
+                )
+                self._emit_adapter_error(ctx, error_payload)
+                try:
+                    await asyncio.sleep(managed.backoff_s)
+                except asyncio.CancelledError:
+                    managed.status.state = "stopped"
+                    raise
+                managed.backoff_s = min(managed.backoff_s * 2, MAX_BACKOFF_S)
+        managed.status.state = "stopped"
+
+    def _emit_adapter_error(
+        self, ctx: AdapterContext, payload: dict[str, Any]
+    ) -> None:
+        """Append an ``adapter.error`` event via the context's event_log.
+
+        Best-effort: a failure here must not crash the supervisor (the
+        log may itself be down). Production wires a real EventLog;
+        tests inject a fake whose ``append`` records the call."""
+        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
+            ctx.event_log, "append", None
+        )
+        if appender is None:
+            return
+        try:
+            appender(
+                type="adapter.error",
+                schema_version=1,
+                payload=payload,
+                correlation_id=ctx.correlation_id_factory(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("supervisor failed to emit adapter.error for %s", payload.get("adapter_name"))
+
+    async def _handle_http(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Minimal HTTP/1.1 handler that serves GET /status as JSON.
+
+        Stdlib-only — keeps the supervisor free of an aiohttp dep. Any
+        non-``GET /status`` request gets a 404."""
+        try:
+            request_line = await reader.readline()
+            # Drain headers.
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b""):
+                    break
+            parts = request_line.split()
+            if len(parts) >= 2 and parts[0] == b"GET" and parts[1].startswith(b"/status"):
+                body = json.dumps(self.snapshot()).encode("utf-8")
+                headers = (
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                writer.write(headers + body)
+            else:
+                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _monotonic() -> float:
+    return asyncio.get_event_loop().time()
+
+
+def _status_to_dict(status: AdapterStatus) -> dict[str, Any]:
+    return {
+        "state": status.state,
+        "last_error": status.last_error,
+        "last_cursor_advance_at": status.last_cursor_advance_at.isoformat()
+        if status.last_cursor_advance_at is not None
+        else None,
+        "started_at": status.started_at.isoformat() if status.started_at is not None else None,
+        "restart_count": status.restart_count,
+        "next_backoff_s": status.next_backoff_s,
+    }
+
+
+__all__ = [
+    "AdapterSupervisor",
+    "AdapterLoader",
+    "DEFAULT_PORT",
+    "INITIAL_BACKOFF_S",
+    "MAX_BACKOFF_S",
+    "UPTIME_RESET_S",
+]
+
+

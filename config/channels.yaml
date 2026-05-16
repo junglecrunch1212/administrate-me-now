@@ -1,0 +1,24 @@
+# L1 adapter configuration — read by adminme.daemons.adapter_supervisor.
+#
+# One entry per configured adapter under `adapters:`. Each entry's `kind`
+# matches the adapter pack at packs/adapters/<family>/<name>/. The wizard
+# (prompt 16) will own writing this file at install time; until then
+# operators edit it by hand.
+#
+# Secret references use 1Password references (op://<vault>/<item>/<field>)
+# per ADMINISTRATEME_BUILD.md §L1 — NEVER the secret value itself. The
+# Gmail adapter (prompt 11a c2/c3) resolves these at startup via the
+# adminme.lib.crypto helpers.
+
+adapter_supervisor_host: 127.0.0.1
+adapter_supervisor_port: 8081
+
+adapters:
+  - kind: messaging-gmail-api
+    family: messaging
+    sensitivity_floor: normal
+    config:
+      service_account_key_ref: op://AdministrateMe/gmail-sandbox/service-account-json
+      user_email: sandbox@example.test
+      # Poll cadence is enforced inside the adapter; the supervisor only
+      # restarts on crash. See packs/adapters/messaging/gmail/pack.yaml.
