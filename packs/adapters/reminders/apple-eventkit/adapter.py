@@ -1,12 +1,14 @@
-"""Apple Reminders bidirectional adapter — outbound EventKit write path (c2).
+"""Apple Reminders bidirectional adapter — outbound write path (c2) +
+inbound poll + dedupe + cursor (c3).
 
 Implements the ``adminme.adapters.base.Adapter`` Protocol per the operator
-decision in ``docs/06-split-memo-11.md`` §4. Phase 11c commit 2 ships the
-outbound half only: event-log → iCloud writes on a 30s loop. The inbound
-poll (iCloud → event-log) is stubbed at ``_inbound_poll`` and raises
-``NotImplementedError``; it lands in commit 3. ``start()`` spawns the
-outbound supervised task and blocks on it; commit 4 wires both inbound +
-outbound concurrently.
+decision in ``docs/06-split-memo-11.md`` §4. Phase 11c commit 2 shipped
+the outbound half (event-log → iCloud writes on a 30s loop); commit 3
+adds the inbound half (iCloud → event-log polling, never-sync filter
+symmetric with outbound, dedupe-by-``remind_id``, milestone-only
+``adapter.cursor_advanced`` emission). ``start()`` continues to spawn
+only the outbound supervised task in c3; the concurrent inbound +
+outbound supervision in ``start()`` lands in commit 4.
 
 Bidirectional sync model [BUILD.md APPLE REMINDERS BIDIRECTIONAL —
 DETAILED SPEC]. The adapter consumes three upstream event types and
@@ -22,13 +24,26 @@ with ``direction="outbound"`` and ``causation_id`` set to the upstream
 event id — round-trip traceability per BUILD.md APPLE REMINDERS
 BIDIRECTIONAL §"Outbound write cadence".
 
+The inbound poll (c3) fetches reminders via ``fetch_reminders`` every
+30s, applies the never-sync filter at the iCloud boundary, dedupes by
+``remind_id`` against a constructor-injected resolver (the ``reminders``
+projection slice in production; a permissive ``None``-returner in tests
+and Phase A when the projection's writer pipeline is still deferred —
+see prompt 11c §3 deferred-watch). Genuinely-new or modified reminders
+emit ``reminder.list_item.synced`` with ``direction="inbound"`` and
+``causation_id=None`` (iCloud is the source — no AdministrateMe event
+triggered the emission, so there's no upstream id to chain). Cursor
+state is per-list ``(list_identifier → last_modified_at)``;
+``adapter.cursor_advanced`` emission is gated on the 100-events-or-
+5-minutes milestone shared across the L1 adapter family.
+
 Never-sync filter [BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Never-sync
 rules", VISION §"Privacy by default"]. The predicate from
-``never_sync.py`` (c1) is applied BEFORE every outbound write — three
-rules short-circuit any block: list-name substring (e.g., "Work"),
-item-tag substring (e.g., "#private"), owning-member role
-(``"child"`` / ``"ambient"``). Symmetric enforcement at the inbound
-boundary lands in c3.
+``never_sync.py`` (c1) is applied at BOTH boundaries: BEFORE every
+outbound write (c2) and BEFORE every inbound emit (c3). The same three
+rules short-circuit a block on either side: list-name substring (e.g.,
+"Work"), item-tag substring (e.g., "#private"), owning-member role
+(``"child"`` / ``"ambient"``).
 
 Sensitivity floor [§6 invariant 10]. Hardcoded ``"normal"`` at the
 class level. Adapters NEVER auto-elevate; any config attempt to set
@@ -50,6 +65,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import logging
 import sys
 import uuid
@@ -150,6 +166,15 @@ EKEventStoreFactory = Callable[[], Any]
 constructs cleanly without pyobjc; the supervisor wires the real
 factory at startup (prompt 16 bootstrap wizard)."""
 
+DedupeResolver = Callable[[str], datetime | None]
+"""Maps ``remind_id`` → the projected ``last_modified_at`` for that
+reminder, or ``None`` if the projection has no record of it. Production
+reads the ``reminders`` projection slice; the permissive default
+returns ``None`` for every input so inbound emission is permissive
+when the projection's writer pipeline is absent (Phase A — see prompt
+11c §3 deferred-watch). [§7.3, D17] adapters READ from projections;
+they never write."""
+
 
 def _noop_ek_event_store_factory() -> Any:
     """PM-27 default factory. Returns a ``NoopEKEventStore`` that raises
@@ -164,6 +189,15 @@ def _default_member_role_resolver(_member_id: str) -> str:
     slice; this default is for tests + the Phase A operator-self-host
     case where the projection isn't wired yet."""
     return "adult"
+
+
+def _default_dedupe_resolver(_remind_id: str) -> datetime | None:
+    """Permissive default — returns ``None`` for every ``remind_id`` so
+    the in-memory session-level ``_seen_inbound`` cache is the only
+    dedupe gate. Phase A: the ``reminders`` projection slice's writer
+    pipeline is deferred (prompt 11c §3); production tightens this once
+    the projection's writer lands and the resolver consults it."""
+    return None
 
 
 class AppleEventKitAdapter:
@@ -204,13 +238,29 @@ class AppleEventKitAdapter:
     outbound: pack.yaml's cron is a heartbeat, the 30s sub-cadence is
     the active polling rate per §"Polling cadence"."""
 
+    CURSOR_MILESTONE_EVENTS: int = 100
+    CURSOR_MILESTONE_INTERVAL_S: int = 300
+    """``adapter.cursor_advanced`` is emitted at whichever milestone
+    fires first — 100 emissions since the last advance OR 5 minutes of
+    wall clock. Shared across the L1 adapter family; matches Gmail's and
+    Plaid's settings so dashboards aggregate cleanly. Anti-vision §"Quiet
+    by default": pure per-poll emission would swamp the event log."""
+
+    INBOUND_CURSOR_KIND: str = "list_identifier_last_modified"
+    """Per-list ``(list_identifier → last_modified_at)`` cursor shape.
+    JSON-serialized into the v1 schema's ``cursor_value: str`` field so
+    the round-trip carries the entire reminder-family cursor map in one
+    audit event."""
+
     def __init__(
         self,
         *,
         config: dict[str, Any],
         ek_event_store_factory: EKEventStoreFactory = _noop_ek_event_store_factory,
         member_role_resolver: MemberRoleResolver = _default_member_role_resolver,
+        dedupe_resolver: DedupeResolver = _default_dedupe_resolver,
         max_outbound_cycles: int | None = None,
+        max_inbound_cycles: int | None = None,
     ) -> None:
         self._config = dict(config)
         # [§6 invariant 10] re-assert the class-level floor against the
@@ -229,6 +279,7 @@ class AppleEventKitAdapter:
 
         self._ek_event_store_factory = ek_event_store_factory
         self._member_role_resolver = member_role_resolver
+        self._dedupe_resolver = dedupe_resolver
         self._never_sync_list_substrings: tuple[str, ...] = tuple(
             self._config.get(
                 "never_sync_list_substrings", DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS
@@ -239,9 +290,11 @@ class AppleEventKitAdapter:
                 "never_sync_tag_substrings", DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
             )
         )
-        # Test seam: bound the outbound loop. ``None`` = run forever
-        # (production); the supervisor stops the task on lifecycle events.
+        # Test seams: bound each loop independently. ``None`` = run
+        # forever (production); the supervisor stops both tasks on
+        # lifecycle events.
         self._max_outbound_cycles = max_outbound_cycles
+        self._max_inbound_cycles = max_inbound_cycles
 
         self._status = AdapterStatus()
         self._ek_store: Any = None
@@ -249,6 +302,25 @@ class AppleEventKitAdapter:
         self._outbound_queue: deque[dict[str, Any]] = deque()
         self._stop_requested: bool = False
         self._outbound_task: asyncio.Task[None] | None = None
+        self._inbound_task: asyncio.Task[None] | None = None
+
+        # Inbound cursor state — per-list ``last_modified_at`` watermark.
+        # ``adapter.cursor_advanced`` packs the dict into a single
+        # JSON-encoded ``cursor_value`` string per milestone fire.
+        self._inbound_cursors: dict[str, datetime] = {}
+
+        # Session-level dedupe cache. Bridges the gap between the
+        # projection-resolver's view (which may be stale or absent under
+        # Phase A — see [§3 deferred-watch]) and live state. Updated on
+        # every successful emit; consulted on every inbound candidate
+        # before the projection-resolver fallback.
+        self._seen_inbound: dict[str, datetime] = {}
+
+        # Cursor-advance milestone state. Mirrors Gmail's and Plaid's
+        # pattern: count emissions since last advance + track wall-clock
+        # since last advance; emit on whichever threshold fires first.
+        self._events_since_inbound_advance: int = 0
+        self._last_inbound_advance_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Adapter Protocol
@@ -292,16 +364,18 @@ class AppleEventKitAdapter:
             return
 
     async def stop(self) -> None:
-        """Cancel the outbound task, release the EKEventStore handle,
-        and transition to the ``"stopped"`` state. Idempotent."""
+        """Cancel both supervised tasks (outbound from c2; inbound from
+        c3 once ``start()`` spawns it in c4), release the EKEventStore
+        handle, and transition to the ``"stopped"`` state. Idempotent.
+        """
         self._stop_requested = True
-        task = self._outbound_task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+        for task in (self._outbound_task, self._inbound_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         self._ek_store = None
         self._status.state = "stopped"
 
@@ -540,20 +614,257 @@ class AppleEventKitAdapter:
         return None
 
     # ------------------------------------------------------------------
-    # inbound: stub for c3
+    # inbound: iCloud → event-log (c3)
     # ------------------------------------------------------------------
     async def _inbound_poll(self, *, ctx: AdapterContext) -> None:
-        """Inbound poll — iCloud → event-log.
+        """Inbound poll loop. Each tick fetches reminders via the
+        EKEventStore, applies the never-sync filter symmetrically with
+        the outbound boundary, dedupes by ``remind_id``, and emits one
+        ``reminder.list_item.synced`` v1 event with
+        ``direction="inbound"`` per genuinely-new-or-modified item.
 
-        c3 implements: fetch reminders via EventKit, apply the never-sync
-        filter, dedupe by ``remind_id`` against the ``reminders``
-        projection slice (or permissive fallback), emit
-        ``reminder.list_item.synced`` with ``direction="inbound"``,
-        advance cursor at milestones. c2 ships this stub so the class
-        layout is fixed before c3 fills in the body."""
-        raise NotImplementedError(
-            "inbound poll is implemented in phase 11c commit 3"
+        Defensive catch mirrors the outbound loop: any EventKit-side
+        exception classifies into ``AdapterErrorV1`` severity +
+        ``error_kind``; transient stays in the loop, fatal halts so the
+        supervisor's restart-with-backoff takes over. Tests bound the
+        loop via ``max_inbound_cycles``."""
+        cycles = 0
+        while not self._stop_requested:
+            if (
+                self._max_inbound_cycles is not None
+                and cycles >= self._max_inbound_cycles
+            ):
+                return
+            try:
+                self._inbound_poll_once(ctx=ctx)
+            except BaseException as exc:  # noqa: BLE001 — classify & emit
+                severity, error_kind = _classify_eventkit_error(exc)
+                self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
+                    error_message=str(exc) or type(exc).__name__,
+                    retry_after_s=None,
+                )
+                if severity == "fatal":
+                    self._status.state = "crashed"
+                    return
+                self._status.state = "backoff"
+            cycles += 1
+            try:
+                await asyncio.sleep(self.INBOUND_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+
+    def _inbound_poll_once(self, *, ctx: AdapterContext) -> int:
+        """Run one inbound cycle. Returns the count of
+        ``reminder.list_item.synced`` events emitted (i.e., post never-
+        sync filter + dedupe). One ``sync_cycle_id`` covers every
+        emission in the batch so downstream consumers can correlate.
+
+        Anti-vision §"Quiet by default": the dedupe gate is what keeps
+        emission load-bearing instead of noisy. Pure fetch-then-emit
+        would produce one event per reminder per poll cycle even when
+        nothing changed — the build-fail test in §9 asserts this."""
+        if self._ek_store is None:
+            return 0
+        sync_cycle_id = _next_sync_cycle_id()
+        reminders = self._fetch_reminders_filtered()
+        emitted = 0
+        for rem in reminders:
+            if not self._is_new_or_modified(rem):
+                continue
+            self._emit_inbound_synced(
+                ctx=ctx, reminder=rem, sync_cycle_id=sync_cycle_id
+            )
+            emitted += 1
+        self._maybe_emit_inbound_cursor_advance(ctx=ctx)
+        return emitted
+
+    def _fetch_reminders_filtered(self) -> list[Any]:
+        """Fetch every reminder across non-never-sync lists and apply
+        the never-sync predicate per item. Symmetric with the outbound
+        boundary's filter — the same three rules (list-name substring,
+        item-tag substring, owning-member role) gate both directions.
+
+        The adapter's configured ``member_id`` resolves the
+        owning-member role for the inbound batch; iCloud does not carry
+        AdministrateMe's household-member assignment, so the adapter
+        instance's owner is the source of truth for ownership-exclusion
+        per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Never-sync rules"."""
+        ek_store = self._ek_store
+        if ek_store is None:
+            return []
+        all_reminders = ek_store.fetch_reminders()
+        member_id = str(self._config.get("member_id", ""))
+        member_role = self._member_role_resolver(member_id)
+        passing: list[Any] = []
+        for rem in all_reminders:
+            list_id = str(getattr(rem, "list_identifier", "") or "")
+            list_name = ek_store.list_name_for_identifier(list_id)
+            title = str(getattr(rem, "title", "") or "")
+            notes = getattr(rem, "notes", None)
+            if passes_never_sync(
+                list_name=list_name,
+                title=title,
+                notes=notes if isinstance(notes, str) else None,
+                member_role=member_role,
+                never_sync_list_substrings=self._never_sync_list_substrings,
+                never_sync_tag_substrings=self._never_sync_tag_substrings,
+            ):
+                passing.append(rem)
+        return passing
+
+    def _is_new_or_modified(self, reminder: Any) -> bool:
+        """Dedupe predicate. Returns ``True`` iff the reminder is
+        genuinely new (no prior record) OR genuinely modified
+        (``last_modified_at`` is strictly newer than the most recent
+        timestamp we have on file). The session cache ``_seen_inbound``
+        wins over the projection resolver because it's live; the
+        resolver is the cold-start floor for the cross-session case.
+
+        Phase A: the resolver default is permissive (returns ``None``
+        for every input — see ``_default_dedupe_resolver``) so absence-
+        of-record is treated as "new". Once the ``reminders``
+        projection's writer pipeline ships, production tightens this
+        path automatically — no adapter change required."""
+        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+        if not remind_id:
+            return False
+        current_lmod = getattr(reminder, "last_modified_at", None)
+        prior_lmod = self._seen_inbound.get(remind_id)
+        if prior_lmod is None:
+            prior_lmod = self._dedupe_resolver(remind_id)
+        if prior_lmod is None:
+            return True
+        if not isinstance(current_lmod, datetime):
+            # The reminder has no usable timestamp; we've seen its id
+            # before — treat as unchanged to avoid emit-on-every-poll.
+            return False
+        return current_lmod > prior_lmod
+
+    def _emit_inbound_synced(
+        self,
+        *,
+        ctx: AdapterContext,
+        reminder: Any,
+        sync_cycle_id: str,
+    ) -> None:
+        """Translate one iCloud-side reminder → a
+        ``reminder.list_item.synced`` v1 event with
+        ``direction="inbound"``, ``causation_id=None`` (iCloud is the
+        source; no AdministrateMe event triggered this emission), and
+        update the per-list cursor + session dedupe cache.
+
+        ``priority`` is normalized to the EventKit ordinal scale
+        ``{0, 1, 5, 9}``; any out-of-scale value lands as ``0`` (none)
+        so the schema's ``Literal[0, 1, 5, 9]`` doesn't reject the event
+        — the Pydantic model's enforcement is at registration time, not
+        at adapter-emit time, but defending in depth is cheap."""
+        member_id = str(self._config.get("member_id", ""))
+        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+        list_id = str(getattr(reminder, "list_identifier", "") or "")
+        ek_store = self._ek_store
+        list_name = (
+            ek_store.list_name_for_identifier(list_id)
+            if ek_store is not None
+            else list_id
         )
+        title = str(getattr(reminder, "title", "") or "")
+        notes_raw = getattr(reminder, "notes", None)
+        notes: str | None = (
+            notes_raw[:2000] if isinstance(notes_raw, str) and notes_raw else None
+        )
+        due_at = getattr(reminder, "due_at", None)
+        raw_priority = getattr(reminder, "priority", 0)
+        priority: Literal[0, 1, 5, 9]
+        if raw_priority == 1:
+            priority = 1
+        elif raw_priority == 5:
+            priority = 5
+        elif raw_priority == 9:
+            priority = 9
+        else:
+            priority = 0
+        completed = bool(getattr(reminder, "completed", False))
+        lmod = getattr(reminder, "last_modified_at", None)
+        emit_lmod: datetime = (
+            lmod if isinstance(lmod, datetime) else ctx.now_factory()
+        )
+
+        payload: dict[str, Any] = {
+            "member_id": member_id,
+            "remind_id": remind_id,
+            "list_identifier": list_id,
+            "list_name": list_name,
+            "title": title[:500],
+            "notes": notes,
+            "due_at": _maybe_iso(due_at),
+            "priority": priority,
+            "completed": completed,
+            "last_modified_at": _to_iso(emit_lmod),
+            "direction": "inbound",
+            "sync_cycle_id": sync_cycle_id,
+        }
+        # [Causation invariant] inbound has no upstream AdministrateMe
+        # event — iCloud is the source — so causation_id is left unset.
+        self._append(
+            ctx=ctx, event_type="reminder.list_item.synced", payload=payload
+        )
+
+        self._seen_inbound[remind_id] = emit_lmod
+        prior_cursor = self._inbound_cursors.get(list_id)
+        if prior_cursor is None or emit_lmod > prior_cursor:
+            self._inbound_cursors[list_id] = emit_lmod
+        self._events_since_inbound_advance += 1
+
+    def _maybe_emit_inbound_cursor_advance(
+        self, *, ctx: AdapterContext
+    ) -> None:
+        """Emit ``adapter.cursor_advanced`` v1 only on milestone.
+        Gated on whichever fires first: 100 emissions since the last
+        advance OR 5 minutes of wall clock since the last advance with
+        at least one emission. The cursor_value packs the entire
+        per-list watermark dict as a JSON string so a single audit event
+        captures the full reminder-family cursor map.
+
+        Anti-vision §"Quiet by default": gating is what keeps the
+        cursor-advance signal load-bearing. Skipping this gate would
+        produce one event per poll cycle."""
+        now = ctx.now_factory()
+        events = self._events_since_inbound_advance
+        elapsed_s: float | None = None
+        if self._last_inbound_advance_at is not None:
+            elapsed_s = (now - self._last_inbound_advance_at).total_seconds()
+        events_threshold = events >= self.CURSOR_MILESTONE_EVENTS
+        time_threshold = (
+            elapsed_s is not None
+            and elapsed_s >= self.CURSOR_MILESTONE_INTERVAL_S
+            and events > 0
+        )
+        if not (events_threshold or time_threshold):
+            return
+        cursor_value = json.dumps(
+            {
+                lid: _to_iso(ts)
+                for lid, ts in sorted(self._inbound_cursors.items())
+            },
+            sort_keys=True,
+        ) or "{}"
+        payload = {
+            "adapter_name": self.name,
+            "adapter_family": self.family,
+            "cursor_kind": self.INBOUND_CURSOR_KIND,
+            "cursor_value": cursor_value,
+            "events_since_last": events,
+            "advanced_at": _to_iso(now),
+        }
+        self._append(
+            ctx=ctx, event_type="adapter.cursor_advanced", payload=payload
+        )
+        self._events_since_inbound_advance = 0
+        self._last_inbound_advance_at = now
+        self._status.last_cursor_advance_at = now
 
     # ------------------------------------------------------------------
     # emission helpers (mirror gmail / plaid patterns)
@@ -673,6 +984,7 @@ def _classify_eventkit_error(exc: BaseException) -> tuple[str, str]:
 
 __all__ = [
     "AppleEventKitAdapter",
+    "DedupeResolver",
     "EKEventStoreFactory",
     "EKEventStoreLike",
     "EKReminderLike",
