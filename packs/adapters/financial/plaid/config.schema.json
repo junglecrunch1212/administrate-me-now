@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme/packs/adapters/financial/plaid/config.schema.json",
+  "title": "Plaid adapter configuration",
+  "description": "Per-Item configuration consumed by packs/adapters/financial/plaid/adapter.py at start(). Secret references use the 1Password 'op://<vault>/<item>/<field>' pattern per ADMINISTRATEME_BUILD.md §L1; raw secrets are a constitutional violation. sensitivity_floor is a hardcoded const at the pack level per SYSTEM_INVARIANTS.md §6 invariant 10 — any config that tries to lower it to 'normal' is rejected by JSON-schema validation before the loader runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "item_access_token_ref",
+    "plaid_client_id_ref",
+    "plaid_secret_ref",
+    "webhook_route",
+    "member_id",
+    "plaid_item_id",
+    "institution_id"
+  ],
+  "properties": {
+    "item_access_token_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the long-lived Plaid Item access token (POST /item/public_token/exchange result). NEVER the token value itself."
+    },
+    "plaid_client_id_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the Plaid API client_id."
+    },
+    "plaid_secret_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the Plaid API secret."
+    },
+    "webhook_route": {
+      "type": "string",
+      "pattern": "^/[A-Za-z0-9/_-]+$",
+      "description": "HTTP route the adapter registers for Plaid webhook delivery (e.g. '/webhooks/plaid'). The adapter supervisor mounts the route at startup."
+    },
+    "member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Household member who owns this Plaid Item. Stamped onto every money_flow.plaid_synced event so downstream consumers can owner-scope correctly."
+    },
+    "plaid_item_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Plaid's stable Item identifier. The cursor is persisted per (member_id, plaid_item_id) tuple per BUILD.md PLAID DETAILED SPEC §'Sync cursor'."
+    },
+    "institution_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Plaid institution_id (e.g. 'ins_109508'). Used to fetch institution health via /institutions/status/get."
+    },
+    "sensitivity_floor": { "const": "privileged", "description": "Hardcoded constant per SYSTEM_INVARIANTS.md §6 invariant 10 — financial adapters cannot be downgraded to 'normal'. JSON-schema validation rejects any other value." },
+    "dedupe_window_minutes": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 90,
+      "description": "Adapter-side dedupe window for inbound webhook duplicates (Plaid may re-deliver). Defaults to 90 minutes."
+    },
+    "backstop_poll_cron": {
+      "type": "string",
+      "default": "0 4 * * *",
+      "description": "APScheduler cron expression for the daily backstop poll. Webhooks are primary; this is the safety net for silent webhook drops."
+    }
+  }
+}

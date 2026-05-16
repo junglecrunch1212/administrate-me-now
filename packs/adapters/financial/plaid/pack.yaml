@@ -1,0 +1,62 @@
+pack:
+  id: adapter:financial-plaid
+  name: Plaid financial adapter
+  version: 1.0.0
+  kind: adapter
+  family: financial
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+# Adapter-level constants. The runtime treats `sensitivity_floor` as a
+# hardcoded pack property per SYSTEM_INVARIANTS.md §6 invariant 10 +
+# DECISIONS.md (financial-family adapters are privileged-floor); the
+# config loader rejects any member-level override that would lower it to
+# `normal`. Mirrored as `"const": "privileged"` in config.schema.json so
+# JSON-schema validation rejects malformed configs before the loader
+# runs.
+sensitivity_floor: privileged
+
+# Trigger model. Webhooks are primary: Plaid pushes
+# `SYNC_UPDATES_AVAILABLE` when an Item has new transactions, and the
+# adapter's webhook_handler enqueues a `/transactions/sync` cycle. The
+# cron is a backstop daily-poll in case the webhook stream silently
+# drops; the supervisor's APScheduler entry runs at this cadence per
+# SYSTEM_INVARIANTS.md §14.
+triggers:
+  kind: webhook_driven
+  schedule: "0 4 * * *"
+  description: |
+    Webhook-driven sync (SYNC_UPDATES_AVAILABLE) is primary; the cron is
+    a daily backstop poll in the absence of webhook traffic.
+
+# Event types the adapter emits or consumes. The three cross-cutting
+# `adapter.*` schemas come from prompt 11a c1
+# (adminme/events/schemas/adapters.py); `money_flow.plaid_synced` is new
+# in prompt 11b c1 (adminme/events/schemas/financial.py). Registration
+# happens at module import time per DECISIONS.md §D7.
+depends_on:
+  event_types:
+    - adapter.error
+    - adapter.authenticated
+    - adapter.cursor_advanced
+    - money_flow.plaid_synced
+
+# Config schema reference. The supervisor's loader validates each
+# adapter entry from channels.yaml against this schema before
+# instantiating the adapter.
+config:
+  schema: config.schema.json
+  example: config.example.yaml
+
+# Documentation-only metadata (the loader ignores everything below
+# `pack:` other than the schema/example refs above; the active runtime
+# contract for the adapter class lives at adapter.py implementing the
+# adminme.adapters.base.Adapter Protocol).
+documentation:
+  build_spec: ADMINISTRATEME_BUILD.md#plaid--detailed-spec
+  reference: docs/reference/plaid/_index.md
+  webhook_taxonomy:
+    - SYNC_UPDATES_AVAILABLE   # triggers /transactions/sync
+    - ITEM_LOGIN_REQUIRED      # emits adapter.error severity=fatal
+  cursor_kind: transactions_cursor
