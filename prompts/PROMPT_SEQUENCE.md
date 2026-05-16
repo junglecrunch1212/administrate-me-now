@@ -4,6 +4,39 @@
 
 **Why a sequence instead of one mega-prompt.** One prompt for the whole build fails predictably: context pressure, lost-in-the-middle attention, drift from earlier constraints, and a tendency to race to completion without stopping to verify. This sequence addresses all four by giving each prompt a narrow scope, a specific reading list, explicit deliverables, and a required stop for human review.
 
+
+---
+
+## Rebase notes (2026-05-16)
+
+**Read this before doing anything else if you are a Partner session opening this file for the first time.**
+
+On 2026-05-16, an architecture-amendment-acknowledgment memo was authored at `docs/08-architecture-amendment-adapter-rebase.md`. Read it first. It records that prompts 11a / 11b / 11c executor cycles were authored against the wrong canon (the simple `docs/06-split-memo-11.md` 4-way decomposition) instead of the canonical 5-base-class adapter framework described in rows 115-123 below. The shipped code is salvageable via a staged retrofit (Cohort C per memo 08 §3.3); the canonical sequence in this file did not change and has always been correct.
+
+**Source-of-truth precedence when files disagree:**
+
+1. This file (`prompts/PROMPT_SEQUENCE.md`) for sequence shape.
+2. The amendment memos at `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md` and `docs/05-architecture-amendment-personal-data-layer.md` for adapter-framework canon ([D17]-[D25], [PM-29]-[PM-35]).
+3. The rebase memo `docs/08-architecture-amendment-adapter-rebase.md` for the recovery plan.
+4. The framework split memo `docs/09-split-memo-11-framework.md` for the 3-way decomposition of prompt 11 (11-α / 11-β / 11-γ).
+
+**Superseded artifacts on main (do NOT use as canon):**
+
+- `prompts/11-standalone-adapters.md` — DELETED 2026-05-16 (PR #117 batch). The simpler-canon parent draft that the wrong 11a/b/c work was authored against. Removed entirely to prevent reuse.
+- `prompts/_active/11a-adapter-foundation-gmail.md`, `prompts/_active/11b-adapter-plaid.md`, `prompts/_active/11c-adapter-reminders-bidirectional.md` — historical record of the wrong-canon refactored prompts that the shipped (now-retrofit-pending) 11a/b/c executor cycles ran against. **NOT canonical.** Cohort C retrofit prompts will retrofit the shipped code into the framework; Cohort D will author canonical 11a/b/c per rows 116-117. The historical refactored prompts stay on main as the audit trail of what was shipped.
+- `docs/06-split-memo-11.md` — historical 4-way split memo that drove the wrong-canon authorship. Superseded by `docs/09-split-memo-11-framework.md` (the canonical 3-way framework split). Stays on main as historical record.
+- `docs/07-deferred-adapter-framework-expansion.md` — header was amended in PR #113 to flip its "deferred" framing to "SUPERSEDED — see memo 08". The body is still useful as a synopsis of the canonical framework components, but the framing is wrong; trust memo 08, not memo 07.
+
+**What is canonical (use these as canon):**
+
+- Rows 115-123 below — the canonical 11 cohort layout (11 framework + 11a Gmail+Plaid + 11b Cat-B cohort + 11c-i bridge + 11c-ii Cat-D + 11d projection + 11e contacts + 11f lists projection + 11g HA).
+- `prompts/11-adapter-framework.md` — canonical parent draft for prompt 11 (PR #114).
+- `prompts/_active/11-alpha-adapter-framework-abcs-and-manifest.md` — canonical v4 refactor for the first framework sub-prompt (PR #116). 11-β and 11-γ refactors will follow after 11-α executes.
+
+**Pause rule (operator-side):** no `executor-cycle.yml` fires with `prompt_id` in the 11* family OTHER THAN `11-alpha`, `11-beta`, `11-gamma` until Cohort B (framework) completes. Cohort C retrofit + Cohort D resumed canon both depend on the framework being on main first.
+
+**For future Partner sessions:** if you find yourself confused about whether to follow `prompts/_active/11a-*.md` or rows 116-117 below for the canonical 11a scope, the answer is rows 116-117. The shipped code from the wrong-canon 11a needs retrofit (Cohort C). The canonical 11a (Gmail + Plaid CENTRAL via the typed ABCs) ships in Cohort D after Cohort B + Cohort C complete.
+
 ---
 
 ## The two-phase model
