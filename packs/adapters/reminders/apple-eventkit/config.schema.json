@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme/packs/adapters/reminders/apple-eventkit/config.schema.json",
+  "title": "Apple Reminders bidirectional adapter configuration",
+  "description": "Per-household configuration consumed by packs/adapters/reminders/apple-eventkit/adapter.py at start(). The Reminders adapter does not use a 1Password reference — EventKit access is granted at the OS level via EKEventStore.requestFullAccessToReminders (prompt 16 bootstrap-wizard wires the grant). sensitivity_floor is a hardcoded const `\"normal\"` at the pack level per SYSTEM_INVARIANTS.md §6 invariant 10 — adapters never auto-elevate, so any config that tries to raise it to `\"privileged\"` is rejected by JSON-schema validation before the loader runs. The never-sync filter is the per-item privacy boundary applied at BOTH inbound and outbound boundaries inside the adapter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "target_list_identifier",
+    "member_id"
+  ],
+  "properties": {
+    "target_list_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The iCloud Reminders list identifier (EKCalendar.calendarIdentifier) that AdministrateMe writes household-tagged reminders to on the 30s outbound loop. Inbound polls fetch from ALL non-never-sync lists; outbound writes go only to this list."
+    },
+    "member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Household member who owns the EventKit grant for this adapter instance. Stamped onto every reminder.list_item.synced event so downstream consumers can owner-scope correctly."
+    },
+    "never_sync_list_substrings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": ["Work", "Case", "Client"],
+      "description": "List names containing any of these substrings (case-insensitive) are blocked from sync at BOTH boundaries. Default matches the canonical never-sync rules in BUILD.md APPLE REMINDERS BIDIRECTIONAL §\"Never-sync rules\"."
+    },
+    "never_sync_tag_substrings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": ["#private"],
+      "description": "Reminders whose title or notes contain any of these substrings (case-insensitive) are blocked from sync at BOTH boundaries. Default is the canonical `#private` tag."
+    },
+    "inbound_poll_interval_s": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "description": "Seconds between inbound EventKit fetch cycles. The supervisor's APScheduler cron is a 1-minute heartbeat; the in-process cadence here is the active polling cadence."
+    },
+    "outbound_poll_interval_s": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "description": "Seconds between outbound EventKit write batches. The adapter drains queued upstream events (`reminder.dispatched` / `task.created` / `commitment.proposed`) at this cadence to minimize iCloud sync churn."
+    },
+    "sensitivity_floor": {
+      "const": "normal",
+      "description": "Hardcoded constant per SYSTEM_INVARIANTS.md §6 invariant 10 — reminders adapters cannot be elevated to `\"privileged\"` via config (auto-elevation is a deliberate operator decision for a future prompt). JSON-schema validation rejects any other value."
+    }
+  }
+}

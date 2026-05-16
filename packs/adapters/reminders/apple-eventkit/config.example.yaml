@@ -1,0 +1,26 @@
+# Apple Reminders bidirectional adapter example config.
+#
+# Unlike Gmail (service-account JSON) and Plaid (item access token),
+# the Reminders adapter does NOT use a 1Password reference: EventKit
+# access is an OS-level permission grant per
+# docs/reference/apple-eventkit/access.md. The bootstrap-wizard
+# (prompt 16) wires `EKEventStore.requestFullAccessToReminders` at
+# install time; until then operators grant access manually.
+#
+# sensitivity_floor is hardcoded `normal` at the pack level per
+# SYSTEM_INVARIANTS.md §6 invariant 10 — adapters never auto-elevate.
+# Per-item privacy is enforced by the never-sync filter (list-name
+# substring + tag substring + child/ambient member role) applied at
+# BOTH inbound and outbound boundaries.
+
+target_list_identifier: "AdministrateMe Household"
+member_id: member-001
+never_sync_list_substrings:
+  - "Work"
+  - "Case"
+  - "Client"
+never_sync_tag_substrings:
+  - "#private"
+inbound_poll_interval_s: 30
+outbound_poll_interval_s: 30
+sensitivity_floor: normal
