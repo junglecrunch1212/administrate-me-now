@@ -1,0 +1,50 @@
+{
+  "lists": {
+    "list-household-001": "AdministrateMe Household",
+    "list-family-2": "Family",
+    "list-work-cases": "Work case files",
+    "list-personal": "Personal"
+  },
+  "reminders": [
+    {
+      "calendarItemIdentifier": "x-coredata://AdministrateMe/EKReminder/rem-001",
+      "list_identifier": "list-household-001",
+      "title": "Pick up Maya at 5pm",
+      "notes": null,
+      "due_at": "2026-05-16T17:00:00Z",
+      "priority": 1,
+      "completed": false,
+      "last_modified_at": "2026-05-16T11:55:00Z"
+    },
+    {
+      "calendarItemIdentifier": "x-coredata://AdministrateMe/EKReminder/rem-002",
+      "list_identifier": "list-household-001",
+      "title": "Refill prescription",
+      "notes": "Walgreens — Susan's name on the script",
+      "due_at": "2026-05-17T09:00:00Z",
+      "priority": 5,
+      "completed": false,
+      "last_modified_at": "2026-05-16T11:50:00Z"
+    },
+    {
+      "calendarItemIdentifier": "x-coredata://AdministrateMe/EKReminder/rem-003",
+      "list_identifier": "list-family-2",
+      "title": "Sign permission slip",
+      "notes": null,
+      "due_at": "2026-05-18T08:00:00Z",
+      "priority": 5,
+      "completed": false,
+      "last_modified_at": "2026-05-16T11:45:00Z"
+    },
+    {
+      "calendarItemIdentifier": "x-coredata://AdministrateMe/EKReminder/rem-private",
+      "list_identifier": "list-personal",
+      "title": "#private — therapy appt",
+      "notes": null,
+      "due_at": "2026-05-19T10:00:00Z",
+      "priority": 5,
+      "completed": false,
+      "last_modified_at": "2026-05-16T11:40:00Z"
+    }
+  ]
+}
