@@ -38,6 +38,19 @@ C3 adds (inbound poll + dedupe + never-sync filter on iCloud reads):
      carries the JSON-encoded per-list cursor map; pure per-cycle
      emission would defeat anti-vision §"Quiet by default".
 
+C4 adds (supervisor lifecycle — both-poll-tasks supervision):
+ 15. ``start()`` spawns BOTH the inbound and outbound poll tasks
+     concurrently and ``stop()`` cancels both cleanly. c2 + c3 spawned
+     only the outbound task; c4 closes the bidirectional supervision
+     surface per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Polling
+     cadence" + §"Outbound write cadence".
+ 16. A ``NoopEKEventStore`` factory (which raises on every operation)
+     surfaces a ``RuntimeError`` through the supervised tasks; the
+     adapter classifies it via ``_classify_eventkit_error`` and emits
+     ``adapter.error`` v1 with the supervisor-expected shape so the
+     supervisor's restart-with-backoff loop takes over per
+     ``adminme/daemons/adapter_supervisor.py``.
+
 F-3 (10c-iii, reinforced by 11a + 11b): test basename is unique
 (``test_apple_eventkit_adapter_pack_internal.py``) so collection from
 the repo root does not collide with sibling pack-internal tests.
@@ -908,3 +921,114 @@ async def test_inbound_poll_loop_bounded_via_max_inbound_cycles() -> None:
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     ]
     assert len(synced) == 3
+
+
+# ---------------------------------------------------------------------------
+# 7) c4 — supervisor lifecycle (both-poll-tasks supervision)
+# ---------------------------------------------------------------------------
+
+
+async def test_start_spawns_both_poll_tasks_and_stop_cancels_cleanly() -> None:
+    """``start()`` spawns BOTH the inbound and outbound supervised
+    tasks; ``stop()`` cancels both cleanly. c2 + c3 spawned only the
+    outbound task; c4 closes the bidirectional supervision surface
+    per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Polling cadence" +
+    §"Outbound write cadence"."""
+    fixture = _load_inbound_fixture()
+    reminders = _reminders_from_fixture(fixture)
+    ek_store = _FakeEKEventStore(
+        list_names=fixture["lists"],
+        inbound_reminders=reminders,
+    )
+    adapter = _make_adapter(ek_store=ek_store)
+    # Bound both loops so start() returns rather than blocking forever;
+    # bypass the 30s inter-cycle sleeps so the test settles in
+    # milliseconds.
+    adapter._max_outbound_cycles = 1
+    adapter._max_inbound_cycles = 1
+    adapter.OUTBOUND_INTERVAL_S = 0  # type: ignore[misc]
+    adapter.INBOUND_INTERVAL_S = 0  # type: ignore[misc]
+
+    event_log = _FakeEventLog()
+
+    import asyncio
+
+    start_task = asyncio.create_task(adapter.start(ctx=_ctx(event_log)))
+    # Let both tasks attach + complete their bounded cycles.
+    await asyncio.wait_for(start_task, timeout=2.0)
+
+    # Both supervised tasks were created (i.e. start() spawned both,
+    # not just the outbound from c2/c3).
+    assert adapter._outbound_task is not None
+    assert adapter._inbound_task is not None
+    assert adapter._outbound_task.done()
+    assert adapter._inbound_task.done()
+
+    # adapter.authenticated emitted exactly once at start().
+    auth = [c for c in event_log.calls if c["type"] == "adapter.authenticated"]
+    assert len(auth) == 1
+
+    # Inbound emissions from the bounded inbound cycle made it into the
+    # log — proves the inbound task actually ran, not just attached.
+    synced_inbound = [
+        c
+        for c in event_log.calls
+        if c["type"] == "reminder.list_item.synced"
+        and c["payload"]["direction"] == "inbound"
+    ]
+    assert len(synced_inbound) == 3
+
+    # stop() is idempotent and transitions state to "stopped".
+    await adapter.stop()
+    assert adapter.status().state == "stopped"
+
+
+async def test_eventkit_permission_failure_emits_adapter_error_for_supervisor() -> None:
+    """A ``NoopEKEventStore`` factory (no real EventKit grant wired)
+    raises ``RuntimeError`` on every operation; the adapter's defensive
+    catch classifies the exception via ``_classify_eventkit_error`` and
+    emits an ``adapter.error`` v1 event with the
+    supervisor-expected shape. ``_classify_eventkit_error`` maps a bare
+    ``RuntimeError`` to ``(severity="transient", error_kind="unknown")``;
+    the supervisor's restart-with-backoff loop is what closes the
+    operator-surface gap once the permission grant is real (prompt 16
+    bootstrap wizard)."""
+    adapter_mod = _adapter_mod
+    noop_store = adapter_mod.NoopEKEventStore()
+
+    def factory() -> Any:
+        return noop_store
+
+    adapter = AppleEventKitAdapter(
+        config={
+            "target_list_identifier": "list-household-001",
+            "member_id": "member-001",
+        },
+        ek_event_store_factory=factory,
+    )
+    adapter._ek_store = noop_store
+    # Bound the outbound loop so the test does not hang; one cycle is
+    # enough to trip the NoopEKEventStore raise inside the drain path.
+    adapter._max_outbound_cycles = 1
+    adapter.OUTBOUND_INTERVAL_S = 0  # type: ignore[misc]
+    # Pre-queue an upstream event so the drain actually invokes the
+    # NoopEKEventStore (an empty queue is a clean no-op).
+    adapter.enqueue_outbound(_upstream_reminder_dispatched())
+
+    event_log = _FakeEventLog()
+    await adapter._outbound_poll(ctx=_ctx(event_log))
+
+    errors = [c for c in event_log.calls if c["type"] == "adapter.error"]
+    assert len(errors) == 1
+    err = errors[0]
+    assert err["schema_version"] == 1
+    payload = err["payload"]
+    assert payload["adapter_name"] == "reminders-apple-eventkit"
+    assert payload["adapter_family"] == "reminders"
+    # _classify_eventkit_error maps a bare RuntimeError to transient/unknown.
+    assert payload["severity"] == "transient"
+    assert payload["error_kind"] == "unknown"
+    assert "NoopEKEventStore" in payload["error_message"]
+    # The supervisor reads status() — a transient error transitions to
+    # "backoff" so the supervisor's restart window can take over.
+    assert adapter.status().state == "backoff"

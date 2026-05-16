@@ -42,3 +42,22 @@ adapters:
       # silently drops a SYNC_UPDATES_AVAILABLE. See
       # packs/adapters/financial/plaid/pack.yaml.
       backstop_poll_cron: "0 4 * * *"
+
+  - kind: reminders-apple-eventkit
+    family: reminders
+    # sensitivity_floor is hardcoded `normal` at the pack level per
+    # SYSTEM_INVARIANTS.md §6 invariant 10 — the adapter's config loader
+    # rejects any attempt to raise it (per-item privacy lives in the
+    # never-sync predicate, not the floor). Declared here for operator
+    # visibility only.
+    sensitivity_floor: normal
+    config:
+      target_list_identifier: "AdministrateMe Household"
+      member_id: member-001
+      # Never-sync rules applied at BOTH inbound and outbound boundaries.
+      # See packs/adapters/reminders/apple-eventkit/never_sync.py for the
+      # canonical predicate; these substrings override the defaults.
+      never_sync_list_substrings: ["Work", "Case", "Client"]
+      never_sync_tag_substrings: ["#private"]
+      inbound_poll_interval_s: 30
+      outbound_poll_interval_s: 30

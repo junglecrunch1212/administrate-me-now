@@ -66,6 +66,115 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import logging
+import sys
+import uuid
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from adminme.adapters.base import (
+    AdapterContext,
+    AdapterStatus,
+    SensitivityFloor,
+)
+
+_log = logging.getLogger(__name__)
+
+_PACK_DIR = Path(__file__).resolve().parent
+
+
+def _import_sibling(module_name: str) -> Any:
+    """Load a sibling pack-internal Python file via importlib.
+
+    Pack files do not live on Python's import path (``packs/`` isn't a
+    package); the supervisor loads ``adapter.py`` via
+    ``importlib.util.spec_from_file_location`` and pack-internal sibling
+    modules need the same treatment. Caches by name so repeated
+    invocations across test collection don't reload."""
+    cached_name = f"_apple_eventkit_pack__{module_name}"
+    cached = sys.modules.get(cached_name)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(
+        cached_name, _PACK_DIR / f"{module_name}.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load pack sibling {module_name!r}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[cached_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_never_sync_mod: Any = _import_sibling("never_sync")
+_shim_mod: Any = _import_sibling("_eventkit_shim")
+
+passes_never_sync: Callable[..., bool] = _never_sync_mod.passes_never_sync
+DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS: tuple[str, ...] = tuple(
+    _never_sync_mod.DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS
+)
+DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS: tuple[str, ...] = tuple(
+    _never_sync_mod.DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
+)
+EKEventStoreLike: Any = _shim_mod.EKEventStoreLike
+EKReminderLike: Any = _shim_mod.EKReminderLike
+NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
+
+
+# OS-level token-storage reference. EventKit access is granted at the OS
+# level via ``EKEventStore.requestFullAccessToReminders(completion:)``
+# per docs/reference/apple-eventkit/access.md; no 1Password secret is
+# involved (unlike Gmail's service-account JSON or Plaid's item access
+# token). The string is recorded on ``adapter.authenticated`` for audit.
+_OS_TOKEN_STORAGE_REF = "os://reminders-permission"
+
+_DEFAULT_INBOUND_INTERVAL_S = 30
+_DEFAULT_OUTBOUND_INTERVAL_S = 30
+
+_OUTBOUND_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        "reminder.dispatched",
+        "task.created",
+        "commitment.proposed",
+    }
+)
+
+# EventKit priority ordinal scale per
+# ``docs/reference/apple-eventkit/ekreminder.md``: 0=none, 1=high,
+# 5=medium, 9=low. The Reminders adapter maps urgency strings on
+# ``commitment.proposed`` to these ordinals.
+_PRIORITY_BY_URGENCY: dict[str, Literal[0, 1, 5, 9]] = {
+    "today": 1,
+    "this_week": 5,
+    "this_month": 9,
+    "no_rush": 0,
+}
+
+MemberRoleResolver = Callable[[str], str]
+"""Maps ``member_id`` → role string (``"adult"`` / ``"child"`` /
+``"ambient"``). Production wires the ``members`` projection slice from
+prompt 05; tests inject a fake. The never-sync predicate's
+ownership-exclusion rule consults this for every outbound write
+candidate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Never-sync
+rules"."""
+
+EKEventStoreFactory = Callable[[], Any]
+"""PM-27: constructor-injected callable that returns an
+``EKEventStoreLike``. Default is ``NoopEKEventStore`` so the adapter
+constructs cleanly without pyobjc; the supervisor wires the real
+factory at startup (prompt 16 bootstrap wizard)."""
+
+DedupeResolver = Callable[[str], datetime | None]
+"""Maps ``remind_id`` → the projected ``last_modified_at`` for that
+reminder, or ``None`` if the projection has no record of it. Production
+reads the ``reminders`` projection slice; the permissive default
+returns ``None`` for every input so inbound emission is permissive
+when the projection's writer pipeline is absent (Phase A — see prompt
+11c §3 deferred-watch). [§7.3, D17] adapters READ from projections;
+they never write."""
+
 
 def _noop_ek_event_store_factory() -> Any:
     """PM-27 default factory. Returns a ``NoopEKEventStore`` that raises
@@ -90,6 +199,58 @@ def _default_dedupe_resolver(_remind_id: str) -> datetime | None:
     the projection's writer lands and the resolver consults it."""
     return None
 
+
+class AppleEventKitAdapter:
+    """Apple Reminders L1 standalone bidirectional adapter.
+
+    Class attributes satisfy the ``Adapter`` Protocol's required fields.
+    ``sensitivity_floor`` is hardcoded ``"normal"`` per [§6 invariant
+    10]; any config attempt to set ``"privileged"`` raises at
+    construction.
+
+    The supervisor instantiates one of these per Reminders entry in
+    ``config/channels.yaml`` and supervises ``start()``. Each adapter
+    handles a single household member's EventKit grant; multi-member
+    households run multiple supervised instances.
+    """
+
+    # [§6 invariant 10, D11 (Reminders posture)]: sensitivity floor
+    # hardcoded at the class level. Reminders adapters cannot be
+    # ELEVATED to ``privileged`` via config — adapters never
+    # auto-elevate; that's a deliberate operator decision for a future
+    # prompt. JSON-schema rejects most malformed inputs at load time;
+    # ``__init__`` is the defense-in-depth runtime check.
+    name: str = "reminders-apple-eventkit"
+    family: str = "reminders"
+    version: str = "1.0.0"
+    sensitivity_floor: SensitivityFloor = "normal"
+
+    PACK_ID: str = "adapter:reminders-apple-eventkit"
+
+    OUTBOUND_INTERVAL_S: int = _DEFAULT_OUTBOUND_INTERVAL_S
+    """In-process outbound write cadence. ``pack.yaml``'s ``*/1 * * * *``
+    cron is a heartbeat; the 30s sub-cadence is the active outbound
+    rate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Outbound write
+    cadence"."""
+
+    INBOUND_INTERVAL_S: int = _DEFAULT_INBOUND_INTERVAL_S
+    """In-process inbound poll cadence (c3). Same rationale as the
+    outbound: pack.yaml's cron is a heartbeat, the 30s sub-cadence is
+    the active polling rate per §"Polling cadence"."""
+
+    CURSOR_MILESTONE_EVENTS: int = 100
+    CURSOR_MILESTONE_INTERVAL_S: int = 300
+    """``adapter.cursor_advanced`` is emitted at whichever milestone
+    fires first — 100 emissions since the last advance OR 5 minutes of
+    wall clock. Shared across the L1 adapter family; matches Gmail's and
+    Plaid's settings so dashboards aggregate cleanly. Anti-vision §"Quiet
+    by default": pure per-poll emission would swamp the event log."""
+
+    INBOUND_CURSOR_KIND: str = "list_identifier_last_modified"
+    """Per-list ``(list_identifier → last_modified_at)`` cursor shape.
+    JSON-serialized into the v1 schema's ``cursor_value: str`` field so
+    the round-trip carries the entire reminder-family cursor map in one
+    audit event."""
 
     def __init__(
         self,
@@ -119,6 +280,21 @@ def _default_dedupe_resolver(_remind_id: str) -> datetime | None:
         self._ek_event_store_factory = ek_event_store_factory
         self._member_role_resolver = member_role_resolver
         self._dedupe_resolver = dedupe_resolver
+        self._never_sync_list_substrings: tuple[str, ...] = tuple(
+            self._config.get(
+                "never_sync_list_substrings", DEFAULT_NEVER_SYNC_LIST_SUBSTRINGS
+            )
+        )
+        self._never_sync_tag_substrings: tuple[str, ...] = tuple(
+            self._config.get(
+                "never_sync_tag_substrings", DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
+            )
+        )
+        # Test seams: bound each loop independently. ``None`` = run
+        # forever (production); the supervisor stops both tasks on
+        # lifecycle events.
+        self._max_outbound_cycles = max_outbound_cycles
+        self._max_inbound_cycles = max_inbound_cycles
 
         self._status = AdapterStatus()
         self._ek_store: Any = None
@@ -145,6 +321,68 @@ def _default_dedupe_resolver(_remind_id: str) -> datetime | None:
         # since last advance; emit on whichever threshold fires first.
         self._events_since_inbound_advance: int = 0
         self._last_inbound_advance_at: datetime | None = None
+
+    # ------------------------------------------------------------------
+    # Adapter Protocol
+    # ------------------------------------------------------------------
+    async def start(self, *, ctx: AdapterContext) -> None:
+        """Validate config, instantiate the EKEventStore, emit
+        ``adapter.authenticated``, spawn BOTH supervised poll tasks
+        (outbound + inbound) concurrently, and block until either
+        completes or ``stop()`` is called.
+
+        c4 closes the bidirectional surface: the inbound poll task
+        joins the outbound task under ``asyncio.gather`` so a single
+        ``stop()`` cancels both cleanly per BUILD.md APPLE REMINDERS
+        BIDIRECTIONAL §"Polling cadence" + §"Outbound write cadence".
+        Tests exercise the underlying helpers directly to avoid
+        blocking on the loop; this method is the supervisor-facing
+        lifecycle hook only."""
+        target_list_identifier = self._config.get("target_list_identifier")
+        member_id = self._config.get("member_id")
+        if not isinstance(target_list_identifier, str) or not target_list_identifier:
+            raise ValueError(
+                "config.target_list_identifier must be a non-empty string "
+                "(the iCloud Reminders list AdministrateMe writes to)"
+            )
+        if not isinstance(member_id, str) or not member_id:
+            raise ValueError(
+                "config.member_id must be a non-empty string (the household "
+                "member whose EventKit grant this adapter uses)"
+            )
+
+        self._ek_store = self._ek_event_store_factory()
+        self._ctx = ctx
+        self._status.started_at = ctx.now_factory()
+        self._status.state = "running"
+
+        # [D7] adapter.authenticated registered at v1 in
+        # adminme/events/schemas/adapters.py. [D8] correlation_id is
+        # minted by the supervisor-provided factory.
+        self._emit_authenticated(ctx=ctx)
+
+        self._outbound_task = asyncio.create_task(self._outbound_poll(ctx=ctx))
+        self._inbound_task = asyncio.create_task(self._inbound_poll(ctx=ctx))
+        try:
+            await asyncio.gather(
+                self._outbound_task, self._inbound_task
+            )
+        except asyncio.CancelledError:
+            return
+
+    async def stop(self) -> None:
+        """Cancel both supervised tasks (outbound from c2; inbound from
+        c3 once ``start()`` spawns it in c4), release the EKEventStore
+        handle, and transition to the ``"stopped"`` state. Idempotent.
+        """
+        self._stop_requested = True
+        for task in (self._outbound_task, self._inbound_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         self._ek_store = None
         self._status.state = "stopped"
 
