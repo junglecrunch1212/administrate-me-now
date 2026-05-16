@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Gmail adapter config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service_account_key_ref", "user_email"],
+  "properties": {
+    "service_account_key_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the service-account JSON (op://<vault>/<item>/<field>). NEVER a raw secret per ADMINISTRATEME_BUILD.md §L1."
+    },
+    "user_email": {
+      "type": "string",
+      "format": "email",
+      "description": "The Gmail address being polled (subject of service-account domain-wide delegation)."
+    },
+    "sensitivity_floor": {
+      "type": "string",
+      "enum": ["normal", "privileged"],
+      "default": "normal",
+      "description": "Adapter sensitivity floor. Config may RAISE the floor (e.g. law-practice email = 'privileged') but cannot LOWER it below the hardcoded class default per SYSTEM_INVARIANTS.md §6 invariant 10."
+    }
+  }
+}
