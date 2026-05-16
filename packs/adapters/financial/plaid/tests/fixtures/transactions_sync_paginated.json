@@ -1,0 +1,76 @@
+{
+  "_comment": "Two-page recorded /transactions/sync response. Page 1 carries has_more=true so the adapter pagination loop calls transactions_sync again with the page-1 next_cursor; page 2 returns has_more=false. The pack-internal cursor-milestone test loads this and a sibling 'transactions_sync_milestone_page2.json' to verify the loop accumulates added across pages and persists the post-pagination cursor.",
+  "page1": {
+    "added": [
+      {
+        "transaction_id": "txn-pg1-1",
+        "account_id": "acct-checking-001",
+        "amount": -10.0,
+        "iso_currency_code": "USD",
+        "date": "2026-05-12",
+        "name": "Page 1 Tx 1",
+        "pending": false
+      },
+      {
+        "transaction_id": "txn-pg1-2",
+        "account_id": "acct-checking-001",
+        "amount": -20.0,
+        "iso_currency_code": "USD",
+        "date": "2026-05-12",
+        "name": "Page 1 Tx 2",
+        "pending": false
+      }
+    ],
+    "modified": [],
+    "removed": [],
+    "accounts": [
+      {
+        "account_id": "acct-checking-001",
+        "name": "Plaid Checking",
+        "type": "depository",
+        "subtype": "checking"
+      }
+    ],
+    "item": {
+      "item_id": "item-sandbox-abc",
+      "institution_id": "ins_109508",
+      "institution_name": "First Platypus Bank"
+    },
+    "next_cursor": "cursor-page2",
+    "has_more": true,
+    "request_id": "req-pg1"
+  },
+  "page2": {
+    "added": [
+      {
+        "transaction_id": "txn-pg2-1",
+        "account_id": "acct-savings-001",
+        "amount": 250.0,
+        "iso_currency_code": "USD",
+        "date": "2026-05-13",
+        "name": "Page 2 Tx 1",
+        "pending": false
+      }
+    ],
+    "modified": [],
+    "removed": [
+      { "transaction_id": "txn-removed-1" }
+    ],
+    "accounts": [
+      {
+        "account_id": "acct-savings-001",
+        "name": "Plaid Savings",
+        "type": "depository",
+        "subtype": "savings"
+      }
+    ],
+    "item": {
+      "item_id": "item-sandbox-abc",
+      "institution_id": "ins_109508",
+      "institution_name": "First Platypus Bank"
+    },
+    "next_cursor": "cursor-final",
+    "has_more": false,
+    "request_id": "req-pg2"
+  }
+}
