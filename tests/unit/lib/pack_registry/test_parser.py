@@ -34,13 +34,20 @@ def test_parse_existing_gmail_pack_yaml_yields_empty_capabilities() -> None:
     assert manifest.sensitivity_default == "normal"
 
 
-def test_parse_existing_plaid_pack_yaml_yields_empty_capabilities() -> None:
+def test_parse_existing_plaid_pack_yaml_yields_cat_c_capability() -> None:
+    """Plaid pack.yaml was retrofitted in prompt 11r-b: the manifest now
+    declares one Cat-C capability with ``money_flow.plaid_synced`` in
+    event_families. ``sensitivity_default: privileged`` is now declared
+    in the manifest (matches the hardcoded class-attribute floor — the
+    manifest layer of the triple-lock per [§6 invariant 10])."""
     pack_dir = REPO_ROOT / "packs" / "adapters" / "financial" / "plaid"
     manifest = parse_adapter_manifest(pack_dir)
-    assert manifest.capabilities == []
-    # Legacy top-level `sensitivity_floor: privileged` is NOT a framework
-    # extension; the parser ignores it (the existing supervisor handles it).
-    assert manifest.sensitivity_default == "normal"
+    assert len(manifest.capabilities) == 1
+    cap = manifest.capabilities[0]
+    assert cap.kind == "Cat-C"
+    assert cap.runtime == "central"
+    assert cap.event_families == ["money_flow.plaid_synced"]
+    assert manifest.sensitivity_default == "privileged"
 
 
 def test_parse_existing_reminders_pack_yaml_yields_empty_capabilities() -> None:
