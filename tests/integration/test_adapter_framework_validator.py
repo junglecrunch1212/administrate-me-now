@@ -187,12 +187,11 @@ def test_existing_v1_gmail_pack_validates_without_errors() -> None:
 
 
 def test_existing_v1_plaid_pack_validates_without_errors() -> None:
-    """Backward-compat for the on-main Plaid v1 pack — same shape as Gmail.
-
-    Plaid is the privileged-floor financial adapter; Cohort C will
-    retrofit it to inherit from :class:`InboundDataAdapter` (Cat-C —
-    no write surface). Until then, the validator surfaces only the
-    base-class advisory.
+    """Post-retrofit (prompt 11r-b — Cohort C step 2): the Plaid pack
+    now inherits :class:`InboundDataAdapter` and declares a Cat-C
+    ``capabilities`` block. The validator returns zero errors AND no
+    ``advisory_pending_retrofit`` finding on ``base_class_conformance``
+    — the second of three Cohort C advisories closed.
     """
     pack_dir = Path("packs/adapters/financial/plaid")
     result = validate_adapter_pack(pack_dir)
@@ -200,10 +199,14 @@ def test_existing_v1_plaid_pack_validates_without_errors() -> None:
     assert not result.has_errors(), [
         (f.check, f.message) for f in result.errors()
     ]
-    assert any(
-        f.check == "base_class_conformance"
-        and "advisory_pending_retrofit" in f.message
+    pending = [
+        f
         for f in result.advisories()
+        if f.check == "base_class_conformance"
+        and "advisory_pending_retrofit" in f.message
+    ]
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
     )
 
 
