@@ -58,6 +58,7 @@ the repo root does not collide with sibling pack-internal tests.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 from datetime import datetime, timedelta, timezone
@@ -388,7 +389,7 @@ def test_outbound_drain_calls_save_on_eventkit() -> None:
     )
 
     event_log = _FakeEventLog()
-    written = adapter._drain_outbound_once(ctx=_ctx(event_log))
+    written = asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
     assert written == 1
     assert len(ek_store.builds) == 1
@@ -417,7 +418,7 @@ def test_outbound_drain_ignores_non_trigger_event_types() -> None:
     )
 
     event_log = _FakeEventLog()
-    written = adapter._drain_outbound_once(ctx=_ctx(event_log))
+    written = asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
     assert written == 0
     assert ek_store.builds == []
@@ -450,7 +451,7 @@ def test_outbound_emit_reminder_list_item_synced_with_direction_outbound() -> No
     )
 
     event_log = _FakeEventLog()
-    adapter._drain_outbound_once(ctx=_ctx(event_log))
+    asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
     synced = [
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
@@ -497,7 +498,7 @@ def test_never_sync_blocks_outbound_to_work_list() -> None:
     )
 
     event_log = _FakeEventLog()
-    written = adapter._drain_outbound_once(ctx=_ctx(event_log))
+    written = asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
     assert written == 0
     assert ek_store.builds == []
@@ -520,7 +521,7 @@ def test_never_sync_blocks_outbound_for_child_member_role() -> None:
     adapter.enqueue_outbound(_upstream_reminder_dispatched())
 
     event_log = _FakeEventLog()
-    written = adapter._drain_outbound_once(ctx=_ctx(event_log))
+    written = asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
     assert written == 0
     assert ek_store.builds == []

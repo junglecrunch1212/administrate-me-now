@@ -72,13 +72,21 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
     AdapterContext,
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.lib.adapters import (
+    ChangeEnvelope,
+    ExternalStateMirrorAdapter,
+    WriteCapabilityError,
+    WriteOperation,
+    WriteResult,
+)
+from adminme.lib.observation import outbound as observation_outbound
 
 _log = logging.getLogger(__name__)
 
@@ -200,13 +208,33 @@ def _default_dedupe_resolver(_remind_id: str) -> datetime | None:
     return None
 
 
-class AppleEventKitAdapter:
+class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     """Apple Reminders L1 standalone bidirectional adapter.
+
+    Retrofitted onto :class:`ExternalStateMirrorAdapter` per prompt 11r-c
+    (Cohort C retrofit step 3 of 3; ``docs/08-architecture-amendment-adapter-rebase.md``
+    §3.3). The inheritance flip + the ``capabilities`` / ``write_capabilities``
+    / ``sharing_model_discriminator`` ClassVars + the
+    :meth:`_apply_write_impl` and :meth:`_on_external_change` ABC method
+    implementations close the THIRD and FINAL ``advisory_pending_retrofit``
+    finding the 11-β validator surfaces on ``base_class_conformance``,
+    closing Cohort C.
+
+    Cat-B's write surface is **asymmetric per [UT-27]**:
+    ``write_capabilities = ["create_reminder"]`` declares ONLY the kind
+    the adapter actually implements today. Declaring ``toggle_completion``
+    / ``update_reminder`` / ``delete_reminder`` without method-presence
+    would fail ``write_capabilities_check`` per memo 05 §3.4. The base
+    class's :meth:`apply_write` raises :class:`WriteCapabilityError` for
+    any undeclared kind BEFORE the external API is touched — that's the
+    [UT-27] gate this retrofit makes load-bearing on every outbound write.
 
     Class attributes satisfy the ``Adapter`` Protocol's required fields.
     ``sensitivity_floor`` is hardcoded ``"normal"`` per [§6 invariant
     10]; any config attempt to set ``"privileged"`` raises at
-    construction.
+    construction. Reminders adapters cannot auto-elevate — that's a
+    deliberate operator decision for a future prompt; finer-grained
+    item-level privacy lives in the never-sync predicate, not the floor.
 
     The supervisor instantiates one of these per Reminders entry in
     ``config/channels.yaml`` and supervises ``start()``. Each adapter
@@ -220,10 +248,35 @@ class AppleEventKitAdapter:
     # auto-elevate; that's a deliberate operator decision for a future
     # prompt. JSON-schema rejects most malformed inputs at load time;
     # ``__init__`` is the defense-in-depth runtime check.
-    name: str = "reminders-apple-eventkit"
-    family: str = "reminders"
-    version: str = "1.0.0"
-    sensitivity_floor: SensitivityFloor = "normal"
+    name: ClassVar[str] = "reminders-apple-eventkit"
+    family: ClassVar[Literal["reminders", "calendaring", "contacts"]] = "reminders"
+    version: ClassVar[str] = "1.0.0"
+    sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
+
+    # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
+    # ``capabilities`` block for runtime introspection without re-parsing
+    # ``pack.yaml``. One Cat-B entry declaring ``reminder.list_item.synced``;
+    # the manifest at ``packs/adapters/reminders/apple-eventkit/pack.yaml``
+    # is the source of truth.
+    capabilities: ClassVar[list[Any]] = [
+        {
+            "kind": "Cat-B",
+            "runtime": "central",
+            "event_families": ["reminder.list_item.synced"],
+        }
+    ]
+
+    # [UT-27] asymmetric write_capabilities — declare ONLY what's
+    # implemented. ``toggle_completion`` / ``update_reminder`` /
+    # ``delete_reminder`` are out of scope per memo 08 §5 (inheritance +
+    # manifest only, not a rewrite); declaring them without method
+    # presence would fail ``write_capabilities_check``.
+    write_capabilities: ClassVar[list[str]] = ["create_reminder"]
+
+    # [memo 05 §2.5, PM-35] projection-row column distinguishing
+    # per-member vs shared rows on the future ``lists`` / ``reminders``
+    # projection (Cohort D 11f). Single-deployment central in 11r-c.
+    sharing_model_discriminator: ClassVar[str] = "owner_member_id"
 
     PACK_ID: str = "adapter:reminders-apple-eventkit"
 
@@ -321,6 +374,20 @@ class AppleEventKitAdapter:
         # since last advance; emit on whichever threshold fires first.
         self._events_since_inbound_advance: int = 0
         self._last_inbound_advance_at: datetime | None = None
+
+        # Observation-mode wiring slots for :meth:`_apply_write_impl`
+        # per [§6.20]. Phase A leaves these unset; the Phase B prompt
+        # extending the supervisor's adapter-loading path will populate
+        # them so EKEventStore writes route through
+        # :func:`adminme.lib.observation.outbound`. Until then,
+        # :meth:`_apply_write_impl` calls ``ek_store.save(...)`` directly
+        # to preserve byte-for-byte the existing production save path
+        # (the never-sync filter at the outbound boundary is per-item
+        # privacy, NOT a substitute for the observation-mode operator
+        # gate per memo 08 §3.3).
+        self._observation_session: Any = None
+        self._observation_manager: Any = None
+        self._observation_event_log: Any = None
 
     # ------------------------------------------------------------------
     # Adapter Protocol
@@ -430,7 +497,7 @@ class AppleEventKitAdapter:
             ):
                 return
             try:
-                self._drain_outbound_once(ctx=ctx)
+                await self._drain_outbound_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
                 self._emit_error(
@@ -450,7 +517,7 @@ class AppleEventKitAdapter:
             except asyncio.CancelledError:
                 return
 
-    def _drain_outbound_once(self, *, ctx: AdapterContext) -> int:
+    async def _drain_outbound_once(self, *, ctx: AdapterContext) -> int:
         """Drain every queued upstream event in a single batch. Returns
         the count of writes that produced a ``reminder.list_item.synced``
         emission (i.e., the count post never-sync filter).
@@ -464,7 +531,7 @@ class AppleEventKitAdapter:
         written = 0
         while self._outbound_queue:
             upstream = self._outbound_queue.popleft()
-            if self._write_one_outbound(
+            if await self._write_one_outbound(
                 ctx=ctx,
                 upstream=upstream,
                 sync_cycle_id=sync_cycle_id,
@@ -472,18 +539,30 @@ class AppleEventKitAdapter:
                 written += 1
         return written
 
-    def _write_one_outbound(
+    async def _write_one_outbound(
         self,
         *,
         ctx: AdapterContext,
         upstream: dict[str, Any],
         sync_cycle_id: str,
     ) -> bool:
-        """Translate one upstream event → EKReminder, apply the
-        never-sync filter, call ``EKEventStore.save(_:commit:)``, emit
+        """Translate one upstream event → ``WriteOperation``, apply the
+        never-sync filter, dispatch through the Cat-B ABC's
+        :meth:`apply_write` gate (which exercises the [UT-27]
+        ``write_capabilities`` check on every production outbound write),
+        and on a successful :class:`WriteResult` emit
         ``reminder.list_item.synced`` with ``direction="outbound"``.
-        Returns True iff a synced event was emitted (False on
-        never-sync block / unmappable upstream).
+
+        Returns ``True`` iff a synced event was emitted (``False`` on
+        never-sync block / unmappable upstream / observation-mode
+        suppression).
+
+        Per memo 08 §3.3 + the prompt 11r-c §1 paragraph 3 — the gate is
+        what makes ``write_capabilities`` load-bearing instead of
+        decorative; the per-operation kind check is enforced BEFORE the
+        external API is touched, so any code path that tries to invoke
+        an undeclared kind (``toggle_completion`` / ``delete_reminder``)
+        raises :class:`WriteCapabilityError` cleanly at the gate.
 
         [Causation invariant] ``causation_id`` is the upstream event's
         id — every outbound emission traces back to the proactive
@@ -516,22 +595,35 @@ class AppleEventKitAdapter:
         ):
             return False
 
-        reminder = ek_store.build_reminder(
-            list_identifier=target_list_id,
-            title=translation["title"],
-            notes=translation.get("notes"),
-            due_at=translation.get("due_at"),
-            priority=translation["priority"],
+        # [UT-27] dispatch through the ABC gate. ``apply_write`` raises
+        # ``WriteCapabilityError`` for any kind not declared in
+        # ``write_capabilities`` BEFORE invoking ``_apply_write_impl`` —
+        # the gate is exercised on every production outbound write.
+        operation = WriteOperation(
+            kind="create_reminder",
+            target_external_id=None,
+            payload={
+                "member_id": member_id,
+                "target_list_id": target_list_id,
+                "target_list_name": target_list_name,
+                "title": translation["title"],
+                "notes": translation.get("notes"),
+                "due_at": translation.get("due_at"),
+                "priority": translation["priority"],
+            },
         )
-        # ``save(_:commit:)`` per docs/reference/apple-eventkit/create.md
-        # — ``commit=True`` flushes immediately rather than batching for
-        # a later ``commit()`` call. Each outbound write is its own
-        # transaction so iCloud sync churn stays per-reminder.
-        ek_store.save(reminder, commit=True)
+        result = await self.apply_write(operation)
+        if not result.applied:
+            # Observation mode suppressed the side effect, OR the impl
+            # declined to apply for some other internal reason. In either
+            # case the synced event is NOT emitted (no external state
+            # changed; emitting would lie about iCloud-side state).
+            return False
 
-        # Apple stamps ``calendarItemIdentifier`` on save; read it back
-        # for the round-trip-traceability field on the emitted event.
-        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+        # Apple stamps ``calendarItemIdentifier`` on save; the
+        # WriteResult.external_id carries it forward for the
+        # round-trip-traceability field on the emitted event.
+        remind_id = result.external_id or ""
         now = ctx.now_factory()
         payload: dict[str, Any] = {
             "member_id": member_id,
@@ -555,6 +647,163 @@ class AppleEventKitAdapter:
             causation_id=causation_id,
         )
         return True
+
+    # ------------------------------------------------------------------
+    # ExternalStateMirrorAdapter ABC — Cat-B abstract method
+    # implementations per prompt 11r-c §7 c2 / [UT-27] / [§6.20].
+    # ------------------------------------------------------------------
+    async def _apply_write_impl(
+        self, operation: WriteOperation
+    ) -> WriteResult:
+        """Per-operation write implementation. Invoked by
+        :meth:`apply_write` only after the [UT-27] capability gate
+        passes — the gate guarantees ``operation.kind`` is in
+        ``write_capabilities``, so the per-kind switch below only needs
+        to cover declared kinds (``create_reminder`` today).
+
+        Routes the actual ``EKEventStore.save(_:commit:)`` call through
+        :func:`adminme.lib.observation.outbound` per [§6.20] when the
+        Phase B observation-mode wiring slots are populated by the
+        supervisor; otherwise calls ``ek_store.save`` directly (Phase A
+        preserves the existing production save path byte-for-byte per
+        memo 08 §5 — the never-sync filter at the outbound boundary is
+        per-item privacy, NOT a substitute for the operator-level
+        observation-mode gate).
+
+        Returns :class:`WriteResult` with ``applied=True`` +
+        ``external_id`` on save; ``applied=False`` + ``suppressed=True``
+        on observation-mode suppression.
+        """
+        if operation.kind != "create_reminder":  # defense-in-depth
+            # [UT-27]: the apply_write gate should have caught this.
+            # If we got here, write_capabilities and this dispatch are
+            # out of sync — surface loudly rather than silently no-op.
+            raise WriteCapabilityError(
+                f"AppleEventKitAdapter._apply_write_impl received "
+                f"undeclared kind={operation.kind!r}"
+            )
+
+        ek_store = self._ek_store
+        if ek_store is None:
+            # The supervisor calls start() before any outbound dispatch;
+            # arriving here means a test invoked apply_write before
+            # start(). Honest no-op rather than a crash.
+            return WriteResult(applied=False, external_id=None, suppressed=False)
+
+        payload = operation.payload
+        reminder = ek_store.build_reminder(
+            list_identifier=str(payload["target_list_id"]),
+            title=str(payload["title"]),
+            notes=payload.get("notes"),
+            due_at=payload.get("due_at"),
+            priority=payload["priority"],
+        )
+
+        # [§6.20] observation-mode wrap. The 11-β validator's
+        # ``observation_mode_wrapping`` AST-walk finds the call site;
+        # runtime suppression activates once the supervisor's adapter-
+        # loading path wires the seam slots (Phase B).
+        session = self._observation_session
+        manager = self._observation_manager
+        event_log = self._observation_event_log
+
+        async def _do_save() -> None:
+            # ``save(_:commit:)`` per docs/reference/apple-eventkit/create.md
+            # — ``commit=True`` flushes immediately rather than batching
+            # for a later ``commit()`` call. Each outbound write is its
+            # own transaction so iCloud sync churn stays per-reminder.
+            ek_store.save(reminder, commit=True)
+
+        if session is not None and manager is not None and event_log is not None:
+            outbound_result = await observation_outbound(
+                session,
+                "reminders.create_reminder",
+                {
+                    "member_id": str(payload.get("member_id", "")),
+                    "list_identifier": str(payload["target_list_id"]),
+                    "list_name": str(payload.get("target_list_name", "")),
+                    "title": str(payload["title"]),
+                    "priority": payload["priority"],
+                },
+                _do_save,
+                manager=manager,
+                event_log=event_log,
+                target_channel="reminders-apple-eventkit",
+                target_identifier=str(payload["target_list_id"]),
+            )
+            if outbound_result.suppressed:
+                return WriteResult(
+                    applied=False, external_id=None, suppressed=True
+                )
+        else:
+            # Phase A — seams unset; the existing production save path
+            # is preserved byte-for-byte.
+            await _do_save()
+
+        remind_id = str(
+            getattr(reminder, "calendarItemIdentifier", "") or ""
+        )
+        return WriteResult(
+            applied=True, external_id=remind_id or None, suppressed=False
+        )
+
+    async def _on_external_change(self, envelope: ChangeEnvelope) -> None:
+        """Cat-B ABC entry point for inbound change envelopes. Per memo
+        08 §5 (inheritance + manifest only, not a rewrite) and prompt
+        11r-c §1 paragraph 3, the existing :meth:`_inbound_poll_once`
+        keeps calling :meth:`_emit_inbound_synced` directly for the
+        production poll path; this hook is the framework contract entry
+        point that ``base_class_conformance`` checks find via AST-walk
+        and that future ingress paths (webhook handlers, 11g's HA Cat-C/
+        Cat-E adapters routing real change envelopes) will dispatch
+        through.
+
+        Synthesizes a reminder-like duck-typed object from
+        ``envelope.payload`` and delegates to the existing
+        :meth:`_emit_inbound_synced`. The ``ctx`` is captured at
+        :meth:`start` time; if the hook fires before start(), the call
+        is an honest no-op.
+        """
+        ctx = self._ctx
+        if ctx is None:
+            return
+
+        payload = envelope.payload
+        sync_cycle_id = str(payload.get("sync_cycle_id") or _next_sync_cycle_id())
+
+        # Build a duck-typed reminder shim from the envelope payload.
+        # The existing _emit_inbound_synced reads attributes via
+        # getattr(); a SimpleNamespace satisfies that contract without
+        # depending on the EKReminderLike Protocol type.
+        from types import SimpleNamespace
+
+        last_modified_raw = payload.get("last_modified_at")
+        last_modified_at: datetime | None
+        if isinstance(last_modified_raw, datetime):
+            last_modified_at = last_modified_raw
+        elif isinstance(last_modified_raw, str) and last_modified_raw:
+            try:
+                last_modified_at = datetime.fromisoformat(
+                    last_modified_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                last_modified_at = None
+        else:
+            last_modified_at = None
+
+        synthetic = SimpleNamespace(
+            calendarItemIdentifier=envelope.external_id,
+            list_identifier=str(payload.get("list_identifier", "")),
+            title=str(payload.get("title", "")),
+            notes=payload.get("notes"),
+            due_at=payload.get("due_at"),
+            priority=payload.get("priority", 0),
+            completed=bool(payload.get("completed", False)),
+            last_modified_at=last_modified_at,
+        )
+        self._emit_inbound_synced(
+            ctx=ctx, reminder=synthetic, sync_cycle_id=sync_cycle_id
+        )
 
     @staticmethod
     def _translate_upstream(
