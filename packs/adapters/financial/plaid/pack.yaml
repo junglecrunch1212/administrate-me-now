@@ -60,3 +60,20 @@ documentation:
     - SYNC_UPDATES_AVAILABLE   # triggers /transactions/sync
     - ITEM_LOGIN_REQUIRED      # emits adapter.error severity=fatal
   cursor_kind: transactions_cursor
+
+# Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35].
+# Added by prompt 11r-b (Cohort C retrofit) — closes the
+# advisory_pending_retrofit finding the 11-β validator surfaces on
+# base_class_conformance. `dedup_strategy` is declared as a mapping per
+# the on-main AdapterManifest model (`dict[str, Any] | None`); the
+# `external_id` kind matches Plaid's `(plaid_item_id, sync_cursor)`
+# stability semantics — same /transactions/sync cycle produces the same
+# external_id, so re-delivery on supervisor restart is dedup-safe.
+capabilities:
+  - kind: Cat-C
+    runtime: central
+    event_families: [money_flow.plaid_synced]
+sensitivity_default: privileged
+sharing_model_discriminator: owner_member_id
+dedup_strategy:
+  kind: external_id
