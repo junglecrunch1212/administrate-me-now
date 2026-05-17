@@ -4,8 +4,8 @@ Prompt 11-γ ships three subcommands here: ``list`` (discover installed
 packs), ``validate`` (wrap the 11-β six-check validator), and
 ``scaffold`` (generate a validator-clean skeleton under the [D20]
 three-layer developer-mode gate). Commit 1 of the four-commit cycle
-introduces ``adapters_app`` and the ``list`` subcommand; ``validate``
-and ``scaffold`` land in commits 2 and 3 respectively.
+introduces ``adapters_app`` and the ``list`` subcommand; commit 2 adds
+``validate``; commit 3 adds ``scaffold``.
 
 The ``list`` subcommand walks ``<packs-root>/<family>/<name>/`` at
 depth 2 (not the entire ``packs/`` tree per the framework's
@@ -15,6 +15,16 @@ the discovered rows as a ``rich.table.Table``. Malformed manifests
 surface as an ``<unparseable>`` row with a ``<!>`` marker rather than
 aborting the listing — operator visibility for the broken pack matters
 more than a clean table.
+
+The ``validate`` subcommand wraps
+:func:`adminme.lib.pack_registry.validator.validate_adapter_pack`
+(the 11-β six-check aggregator) and renders findings with
+severity-coded color via rich.console. Exit codes are tiered per
+memo 05 §3.4: ``0`` when no error findings (warnings + advisories do
+NOT fail), ``1`` on any error finding, ``2`` when the manifest itself
+cannot be parsed (a different failure mode from "manifest parses but
+fails validation"). ``validate`` does NOT install the pack; install is
+a separate supervisor-side flow that runs ``validate`` first.
 """
 
 from __future__ import annotations
@@ -31,6 +41,10 @@ from adminme.lib.pack_registry import (
     AdapterManifest,
     ManifestParseError,
     parse_adapter_manifest,
+)
+from adminme.lib.pack_registry.validator import (
+    ValidationFinding,
+    validate_adapter_pack,
 )
 
 # The Typer subcommand group — registered into the top-level ``app`` in
@@ -298,3 +312,86 @@ def list_command(
         return
 
     console.print(_build_table(rows))
+
+
+# ---------------------------------------------------------------------------
+# ``adminme adapters validate <pack-dir>`` (commit 2).
+# ---------------------------------------------------------------------------
+
+# Severity-to-color mapping per memo 05 §3.4. Kept as a module constant
+# so unit tests can pin the contract directly without parsing rendered
+# output (rich strips ANSI when stdout is not a tty, which is the
+# CliRunner default).
+_SEVERITY_COLORS: dict[str, str] = {
+    "error": "red",
+    "warning": "yellow",
+    "advisory": "blue",
+}
+
+
+def _format_finding(finding: ValidationFinding) -> str:
+    """Render one validator finding as a rich-markup string.
+
+    The output uses rich's inline color tags (``[red]…[/red]``) so the
+    Console renderer applies severity coloring when running in a tty
+    and falls back to plain text otherwise. Severity tag is uppercased
+    for at-a-glance scanning; ``field_path`` is bracket-suffixed when
+    present (a manifest-field finding), absent when the check
+    references an adapter source file rather than a manifest field.
+    """
+    color = _SEVERITY_COLORS[finding.severity]
+    suffix = f" [{finding.field_path}]" if finding.field_path else ""
+    return (
+        f"[{color}]{finding.severity.upper()}[/{color}] "
+        f"{finding.check}{suffix}: {finding.message}"
+    )
+
+
+@adapters_app.command("validate")
+def validate_command(
+    pack_dir: Path = typer.Argument(
+        ...,
+        help="Path to the adapter pack directory containing pack.yaml.",
+    ),
+) -> None:
+    """Validate an adapter pack against the install-time six-check validator.
+
+    Wraps :func:`adminme.lib.pack_registry.validator.validate_adapter_pack`
+    and renders each finding with severity-coded color. The on-main
+    registry and projection tree are used; ``--registry-stub`` and
+    ``--projections-dir`` flags are reserved for advanced testing and
+    out-of-scope per prompt 11-γ §6.
+
+    Exit codes:
+
+    - ``0`` — no error findings. Warnings and advisories do not fail.
+    - ``1`` — at least one error finding. Install must be refused.
+    - ``2`` — :class:`ManifestParseError`: ``pack.yaml`` is missing or
+      malformed. Distinct from "manifest parses but validation fails"
+      so the supervisor can route the two cases differently.
+    """
+    console = Console()
+    try:
+        result = validate_adapter_pack(pack_dir)
+    except ManifestParseError as exc:
+        typer.echo(
+            f"adminme adapters validate: cannot parse manifest at {pack_dir}: {exc}",
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
+
+    if not result.findings:
+        console.print(f"[green]OK[/green] {pack_dir}: no findings.")
+        return
+
+    for finding in result.findings:
+        console.print(_format_finding(finding))
+
+    console.print(
+        f"{len(result.errors())} error(s), "
+        f"{len(result.warnings())} warning(s), "
+        f"{len(result.advisories())} advisory(ies)."
+    )
+
+    if result.has_errors():
+        raise typer.Exit(code=1)
