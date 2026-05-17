@@ -374,8 +374,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 10c-iii — proactive pipelines (reminder_dispatch + crm_surface + custody_brief)
 - **Refactored**: by Partner in Cowork (Session B, v4.2 pre-authorship gate), 2026-05-15. Prompt file: `prompts/_active/10c-iii-reminder-crm-custody.md` (~290 lines, quality bar = 10c-ii). The defective Session A draft (stale citations + fictional `ProactivePipeline` base class) was deleted and re-authored under the v4.2 pre-authorship checklist + three-surfaces glossary (`docs/PARTNER-PRE-AUTHORSHIP-CHECKLIST.md`, `cowork-partner/PROJECT-INSTRUCTIONS.md`).
-- **Session merged**: PR #<TBD>, commits 0b7278d / 365f883 / 787117b / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #81-class series (squash-merged), c1 main sha `f63dfea` (PR #81); c2/c3/c4 collapsed into the recovery cycle that landed alongside the wrong-canon 11* cohort, merged 2026-05-15.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/events/schemas/domain.py` — `ReminderDispatchedV1` + `CrmSurfacedV1` + `CustodyBriefComposedV1` registered at v1 per `[D7]`. All three carry `delivered: bool` + `validation_failed: bool` per the 10c-ii pattern. `ReminderDispatchedV1.composed_text` is `min_length=1, max_length=280` (SMS-friendly) per `[§7]`; `CrmSurfacedV1.composed_text` max 1000; `CustodyBriefComposedV1.composed_text` max 1500 long-form. `CrmSurfacedV1.gap_kind` is `Literal["stale_contact","upcoming_birthday","hosting_imbalance"]` per `[§7]` table — discriminator on the emitted event for downstream filtering. All three: `model_config = {"extra": "forbid"}`.
   - `packs/skills/{compose_reminder,compose_crm_surface,compose_custody_brief}/{pack.yaml,SKILL.md,handler.py,prompt.jinja2,schemas/{input,output}.schema.json,tests/test_*_skill_pack_internal.py}` — three full 09b-shape skill packs at v1.0.0. `provider_preferences: [anthropic/claude-haiku-4-5, anthropic/claude-opus-4-6]`, `temperature: 0.2`, `sensitivity_required: normal`, `context_scopes_required: ["member_profile_read"]`, `timeout_seconds: 12`, `outbound_affecting: false`. `on_failure` shape returns `composed_text=""` + `validation_failed=true` so the pipeline's `_SKILL_FAILURE_EXCEPTIONS` catch lands on the sentinel path per `[§7.7]`.
@@ -409,8 +409,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11a — adapter foundation + Gmail
 - **Refactored**: by Partner in Cowork (v4.2 pre-authorship gate), 2026-05-15. Prompt file: `prompts/_active/11a-adapter-foundation-gmail.md` (~273 lines, quality bar = 10c-iii). First sub-prompt of the prompt-11 Tier C split per `docs/06-split-memo-11.md`.
-- **Session merged**: PR #<TBD>, commits f8c3b41 / abb9077 / ba75160 / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PR #91 (c1, main sha `54f94c4`) + PR #104 (c2+c3+c4 recovery, main sha `a5f062c`), merged 2026-05-15. Wrong-canon per memo 08; superseded by Cohort C step 1 (11r-a, PRs #133-#136) which retrofits the shipped Gmail pack onto CommunicationAdapter.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/events/schemas/adapters.py` (NEW) — three cross-cutting adapter event types registered at v1 per `[D7]`: `AdapterErrorV1` (severity `transient|fatal`, error_kind enum `auth_failed|rate_limited|network|api_changed|quota_exceeded|unknown`, optional `retry_after_s` for supervisor backoff), `AdapterAuthenticatedV1` (`token_storage_ref` pattern-constrained to `op://<vault>/<item>/<field>` — NEVER the secret itself per `[BUILD.md §L1]`), `AdapterCursorAdvancedV1` (milestone-only emission per anti-vision §"Quiet by default"). All three: `model_config = {"extra": "forbid"}`. Module sits alongside `domain.py`/`crm.py`/`governance.py`/`ingest.py` as the adapters cross-cutting peer.
   - `adminme/adapters/base.py` — replaced the prompt-02 docstring-only stub with a complete `runtime_checkable Protocol`: `Adapter` (with `name`/`family`/`version`/`sensitivity_floor` class attrs and `start(ctx)`/`stop()`/`status()` lifecycle methods), `AdapterContext` (frozen dataclass carrying `event_log`, `config`, `correlation_id_factory`, `now_factory`), `AdapterStatus` (mutable dataclass with `state` lifecycle field, `last_error`, `last_cursor_advance_at`, `restart_count`, `next_backoff_s`). Cites `[§L1]`, `[§1]`, `[§6]` invariant 10, `[§7.3]`/`[D17]`, `[§8]` invariant 3, `[D8]`.
@@ -446,8 +446,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11b — Plaid adapter (financial inbound)
 - **Refactored**: by Partner in Cowork, 2026-05-16. Prompt file: `prompts/_active/11b-adapter-plaid.md` (~270 lines, quality bar = 11a). Second sub-prompt of the prompt-11 Tier C split per `docs/06-split-memo-11.md`; ships Plaid as the financial-family worked example cloning 11a's Gmail-adapter-pack pattern.
-- **Session merged**: PR #<TBD>, commits 75814b1 / c0a0ad8 / 6268c5b / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PR #100 (c1, main sha `f8416df`) + PR #105 (c2+c3+c4 recovery, main sha `82153ad`), merged 2026-05-15/16. Wrong-canon per memo 08; Cohort C step 2 (11r-b) will retrofit Plaid onto InboundDataAdapter.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/events/schemas/financial.py` (NEW) — `MoneyFlowPlaidSyncedV1` registered at v1 per `[D7]`. Fields: `member_id`, `plaid_item_id`, `institution_id`, `institution_name`, `sync_cursor` (all `min_length=1`), `transactions_added` / `transactions_modified` / `transactions_removed` / `accounts_modified_count` (`ge=0` — zero is valid), `synced_at`, `webhook_triggered` (`bool`). `model_config = {"extra": "forbid"}`. One SUMMARY event per `/transactions/sync` cycle (NEVER per transaction) per VISION §"Quiet by default".
   - `packs/adapters/financial/plaid/` (NEW pack, second L1 adapter, financial-family worked example):
@@ -485,8 +485,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11c — Apple Reminders bidirectional adapter
 - **Refactored**: by Partner in Cowork, 2026-05-16. Prompt file: `prompts/_active/11c-adapter-reminders-bidirectional.md` (~297 lines, quality bar = 11b). Third sub-prompt of the prompt-11 Tier C split per `docs/06-split-memo-11.md`; ships the FIRST bidirectional adapter (inbound iCloud→event-log + outbound event-log→iCloud) cloning the 11a Gmail-adapter-pack shape with Reminders-specific substitutions.
-- **Session merged**: PR #<TBD>, commits 9ab231b / 76fccde / 00b76be / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #108 / #109 / #110 / #111 (squash-merged sequentially), c1-c4 main shas `b295760` / `7c66496` / `e0b6ee4` / `9117ed3`, merged 2026-05-16. Wrong-canon per memo 08; Cohort C step 3 (11r-c) will retrofit Reminders onto ExternalStateMirrorAdapter with `list.*` / `list_item.*` schema migration per [D18].
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/events/schemas/reminders.py` (NEW) — `ReminderListItemSyncedV1` registered at v1 per `[D7]`. Fields: `member_id`, `remind_id` (Apple's `calendarItemIdentifier`), `list_identifier`, `list_name` (all `min_length=1`); `title` (`max_length=500`), `notes` (`max_length=2000` or `None`), `due_at` (`datetime` or `None`), `priority` (`Literal[0, 1, 5, 9]` matching EventKit's none/high/medium/low ordinals), `completed` (`bool`), `last_modified_at` (`datetime`), `direction` (`Literal["inbound", "outbound"]`), `sync_cycle_id` (`min_length=1`). `model_config = {"extra": "forbid"}`. One event per genuinely-new or modified reminder; NEVER per unchanged poll-cycle entry per anti-vision §"Quiet by default".
   - `packs/adapters/reminders/apple-eventkit/` (NEW pack, third L1 adapter, FIRST bidirectional worked example):
@@ -530,8 +530,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11-α — Adapter framework contracts (5 ABCs + manifest extensions)
 - **Refactored**: by Partner in Cowork, 2026-05-16. Prompt file: `prompts/_active/11-alpha-adapter-framework-abcs-and-manifest.md` (~285 lines, quality bar = 11c). First sub-prompt of the prompt-11 framework split per `docs/09-split-memo-11-framework.md`; ships the **contract layer** (5 abstract base classes per epistemic-role category at `adminme/lib/adapters/` + capability-driven manifest extensions at `adminme/lib/pack_registry/`) that 11-β (install-time validator) and 11-γ (CLI + authoring guide) consume.
-- **Session merged**: PR #<TBD>, commits bd60a52 / f1e599b / 9c9de46 / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #118 / #119 / #120 / #121 (squash-merged sequentially), c1-c4 main shas `e17768e3` / `1aab2576` / `fdcfce68` / `fdbdd556`, merged 2026-05-16. Cohort B step 4 (framework contract layer).
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/lib/adapters/` (NEW package — 5 ABCs at the contract layer per memo 05 §3.2, `[D19]`, `[PM-34]`):
     - `__init__.py` — single import surface re-exporting the 5 ABCs plus their auxiliary dataclasses (`OutboundMessage` / `SendResult` / `InboundEnvelope` for Cat-A; `WriteOperation` / `WriteResult` / `ChangeEnvelope` / `WriteCapabilityError` for Cat-B; `ActionRequest` / `ActionResult` for Cat-E). The 5 ABCs extend the simple `Adapter` Protocol from `adminme/adapters/base.py` (PR #91 series) with category-specific shape; the Protocol stays unchanged per §6 out-of-scope discipline.
@@ -581,8 +581,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11-β — Adapter framework validator (6 install-time checks)
 - **Refactored**: by Partner in Cowork, 2026-05-16. Prompt file: `prompts/_active/11-beta-adapter-framework-validator.md` (~281 lines, quality bar = 11-α). Second sub-prompt of the prompt-11 framework split per `docs/09-split-memo-11-framework.md`; ships the **enforcement layer** (six per-check modules + a `validate_adapter_pack` aggregator at `adminme/lib/pack_registry/validator/`) that 11-α's contract layer was designed for. 11-α PARSES; 11-β ENFORCES.
-- **Session merged**: PR #<TBD>, commits 65eb7ae / 691887a / 3ec0489 / <c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #123 / #124 / #125 / #126 (squash-merged sequentially), c1-c4 main shas `8fd2101d` / `77c1d27c` / `8efd6793` / `7b33ca46`, merged 2026-05-16. Cohort B step 5 (framework enforcement layer — 6 install-time validator checks).
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/lib/pack_registry/validator/` (NEW package — sibling to `models.py` + `parser.py`; the canonical location per the Gate-2 path correction inherited from 11-α — split memo §4 said `bootstrap/pack_registry/validator/*` but the on-main pack-registry parent is `adminme/lib/pack_registry/`):
     - `__init__.py` (~170 lines) — the `validate_adapter_pack(pack_dir, *, registry=None, projections_dir=None) -> ValidationResult` aggregator. Wires all six checks; does NOT short-circuit (every check runs, every finding is preserved on the returned :class:`ValidationResult`). Forwards `registry` to the event-schema-registration check and `projections_dir` to the projection-subscription-compatibility check, so callers fully decouple from on-main schema/projection side effects. Re-reads `family:` from the yaml independently of the parser (since `AdapterManifest` does not carry family — it is not a manifest-extension field).
@@ -642,8 +642,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11-γ — Adapter framework CLI + authoring guide (closes Cohort B)
 - **Refactored**: by Partner in Cowork, 2026-05-17. Prompt file: `prompts/_active/11-gamma-adapter-framework-cli-and-guide.md` (~310 lines, quality bar = 11-β). Third and final sub-prompt of the prompt-11 framework split per `docs/09-split-memo-11-framework.md`; ships the **operator + developer seam** — the `adminme adapters` Typer subcommand group, the five per-category scaffold templates, and the authoring guide. 11-α PARSED; 11-β ENFORCED; 11-γ MAKES BOTH ACCESSIBLE.
-- **Session merged**: PR #<TBD>, commits 4c5062c/0741fc0/fc5c4df/<c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #128 / #129 / #130 / #131 (squash-merged sequentially), c1-c4 main shas `ca669b37` / `bb795edc` / `4f998d33` / `fcb9d2ae`, merged 2026-05-17. Cohort B step 6 (CLI subcommand group + 5 scaffold templates + authoring guide). **Closes Cohort B** per memo 08 §3.2.
+- **Outcome**: MERGED.
 - **Evidence**:
   - `adminme/cli/commands/adapters.py` (~630 lines including subcommand bodies + the [D20] gate helper + the rich-table renderer + the scaffold-template loader). Three subcommands wired into `adminme/cli/main.py` via `app.add_typer(adapters_app, name="adapters")`:
     - **`adminme adapters list`** (c1) — walks `<packs-root>/<family>/<name>/` at depth 2; parses each `pack.yaml` via `parse_adapter_manifest`; renders rows via `rich.table.Table` with columns `name / family / version / kinds / runtime / sensitivity_default`. Malformed manifests surface as `<unparseable>` rows with a `<!>` marker rather than aborting the listing — operator visibility for the broken pack matters more than a clean table.
@@ -687,8 +687,8 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 11r-a — Retrofit Gmail to CommunicationAdapter (Cohort C, 1 of 3)
 - **Refactored**: by Partner in Cowork, 2026-05-17. Prompt file: `prompts/_active/11r-a-retrofit-gmail-to-communication-adapter.md` (~328 lines, quality bar = 11-γ). First of three Cohort C retrofit prompts per `docs/08-architecture-amendment-adapter-rebase.md` §3.3. Closes the FIRST of three `advisory_pending_retrofit` findings the 11-β validator surfaces on shipped v1 packs. Pattern fidelity matters: the inheritance flip, the manifest capabilities block, and the `send` / `_on_inbound` stub pattern set the precedent for 11r-b (Plaid) and 11r-c (Reminders — the heavy one with event-taxonomy migration).
-- **Session merged**: PR #<TBD>, commits 67d202b/8f71db8/b142102/<c4-sha>, merged <TBD>.
-- **Outcome**: IN FLIGHT.
+- **Session merged**: PRs #133 / #134 / #135 / #136 (squash-merged sequentially with NO ghost conflicts — non-overlapping file scopes per c-band), c1-c4 main shas `78c0dd85` / `fe154992` / `82838145` / `f3e89d8f`, merged 2026-05-17. Cohort C step 1 (first of three retrofits — closes 1 of 3 advisory_pending_retrofit findings).
+- **Outcome**: MERGED.
 - **Evidence**:
   - `packs/adapters/messaging/gmail/pack.yaml` (+14 lines in c1) — appended the canonical framework extension block below the legacy v1 config: one Cat-A capability with `runtime: central` and `event_families: [messaging.received]` (Gmail's inbound-only surface today; `messaging.sent` deferred to a Phase B Gmail-outbound prompt per [PM-35]); `observation_mode_required: true` per `[§6.20]`; `sharing_model_discriminator: owner_member_id`; `dedup_strategy: external_id`. The legacy top-level fields (`pack:`, `runtime:`, `family:`, `triggers:`, `depends_on:`, `events_emitted:`, `config:`) stay unchanged — the manifest parser ignores them; the extension fields layer on top per memo 05 §3.1.
   - `packs/adapters/messaging/gmail/adapter.py` (+153 / −22 lines in c2) — three surface changes per memo 08 §3.3:
