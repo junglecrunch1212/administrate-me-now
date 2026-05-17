@@ -175,27 +175,136 @@ def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4) `send` stub — honest NotImplementedError per memo 08 §3.3
+# 4) `send` — real outbound shipped in 11a c2 (replaces the 11r-a stub)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_send_raises_not_implemented_until_phase_b() -> None:
-    """Gmail outbound (``users.messages.send``) is deferred to a Phase B
-    prompt per memo 08 §3.3. Today the ``send`` stub raises
-    ``NotImplementedError`` BEFORE reaching the ``outbound()`` call
-    because the supervisor's adapter-loading path does not yet populate
-    the observation-mode wiring slots. Runtime callers see a clear
-    error — never a silent no-op."""
+async def test_send_no_longer_raises_not_implemented() -> None:
+    """Prompt 11a c2 replaced the 11r-a ``NotImplementedError`` stub
+    with a real Gmail v1 ``users.messages.send`` implementation. The
+    Phase-A path (observation seams unset) calls the Gmail service
+    directly. The deep-coverage assertions live in
+    ``test_gmail_send.py``; this test pins the retrofit advisory's
+    closure — :meth:`send` no longer raises ``NotImplementedError`` from
+    the framework's perspective."""
     adapter = _make_adapter()
+    captured_send: list[dict[str, Any]] = []
+
+    class _FakeExecute:
+        def execute(self) -> dict[str, Any]:
+            return {"id": "gmail-msg-r1", "threadId": "thr-r1"}
+
+    class _FakeMessages:
+        def send(self, **kwargs: Any) -> Any:
+            captured_send.append(kwargs)
+            return _FakeExecute()
+
+    class _FakeUsers:
+        def messages(self) -> Any:
+            return _FakeMessages()
+
+    class _FakeService:
+        def users(self) -> Any:
+            return _FakeUsers()
+
+    adapter._service = _FakeService()
     message = OutboundMessage(
         channel="gmail",
         recipient="someone@example.test",
         body="hello",
+        metadata={"subject": "ping"},
     )
 
-    with pytest.raises(NotImplementedError, match="Phase B"):
-        await adapter.send(message)
+    result = await adapter.send(message)
+
+    # No NotImplementedError. Gmail API was actually called.
+    assert len(captured_send) == 1
+    assert captured_send[0]["userId"] == "me"
+    assert "raw" in captured_send[0]["body"]
+    assert result.delivered is True
+    assert result.external_id == "gmail-msg-r1"
+    assert result.suppressed is False
+
+
+@pytest.mark.asyncio
+async def test_send_routes_through_observation_when_seams_populated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the supervisor (Phase B) populates the three observation-
+    seam slots, :meth:`send` MUST route the action through
+    :func:`adminme.lib.observation.outbound` rather than calling the
+    Gmail API directly — the 11r-c Phase-A-conditional pattern applied
+    to Cat-A's send. The deep payload/SendResult coverage lives in
+    ``test_gmail_send.py``; this test pins the routing contract at the
+    framework boundary."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "gmail_adapter_obs_routing_test", GMAIL_PACK_DIR / "adapter.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    GmailAdapterModule = module.GmailAdapter
+
+    routed: list[str] = []
+
+    async def fake_outbound(
+        session: Any,
+        action: str,
+        payload: dict[str, Any],
+        action_fn: Any,
+        *,
+        manager: Any,
+        event_log: Any,
+        target_channel: str,
+        target_identifier: str,
+    ) -> Any:
+        routed.append(action)
+        # Importing OutboundResult lazily so the retrofit test file does
+        # not pick up unused-import lint when the test is skipped.
+        from adminme.lib.observation import OutboundResult
+
+        return OutboundResult(suppressed=False, result={"id": "x", "threadId": "y"})
+
+    monkeypatch.setattr(module, "outbound", fake_outbound)
+
+    class _FakeExecute:
+        def execute(self) -> dict[str, Any]:
+            return {"id": "should-not-be-used", "threadId": "should-not"}
+
+    class _FakeMessages:
+        def send(self, **kwargs: Any) -> Any:
+            return _FakeExecute()
+
+    class _FakeUsers:
+        def messages(self) -> Any:
+            return _FakeMessages()
+
+    class _FakeService:
+        def users(self) -> Any:
+            return _FakeUsers()
+
+    adapter = GmailAdapterModule(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+        observation_session=object(),
+        observation_manager=object(),
+        observation_event_log=object(),
+    )
+    adapter._service = _FakeService()
+    message = OutboundMessage(
+        channel="gmail",
+        recipient="someone@example.test",
+        body="seam routing test",
+    )
+
+    await adapter.send(message)
+
+    assert routed == ["messaging.send"]
 
 
 # ---------------------------------------------------------------------------
