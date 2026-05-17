@@ -70,13 +70,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
     AdapterContext,
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.lib.adapters import InboundDataAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -203,21 +204,48 @@ def _noop_webhook_verifier_factory(
     return _verify
 
 
-class PlaidAdapter:
+class PlaidAdapter(InboundDataAdapter):
     """L1 standalone adapter for the Plaid financial-data system.
 
     See module docstring for the broader contract. This class satisfies
     the ``adminme.adapters.base.Adapter`` runtime Protocol; the
     supervisor at ``adminme.daemons.adapter_supervisor`` discovers it via
     a loader callable that reads ``config/channels.yaml``.
+
+    Retrofitted onto :class:`InboundDataAdapter` per prompt 11r-b (Cohort
+    C retrofit; ``docs/08-architecture-amendment-adapter-rebase.md``
+    §3.3). The inheritance flip + the ``capabilities`` manifest block +
+    the ``family`` / ``capabilities`` ClassVars close the
+    ``advisory_pending_retrofit`` finding the 11-β validator surfaces on
+    ``base_class_conformance``. Cat-C has NO write surface — the ABC's
+    abstract methods are exactly ``start`` / ``stop`` / ``status`` which
+    Plaid already implements, so no stub methods are added. Existing
+    ingestion logic (``webhook_handler``, ``_sync_transactions``,
+    ``_fetch_institution_health``, the ``PlaidSDKError`` hierarchy) is
+    preserved byte-for-byte. [§6 invariant 10] sensitivity_floor override
+    to ``"privileged"`` is legal (subclasses may RAISE the ABC default,
+    never lower it).
     """
 
     # [§6 invariant 10, D11]: sensitivity floor hardcoded at the class
     # level; financial adapters CANNOT be downgraded via configuration.
-    name: str = "financial-plaid"
-    family: str = "financial"
-    version: str = "1.0.0"
-    sensitivity_floor: SensitivityFloor = "privileged"
+    name: ClassVar[str] = "financial-plaid"
+    family: ClassVar[Literal["financial"]] = "financial"
+    version: ClassVar[str] = "1.0.0"
+    sensitivity_floor: ClassVar[SensitivityFloor] = "privileged"
+
+    # [memo 05 §3.2, PM-35]: class-level mirror of the manifest's
+    # ``capabilities`` block for runtime introspection without re-parsing
+    # ``pack.yaml``. Plaid emits one event family today
+    # (``money_flow.plaid_synced``); the manifest's capabilities block in
+    # ``pack.yaml`` is the source of truth and this ClassVar mirrors it.
+    capabilities: ClassVar[list[Any]] = [
+        {
+            "kind": "Cat-C",
+            "runtime": "central",
+            "event_families": ["money_flow.plaid_synced"],
+        }
+    ]
 
     def __init__(
         self,
