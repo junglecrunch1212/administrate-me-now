@@ -1,0 +1,19 @@
+pack:
+  id: adapter:financial-<NAME>
+  name: <NAME>
+  version: 0.1.0
+  family: financial
+
+family: financial
+runtime: central
+sensitivity_floor: privileged
+
+capabilities:
+  - kind: Cat-C
+    runtime: central
+    event_families: [money_flow.plaid_synced]
+
+write_capabilities: []
+sensitivity_default: privileged
+observation_mode_required: false
+owner_scope_overridability_at_install: true

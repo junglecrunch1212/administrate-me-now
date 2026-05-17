@@ -1,0 +1,19 @@
+pack:
+  id: adapter:knowledge-<NAME>
+  name: <NAME>
+  version: 0.1.0
+  family: knowledge
+
+family: knowledge
+runtime: bridge
+sensitivity_floor: privileged
+
+capabilities:
+  - kind: Cat-D
+    runtime: bridge
+    event_families: []
+
+write_capabilities: []
+sensitivity_default: privileged
+observation_mode_required: false
+owner_scope_overridability_at_install: false

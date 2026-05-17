@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cat-C financial adapter config",
+  "type": "object",
+  "properties": {
+    "credentials_ref": {
+      "type": "string",
+      "description": "Reference to a credential held by the supervisor."
+    }
+  },
+  "required": ["credentials_ref"],
+  "additionalProperties": false
+}

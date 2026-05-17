@@ -29,7 +29,10 @@ a separate supervisor-side flow that runs ``validate`` first.
 
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import typer
@@ -395,3 +398,235 @@ def validate_command(
 
     if result.has_errors():
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# ``adminme adapters scaffold <kind> <runtime>`` (commit 3).
+#
+# Generates a validator-clean adapter pack skeleton from a per-category
+# template tree. Gated behind the [D20] three-layer developer-mode gate:
+# (1) ``ADMINME_DEVELOPER_MODE=1`` in the process env, (2) ``--allow-scaffold``
+# on the command line, (3) interactive confirmation. ANY layer's miss
+# refuses with a distinct exit code (3/4/5) so the supervisor and the
+# operator can distinguish refusal modes per memo 05 §3.4.
+# ---------------------------------------------------------------------------
+
+# Exit-code contract for the three-layer gate. Distinct codes per layer
+# so a scripted operator can tell env-missing from flag-missing from
+# confirm-declined without scraping stderr. Defined as a module constant
+# so unit tests can pin the contract without magic numbers.
+SCAFFOLD_EXIT_ENV_MISSING: int = 3
+SCAFFOLD_EXIT_FLAG_MISSING: int = 4
+SCAFFOLD_EXIT_CONFIRM_DECLINED: int = 5
+
+_DEV_MODE_ENV: str = "ADMINME_DEVELOPER_MODE"
+_DEV_MODE_ENABLED_VALUE: str = "1"
+
+# Root of the on-disk template tree. Templates live as data files next
+# to this module so ``shutil.copy`` works without packaging gymnastics;
+# the loader stays AST-walk-safe (no importlib.import_module on
+# template content).
+_TEMPLATE_ROOT: Path = Path(__file__).parent / "adapters_scaffold" / "templates"
+
+# Filename / content substitution placeholders. Only two: the pack name
+# (lowercase, hyphen-separated identifier) and the class name (CamelCase
+# Adapter suffix). All other content is verbatim so templates remain
+# concrete, inspectable, and copy-paste-able.
+_PLACEHOLDER_NAME: str = "<NAME>"
+_PLACEHOLDER_CLASSNAME: str = "<CLASSNAME>"
+
+# File extension marking a template that needs placeholder substitution.
+# Non-``.j2`` files (e.g. ``config.schema.json``) are copied verbatim.
+_TEMPLATE_SUFFIX: str = ".j2"
+
+
+class CapabilityKindArg(str, Enum):
+    """Typer-friendly enum for the ``kind`` positional argument.
+
+    Mirrors :data:`adminme.lib.pack_registry.models.CapabilityKind` but
+    is a ``str``-backed :class:`Enum` so Typer surfaces a choice list in
+    ``--help`` and rejects unknown values at the click layer (before the
+    gate even runs).
+    """
+
+    cat_a = "Cat-A"
+    cat_b = "Cat-B"
+    cat_c = "Cat-C"
+    cat_d = "Cat-D"
+    cat_e = "Cat-E"
+
+
+class CapabilityRuntimeArg(str, Enum):
+    """Typer-friendly enum for the ``runtime`` positional argument."""
+
+    central = "central"
+    bridge = "bridge"
+    dual = "dual"
+    plugin = "plugin"
+
+
+def _classname_for(name: str) -> str:
+    """Convert ``demo-pack`` → ``DemoPackAdapter``.
+
+    Splits on ``-`` and ``_`` to handle both common identifier shapes,
+    title-cases each segment, and suffixes ``Adapter`` per the on-main
+    convention (GmailAdapter, PlaidAdapter, RemindersEventKitAdapter).
+    """
+    parts = [seg for seg in name.replace("_", "-").split("-") if seg]
+    return "".join(p.capitalize() for p in parts) + "Adapter"
+
+
+def _substitute(content: str, name: str, classname: str) -> str:
+    """Apply ``<NAME>`` and ``<CLASSNAME>`` substitution to a string.
+
+    Plain ``str.replace`` per the prompt's §7 deliverables — no Jinja2
+    dependency, no templating-engine semantics. Substitutions are
+    idempotent and order-independent (the two placeholders never overlap).
+    """
+    return content.replace(_PLACEHOLDER_NAME, name).replace(
+        _PLACEHOLDER_CLASSNAME, classname
+    )
+
+
+def _template_dir_for(kind: CapabilityKindArg, runtime: CapabilityRuntimeArg) -> Path:
+    """Resolve the on-disk template directory for ``(kind, runtime)``.
+
+    The path is ``<root>/<kind-lower>-<runtime>/`` per the §7 layout —
+    e.g. ``cat-c-central/`` for ``(Cat-C, central)``. Missing templates
+    raise :class:`FileNotFoundError`; the scaffold command surfaces this
+    as a refusal with a helpful list of the available combinations.
+    """
+    return _TEMPLATE_ROOT / f"{kind.value.lower()}-{runtime.value}"
+
+
+def _render_template(
+    template_dir: Path, output_dir: Path, name: str, classname: str
+) -> list[Path]:
+    """Render a template directory into ``output_dir`` and return new files.
+
+    Walks ``template_dir`` recursively. ``.j2`` files have the suffix
+    stripped and undergo ``<NAME>``/``<CLASSNAME>`` substitution on both
+    filename and content; non-``.j2`` files (e.g. ``config.schema.json``)
+    are copied verbatim. Directory names get the same filename
+    substitution so ``tests/`` survives unchanged but
+    ``test_<NAME>_adapter_pack_internal.py.j2`` lands as
+    ``test_<name>_adapter_pack_internal.py`` per the F-3 unique-basename
+    rule [10c-iii precedent].
+    """
+    written: list[Path] = []
+    for src in sorted(template_dir.rglob("*")):
+        rel = src.relative_to(template_dir)
+        rel_parts = [_substitute(p, name, classname) for p in rel.parts]
+        if rel_parts and rel_parts[-1].endswith(_TEMPLATE_SUFFIX):
+            rel_parts[-1] = rel_parts[-1][: -len(_TEMPLATE_SUFFIX)]
+        dest = output_dir.joinpath(*rel_parts)
+        if src.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if src.suffix == _TEMPLATE_SUFFIX:
+            dest.write_text(
+                _substitute(src.read_text(encoding="utf-8"), name, classname),
+                encoding="utf-8",
+            )
+        else:
+            shutil.copy(src, dest)
+        written.append(dest)
+    return written
+
+
+def _refuse(message: str, exit_code: int) -> None:
+    """Emit a one-line stderr refusal and raise :class:`typer.Exit`.
+
+    Stderr-only (no rich console) so scripted invocations get a single
+    deterministic line per gate refusal — the operator's eye scans for
+    ``scaffold refused: ...`` without ANSI noise mixed into stdout.
+    """
+    typer.echo(f"scaffold refused: {message}", err=True)
+    raise typer.Exit(code=exit_code)
+
+
+@adapters_app.command("scaffold")
+def scaffold_command(
+    kind: CapabilityKindArg = typer.Argument(
+        ...,
+        help="Capability category for the scaffolded pack (Cat-A...Cat-E).",
+    ),
+    runtime: CapabilityRuntimeArg = typer.Argument(
+        ...,
+        help="Runtime placement: central / bridge / dual / plugin.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="Output directory; defaults to ./adapter-skeleton-<kind>-<runtime>.",
+    ),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help="Pack name (lowercase identifier); default derives from kind/runtime.",
+    ),
+    allow_scaffold: bool = typer.Option(
+        False,
+        "--allow-scaffold",
+        help="Layer 2 of the developer-mode gate per [D20]. Required.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Skip the interactive confirm (layers 1+2 still required)."
+    ),
+) -> None:
+    """Generate a validator-clean adapter pack skeleton (developer-mode only).
+
+    The three-layer developer-mode gate runs top-down per [D20]:
+
+    1. Env: ``ADMINME_DEVELOPER_MODE=1`` must be set. Miss → exit 3.
+    2. Flag: ``--allow-scaffold`` must be present. Miss → exit 4.
+    3. Confirm: ``typer.confirm`` returns True (or ``--yes``). Decline → 5.
+
+    On PASS, copies the matching ``<kind-lower>-<runtime>`` template
+    tree from ``adapters_scaffold/templates/`` into ``--output`` with
+    ``<NAME>`` / ``<CLASSNAME>`` substitution. The generated pack is
+    validator-clean: ``adminme adapters validate <output>`` exits 0.
+    """
+    console = Console()
+    if os.environ.get(_DEV_MODE_ENV) != _DEV_MODE_ENABLED_VALUE:
+        _refuse(
+            f"developer mode not enabled — set {_DEV_MODE_ENV}=1.",
+            SCAFFOLD_EXIT_ENV_MISSING,
+        )
+    if not allow_scaffold:
+        _refuse(
+            "the --allow-scaffold flag is required per [D20] layer 2.",
+            SCAFFOLD_EXIT_FLAG_MISSING,
+        )
+
+    kind_runtime = f"{kind.value.lower()}-{runtime.value}"
+    resolved_name = name or f"{kind_runtime}-skeleton"
+    resolved_output = output or Path(f"./adapter-skeleton-{kind_runtime}")
+
+    if not yes:
+        if not typer.confirm(
+            f"Scaffold a new adapter pack at {resolved_output}?", default=False
+        ):
+            _refuse(
+                "interactive confirmation declined.",
+                SCAFFOLD_EXIT_CONFIRM_DECLINED,
+            )
+
+    template_dir = _template_dir_for(kind, runtime)
+    if not template_dir.is_dir():
+        available = sorted(p.name for p in _TEMPLATE_ROOT.iterdir() if p.is_dir())
+        typer.echo(
+            f"scaffold refused: no template for {kind.value}/{runtime.value} "
+            f"(available: {available}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    resolved_output.mkdir(parents=True, exist_ok=True)
+    classname = _classname_for(resolved_name)
+    written = _render_template(template_dir, resolved_output, resolved_name, classname)
+    console.print(
+        f"[green]scaffolded[/green] {len(written)} file(s) at {resolved_output} "
+        f"(name={resolved_name}, class={classname})."
+    )

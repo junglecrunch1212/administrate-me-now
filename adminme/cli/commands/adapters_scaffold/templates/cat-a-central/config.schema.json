@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cat-A messaging adapter config",
+  "type": "object",
+  "properties": {
+    "credentials_ref": {
+      "type": "string",
+      "description": "Reference to a credential held by the supervisor; never the secret itself."
+    }
+  },
+  "required": ["credentials_ref"],
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cat-E outbound-action adapter config",
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "description": "Base URL of the external action endpoint."
+    },
+    "credentials_ref": {
+      "type": "string",
+      "description": "Reference to a credential held by the supervisor."
+    }
+  },
+  "required": ["endpoint", "credentials_ref"],
+  "additionalProperties": false
+}

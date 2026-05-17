@@ -1,0 +1,23 @@
+pack:
+  id: adapter:calendaring-<NAME>
+  name: <NAME>
+  version: 0.1.0
+  family: calendaring
+
+family: calendaring
+runtime: central
+sensitivity_floor: normal
+
+capabilities:
+  - kind: Cat-B
+    runtime: central
+    event_families:
+      - calendar.event_added
+      - calendar.event_updated
+      - calendar.event_deleted
+
+write_capabilities: [create_event, delete_event]
+sensitivity_default: normal
+observation_mode_required: true
+owner_scope_overridability_at_install: true
+sharing_model_discriminator: owner_member_id

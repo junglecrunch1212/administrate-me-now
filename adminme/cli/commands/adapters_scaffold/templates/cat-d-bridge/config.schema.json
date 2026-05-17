@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cat-D bridge personal-knowledge adapter config",
+  "type": "object",
+  "properties": {
+    "watch_path": {
+      "type": "string",
+      "description": "Local filesystem path to watch for changes (member-bridge resident)."
+    }
+  },
+  "required": ["watch_path"],
+  "additionalProperties": false
+}
