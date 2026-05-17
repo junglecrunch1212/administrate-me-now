@@ -18,7 +18,11 @@ so importing this module does not crash the entry point machinery.
 
 import typer
 
+from adminme.cli.commands.adapters import adapters_app
+
 app = typer.Typer(
     help="AdministrateMe CLI — implemented in prompt 17.",
     no_args_is_help=True,
 )
+
+app.add_typer(adapters_app, name="adapters")
