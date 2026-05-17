@@ -44,10 +44,16 @@ from adminme.lib.pack_registry.validator.result import ValidationFinding
 
 _CHECK_NAME = "projection_subscription_compatibility"
 
-# Cat-D projections that ship in later Cohort D prompts. A Cat-B / Cat-D
+# Projections that ship in later Cohort D prompts. A Cat-B / Cat-D
 # capability whose families all carry one of these prefixes surfaces as
 # ``advisory_pending_projection`` instead of ``error``. See memo 05 §3.4.
-_PENDING_PROJECTIONS: frozenset[str] = frozenset({"member_knowledge", "lists"})
+# ``reminder`` covers the legacy ``reminder.list_item.synced`` family the
+# 11r-c retrofit preserves byte-for-byte per memo 08 §5; the ``[D18]``
+# migration to the ``list_item.*`` taxonomy (subscribed by the future
+# ``lists`` projection in 11f) is Cohort D scope.
+_PENDING_PROJECTIONS: frozenset[str] = frozenset(
+    {"member_knowledge", "lists", "reminder"}
+)
 
 # Categories whose ingest events feed L3 projections per memo 05 §2.1.
 _PROJECTION_FEEDING_KINDS: frozenset[str] = frozenset({"Cat-B", "Cat-D"})

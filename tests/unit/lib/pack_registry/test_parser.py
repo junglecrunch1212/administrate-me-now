@@ -50,11 +50,24 @@ def test_parse_existing_plaid_pack_yaml_yields_cat_c_capability() -> None:
     assert manifest.sensitivity_default == "privileged"
 
 
-def test_parse_existing_reminders_pack_yaml_yields_empty_capabilities() -> None:
+def test_parse_existing_reminders_pack_yaml_yields_cat_b_capability() -> None:
+    """Reminders pack.yaml was retrofitted in prompt 11r-c: the manifest
+    now declares one Cat-B capability with ``reminder.list_item.synced``
+    in event_families, the asymmetric ``write_capabilities``
+    ``["create_reminder"]`` per [UT-27], and the sharing model
+    discriminator ``owner_member_id`` (Cat-B is bidirectional; the
+    write surface is per-operation, declared only for kinds with
+    method-presence per memo 05 §3.4)."""
     pack_dir = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
     manifest = parse_adapter_manifest(pack_dir)
-    assert manifest.capabilities == []
-    assert manifest.write_capabilities == []
+    assert len(manifest.capabilities) == 1
+    cap = manifest.capabilities[0]
+    assert cap.kind == "Cat-B"
+    assert cap.runtime == "central"
+    assert cap.event_families == ["reminder.list_item.synced"]
+    assert manifest.sensitivity_default == "normal"
+    assert manifest.write_capabilities == ["create_reminder"]
+    assert manifest.sharing_model_discriminator == "owner_member_id"
 
 
 # ---------- Forward-compat: new manifests populate capabilities ----------
