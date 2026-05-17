@@ -1,18 +1,23 @@
 """Gmail adapter pack — L1 standalone adapter for messaging (Gmail v1 API).
 
-Implements the ``Adapter`` Protocol from ``adminme.adapters.base``. C2
-ships the manifest + service-account authentication path; C3 fills in
-the polling loop, ``users.history.list`` incremental sync,
-``users.messages.get`` body fetch, milestone-only cursor advances, and
-the defensive HTTP-error classification that drives the supervisor's
-backoff.
+Inherits :class:`adminme.lib.adapters.CommunicationAdapter` (Cat-A) per
+``docs/08-architecture-amendment-adapter-rebase.md`` §3.3 (Cohort C
+retrofit). The inheritance flip + the ``capabilities`` manifest block +
+honest stubs for :meth:`send` and :meth:`_on_inbound` close the
+``advisory_pending_retrofit`` finding the 11-β validator surfaces on
+``base_class_conformance``. Real Gmail outbound (``users.messages.send``
+plus the ``messaging.sent`` event schema) is deferred to a Phase B
+prompt; the :meth:`send` stub routes through
+:func:`adminme.lib.observation.outbound` so the validator's
+``observation_mode_wrapping`` AST-walk finds the wiring and raises
+``NotImplementedError`` so runtime callers get a clear error.
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
 SYSTEM_INVARIANTS.md §6 invariant 10 (sensitivity-floor downgrade
-forbidden), §7.3 + §D17 (adapters never write projections), §8
-invariant 3 (channel transport is OpenClaw's territory — adapters emit
-events only).
+forbidden), §6.20 (observation mode wraps outbound), §7.3 + §D17
+(adapters never write projections), §8 invariant 3 (channel transport
+is OpenClaw's territory — adapters emit events only).
 
 Gmail API endpoints used (see ``docs/reference/google-gmail/gmail-v1.ts``):
 
@@ -38,13 +43,20 @@ import logging
 import shutil
 import subprocess
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
     AdapterContext,
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.lib.adapters import (
+    CommunicationAdapter,
+    InboundEnvelope,
+    OutboundMessage,
+    SendResult,
+)
+from adminme.lib.observation import outbound
 
 _log = logging.getLogger(__name__)
 
@@ -120,8 +132,8 @@ def _default_service_factory(
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
-class GmailAdapter:
-    """Gmail L1 standalone adapter.
+class GmailAdapter(CommunicationAdapter):
+    """Gmail Cat-A standalone adapter (retrofitted onto CommunicationAdapter).
 
     Polls the Gmail history API (``users.history.list``) every 2 minutes
     per ``pack.yaml`` ``triggers.schedule`` and emits ``messaging.received``
@@ -129,27 +141,52 @@ class GmailAdapter:
     (every 100 messages OR every 5 minutes — see
     ``AdapterCursorAdvancedV1`` docstring) per anti-vision §"Quiet by
     default".
+
+    Retrofitted onto :class:`CommunicationAdapter` per prompt 11r-a
+    (Cohort C retrofit; ``docs/08-architecture-amendment-adapter-rebase.md``
+    §3.3). The inheritance flip preserves the simple ``Adapter`` Protocol
+    surface (``start`` / ``stop`` / ``status`` / ``name`` / ``family`` /
+    ``version`` / ``sensitivity_floor``) and adds the Cat-A contract
+    methods :meth:`send` + :meth:`_on_inbound`. Today Gmail is
+    inbound-only; the :meth:`send` stub raises ``NotImplementedError``
+    via an ``action_fn`` routed through
+    :func:`adminme.lib.observation.outbound`. Phase B will ship real
+    Gmail outbound + the ``messaging.sent`` event schema + the second
+    capability block in the manifest.
     """
 
-    pack_id: str = "adapter:messaging-gmail-api"
-    name: str = "messaging-gmail-api"
-    family: str = "messaging"
-    version: str = "1.0.0"
+    pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
+    name: ClassVar[str] = "messaging-gmail-api"
+    family: ClassVar[Literal["messaging"]] = "messaging"
+    version: ClassVar[str] = "1.0.0"
 
-    HARDCODED_FLOOR: SensitivityFloor = "normal"
+    capabilities: ClassVar[list[Any]] = [
+        {
+            "kind": "Cat-A",
+            "runtime": "central",
+            "event_families": ["messaging.received"],
+        }
+    ]
+    """Class-level mirror of the manifest's ``capabilities`` block per
+    memo 05 §3.2 (runtime introspection without re-parsing pack.yaml).
+    Today: one Cat-A entry declaring ``messaging.received`` only. Phase B
+    adds a second entry covering ``messaging.sent`` when real Gmail
+    outbound ships."""
+
+    HARDCODED_FLOOR: ClassVar[SensitivityFloor] = "normal"
     """Class-level minimum sensitivity_floor. Config may RAISE the floor
     (e.g. to ``privileged`` for a law-practice Gmail) but cannot lower
     it. [§6 invariant 10]"""
 
-    SCOPES: list[str] = [GMAIL_READONLY_SCOPE]
+    SCOPES: ClassVar[list[str]] = [GMAIL_READONLY_SCOPE]
 
-    POLL_INTERVAL_S: int = 120
+    POLL_INTERVAL_S: ClassVar[int] = 120
     """In-process poll cadence. Matches ``pack.yaml`` ``triggers.schedule``
     (every 2 minutes). The supervisor only restarts on crash; it does NOT
     drive the poll itself."""
 
-    CURSOR_MILESTONE_EVENTS: int = 100
-    CURSOR_MILESTONE_INTERVAL_S: int = 300
+    CURSOR_MILESTONE_EVENTS: ClassVar[int] = 100
+    CURSOR_MILESTONE_INTERVAL_S: ClassVar[int] = 300
     """Cursor-advance emission is gated on whichever milestone fires
     first — 100 events processed OR 5 minutes of wall clock. Avoids the
     anti-vision pattern of one ``adapter.cursor_advanced`` per message."""
@@ -168,7 +205,12 @@ class GmailAdapter:
         )
         self._service_factory = service_factory or _default_service_factory
         # [§6 invariant 10] resolve floor at construction; raise on downgrade.
-        self.sensitivity_floor: SensitivityFloor = self._resolve_sensitivity_floor()
+        # The CommunicationAdapter ABC declares sensitivity_floor as a
+        # ClassVar default; Gmail overrides per-instance to honor config-
+        # raise semantics (config may raise the floor, never lower it).
+        self.sensitivity_floor: SensitivityFloor = (  # type: ignore[misc]
+            self._resolve_sensitivity_floor()
+        )
         self._status = AdapterStatus()
         self._service: Any = None
         self._cursor: str | None = None
@@ -178,6 +220,15 @@ class GmailAdapter:
         # Test seam: bound the loop. None = run forever (production); the
         # supervisor stops the task on its lifecycle events.
         self._max_poll_cycles: int | None = max_poll_cycles
+        # Observation-mode wiring slots for :meth:`send`. Phase A leaves
+        # these unset; a Phase B prompt extending the supervisor's
+        # adapter-loading path will populate them so Gmail outbound can
+        # route through :func:`adminme.lib.observation.outbound` per
+        # [§6.20]. Until then, :meth:`send` short-circuits to
+        # ``NotImplementedError`` before reaching the outbound() call.
+        self._observation_session: Any = None
+        self._observation_manager: Any = None
+        self._observation_event_log: Any = None
 
     # ------------------------------------------------------------------
     # sensitivity-floor invariant [§6 invariant 10]
@@ -315,6 +366,86 @@ class GmailAdapter:
 
     def status(self) -> AdapterStatus:
         return self._status
+
+    # ------------------------------------------------------------------
+    # CommunicationAdapter contract — Cat-A surface
+    # ------------------------------------------------------------------
+    async def send(self, message: OutboundMessage) -> SendResult:
+        """Send an outbound Gmail message.
+
+        Phase A honest stub: routes through
+        :func:`adminme.lib.observation.outbound` so the 11-β validator's
+        ``observation_mode_wrapping`` AST-walk finds the wiring per
+        [§6.20]. The closure passed as ``action_fn`` raises
+        ``NotImplementedError("Gmail outbound deferred to Phase B")`` —
+        runtime callers see a clear error rather than a silent no-op.
+
+        Real Gmail outbound (``users.messages.send`` + the
+        ``messaging.sent`` v1 event schema + the second capability block
+        in ``pack.yaml``) ships in a Phase B prompt per
+        ``docs/08-architecture-amendment-adapter-rebase.md`` §3.3.
+
+        Phase A leaves the observation-mode wiring slots
+        (``_observation_session`` / ``_observation_manager`` /
+        ``_observation_event_log``) unset on the instance — the
+        supervisor's adapter-loading path keeps the simple ``Adapter``
+        Protocol surface unchanged per memo 08 §5. The Phase B prompt
+        extends the supervisor to populate those slots; until then,
+        :meth:`send` short-circuits with ``NotImplementedError`` before
+        reaching the ``outbound()`` call.
+        """
+
+        async def _gmail_send_deferred() -> None:
+            # Phase B: this is where the real ``users.messages.send``
+            # call fires. Phase A keeps it deferred.
+            raise NotImplementedError(
+                "Gmail outbound deferred to Phase B"
+            )
+
+        session = self._observation_session
+        manager = self._observation_manager
+        event_log = self._observation_event_log
+        if session is None or manager is None or event_log is None:
+            raise NotImplementedError(
+                "Gmail outbound deferred to Phase B"
+            )
+
+        # [§6.20] every outbound side effect routes through the single
+        # observation-mode seam. The 11-β observation_mode_wrapping
+        # AST-walk finds this call site.
+        result = await outbound(
+            session,
+            "messaging.send",
+            {
+                "channel": message.channel,
+                "recipient": message.recipient,
+                "body": message.body,
+            },
+            _gmail_send_deferred,
+            manager=manager,
+            event_log=event_log,
+            target_channel=message.channel,
+            target_identifier=message.recipient,
+        )
+        return SendResult(
+            delivered=not result.suppressed,
+            external_id=None,
+            suppressed=result.suppressed,
+        )
+
+    async def _on_inbound(self, envelope: InboundEnvelope) -> None:
+        """Inbound hook — Phase A no-op satisfying the ABC contract.
+
+        The existing :meth:`_poll_loop` / :meth:`_run_poll_cycle` /
+        :meth:`_emit_messaging_received` path stays in place and emits
+        ``messaging.received`` v1 events directly per memo 08 §5
+        ("inheritance + manifest only, not a rewrite"). A future internal
+        refactor can route the polling loop through this hook for
+        in-memory dedup or per-envelope metrics; for now the hook's
+        existence-and-callability is what the
+        :class:`CommunicationAdapter` ABC requires.
+        """
+        return None
 
     # ------------------------------------------------------------------
     # Gmail API helpers
