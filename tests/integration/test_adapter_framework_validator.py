@@ -161,16 +161,11 @@ def test_multi_capability_pack_validates_cleanly_end_to_end(
 
 
 def test_existing_v1_gmail_pack_validates_without_errors() -> None:
-    """Backward-compat: the on-main Gmail v1 pack yields no errors.
-
-    The Gmail pack predates the framework — its ``pack.yaml`` carries no
-    ``capabilities:`` block and its ``adapter.py`` implements the simple
-    ``Adapter`` Protocol directly (not :class:`CommunicationAdapter`).
-    Cohort C retrofits will land the ABC inheritance + manifest
-    capability blocks; the 11-β validator SURFACES the gap as an
-    ``advisory_pending_retrofit`` finding from base-class conformance,
-    not an error. The other five checks each yield zero findings for
-    a no-capabilities manifest.
+    """Post-retrofit (prompt 11r-a — Cohort C step 1): the Gmail pack
+    now inherits :class:`CommunicationAdapter` and declares a Cat-A
+    ``capabilities`` block. The validator returns zero errors AND no
+    ``advisory_pending_retrofit`` finding on ``base_class_conformance``
+    — the first of three Cohort C advisories closed.
     """
     pack_dir = Path("packs/adapters/messaging/gmail")
     result = validate_adapter_pack(pack_dir)
@@ -178,11 +173,14 @@ def test_existing_v1_gmail_pack_validates_without_errors() -> None:
     assert not result.has_errors(), [
         (f.check, f.message) for f in result.errors()
     ]
-    advisories = result.advisories()
-    assert any(
-        f.check == "base_class_conformance"
+    pending = [
+        f
+        for f in result.advisories()
+        if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
-        for f in advisories
+    ]
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
     )
 
 
