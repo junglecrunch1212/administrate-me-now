@@ -277,28 +277,36 @@ def test_list_command_finds_three_reference_packs_on_main() -> None:
     """The repo's own ``packs/adapters/`` ships Gmail, Plaid, Reminders.
 
     Pinned per the prompt's §8 c1 verification block: ``adminme adapters
-    list`` should show three rows on a clean main checkout.
+    list`` should show three rows on a clean main checkout. Post-Cohort-C
+    closure (prompts 11r-a / 11r-b / 11r-c), all three packs are now
+    framework-conformant: Gmail declares Cat-A, Plaid declares Cat-C,
+    Reminders declares Cat-B — each on the ``central`` runtime.
     """
     if not ONMAIN_PACKS_ROOT.is_dir():
         # Repo layout drifted — let the failure here flag it loudly
         # rather than silently passing.
         raise AssertionError(f"{ONMAIN_PACKS_ROOT} missing — repo layout drifted?")
     rows = _discover_packs(ONMAIN_PACKS_ROOT)
-    names = {r.name for r in rows}
-    assert "messaging-gmail-api" in names
-    assert "financial-plaid" in names
-    assert "reminders-apple-eventkit" in names
-    # All three are legacy v1 manifests on main (Cohort C retrofit
-    # pending), so kinds/runtime render as em-dash.
-    for row in rows:
+    by_name = {r.name: r for r in rows}
+    assert "messaging-gmail-api" in by_name
+    assert "financial-plaid" in by_name
+    assert "reminders-apple-eventkit" in by_name
+    # All three are post-Cohort-C-retrofit on main; kinds + runtime
+    # populated per category.
+    expected_kinds = {
+        "messaging-gmail-api": "Cat-A",
+        "financial-plaid": "Cat-C",
+        "reminders-apple-eventkit": "Cat-B",
+    }
+    for name, expected in expected_kinds.items():
+        row = by_name[name]
         assert row.unparseable is False
-        if row.name in {
-            "messaging-gmail-api",
-            "financial-plaid",
-            "reminders-apple-eventkit",
-        }:
-            assert row.kinds == "—"
-            assert row.runtime == "—"
+        assert row.kinds == expected, (
+            f"{name}: expected kinds={expected!r}, got {row.kinds!r}"
+        )
+        assert row.runtime == "central", (
+            f"{name}: expected runtime='central', got {row.runtime!r}"
+        )
 
 
 # ---------- Table builder ----------

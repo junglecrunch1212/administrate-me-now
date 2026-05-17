@@ -247,14 +247,14 @@ def test_validate_exits_two_on_real_missing_pack_yaml(tmp_path: Path) -> None:
 # ---------- On-main smoke ----------
 
 
-def test_validate_against_on_main_gmail_pack_exits_zero_with_advisory() -> None:
-    """Gmail is a legacy v1 pack pending Cohort C retrofit.
-
-    Per prompt 11-γ §8 c2 verification, ``adminme adapters validate
-    packs/adapters/messaging/gmail`` exits ``0`` and surfaces the
-    advisory the base-class-conformance check produces against the v1
-    manifest. Cohort C closes this advisory by retrofitting Gmail onto
-    :class:`CommunicationAdapter`.
+def test_validate_against_on_main_gmail_pack_exits_zero_with_no_advisory() -> None:
+    """Post-retrofit (prompt 11r-a — Cohort C step 1): Gmail now
+    inherits :class:`CommunicationAdapter` and declares a Cat-A
+    ``capabilities`` block. ``adminme adapters validate
+    packs/adapters/messaging/gmail`` exits ``0`` AND no longer
+    surfaces the ``base_class_conformance`` advisory — the first of
+    three Cohort C advisories closed (Plaid + Reminders followed via
+    11r-b / 11r-c).
     """
     if not ONMAIN_GMAIL_PACK.is_dir():
         raise AssertionError(
@@ -263,6 +263,7 @@ def test_validate_against_on_main_gmail_pack_exits_zero_with_advisory() -> None:
 
     result = runner.invoke(adapters_app, ["validate", str(ONMAIN_GMAIL_PACK)])
     assert result.exit_code == 0, result.stdout
-    # The advisory's text survives the renderer; ANSI is stripped by
-    # CliRunner's buffer so we look for the plain check name.
-    assert "base_class_conformance" in result.stdout
+    # base_class_conformance advisory is GONE post-retrofit. ANSI is
+    # stripped by CliRunner's buffer so we look for the plain check name.
+    assert "advisory_pending_retrofit" not in result.stdout
+    assert "base_class_conformance" not in result.stdout
