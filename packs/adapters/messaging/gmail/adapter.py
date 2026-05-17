@@ -2,15 +2,16 @@
 
 Inherits :class:`adminme.lib.adapters.CommunicationAdapter` (Cat-A) per
 ``docs/08-architecture-amendment-adapter-rebase.md`` §3.3 (Cohort C
-retrofit). The inheritance flip + the ``capabilities`` manifest block +
-honest stubs for :meth:`send` and :meth:`_on_inbound` close the
-``advisory_pending_retrofit`` finding the 11-β validator surfaces on
-``base_class_conformance``. Real Gmail outbound (``users.messages.send``
-plus the ``messaging.sent`` event schema) is deferred to a Phase B
-prompt; the :meth:`send` stub routes through
-:func:`adminme.lib.observation.outbound` so the validator's
-``observation_mode_wrapping`` AST-walk finds the wiring and raises
-``NotImplementedError`` so runtime callers get a clear error.
+retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
+(``users.messages.send`` + MIME builder) ships in prompt 11a c2; the
+:meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
+directly when the observation seam slots are unpopulated (Phase A),
+and routes through :func:`adminme.lib.observation.outbound` when the
+slots are populated by the supervisor (Phase B). The emitted event is
+the EXISTING ``messaging.sent@v1`` schema registered at
+``adminme/events/schemas/ingest.py`` since phase 04-3 (commit
+``2ce1cff``); NO new schema is registered by 11a per [D7] (v1 schemas
+immutable, 47 production consumers).
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
@@ -43,6 +44,8 @@ import logging
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
+from email.utils import formatdate
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
@@ -198,6 +201,9 @@ class GmailAdapter(CommunicationAdapter):
         credentials_resolver: CredentialsResolver | None = None,
         service_factory: ServiceFactory | None = None,
         max_poll_cycles: int | None = None,
+        observation_session: Any = None,
+        observation_manager: Any = None,
+        observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
         self._credentials_resolver = (
@@ -220,15 +226,22 @@ class GmailAdapter(CommunicationAdapter):
         # Test seam: bound the loop. None = run forever (production); the
         # supervisor stops the task on its lifecycle events.
         self._max_poll_cycles: int | None = max_poll_cycles
+        # ctx is captured at start() so :meth:`send` (a Cat-A contract
+        # method the supervisor invokes without re-passing ctx) can emit
+        # ``messaging.sent@v1`` / ``adapter.error@v1`` events through the
+        # supervisor-bound event log. Mirrors the apple-eventkit pattern.
+        self._ctx: AdapterContext | None = None
         # Observation-mode wiring slots for :meth:`send`. Phase A leaves
-        # these unset; a Phase B prompt extending the supervisor's
-        # adapter-loading path will populate them so Gmail outbound can
-        # route through :func:`adminme.lib.observation.outbound` per
-        # [§6.20]. Until then, :meth:`send` short-circuits to
-        # ``NotImplementedError`` before reaching the outbound() call.
-        self._observation_session: Any = None
-        self._observation_manager: Any = None
-        self._observation_event_log: Any = None
+        # these unset (constructor default None); the Phase B prompt
+        # extending the supervisor's adapter-loading path will populate
+        # them via constructor injection so Gmail outbound routes through
+        # :func:`adminme.lib.observation.outbound` per [§6.20]. When
+        # unset, :meth:`send` calls Gmail v1 ``users.messages.send``
+        # directly (memo 08 §3.4 Phase-A-conditional pattern, mirroring
+        # 11r-c's :meth:`_apply_write_impl`).
+        self._observation_session: Any = observation_session
+        self._observation_manager: Any = observation_manager
+        self._observation_event_log: Any = observation_event_log
 
     # ------------------------------------------------------------------
     # sensitivity-floor invariant [§6 invariant 10]
@@ -274,6 +287,7 @@ class GmailAdapter(CommunicationAdapter):
 
         creds_json = self._credentials_resolver(op_ref)
         self._service = self._service_factory(creds_json, self.SCOPES, user_email)
+        self._ctx = ctx
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         self._last_advance_at = ctx.now_factory()
@@ -371,67 +385,182 @@ class GmailAdapter(CommunicationAdapter):
     # CommunicationAdapter contract — Cat-A surface
     # ------------------------------------------------------------------
     async def send(self, message: OutboundMessage) -> SendResult:
-        """Send an outbound Gmail message.
+        """Send an outbound Gmail message via ``users.messages.send``.
 
-        Phase A honest stub: routes through
-        :func:`adminme.lib.observation.outbound` so the 11-β validator's
-        ``observation_mode_wrapping`` AST-walk finds the wiring per
-        [§6.20]. The closure passed as ``action_fn`` raises
-        ``NotImplementedError("Gmail outbound deferred to Phase B")`` —
-        runtime callers see a clear error rather than a silent no-op.
+        Builds an RFC 2822 MIME envelope from ``message`` via
+        :meth:`_build_mime_message`, base64url-encodes it, and POSTs to
+        the Gmail v1 ``users.messages.send`` endpoint. Routes through
+        :func:`adminme.lib.observation.outbound` when the
+        observation-seam slots are populated (Phase B); otherwise calls
+        the Gmail service directly (Phase A — memo 08 §3.4
+        Phase-A-conditional, mirroring 11r-c's
+        :meth:`_apply_write_impl`). On success, emits one
+        ``messaging.sent@v1`` event with field-mapping from Gmail
+        semantics to the existing schema (registered at
+        ``adminme/events/schemas/ingest.py`` since phase 04-3); on
+        observation-suppress, the same event is emitted with
+        ``delivery_status="queued"`` and ``thread_id=None``. The
+        ``messaging.sent@v1`` registration is reused unchanged per [D7].
 
-        Real Gmail outbound (``users.messages.send`` + the
-        ``messaging.sent`` v1 event schema + the second capability block
-        in ``pack.yaml``) ships in a Phase B prompt per
-        ``docs/08-architecture-amendment-adapter-rebase.md`` §3.3.
-
-        Phase A leaves the observation-mode wiring slots
-        (``_observation_session`` / ``_observation_manager`` /
-        ``_observation_event_log``) unset on the instance — the
-        supervisor's adapter-loading path keeps the simple ``Adapter``
-        Protocol surface unchanged per memo 08 §5. The Phase B prompt
-        extends the supervisor to populate those slots; until then,
-        :meth:`send` short-circuits with ``NotImplementedError`` before
-        reaching the ``outbound()`` call.
+        Errors classify per :meth:`_classify_gmail_error` into the
+        ``AdapterErrorV1`` taxonomy (4xx auth → fatal ``auth_failed``,
+        5xx → transient ``network``, 429 → transient ``rate_limited``),
+        emit one ``adapter.error@v1`` event, and re-raise so the
+        supervisor's backoff handles retry. ``messaging.sent@v1`` is
+        NOT emitted on the error path — the action did not, in fact,
+        send.
         """
-
-        async def _gmail_send_deferred() -> None:
-            # Phase B: this is where the real ``users.messages.send``
-            # call fires. Phase A keeps it deferred.
-            raise NotImplementedError(
-                "Gmail outbound deferred to Phase B"
+        # [§7.3, D17]: defense-in-depth input check; the Cat-A ABC's
+        # OutboundMessage is frozen but does not validate non-emptiness.
+        if not message.recipient:
+            raise ValueError(
+                "OutboundMessage.recipient must be a non-empty string"
             )
+        ctx = self._ctx
+        if self._service is None:
+            raise RuntimeError(
+                "Gmail service not initialized; call start() first"
+            )
+
+        mime_b64 = self._build_mime_message(message)
+        service = self._service
+
+        async def _gmail_api_send() -> dict[str, Any]:
+            # Wrapped in a closure so :func:`outbound` can suppress it
+            # under observation mode. ``execute()`` is sync; the
+            # observation seam awaits the closure.
+            return service.users().messages().send(
+                userId="me", body={"raw": mime_b64}
+            ).execute()
 
         session = self._observation_session
         manager = self._observation_manager
         event_log = self._observation_event_log
-        if session is None or manager is None or event_log is None:
-            raise NotImplementedError(
-                "Gmail outbound deferred to Phase B"
+
+        response: dict[str, Any] = {}
+        suppressed = False
+        try:
+            if (
+                session is not None
+                and manager is not None
+                and event_log is not None
+            ):
+                # [§6.20] Phase B: route through the observation seam so
+                # ``observation.suppressed`` / ``external.sent`` are
+                # emitted around the actual Gmail API call. The 11-β
+                # validator's ``observation_mode_wrapping`` AST-walk
+                # finds this call site.
+                outbound_result = await outbound(
+                    session,
+                    "messaging.send",
+                    {
+                        "channel": message.channel,
+                        "recipient": message.recipient,
+                        "body": message.body,
+                    },
+                    _gmail_api_send,
+                    manager=manager,
+                    event_log=event_log,
+                    target_channel=message.channel,
+                    target_identifier=message.recipient,
+                )
+                if outbound_result.suppressed:
+                    suppressed = True
+                else:
+                    response = outbound_result.result or {}
+            else:
+                # Phase A: seams unset; direct Gmail API call. The
+                # supervisor's adapter-loading path keeps the simple
+                # ``Adapter`` Protocol surface unchanged per memo 08 §5.
+                response = await _gmail_api_send()
+        except BaseException as exc:  # noqa: BLE001 — classify & emit
+            severity, error_kind, retry_after_s = (
+                self._classify_gmail_error(exc)
+            )
+            if ctx is not None:
+                self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
+                    error_message=str(exc) or type(exc).__name__,
+                    retry_after_s=retry_after_s,
+                )
+            raise
+
+        # [D7] map onto the EXISTING ``messaging.sent@v1`` field set.
+        # No new schema; field names match
+        # ``MessagingSentV1`` byte-for-byte.
+        if ctx is not None:
+            now_dt = ctx.now_factory()
+        else:
+            now_dt = datetime.now(timezone.utc)
+        sent_at_iso = now_dt.astimezone(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        subject_meta = (
+            message.metadata.get("subject")
+            if isinstance(message.metadata, dict)
+            else None
+        )
+        subject_value: str | None = (
+            str(subject_meta) if subject_meta else None
+        )
+        thread_id_value: str | None = (
+            None if suppressed else response.get("threadId")
+        )
+        delivery_status: Literal["queued", "sent"] = (
+            "queued" if suppressed else "sent"
+        )
+        sent_payload: dict[str, Any] = {
+            "source_channel": "gmail",
+            "to_identifier": message.recipient,
+            "thread_id": thread_id_value,
+            "subject": subject_value,
+            "body_text": message.body,  # FULL body — schema allows str | None
+            "sent_at": sent_at_iso,
+            "delivery_status": delivery_status,
+        }
+        if ctx is not None:
+            self._append(
+                ctx=ctx,
+                event_type="messaging.sent",
+                payload=sent_payload,
             )
 
-        # [§6.20] every outbound side effect routes through the single
-        # observation-mode seam. The 11-β observation_mode_wrapping
-        # AST-walk finds this call site.
-        result = await outbound(
-            session,
-            "messaging.send",
-            {
-                "channel": message.channel,
-                "recipient": message.recipient,
-                "body": message.body,
-            },
-            _gmail_send_deferred,
-            manager=manager,
-            event_log=event_log,
-            target_channel=message.channel,
-            target_identifier=message.recipient,
+        external_id_value: str | None = (
+            None if suppressed else response.get("id")
         )
         return SendResult(
-            delivered=not result.suppressed,
-            external_id=None,
-            suppressed=result.suppressed,
+            delivered=not suppressed,
+            external_id=external_id_value,
+            suppressed=suppressed,
         )
+
+    def _build_mime_message(self, message: OutboundMessage) -> str:
+        """Build an RFC 2822 MIME envelope from an
+        :class:`OutboundMessage` and return its base64url-encoded form
+        per the Gmail v1 ``users.messages.send`` contract
+        (``body.raw`` field).
+
+        Phase A supports ``text/plain`` only; HTML and attachments are
+        deferred per prompt 11a §6. ``From`` is taken from the configured
+        ``user_email``; ``To`` is ``message.recipient``; ``Subject`` is
+        sourced from ``message.metadata["subject"]`` when present.
+        """
+        mime = MIMEText(message.body, "plain", "utf-8")
+        sender = self._config.get("user_email", "")
+        if sender:
+            mime["From"] = str(sender)
+        mime["To"] = message.recipient
+        subject_meta = (
+            message.metadata.get("subject")
+            if isinstance(message.metadata, dict)
+            else None
+        )
+        if subject_meta:
+            mime["Subject"] = str(subject_meta)
+        mime["Date"] = formatdate(localtime=False, usegmt=True)
+        return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
 
     async def _on_inbound(self, envelope: InboundEnvelope) -> None:
         """Inbound hook — Phase A no-op satisfying the ABC contract.
