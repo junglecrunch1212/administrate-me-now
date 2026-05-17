@@ -653,26 +653,52 @@ def test_retrofit_supervisor_loaded_gmail_inherits_communication_adapter() -> (
     assert issubclass(GmailAdapter, CommunicationAdapter)
 
 
-async def test_retrofit_send_stub_raises_not_implemented_through_loader() -> (
+async def test_retrofit_send_method_is_a_real_implementation_through_loader() -> (
     None
 ):
-    """The ``send`` abstract method is satisfied by an honest stub that
-    raises ``NotImplementedError`` per memo 08 §3.3 (Phase A defers real
-    Gmail outbound). Verifying this through the same loader the supervisor
-    uses confirms the retrofit's stub is on the production class, not a
-    test-only shim."""
-    from adminme.lib.adapters import OutboundMessage
+    """The ``send`` abstract method is now a REAL Gmail v1
+    ``users.messages.send`` implementation (post-11a c2 — supersedes the
+    11r-a ``NotImplementedError`` stub). Verifying through the same
+    loader the supervisor uses confirms the real implementation is on
+    the production class, not a test-only shim. Deep coverage of the
+    send contract lives at section (7) below; this is the retrofit-
+    sibling pin that the stub is gone."""
+    from adminme.lib.adapters import OutboundMessage, SendResult
 
     service = _FakeGmailService(profile=_fixture("profile_response.json"))
     adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+
+    # Bypass start()/supervisor lifecycle — :meth:`send` only needs
+    # ``_service`` populated to call the Gmail API and ``_ctx`` is
+    # optional (without it the emit path falls back to UTC now()).
+    class _Execute:
+        def execute(self) -> dict[str, Any]:
+            return {"id": "gmail-retrofit-1", "threadId": "thr-retrofit-1"}
+
+    class _Messages:
+        def send(self, **_kwargs: Any) -> Any:
+            return _Execute()
+
+    class _Users:
+        def messages(self) -> Any:
+            return _Messages()
+
+    class _Service:
+        def users(self) -> Any:
+            return _Users()
+
+    adapter._service = _Service()
     message = OutboundMessage(
         channel="gmail",
         recipient="someone@example.test",
         body="hello from integration test",
     )
 
-    with pytest.raises(NotImplementedError, match="Phase B"):
-        await adapter.send(message)
+    result = await adapter.send(message)
+
+    assert isinstance(result, SendResult)
+    assert result.delivered is True
+    assert result.external_id == "gmail-retrofit-1"
 
 
 async def test_retrofit_validator_clean_after_supervisor_lifecycle(
@@ -743,3 +769,217 @@ async def test_retrofit_validator_clean_after_supervisor_lifecycle(
     assert not result.has_errors(), (
         f"validator reports errors post-retrofit: {result.errors()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7) Cohort D step 1 (prompt 11a) — real Gmail outbound replaces the 11r-a
+#    `send` stub. These three tests exercise the supervisor-loaded
+#    GmailAdapter's real send path end-to-end (Phase A, no observation
+#    seams propagated by the loader yet; Phase B is the future loader
+#    extension covered by the @skip test below).
+# ---------------------------------------------------------------------------
+
+
+async def test_supervisor_loads_gmail_send_path_works_through_loader(
+    tmp_path: Path,
+) -> None:
+    """The supervisor-loaded ``GmailAdapter`` (loaded via the same
+    file-path importlib pattern as in production) exposes a real
+    :meth:`send` that calls Gmail v1 ``users.messages.send`` against an
+    injected fake service and returns a populated :class:`SendResult`.
+
+    The 11r-a `send` stub raised ``NotImplementedError("Phase B")``;
+    after 11a c2 the stub is gone — the supervisor's loader path now
+    yields an adapter whose ``send`` actually sends, closing the
+    Cohort-D-step-1 gap end-to-end at the loader+adapter seam."""
+    from adminme.lib.adapters import OutboundMessage, SendResult
+
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+
+    service = _FakeGmailService(profile=_fixture("profile_response.json"))
+    # max_poll_cycles=0 so start() returns after authenticating but
+    # leaves the supervisor-bound ``_ctx`` populated for the send call.
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+
+    captured_send: list[dict[str, Any]] = []
+
+    class _SendExecute:
+        def execute(self) -> dict[str, Any]:
+            return {"id": "gmail-supervisor-msg-1", "threadId": "thr-sup-1"}
+
+    class _SendMessages:
+        def send(self, **kwargs: Any) -> Any:
+            captured_send.append(kwargs)
+            return _SendExecute()
+
+    class _SendUsers:
+        def messages(self) -> Any:
+            return _SendMessages()
+
+    class _SendService:
+        def users(self) -> Any:
+            return _SendUsers()
+
+    event_log = _RecordingEventLog()
+    sup = _supervisor(
+        config_path=channels, event_log=event_log, adapters=[adapter]
+    )
+
+    await sup.start()
+    try:
+        # Wait for start() to complete so adapter._ctx is populated by
+        # the supervisor's ctx_factory (start() then yields immediately
+        # because max_poll_cycles=0).
+        await _wait_for(
+            lambda: len(event_log.by_type("adapter.authenticated")) == 1
+        )
+
+        # Override the fake service so the send chain hits our recorder.
+        adapter._service = _SendService()
+        message = OutboundMessage(
+            channel="gmail",
+            recipient="alice@example.test",
+            body="hello via supervisor",
+            metadata={"subject": "Supervisor send"},
+        )
+
+        result = await adapter.send(message)
+
+        assert isinstance(result, SendResult)
+        assert result.delivered is True
+        assert result.external_id == "gmail-supervisor-msg-1"
+        assert result.suppressed is False
+        # Gmail v1 wire-shape was actually exercised through the
+        # supervisor-loaded adapter.
+        assert len(captured_send) == 1
+        assert captured_send[0]["userId"] == "me"
+        assert "raw" in captured_send[0]["body"]
+
+        # ``messaging.sent`` was emitted through the supervisor-bound
+        # event log with the existing ``MessagingSentV1`` field set.
+        sent = event_log.by_type("messaging.sent")
+        assert len(sent) == 1
+        payload = sent[0]["payload"]
+        assert payload["source_channel"] == "gmail"
+        assert payload["to_identifier"] == "alice@example.test"
+        assert payload["thread_id"] == "thr-sup-1"
+        assert payload["subject"] == "Supervisor send"
+        assert payload["body_text"] == "hello via supervisor"
+        assert payload["delivery_status"] == "sent"
+    finally:
+        await sup.stop()
+
+
+@pytest.mark.skip(
+    reason=(
+        "Phase B work: the supervisor's adapter loader does not yet "
+        "propagate observation-mode seam slots into the adapter "
+        "constructor; the Phase-A-conditional `send` path covers the "
+        "current loader contract (test (1) above), and the framework "
+        "test ``test_gmail_send.test_send_happy_path_with_seams_"
+        "populated`` covers the Phase-B-conditional branch with seams "
+        "populated directly. This test reserves the integration-seam "
+        "slot for the future Phase B loader extension per memo 08 §3.4."
+    )
+)
+async def test_supervisor_seam_slots_propagate_through_loader(
+    tmp_path: Path,
+) -> None:
+    """Phase B contract: the supervisor's adapter loader will populate
+    the three ``observation_session`` / ``observation_manager`` /
+    ``observation_event_log`` seam slots from the ``AdapterContext`` (or
+    a sibling factory) so ``GmailAdapter.send`` routes through
+    :func:`adminme.lib.observation.outbound` per [§6.20] without per-
+    adapter wiring. Skipped today because the loader does not yet
+    populate those slots — kept as the integration-seam placeholder."""
+
+
+async def test_supervisor_observation_off_send_calls_gmail_directly(
+    tmp_path: Path,
+) -> None:
+    """The Phase-A-conditional contract: when the supervisor-loaded
+    adapter has no observation-mode seams populated (today's loader
+    behavior), :meth:`send` MUST call the Gmail API directly rather
+    than routing through :func:`adminme.lib.observation.outbound`. This
+    pins the Phase A behavior at the integration seam — sister of the
+    Phase B branch covered by the framework-level
+    ``test_send_happy_path_with_seams_populated`` and the @skip Phase B
+    integration test above."""
+    from adminme.lib.adapters import OutboundMessage
+
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+
+    service = _FakeGmailService(profile=_fixture("profile_response.json"))
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+
+    # Sanity check: the supervisor-loaded adapter does NOT have
+    # observation-mode seams populated. If a future loader change
+    # populates them, this test must be rewritten as the Phase B
+    # variant (and the @skip above can lift).
+    assert adapter._observation_session is None
+    assert adapter._observation_manager is None
+    assert adapter._observation_event_log is None
+
+    captured_send: list[dict[str, Any]] = []
+    outbound_called: list[Any] = []
+
+    class _SendExecute:
+        def execute(self) -> dict[str, Any]:
+            return {"id": "gmail-direct-1", "threadId": "thr-direct-1"}
+
+    class _SendMessages:
+        def send(self, **kwargs: Any) -> Any:
+            captured_send.append(kwargs)
+            return _SendExecute()
+
+    class _SendUsers:
+        def messages(self) -> Any:
+            return _SendMessages()
+
+    class _SendService:
+        def users(self) -> Any:
+            return _SendUsers()
+
+    event_log = _RecordingEventLog()
+    sup = _supervisor(
+        config_path=channels, event_log=event_log, adapters=[adapter]
+    )
+
+    # Monkey-patch the adapter module's ``outbound`` to a recorder; the
+    # Phase-A path must NOT call it.
+    async def _recording_outbound(*args: Any, **kwargs: Any) -> Any:
+        outbound_called.append((args, kwargs))
+        raise AssertionError(
+            "outbound() must not be called when observation seams are unset"
+        )
+
+    await sup.start()
+    try:
+        await _wait_for(
+            lambda: len(event_log.by_type("adapter.authenticated")) == 1
+        )
+
+        adapter._service = _SendService()
+        # Patch via the adapter's loaded module (file-path importlib
+        # creates a fresh module instance per _load_gmail_module).
+        original_outbound = _gmail_mod.outbound
+        _gmail_mod.outbound = _recording_outbound
+        try:
+            await adapter.send(
+                OutboundMessage(
+                    channel="gmail",
+                    recipient="alice@example.test",
+                    body="Phase A direct call",
+                    metadata={"subject": "Direct"},
+                )
+            )
+        finally:
+            _gmail_mod.outbound = original_outbound
+
+        # Gmail API hit; outbound() not.
+        assert len(captured_send) == 1
+        assert outbound_called == []
+    finally:
+        await sup.stop()
