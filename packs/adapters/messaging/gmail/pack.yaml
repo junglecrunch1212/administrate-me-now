@@ -30,3 +30,17 @@ events_emitted:
 config:
   schema: config.schema.json
   example: config.example.yaml
+# Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35].
+# Added by prompt 11r-a (Cohort C retrofit) — closes the
+# advisory_pending_retrofit finding the 11-β validator surfaces on
+# base_class_conformance. `dedup_strategy` is declared as a mapping per
+# the on-main AdapterManifest model (`dict[str, Any] | None`); the
+# `external_id` kind matches Gmail's stable message-id semantics.
+capabilities:
+  - kind: Cat-A
+    runtime: central
+    event_families: [messaging.received]
+observation_mode_required: true
+sharing_model_discriminator: owner_member_id
+dedup_strategy:
+  kind: external_id
