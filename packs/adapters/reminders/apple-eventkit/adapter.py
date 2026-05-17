@@ -79,6 +79,11 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
+    ListItemAddedV1,
+    ListItemCompletedV1,
+    ListItemUpdatedV1,
+)
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -369,6 +374,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # before the projection-resolver fallback.
         self._seen_inbound: dict[str, datetime] = {}
 
+        # Per-id snapshot of the last-observed payload-relevant fields,
+        # populated by :meth:`_emit_inbound_synced`. Used ONLY by the
+        # ``list_item.*@v1`` dual-emit kind-derivation per [§D18] —
+        # the legacy ``reminder.list_item.synced@v1`` dedupe path
+        # continues to consult ``_seen_inbound`` byte-for-byte.
+        self._inbound_snapshots: dict[str, dict[str, Any]] = {}
+
         # Cursor-advance milestone state. Mirrors Gmail's and Plaid's
         # pattern: count emissions since last advance + track wall-clock
         # since last advance; emit on whichever threshold fires first.
@@ -644,6 +656,35 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             ctx=ctx,
             event_type="reminder.list_item.synced",
             payload=payload,
+            causation_id=causation_id,
+        )
+
+        # [§D18, D7] Dual-emit ``list_item.added@v1`` alongside the
+        # legacy ``reminder.list_item.synced@v1``. Same ``causation_id``
+        # + correlation_id (via ``ctx.correlation_id_factory()``) per
+        # [§D8] — round-trip traceability spans both event families.
+        # F-3 observation-suppressed invariant: this point is only
+        # reachable when ``result.applied=True`` (the early ``return
+        # False`` above on ``not result.applied`` covers the suppressed
+        # path), so the new emit fires iff the legacy emit fires —
+        # NEITHER on suppress, BOTH on apply.
+        list_item_added_payload: dict[str, Any] = {
+            "member_id": member_id,
+            "list_external_id": target_list_id,
+            "item_external_id": remind_id,
+            "list_name": target_list_name,
+            "title": translation["title"],
+            "notes": translation.get("notes"),
+            "due_at": _maybe_iso(translation.get("due_at")),
+            "priority": translation["priority"],
+            "completed": False,
+            "last_modified_at": _to_iso(now),
+            "sync_cycle_id": sync_cycle_id,
+        }
+        self._append(
+            ctx=ctx,
+            event_type="list_item.added",
+            payload=list_item_added_payload,
             causation_id=causation_id,
         )
         return True
@@ -1068,7 +1109,74 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             ctx=ctx, event_type="reminder.list_item.synced", payload=payload
         )
 
+        # [§D18, D7] Dual-emit a ``list_item.*@v1`` event alongside the
+        # legacy ``reminder.list_item.synced@v1``. The kind is derived
+        # from session cache state captured BEFORE the emit:
+        #   first observation        → ``list_item.added``
+        #   completion-flip f→t       → ``list_item.completed``
+        #   any other field change   → ``list_item.updated`` (with
+        #                              ``field_updates``)
+        # ``list_item.deleted@v1`` on the inbound path is deferred per
+        # prompt 11b-i §6 (requires negative-set logic across cycles).
+        prior_snapshot = self._inbound_snapshots.get(remind_id)
+        is_first_observation = remind_id not in self._seen_inbound
+        new_list_item_payload: dict[str, Any] = {
+            "member_id": member_id,
+            "list_external_id": list_id,
+            "item_external_id": remind_id,
+            "list_name": list_name,
+            "title": title[:500],
+            "notes": notes,
+            "due_at": _maybe_iso(due_at),
+            "priority": priority,
+            "completed": completed,
+            "last_modified_at": _to_iso(emit_lmod),
+            "sync_cycle_id": sync_cycle_id,
+        }
+        if is_first_observation:
+            new_event_type = "list_item.added"
+        elif (
+            prior_snapshot is not None
+            and prior_snapshot.get("completed") is False
+            and completed
+        ):
+            new_event_type = "list_item.completed"
+        else:
+            new_event_type = "list_item.updated"
+            field_updates: dict[str, Any] = {}
+            if prior_snapshot is not None:
+                # Compare each canonical payload field (excluding the
+                # stable identifiers + sync_cycle_id) against the prior
+                # snapshot; surface every changed field for downstream
+                # diffing per ``CalendarEventUpdatedV1`` precedent.
+                for diff_field in (
+                    "title",
+                    "notes",
+                    "due_at",
+                    "priority",
+                    "completed",
+                    "last_modified_at",
+                ):
+                    if new_list_item_payload.get(diff_field) != prior_snapshot.get(
+                        diff_field
+                    ):
+                        field_updates[diff_field] = new_list_item_payload.get(
+                            diff_field
+                        )
+            new_list_item_payload["field_updates"] = field_updates
+        self._append(
+            ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
+        )
+
         self._seen_inbound[remind_id] = emit_lmod
+        self._inbound_snapshots[remind_id] = {
+            "title": title[:500],
+            "notes": notes,
+            "due_at": _maybe_iso(due_at),
+            "priority": priority,
+            "completed": completed,
+            "last_modified_at": _to_iso(emit_lmod),
+        }
         prior_cursor = self._inbound_cursors.get(list_id)
         if prior_cursor is None or emit_lmod > prior_cursor:
             self._inbound_cursors[list_id] = emit_lmod
