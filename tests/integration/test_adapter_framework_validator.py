@@ -211,16 +211,13 @@ def test_existing_v1_plaid_pack_validates_without_errors() -> None:
 
 
 def test_existing_v1_apple_reminders_pack_validates_without_errors() -> None:
-    """Backward-compat for the on-main Apple Reminders v1 pack.
-
-    The Reminders adapter is bidirectional (Cat-B in the new framework)
-    and Cohort C will retrofit it to inherit from
-    :class:`ExternalStateMirrorAdapter`, populating ``write_capabilities``
-    on the pack.yaml from the existing per-operation write surface
-    documented in the adapter source. Until then, the validator
-    surfaces only the base-class advisory and does NOT flag the
-    write-surface drift (write_capabilities is empty on the legacy
-    manifest, so the check skips entirely).
+    """Post-retrofit (prompt 11r-c — Cohort C step 3, closing): the
+    Apple Reminders pack now inherits :class:`ExternalStateMirrorAdapter`
+    and declares a Cat-B ``capabilities`` block + the asymmetric
+    ``write_capabilities`` ``["create_reminder"]`` per [UT-27]. The
+    validator returns zero errors AND no ``advisory_pending_retrofit``
+    finding on ``base_class_conformance`` — the THIRD and FINAL of
+    three Cohort C advisories closed, closing Cohort C entirely.
     """
     pack_dir = Path("packs/adapters/reminders/apple-eventkit")
     result = validate_adapter_pack(pack_dir)
@@ -228,10 +225,14 @@ def test_existing_v1_apple_reminders_pack_validates_without_errors() -> None:
     assert not result.has_errors(), [
         (f.check, f.message) for f in result.errors()
     ]
-    assert any(
-        f.check == "base_class_conformance"
-        and "advisory_pending_retrofit" in f.message
+    pending = [
+        f
         for f in result.advisories()
+        if f.check == "base_class_conformance"
+        and "advisory_pending_retrofit" in f.message
+    ]
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
     )
 
 
