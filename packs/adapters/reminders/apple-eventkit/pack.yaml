@@ -84,3 +84,22 @@ documentation:
     - list-name substring (default ["Work", "Case", "Client"], case-insensitive)
     - item tag substring (default ["#private"], case-insensitive, matched on title+notes)
     - owning member role in {"child", "ambient"}
+
+# Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [UT-27].
+# Added by prompt 11r-c (Cohort C retrofit, step 3 of 3) — closes the THIRD
+# and FINAL advisory_pending_retrofit finding the 11-β validator surfaces on
+# base_class_conformance, closing Cohort C. `dedup_strategy` is declared as
+# a mapping per the on-main AdapterManifest model (`dict[str, Any] | None`);
+# the `external_id` kind matches the existing per-reminder dedupe semantics
+# (EKReminder.calendarItemIdentifier is the stable per-reminder key — same
+# `_seen_inbound` cache key the adapter uses for inbound dedupe today).
+capabilities:
+  - kind: Cat-B
+    runtime: central
+    event_families: [reminder.list_item.synced]
+write_capabilities:
+  - create_reminder
+sensitivity_default: normal
+sharing_model_discriminator: owner_member_id
+dedup_strategy:
+  kind: external_id
