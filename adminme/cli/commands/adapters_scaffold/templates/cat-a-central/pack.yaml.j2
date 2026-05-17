@@ -1,0 +1,18 @@
+pack:
+  id: adapter:messaging-<NAME>
+  name: <NAME>
+  version: 0.1.0
+  family: messaging
+
+family: messaging
+runtime: central
+sensitivity_floor: normal
+
+capabilities:
+  - kind: Cat-A
+    runtime: central
+    event_families: [messaging.received, messaging.sent]
+
+sensitivity_default: normal
+observation_mode_required: true
+owner_scope_overridability_at_install: true
