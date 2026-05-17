@@ -31,11 +31,14 @@ On 2026-05-16, an architecture-amendment-acknowledgment memo was authored at `do
 
 - Rows 115-123 below — the canonical 11 cohort layout (11 framework + 11a Gmail+Plaid + 11b Cat-B cohort + 11c-i bridge + 11c-ii Cat-D + 11d projection + 11e contacts + 11f lists projection + 11g HA).
 - `prompts/11-adapter-framework.md` — canonical parent draft for prompt 11 (PR #114).
-- `prompts/_active/11-alpha-adapter-framework-abcs-and-manifest.md` — canonical v4 refactor for the first framework sub-prompt (PR #116). 11-β and 11-γ refactors will follow after 11-α executes.
+- `prompts/_active/11-alpha-adapter-framework-abcs-and-manifest.md` — canonical v4 refactor for the first framework sub-prompt (PR #116, merged + executor cycle landed PRs #118-#121 on 2026-05-16).
+- `prompts/_active/11-beta-adapter-framework-validator.md` — canonical v4 refactor for the second framework sub-prompt (PR #122, merged + executor cycle landed PRs #123-#126 on 2026-05-16).
+- `prompts/_active/11-gamma-adapter-framework-cli-and-guide.md` — canonical v4 refactor for the third framework sub-prompt (PR #127, merged + executor cycle landed PRs #128-#131 on 2026-05-17). **Closes Cohort B.**
+- `prompts/_active/11r-a-retrofit-gmail-to-communication-adapter.md` — canonical v4 refactor for the FIRST Cohort C retrofit (PR #132, merged + executor cycle landed PRs #133-#136 on 2026-05-17). Closes 1 of 3 `advisory_pending_retrofit` findings.
 
-**Pause rule (operator-side):** no `executor-cycle.yml` fires with `prompt_id` in the 11* family OTHER THAN `11-alpha`, `11-beta`, `11-gamma` until Cohort B (framework) completes. Cohort C retrofit + Cohort D resumed canon both depend on the framework being on main first.
+**Pause rule (operator-side, updated 2026-05-17):** Cohort B is **CLOSED** — 11-α / 11-β / 11-γ all merged (PRs #118-#121 / #123-#126 / #128-#131). The framework is on main: 5 ABCs at `adminme/lib/adapters/`, the manifest schema + 6-check validator at `adminme/lib/pack_registry/`, and the `adminme adapters list / validate / scaffold` CLI at `adminme/cli/commands/adapters.py`. Cohort C is **IN FLIGHT** — 11r-a (Gmail → CommunicationAdapter) merged 2026-05-17 (PRs #133-#136); 11r-b (Plaid → InboundDataAdapter) and 11r-c (Reminders → ExternalStateMirrorAdapter, with `list.*` / `list_item.*` schema migration per [D18]) are the remaining Cohort C steps. Cohort D resumed canon prompts are gated on Cohort C completion per memo 08 §3.4.
 
-**For future Partner sessions:** if you find yourself confused about whether to follow `prompts/_active/11a-*.md` or rows 116-117 below for the canonical 11a scope, the answer is rows 116-117. The shipped code from the wrong-canon 11a needs retrofit (Cohort C). The canonical 11a (Gmail + Plaid CENTRAL via the typed ABCs) ships in Cohort D after Cohort B + Cohort C complete.
+**For future Partner sessions:** if you find yourself confused about whether to follow `prompts/_active/11a-*.md` or rows 116-117 below for the canonical 11a scope, the answer is rows 116-117. The shipped code from the wrong-canon 11a has been **retrofitted via Cohort C step 1 (11r-a)**; the GmailAdapter on main now inherits from `CommunicationAdapter`. The canonical 11a (Gmail + Plaid CENTRAL via the typed ABCs, with real outbound) ships in Cohort D after Cohort C completes.
 
 ---
 
