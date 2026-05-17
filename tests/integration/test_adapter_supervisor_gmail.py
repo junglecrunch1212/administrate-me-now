@@ -623,3 +623,123 @@ async def test_supervisor_correlation_ids_propagate_to_adapter_events(
             assert corr in minted
     finally:
         await sup.stop()
+
+
+# ---------------------------------------------------------------------------
+# 6) Cohort C retrofit (prompt 11r-a) — the supervisor-loaded GmailAdapter
+#    satisfies the CommunicationAdapter ABC end-to-end, the send stub
+#    raises NotImplementedError, the _on_inbound hook is a no-op, and the
+#    on-disk pack passes the 11-β validator with NO advisory_pending_retrofit
+#    finding. These tests sit at the cross-module seam (supervisor loader +
+#    pack adapter + framework ABC + manifest parser + validator) where the
+#    retrofit's contract is observable end-to-end.
+# ---------------------------------------------------------------------------
+
+
+def test_retrofit_supervisor_loaded_gmail_inherits_communication_adapter() -> (
+    None
+):
+    """The supervisor's adapter-loading code path (file-path importlib,
+    mirrored by ``_load_gmail_module``) yields a class that inherits from
+    :class:`CommunicationAdapter`. Per memo 08 §3.3, this is the contract
+    change the retrofit ships — the validator's ``base_class_conformance``
+    check observes this via AST walk against the same file."""
+    from adminme.lib.adapters import CommunicationAdapter
+
+    service = _FakeGmailService(profile=_fixture("profile_response.json"))
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+
+    assert isinstance(adapter, CommunicationAdapter)
+    assert issubclass(GmailAdapter, CommunicationAdapter)
+
+
+async def test_retrofit_send_stub_raises_not_implemented_through_loader() -> (
+    None
+):
+    """The ``send`` abstract method is satisfied by an honest stub that
+    raises ``NotImplementedError`` per memo 08 §3.3 (Phase A defers real
+    Gmail outbound). Verifying this through the same loader the supervisor
+    uses confirms the retrofit's stub is on the production class, not a
+    test-only shim."""
+    from adminme.lib.adapters import OutboundMessage
+
+    service = _FakeGmailService(profile=_fixture("profile_response.json"))
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
+    message = OutboundMessage(
+        channel="gmail",
+        recipient="someone@example.test",
+        body="hello from integration test",
+    )
+
+    with pytest.raises(NotImplementedError, match="Phase B"):
+        await adapter.send(message)
+
+
+async def test_retrofit_validator_clean_after_supervisor_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """End-to-end retrofit contract: the supervisor runs one full poll
+    cycle against the retrofitted GmailAdapter (preserving the existing
+    inbound emit path per memo 08 §5), the ``_on_inbound`` hook is
+    callable on the live instance, and the on-disk pack passes the 11-β
+    validator with NO ``advisory_pending_retrofit`` finding remaining
+    on ``base_class_conformance``. Closes the goal of the entire 11r-a
+    prompt at the integration seam."""
+    from adminme.lib.adapters import InboundEnvelope
+    from adminme.lib.pack_registry.validator import validate_adapter_pack
+
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+
+    history = _fixture("history_response.json")
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        history_pages=[history],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=2)
+
+    event_log = _RecordingEventLog()
+    sup = _supervisor(
+        config_path=channels, event_log=event_log, adapters=[adapter]
+    )
+
+    await sup.start()
+    try:
+        # memo 08 §5: the existing inbound emit path stays unchanged.
+        # The retrofit must not regress messaging.received emission.
+        await _wait_for(
+            lambda: len(event_log.by_type("messaging.received")) == 2
+        )
+
+        # The _on_inbound hook is callable on the live adapter instance
+        # (the ABC abstract method satisfied by an honest no-op stub).
+        envelope = InboundEnvelope(
+            external_id="msg-integration-test",
+            channel="gmail",
+            sender="someone@example.test",
+            received_at="2026-05-17T00:00:00Z",
+            payload={"subject": "from supervisor flow"},
+        )
+        assert await adapter._on_inbound(envelope) is None
+    finally:
+        await sup.stop()
+
+    # The on-disk pack passes the 11-β validator with NO
+    # advisory_pending_retrofit finding on base_class_conformance.
+    result = validate_adapter_pack(GMAIL_PACK_ROOT)
+    pending = [
+        f
+        for f in result.advisories()
+        if f.check == "base_class_conformance"
+        and "advisory_pending_retrofit" in f.message
+    ]
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    )
+    assert not result.has_errors(), (
+        f"validator reports errors post-retrofit: {result.errors()}"
+    )
