@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Home Assistant adapter config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_url", "access_token_ref"],
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Home Assistant base URL (e.g. https://homeassistant.local:8123). The adapter appends /api/states and /api/services/<domain>/<service>."
+    },
+    "access_token_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the long-lived access token (op://<vault>/<item>/<field>). NEVER a raw secret per ADMINISTRATEME_BUILD.md §L1."
+    },
+    "poll_interval_s": {
+      "type": "integer",
+      "minimum": 10,
+      "default": 60,
+      "description": "In-process Cat-C inbound state-poll cadence in seconds. Defaults to 60s; pack.yaml's cron is a heartbeat the supervisor uses to detect a wedged adapter."
+    },
+    "sensitivity_floor": {
+      "type": "string",
+      "enum": ["normal", "privileged"],
+      "default": "normal",
+      "description": "Adapter sensitivity floor. Config may RAISE the floor but cannot LOWER it below the hardcoded class default per SYSTEM_INVARIANTS.md §6 invariant 10."
+    }
+  }
+}

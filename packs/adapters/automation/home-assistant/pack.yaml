@@ -1,0 +1,69 @@
+pack:
+  id: adapter:automation-home-assistant
+  name: Home Assistant multi-capability adapter
+  version: 1.0.0
+  kind: adapter
+  family: home_automation
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+# [§6 invariant 10] sensitivity_floor hardcoded normal; home-automation
+# device state is personal but not financial/legal/health. Config may
+# RAISE the floor but cannot lower below this hardcoded class default.
+sensitivity_floor: normal
+
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: adapter.py
+  class: HomeAssistantAdapter
+
+# Cohort-D first canonical Cat-E adapter (prompt 11g). Documentation-only
+# trigger metadata: the supervisor restarts on crash and treats the cron
+# schedule as a heartbeat; the adapter enforces its own in-process poll
+# cadence per pack-internal POLL_INTERVAL_S (default 60s).
+triggers:
+  kind: external_poll
+  schedule: "*/1 * * * *"
+
+depends_on:
+  event_types:
+    - adapter.error
+    - adapter.authenticated
+    - adapter.cursor_advanced
+    - ha.state_changed
+    - action.executed
+    - action.failed
+
+events_emitted:
+  - adapter.error
+  - adapter.authenticated
+  - adapter.cursor_advanced
+  - ha.state_changed
+  - action.executed
+  - action.failed
+
+config:
+  schema: config.schema.json
+  example: config.example.yaml
+
+# Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [D24].
+# Multi-capability declaration: TWO entries — Cat-C state-reads (NOT a
+# side effect per memo §8; per-capability `observation_mode_required:
+# false` OVERRIDES the pack-level Cat-E gate) + Cat-E service-calls (ARE
+# side effects per §6.20; observation_mode_required inherits the
+# pack-level `true`).
+capabilities:
+  - kind: Cat-C
+    runtime: central
+    event_families: [ha.state_changed]
+    observation_mode_required: false
+  - kind: Cat-E
+    runtime: central
+    event_families: [action.executed, action.failed]
+    observation_mode_required: true
+sensitivity_default: normal
+observation_mode_required: true
+dedup_strategy:
+  kind: external_id
