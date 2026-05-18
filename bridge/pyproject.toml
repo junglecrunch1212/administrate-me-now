@@ -1,0 +1,52 @@
+# L1-bridge daemon — sibling Poetry package to the root `adminme` package.
+# Per memo 04 §2 / [D17] / [PM-29]: the bridge runs on per-member Mac Minis
+# and emits canonical events via HTTP to the central :3337 ingest service.
+# It is NOT installed alongside `adminme` on the central host — it is a
+# separate distributable with its own process lifecycle.
+
+[tool.poetry]
+name = "adminme-bridge"
+version = "0.1.0"
+description = "AdministrateMe L1-bridge daemon — knowledge-source adapter host"
+authors = ["AdministrateMe contributors"]
+readme = "README.md"
+license = "PolyForm-Noncommercial-1.0.0"
+packages = [{ include = "adminme_bridge" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Schema-only import dependency: bridge daemon reads
+# `adminme.events.schemas.bridge.BridgeEnrolledV1` for envelope shape.
+# Editable / path-based per [PM-29] + parent-draft §"Approach" c3.
+# Bootstrap §10 (16-§10) handles install order on real bridge Mac Minis.
+adminme = { path = "..", develop = true }
+
+# Runtime deps — kept minimal per F-5 (line ceiling).
+httpx = "*"
+pydantic = ">=2.6"
+pyyaml = "*"
+structlog = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+pytest-asyncio = "*"
+httpx = "*"
+
+[tool.poetry.scripts]
+adminme-bridge = "adminme_bridge.main:run"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
