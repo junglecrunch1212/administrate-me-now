@@ -5,7 +5,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 07a — ops spine projections (places_assets_accounts, money, vector_search)
 - **Refactored**: by Partner in Claude Chat, pre-session. Prompt file: prompts/07a-projections-ops-spine.md (~600 lines, quality bar = 06).
-- **Session merged**: PR #<N>, commits 81290b0 / edd0c34 / 71731fb / <commit4>, merged <merge date>.
+- **Session merged**: PR #17, commits 81290b0 / edd0c34 / 71731fb / d7c1349d, merged 2026-04-23.
 - **Outcome**: MERGED
 - **Evidence**:
   - 3 projections: places_assets_accounts (3 entity tables + 2 association tables), money (1 table with is_manual + soft-delete), vector_search (vec0 virtual table + embeddings_meta sidecar).
@@ -33,7 +33,7 @@ Permission for Claude Code Opus 4.7 Code Supervision Partner to take over this l
 
 ### Prompt 07b — xlsx_workbooks forward daemon
 - **Refactored**: by Partner in Claude Chat. Prompt file: prompts/07b-xlsx-workbooks-forward.md.
-- **Session merged**: PR #<N>, commits 05e13dd / 3c14625 / 2546061 / <commit4>, merged <merge date>.
+- **Session merged**: PR #18, commits 05e13dd / 3c14625 / 2546061 / fad49733, merged 2026-04-24.
 - **Outcome**: MERGED
 - **Evidence**:
   - xlsx_workbooks projection built as forward-only daemon consuming events from 10 projections; structurally a projection per [§2.2], emits only the categorized system event `xlsx.regenerated`.
@@ -1156,7 +1156,7 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
 - **Closes**: Project-knowledge / repo state-drift gap between Partner sessions. No code-side closure.
 - **Outcome**: MERGED.
 
-### partner-refactor-cowork-bundle-pre-authorship-gate (PR #<N>, merged <date>) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+### partner-refactor-cowork-bundle-pre-authorship-gate (PR #70, merged 2026-05-15) — INFRASTRUCTURE, NOT SIDECAR per PM-22
 - **Category**: Cowork bundle refactor PR. Updates Partner-side process docs and one model-alias fix. No code under `adminme/`/`packs/`/`bootstrap/`/`tests/` touched. No `build_log.md` Evidence section (infrastructure PR per PM-22).
 - **Surfaced by**: The 10c-iii test-drive QC of 2026-05-15. Cowork-authored `prompts/_active/10c-iii-reminder-crm-custody.md` shipped with 8+ stale file-path citations and a fictional `ProactivePipeline` base class. Drift-check and orientation report did not catch the defect because both are structurally upstream of file-existence verification.
 - **Diff scope**: 3 added (`docs/PARTNER-PRE-AUTHORSHIP-CHECKLIST.md`, `docs/SESSION-1-ORIENTATION-PROTOCOL.md`, `cowork-partner/PROJECT-INSTRUCTIONS.md` added at new path; no prior copy existed on main) + 1 modified (`.claude/settings.json` model alias, `claude-opus-4-7` → `opus` per operator direction to use the durable alias) + this `build_log.md` append.
@@ -1164,10 +1164,35 @@ This section also captures **infrastructure PRs that are not sidecars in the PM-
 - **Closes**: the authorship-time stale-citation gap surfaced by the 10c-iii v4 test drive. Does NOT close the 10c-iii build itself — the defective `prompts/_active/10c-iii-reminder-crm-custody.md` on main remains for Session 2 to address (deletion + re-author).
 - **Outcome**: MERGED.
 
-### partner-refactor-surface-glossary (PR #<N>, merged <date>) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+### partner-refactor-surface-glossary (PR #71, merged 2026-05-15) — INFRASTRUCTURE, NOT SIDECAR per PM-22
 - **Category**: Cowork bundle refactor (v4.1 → v4.2). Adds Three-surfaces glossary to `cowork-partner/PROJECT-INSTRUCTIONS.md` and Source column to Gate 2 + Gate 4 of `docs/PARTNER-PRE-AUTHORSHIP-CHECKLIST.md`. No code touched.
 - **Surfaced by**: 2026-05-15 smoke test of v4.1 bundle — agent blurred Surface 1 (pinned content) and Surface 2 (live main via MCP), reporting a local-workspace-only path as merged on main.
 - **Diff scope**: 2 replaced in place + 1 appended (this entry).
 - **Verification**: Three-surfaces glossary present. Source column present in both gate tables. Don't-blur-surfaces rule added to never-do list. Local workspace files synced in same session.
 - **Closes**: surface-conflation gap. Does NOT close the 10c-iii build (defective `prompts/10c-iii-reminder-crm-custody.md` on main remains for the next test-drive session).
 - **Outcome**: MERGED.
+
+### sidecar-smoke-test-oauth-verification (PR #195, merged 2026-05-18)
+- **Surfaced by**: Operator-side verification request after `CLAUDE_CODE_OAUTH_TOKEN` was added to repo secrets (2026-05-18). Original smoke-test run #2 PASSED but its diagnostic step printed `Using ANTHROPIC_API_KEY (API-tier billing)` — misleading. The original `if/elif` checked `ANTHROPIC_API_KEY` first, so when both secrets were set it always misreported the active path. claude-code's actual auth precedence is OAuth-first when both env vars are present.
+- **Diff scope**: 1 file. `.github/workflows/smoke-test.yml` — reorder the auth-precedence diagnostic to check `CLAUDE_CODE_OAUTH_TOKEN` first; add a new "OAuth isolation test" step that runs Haiku with `ANTHROPIC_API_KEY` intentionally unset to prove the Max-plan path works alone. Gated by `if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}` (this gate was structurally invalid and got fixed in PR #196).
+- **Cost**: Two Haiku calls per run instead of one. ~$0.002 per run. Negligible.
+- **Verification (post-merge)**: smoke-test run #6 (commit `bc5cc18`, after PR #196 landed) "OAuth isolation test PASSED. Max-plan subscription billing path is functional." Confirms Haiku call succeeded with only `CLAUDE_CODE_OAUTH_TOKEN` in env.
+- **Closes**: the billing-path-misreport defect and establishes OAuth as the verified billing path for `executor-cycle.yml`. Cost per cycle drops from ~$60-120 (API) to ~10-25% of weekly Max quota.
+- **Outcome**: MERGED.
+
+### sidecar-smoke-test-fix-if-syntax (PR #196, merged 2026-05-18)
+- **Surfaced by**: PR #195 introduced `if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}` on the new OAuth-isolation step. GitHub Actions disallows `secrets.*` references in `if:` expressions (security boundary — secrets are only available in `env:` and `with:` contexts). Result: workflow became syntactically invalid on main; runs #3 and #4 both failed with `Unrecognized named-value: 'secrets'` before any job started.
+- **Diff scope**: 1 file. `.github/workflows/smoke-test.yml` — remove the `if:` conditional. The OAuth isolation step now always runs; the step body checks for `CLAUDE_CODE_OAUTH_TOKEN` being empty at runtime and exits with a clear error if so (appropriate failure mode for a smoke test).
+- **Verification (post-merge)**: smoke-test run #5 (commit `bc5cc18`) parsed cleanly and PASSED. The follow-on run #6 verified OAuth isolation per PR #195's intent.
+- **Closes**: the structural-`if:` invalidation introduced by PR #195. Smoke test now runs cleanly on main and verifies the Max-plan path end-to-end.
+- **Outcome**: MERGED.
+
+### state-snapshot-2026-05-18-phase-a-closeout-brief (PR #197, merged 2026-05-18) — INFRASTRUCTURE, NOT SIDECAR per PM-22
+- **Category**: Partner-state snapshot PR. No code touched. No `build_log.md` Evidence section by design — partner-state snapshots are planning-artifact PRs per PM-22. Recorded here for the chronological trace, mirroring PR #40 (`update-partner-handoff`).
+- **Surfaced by**: End-of-session context pressure during 2026-05-18 multi-cycle Cohort D session. The bulky `docs/partner_handoff.md` was meaningfully stale (last substantive update 2026-05-17 / pre-Cohort-D-step-1) and the per-merge `partner_handoff` update has been deferred 7 cycles in a row because each subsequent merge re-staled the snapshot. Rather than do an exhaustive sweep at the end of a context-pressed session, this PR adds a compact priority brief that the next Partner session reads first.
+- **Diff scope**: 1 file. NEW `docs/SESSION-HANDOFF-2026-05-18-phase-a-closeout.md` (~9 KB) capturing: (1) state delta (7 Cohort D canonical cycles + 10c-iii canonical + 13a/13b discovered on main + 3 sidecars #170/#195/#196 + OAuth path live); (2) pending carryovers (the heavy `partner_handoff.md` / `build_log.md` sweep deferred to the next session); (3) optimal remaining Phase A sequence Z1-Z9 (~12-14 cycles to bootstrap-ready); (4) vision-drift watch points for the closeout stretch; (5) specific instruction for the next session.
+- **Source-of-truth precedence note**: the brief explicitly supersedes `partner_handoff.md` for the duration of Phase A closeout — "If this file says 'X is done' and `partner_handoff.md` says 'X is the next refactor target,' this file wins."
+- **Verification**: brief content reviewed pre-merge against the 7 Cohort D merge SHAs (`ebfa56ed`, `4ed7b731`, `04cdee6d`, `f2f77eaf`, `f0b5e9ce`, `1f88ccec`, `eac5fdfa`). Smoke-test commit `bc5cc18` cited correctly. Brief sequence Z1-Z9 cross-referenced against `prompts/PROMPT_SEQUENCE.md` rebase notes.
+- **Closes**: the orientation-staleness gap. The next Partner session reads this brief in Phase 3 alongside `build_log.md` + `partner_handoff.md` and drives the closeout sweep + Z1-Z9 loop from a current-as-of-merge picture.
+- **Outcome**: MERGED.
+
