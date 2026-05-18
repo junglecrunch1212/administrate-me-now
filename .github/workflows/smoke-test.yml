@@ -80,14 +80,21 @@ jobs:
           echo "Combined-env Haiku call PASSED. Auth works in normal config."
 
       - name: OAuth isolation test (prove OAuth works ALONE — definitive Max-plan proof)
-        if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         env:
           # Intentionally NOT setting ANTHROPIC_API_KEY here. If this call succeeds,
           # CLAUDE_CODE_OAUTH_TOKEN alone is sufficient — subscription billing path is
           # functional and the cycle is paying via the Max plan, not API dollars.
+          # If CLAUDE_CODE_OAUTH_TOKEN is not configured, this step will fail loudly,
+          # which is the correct signal that the Max-plan path is not set up yet.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -e
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not configured."
+            echo "::error::Cannot run OAuth isolation test."
+            echo "::error::Configure the secret via repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
           echo "Calling Haiku with OAuth token ONLY (ANTHROPIC_API_KEY intentionally unset)..."
           echo "If this succeeds, CLAUDE_CODE_OAUTH_TOKEN alone is functional → subscription billing active."
           claude --print \
