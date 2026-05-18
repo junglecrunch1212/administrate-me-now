@@ -35,8 +35,17 @@ from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import InstanceConfig
 from adminme.projections.base import Projection
+from adminme.projections.lists import ListsProjection
 
 _log = logging.getLogger(__name__)
+
+# Default projection classes the runner registers when no caller has supplied an
+# explicit set. Pack-provided projections register separately via the pack runner.
+# [D18] enumerates the 13 first-party projections; this tuple is the registration
+# anchor consumed by integration tests and bootstrap code.
+DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
+    ListsProjection,
+)
 
 
 def _format_key(encryption_key: bytes) -> str:
