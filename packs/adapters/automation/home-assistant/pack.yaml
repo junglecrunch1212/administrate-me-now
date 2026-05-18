@@ -49,20 +49,22 @@ config:
   example: config.example.yaml
 
 # Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [D24].
-# Multi-capability declaration: TWO entries — Cat-C state-reads (NOT a
-# side effect per memo §8; per-capability `observation_mode_required:
-# false` OVERRIDES the pack-level Cat-E gate) + Cat-E service-calls (ARE
-# side effects per §6.20; observation_mode_required inherits the
-# pack-level `true`).
+# Multi-capability declaration: TWO entries — Cat-E service-calls (PRIMARY;
+# ARE side effects per §6.20, observation_mode_required inherits the
+# pack-level `true`, ABC inherited is OutboundActionAdapter so per the
+# validator's base_class_conformance check capabilities[0] MUST be Cat-E)
+# + Cat-C state-reads (secondary; NOT a side effect per memo §8;
+# per-capability `observation_mode_required: false` OVERRIDES the
+# pack-level Cat-E gate).
 capabilities:
-  - kind: Cat-C
-    runtime: central
-    event_families: [ha.state_changed]
-    observation_mode_required: false
   - kind: Cat-E
     runtime: central
     event_families: [action.executed, action.failed]
     observation_mode_required: true
+  - kind: Cat-C
+    runtime: central
+    event_families: [ha.state_changed]
+    observation_mode_required: false
 sensitivity_default: normal
 observation_mode_required: true
 dedup_strategy:

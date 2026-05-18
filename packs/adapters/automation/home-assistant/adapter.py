@@ -99,22 +99,24 @@ class HomeAssistantAdapter(OutboundActionAdapter):
     version: ClassVar[str] = "1.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
-    # [memo 05 §3.2, PM-35, D24] multi-capability: Cat-C reads + Cat-E
-    # writes in the same pack. The Cat-C per-capability override sets
+    # [memo 05 §3.2, PM-35, D24] multi-capability: Cat-E writes (PRIMARY;
+    # ABC inherited is OutboundActionAdapter so capabilities[0] MUST be
+    # Cat-E per the validator's base_class_conformance check) + Cat-C
+    # reads (secondary). The Cat-C per-capability override sets
     # ``observation_mode_required: false`` (reads are NOT side effects
     # per memo §8); the Cat-E entry inherits the pack-level Cat-E gate.
     capabilities: ClassVar[list[Any]] = [
-        {
-            "kind": "Cat-C",
-            "runtime": "central",
-            "event_families": ["ha.state_changed"],
-            "observation_mode_required": False,
-        },
         {
             "kind": "Cat-E",
             "runtime": "central",
             "event_families": ["action.executed", "action.failed"],
             "observation_mode_required": True,
+        },
+        {
+            "kind": "Cat-C",
+            "runtime": "central",
+            "event_families": ["ha.state_changed"],
+            "observation_mode_required": False,
         },
     ]
 
