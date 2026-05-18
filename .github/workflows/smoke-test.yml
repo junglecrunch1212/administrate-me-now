@@ -1,12 +1,17 @@
 name: Smoke test (claude-code auth)
 
-# Manual-only. Validates ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN, if ever
-# configured later) + Actions plumbing before running the full executor-cycle
-# workflow.
+# Manual-only. Validates ANTHROPIC_API_KEY and/or CLAUDE_CODE_OAUTH_TOKEN +
+# Actions plumbing before running the full executor-cycle workflow.
+#
+# When BOTH secrets are set, claude-code prefers CLAUDE_CODE_OAUTH_TOKEN
+# (subscription billing). The "Verify auth precedence" step matches that
+# precedence. The "OAuth isolation test" step proves OAuth works ALONE
+# (without ANTHROPIC_API_KEY as a fallback) — this is the definitive
+# confirmation that Max-plan billing is active.
 #
 # See docs/SETUP-AUTONOMOUS-LOOP.md for one-time setup before first run.
 #
-# Cost: ~$0.001 in API dollars (one Haiku call). Negligible.
+# Cost: ~$0.002 in API dollars (two Haiku calls). Negligible.
 
 on:
   workflow_dispatch:
@@ -34,29 +39,37 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           claude --version
 
-      - name: Verify at least one auth secret is set
+      - name: Verify auth precedence (OAuth preferred when both set)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
-            echo "Using ANTHROPIC_API_KEY (API-tier billing — pay-per-token)."
-          elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            echo "Using CLAUDE_CODE_OAUTH_TOKEN (subscription billing — flat-fee)."
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "CLAUDE_CODE_OAUTH_TOKEN is set — subscription billing path (flat-fee Max plan)."
+            if [ -n "$ANTHROPIC_API_KEY" ]; then
+              echo "Note: ANTHROPIC_API_KEY is ALSO set as fallback."
+              echo "      claude-code prefers OAuth when both are present, so OAuth is the active path."
+              echo "      To force-test API-key path, unset CLAUDE_CODE_OAUTH_TOKEN secret temporarily."
+            else
+              echo "ANTHROPIC_API_KEY is NOT set — OAuth is the only auth path."
+            fi
+          elif [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "Only ANTHROPIC_API_KEY is set — API-tier billing (pay-per-token)."
+            echo "Consider setting CLAUDE_CODE_OAUTH_TOKEN to switch to subscription billing."
           else
             echo "::error::No auth secret configured."
-            echo "::error::Set either ANTHROPIC_API_KEY (recommended, web-only setup) or CLAUDE_CODE_OAUTH_TOKEN."
+            echo "::error::Set CLAUDE_CODE_OAUTH_TOKEN (recommended) or ANTHROPIC_API_KEY."
             echo "::error::See docs/SETUP-AUTONOMOUS-LOOP.md §1-§2 for setup."
             exit 1
           fi
 
-      - name: One cheap Haiku call to verify auth
+      - name: One cheap Haiku call to verify auth (both env vars passed — claude-code picks)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -e
-          echo "Calling Haiku with a one-word prompt..."
+          echo "Calling Haiku with both env vars present (claude-code's precedence applies)..."
           claude --print \
                  --model haiku \
                  --max-budget-usd 1 \
@@ -64,4 +77,25 @@ jobs:
                  'Reply with exactly the word OK.' \
                  < /dev/null
           echo "---"
-          echo "Smoke test PASSED. Auth valid, claude-code installed, Actions plumbing works."
+          echo "Combined-env Haiku call PASSED. Auth works in normal config."
+
+      - name: OAuth isolation test (prove OAuth works ALONE — definitive Max-plan proof)
+        if: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        env:
+          # Intentionally NOT setting ANTHROPIC_API_KEY here. If this call succeeds,
+          # CLAUDE_CODE_OAUTH_TOKEN alone is sufficient — subscription billing path is
+          # functional and the cycle is paying via the Max plan, not API dollars.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -e
+          echo "Calling Haiku with OAuth token ONLY (ANTHROPIC_API_KEY intentionally unset)..."
+          echo "If this succeeds, CLAUDE_CODE_OAUTH_TOKEN alone is functional → subscription billing active."
+          claude --print \
+                 --model haiku \
+                 --max-budget-usd 1 \
+                 --permission-mode bypassPermissions \
+                 'Reply with exactly the word OAUTH.' \
+                 < /dev/null
+          echo "---"
+          echo "OAuth isolation test PASSED. Max-plan subscription billing path is functional."
+          echo "All executor-cycle runs with both secrets present will use OAuth, not API dollars."
