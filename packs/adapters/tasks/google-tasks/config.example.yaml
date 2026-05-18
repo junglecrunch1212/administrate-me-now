@@ -1,0 +1,13 @@
+# Google Tasks adapter example config.
+#
+# Secret references use 1Password references per ADMINISTRATEME_BUILD.md
+# §L1 — NEVER the secret value itself. The wizard (prompt 16) will own
+# writing real values at install time; until then operators edit by hand.
+
+service_account_key_ref: op://AdministrateMe/google-tasks-sandbox/service-account-json
+tasklist_id: "@default"
+user_email: sandbox@example.test
+member_id: member-sandbox
+list_name: Inbox
+poll_interval_s: 60
+sensitivity_floor: normal
