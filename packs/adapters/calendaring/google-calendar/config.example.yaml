@@ -1,0 +1,11 @@
+# Google Calendar adapter example config.
+#
+# Secret references use 1Password references per ADMINISTRATEME_BUILD.md
+# §L1 — NEVER the secret value itself. The wizard (prompt 16) will own
+# writing real values at install time; until then operators edit by hand.
+
+service_account_key_ref: op://AdministrateMe/google-calendar-sandbox/service-account-json
+calendar_id: primary
+user_email: sandbox@example.test
+poll_interval_s: 60
+sensitivity_floor: normal

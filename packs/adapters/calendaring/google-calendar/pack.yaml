@@ -1,0 +1,64 @@
+pack:
+  id: adapter:calendaring-google-calendar
+  name: Google Calendar bidirectional adapter
+  version: 1.0.0
+  kind: adapter
+  family: calendaring
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+# [§6 invariant 10] sensitivity_floor hardcoded normal; calendar entries
+# are personal but not financial/legal/health. The config loader rejects
+# any attempt to lower the floor below this hardcoded class default.
+sensitivity_floor: normal
+
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: adapter.py
+  class: GoogleCalendarAdapter
+
+# Cohort-D Cat-B adapter: documentation-only trigger metadata. The
+# supervisor restarts on crash and treats the schedule as a heartbeat;
+# the adapter enforces its own in-process poll cadence per
+# pack-internal POLL_INTERVAL_S (default 60s).
+triggers:
+  kind: external_poll
+  schedule: "*/1 * * * *"
+
+depends_on:
+  event_types:
+    - adapter.error
+    - adapter.authenticated
+    - adapter.cursor_advanced
+    - calendar.event_added
+
+events_emitted:
+  - adapter.error
+  - adapter.authenticated
+  - adapter.cursor_advanced
+  - calendar.event_added
+
+config:
+  schema: config.schema.json
+  example: config.example.yaml
+
+# Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [UT-27].
+# Cat-B central — Google Calendar v3 API; inbound poll emits the on-main
+# `calendar.event_added@v1` schema (no new schema registered per [D7]);
+# outbound `create_event` calls `events.insert` wrapped through
+# `adminme.lib.observation.outbound` per [§6.20]. write_capabilities is
+# asymmetric per [UT-27] (only `create_event` is implemented; update_event
+# / delete_event are out of scope per parent draft).
+capabilities:
+  - kind: Cat-B
+    runtime: central
+    event_families: [calendar.event_added]
+write_capabilities:
+  - create_event
+sensitivity_default: normal
+sharing_model_discriminator: owner_member_id
+observation_mode_required: true
+dedup_strategy:
+  kind: external_id
