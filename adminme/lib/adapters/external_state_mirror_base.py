@@ -4,9 +4,11 @@ Cat-B: :class:`ExternalStateMirrorAdapter` — bidirectional state-mirror ABC.
 Per ``docs/05-architecture-amendment-personal-data-layer.md`` §1.2 (Cat-B
 contract), §2.3 (asymmetric per-operation ``write_capabilities`` per
 [UT-27]), §2.5 (``sharing_model_discriminator`` on Cat-B projections),
-§3.2 (5-ABC pattern), [D19], [PM-34], and SYSTEM_INVARIANTS.md §7.3 / [D17]
-(adapters NEVER write projections directly — they emit events; the L3
-projector reduces events into projection rows).
+§3.2 (5-ABC pattern), §5.3 (canonical ``list_item.*@v1`` event family
+emitted by reminders / tasks / notes-checklists Cat-B adapters),
+[D18], [D19], [PM-34], and SYSTEM_INVARIANTS.md §7.3 / [D17] (adapters
+NEVER write projections directly — they emit events; the L3 projector
+reduces events into projection rows).
 
 Cat-B is the most complex of the five categories because it ships BOTH
 inbound state mirroring (the ``_on_external_change`` hook) AND outbound
@@ -105,7 +107,14 @@ class ExternalStateMirrorAdapter(ABC):
     Required class attributes (in addition to the simple Adapter
     Protocol's ``name`` / ``version`` / ``sensitivity_floor``):
 
-    - :attr:`family` — one of ``"reminders" | "calendaring" | "contacts"``.
+    - :attr:`family` — one of ``"reminders" | "calendaring" | "contacts" |
+      "tasks"``. ``"tasks"`` covers Google Tasks + Microsoft To-Do +
+      sibling task-list services per memo 05 §5.3 (which already
+      authorizes the family as part of the canonical ``list_item.*``
+      taxonomy alongside reminders + notes-checklists). The
+      Cohort C/D retrofits + canonical builds (11r-c / 11b-i / 11b-iii /
+      11b-iv) shipped against this Literal as it expanded incrementally
+      — keep the Literal authoritative + always-in-sync with the memo.
     - :attr:`capabilities` — list of capability blocks; ≥1 Cat-B entry.
     - :attr:`write_capabilities` — per-operation strings; the
       :meth:`apply_write` gate checks membership before dispatch.
@@ -117,7 +126,7 @@ class ExternalStateMirrorAdapter(ABC):
     """
 
     name: ClassVar[str]
-    family: ClassVar[Literal["reminders", "calendaring", "contacts"]]
+    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]]
     version: ClassVar[str]
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
