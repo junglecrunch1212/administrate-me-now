@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Google Calendar adapter config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service_account_key_ref", "calendar_id", "user_email"],
+  "properties": {
+    "service_account_key_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to the service-account JSON (op://<vault>/<item>/<field>). NEVER a raw secret per ADMINISTRATEME_BUILD.md §L1."
+    },
+    "calendar_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Google Calendar id (e.g. 'primary' or a calendar-list entry id) the adapter polls and writes to."
+    },
+    "user_email": {
+      "type": "string",
+      "format": "email",
+      "description": "The Google Workspace user the service account impersonates (domain-wide delegation subject)."
+    },
+    "poll_interval_s": {
+      "type": "integer",
+      "minimum": 10,
+      "default": 60,
+      "description": "In-process inbound-poll cadence in seconds. Defaults to 60s; pack.yaml's cron is a heartbeat the supervisor uses to detect a wedged adapter."
+    },
+    "sensitivity_floor": {
+      "type": "string",
+      "enum": ["normal", "privileged"],
+      "default": "normal",
+      "description": "Adapter sensitivity floor. Config may RAISE the floor but cannot LOWER it below the hardcoded class default per SYSTEM_INVARIANTS.md §6 invariant 10."
+    }
+  }
+}
