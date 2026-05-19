@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, ClassVar, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Literal, Protocol, runtime_checkable
 
 from adminme_bridge.ingest_client import IngestClient
+
+if TYPE_CHECKING:
+    from adminme_bridge.adapters.sinks import BridgeEventSink
 
 
 AdapterState = Literal["starting", "running", "backoff", "stopped", "crashed"]
@@ -35,12 +38,20 @@ class AdapterStatus:
 class BridgeContext:
     """Per-adapter dependency bag handed to ``KnowledgeAdapter.start()``.
 
-    Frozen so adapters cannot rebind dependencies post-start."""
+    Frozen so adapters cannot rebind dependencies post-start.
+
+    ``ingest_client`` is preserved for 11c-i backward compatibility; new code
+    should use ``sink`` (a ``BridgeEventSink``) which abstracts the emit pathway
+    over the production HTTP path and the test/central-fallback EventLog path
+    (see ``adminme_bridge.adapters.sinks``). F-3: ``sink`` is added at the END
+    of the field list as an optional with default ``None`` to preserve
+    positional-arg compatibility with the 11c-i constructor shape."""
 
     member_id: str
     ingest_client: IngestClient
     correlation_id_factory: Callable[[], str]
     now_factory: Callable[[], datetime]
+    sink: "BridgeEventSink | None" = None
 
 
 @runtime_checkable

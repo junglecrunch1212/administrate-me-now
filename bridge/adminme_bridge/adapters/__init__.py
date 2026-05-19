@@ -8,5 +8,20 @@ from adminme_bridge.adapters.base import (
     BridgeContext,
     KnowledgeAdapter,
 )
+from adminme_bridge.adapters.sinks import (
+    BridgeEventSink,
+    EmitResult,
+    EventLogBridgeSink,
+    IngestClientBridgeSink,
+)
 
-__all__ = ["AdapterState", "AdapterStatus", "BridgeContext", "KnowledgeAdapter"]
+__all__ = [
+    "AdapterState",
+    "AdapterStatus",
+    "BridgeContext",
+    "BridgeEventSink",
+    "EmitResult",
+    "EventLogBridgeSink",
+    "IngestClientBridgeSink",
+    "KnowledgeAdapter",
+]
