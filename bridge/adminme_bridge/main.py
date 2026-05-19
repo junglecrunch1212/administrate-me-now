@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from adminme_bridge.adapters.base import AdapterStatus, BridgeContext, KnowledgeAdapter
+from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
 from adminme_bridge.ingest_client import IngestClient
 from adminme_bridge.packs import PackHandle, discover_packs
@@ -33,17 +33,17 @@ class BridgeSupervisor:
         config: BridgeConfig,
         ingest_client: IngestClient,
         packs: list[PackHandle] | None = None,
-        adapters: list[KnowledgeAdapter] | None = None,
+        adapters: list[BridgeAdapter] | None = None,
     ) -> None:
         self._config = config
         self._ingest_client = ingest_client
         self._packs = packs or []
-        self._adapters: list[KnowledgeAdapter] = adapters or []
+        self._adapters: list[BridgeAdapter] = adapters or []
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
 
     @property
-    def adapters(self) -> list[KnowledgeAdapter]:
+    def adapters(self) -> list[BridgeAdapter]:
         return list(self._adapters)
 
     def make_context(self) -> BridgeContext:
