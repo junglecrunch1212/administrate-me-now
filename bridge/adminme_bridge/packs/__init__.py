@@ -1,10 +1,13 @@
 """Connector-pack loader scaffolding for the bridge daemon.
 
-Per memo 04 §3.1: bridge-side adapter packs declare
-``kind: adapter, subkind: knowledge-source``. The loader walks
-``<packs_dir>/*/pack.yaml``, filters by that discriminator, and yields
-:class:`PackHandle` records. 11c-i ships the scaffold; concrete packs
-land in 11c-ii. Mirrors the shape of ``adminme.lib.pack_registry.parser``.
+Per memo 04 §3.1: bridge-side adapter packs declare ``kind: adapter`` with
+one of two subkinds: ``knowledge-source`` (Cat-D) or ``state-mirror``
+(Cat-B). The loader walks ``<packs_dir>/*/pack.yaml``, filters by that
+discriminator, and yields :class:`PackHandle` records. 11c-i shipped the
+Cat-D scaffold; 11b-ii-α-1 extends the filter to also accept Cat-B
+state-mirror packs per [D19] (runtime substrate orthogonal to category)
+and ``docs/10-split-memo-11b-ii-alpha.md`` §1. Concrete Cat-B packs land
+in 11b-ii-α-2. Mirrors the shape of ``adminme.lib.pack_registry.parser``.
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ import yaml
 
 KNOWLEDGE_SOURCE_KIND = "adapter"
 KNOWLEDGE_SOURCE_SUBKIND = "knowledge-source"
+STATE_MIRROR_SUBKIND = "state-mirror"
+_ALLOWED_SUBKINDS = frozenset({KNOWLEDGE_SOURCE_SUBKIND, STATE_MIRROR_SUBKIND})
 
 
 @dataclass(frozen=True)
@@ -33,9 +38,12 @@ class PackLoadError(RuntimeError):
 
 
 def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
-    """Yield PackHandle per knowledge-source pack found under packs_dir.
+    """Yield PackHandle per bridge-runnable adapter pack found under packs_dir.
 
-    Non-knowledge-source packs are silently skipped per memo 04 §3.1.
+    Accepts ``kind: adapter`` packs whose ``subkind`` is either
+    ``knowledge-source`` (Cat-D) or ``state-mirror`` (Cat-B per [D19] +
+    ``docs/10-split-memo-11b-ii-alpha.md`` §1). Packs with any other
+    ``kind``/``subkind`` are silently skipped per memo 04 §3.1.
     Malformed manifests raise PackLoadError immediately."""
     if not packs_dir.exists():
         return
@@ -54,7 +62,7 @@ def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
             raise PackLoadError(
                 f"{manifest} did not parse to a mapping (got {type(data).__name__})"
             )
-        if data.get("kind") != KNOWLEDGE_SOURCE_KIND or data.get("subkind") != KNOWLEDGE_SOURCE_SUBKIND:
+        if data.get("kind") != KNOWLEDGE_SOURCE_KIND or data.get("subkind") not in _ALLOWED_SUBKINDS:
             continue
         name = (data.get("pack") or {}).get("name")
         entrypoint = data.get("entrypoint")
@@ -73,6 +81,7 @@ def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
 __all__ = [
     "KNOWLEDGE_SOURCE_KIND",
     "KNOWLEDGE_SOURCE_SUBKIND",
+    "STATE_MIRROR_SUBKIND",
     "PackHandle",
     "PackLoadError",
     "discover_packs",

@@ -13,7 +13,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Literal, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Literal,
+    Protocol,
+    TypeAlias,
+    runtime_checkable,
+)
 
 from adminme_bridge.ingest_client import IngestClient
 
@@ -65,4 +74,38 @@ class KnowledgeAdapter(Protocol):
     def status(self) -> AdapterStatus: ...
 
 
-__all__ = ["AdapterState", "AdapterStatus", "BridgeContext", "KnowledgeAdapter"]
+@runtime_checkable
+class StateMirrorBridgeAdapter(Protocol):
+    """Structural contract every L1-bridge state-mirror (Cat-B) adapter satisfies.
+
+    Per [D19] + memo 05 §3.1 + ``docs/10-split-memo-11b-ii-alpha.md`` §1:
+    runtime substrate (central / bridge / dual-deployment) is orthogonal
+    to the 5-category taxonomy. Cat-B ``ExternalStateMirrorAdapter`` packs
+    can ship on a bridge; this Protocol is the structural sibling to
+    :class:`KnowledgeAdapter` for that runtime path.
+
+    ``family`` mirrors the central Cat-B ABC's discriminator at
+    ``adminme/lib/adapters/external_state_mirror_base.py``
+    (``family: ClassVar[Literal[\"reminders\", \"calendaring\", \"contacts\", \"tasks\"]]``).
+    Kept as ``str`` here because α-1 is pure infrastructure; α-2 wires
+    concrete packs whose ``family`` values must match the central Literal.
+    """
+
+    family: ClassVar[str]
+
+    async def start(self, *, ctx: BridgeContext) -> None: ...
+    async def stop(self) -> None: ...
+    def status(self) -> AdapterStatus: ...
+
+
+BridgeAdapter: TypeAlias = KnowledgeAdapter | StateMirrorBridgeAdapter
+
+
+__all__ = [
+    "AdapterState",
+    "AdapterStatus",
+    "BridgeAdapter",
+    "BridgeContext",
+    "KnowledgeAdapter",
+    "StateMirrorBridgeAdapter",
+]
