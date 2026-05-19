@@ -54,6 +54,39 @@ class _RecordingAdapter:
         return self._status
 
 
+@dataclass
+class _RecordingStateMirrorAdapter:
+    """Recording :class:`StateMirrorBridgeAdapter` for supervisor wire-up.
+
+    11b-ii-α-1 Cat-B sibling of :class:`_RecordingAdapter`. ``family``
+    mirrors the central Cat-B ABC's discriminator at
+    ``adminme/lib/adapters/external_state_mirror_base.py``. Used to pin
+    that the supervisor's adapter loop dispatches uniformly to both
+    sibling Protocols (the on-ramp's stop condition per
+    ``docs/10-split-memo-11b-ii-alpha.md`` §1)."""
+
+    family: ClassVar[str] = "reminders"
+    started: bool = False
+    stopped: bool = False
+    last_ctx: BridgeContext | None = None
+    _status: AdapterStatus = field(default_factory=AdapterStatus)
+
+    async def start(self, *, ctx: BridgeContext) -> None:
+        self.started = True
+        self.last_ctx = ctx
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self._status.state = "stopped"
+            raise
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    def status(self) -> AdapterStatus:
+        return self._status
+
+
 def _config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
@@ -123,3 +156,63 @@ async def test_supervisor_snapshot_reports_adapter_states() -> None:
         assert entry["state"] == "starting"
         assert entry["last_error"] is None
         assert entry["restart_count"] == 0
+
+
+async def test_bridge_supervisor_accepts_mock_state_mirror_adapter() -> None:
+    """11b-ii-α-1 supervisor wire-up: ``BridgeSupervisor.adapters: list[BridgeAdapter]``
+    accepts a Cat-B :class:`StateMirrorBridgeAdapter` mock end-to-end, satisfying
+    the on-ramp's stop condition. The Cat-D path (11c-i regression invariant per
+    §4 A-6) is preserved — a list with only a Cat-D adapter still starts cleanly,
+    and a list with only a Cat-B adapter starts via the same loop. The supervisor's
+    snapshot reports each adapter's status uniformly regardless of Protocol kind."""
+    cat_b = _RecordingStateMirrorAdapter()
+    supervisor = BridgeSupervisor(
+        config=_config(),
+        ingest_client=_FakeIngestClient(),  # type: ignore[arg-type]
+        adapters=[cat_b],
+    )
+    await supervisor.start()
+    await asyncio.sleep(0)
+    try:
+        assert cat_b.started is True
+        assert cat_b.last_ctx is not None
+        assert cat_b.last_ctx.member_id == "m1"
+        # ``family`` is the Cat-B discriminator the loader's
+        # ``STATE_MIRROR_SUBKIND`` allow-list ultimately surfaces.
+        assert cat_b.family == "reminders"
+        snap = supervisor.snapshot()
+        assert snap["supervisor"]["adapter_count"] == 1
+        assert snap["adapters"][0]["state"] == "starting"
+    finally:
+        await supervisor.stop()
+    assert cat_b.stopped is True
+
+
+async def test_bridge_supervisor_start_dispatches_to_both_cat_d_and_cat_b_adapters_in_one_run() -> None:
+    """The on-ramp's primary win: a single supervisor instance hosts BOTH a
+    Cat-D :class:`KnowledgeAdapter` and a Cat-B :class:`StateMirrorBridgeAdapter`
+    in one run. The start loop dispatches to each adapter's ``start(ctx=...)``
+    uniformly (both Protocols share the signature per
+    ``bridge/adminme_bridge/adapters/base.py``); the stop loop cleanly shuts
+    both down. Existing 11c-i Cat-D behavior is preserved alongside the new
+    Cat-B path — no regression on §4 A-6."""
+    cat_d = _RecordingAdapter()
+    cat_b = _RecordingStateMirrorAdapter()
+    supervisor = BridgeSupervisor(
+        config=_config(),
+        ingest_client=_FakeIngestClient(),  # type: ignore[arg-type]
+        adapters=[cat_d, cat_b],
+    )
+    await supervisor.start()
+    await asyncio.sleep(0)
+    try:
+        assert cat_d.started is True
+        assert cat_b.started is True
+        assert cat_d.last_ctx is not None and cat_d.last_ctx.member_id == "m1"
+        assert cat_b.last_ctx is not None and cat_b.last_ctx.member_id == "m1"
+        snap = supervisor.snapshot()
+        assert snap["supervisor"]["adapter_count"] == 2
+    finally:
+        await supervisor.stop()
+    assert cat_d.stopped is True
+    assert cat_b.stopped is True
