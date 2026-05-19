@@ -64,8 +64,9 @@ def test_non_satisfying_class_fails_runtime_protocol_check() -> None:
 
 def test_bridge_context_is_frozen_dataclass_with_required_fields() -> None:
     """:class:`BridgeContext` is frozen so adapters cannot rebind
-    dependencies post-start, and exposes exactly the four fields the
-    11c-ii adapters consume."""
+    dependencies post-start, and exposes the fields the 11c-ii adapters
+    consume plus the 11b-ii-α-1 ``sink`` add (optional, defaulted to
+    ``None`` — F-3)."""
     ctx = BridgeContext(
         member_id="m1",
         ingest_client=object(),  # type: ignore[arg-type]
@@ -83,7 +84,72 @@ def test_bridge_context_is_frozen_dataclass_with_required_fields() -> None:
         "ingest_client",
         "correlation_id_factory",
         "now_factory",
+        "sink",
     }
+
+
+def test_bridge_context_construction_with_optional_sink() -> None:
+    """F-3: ``sink`` is added to :class:`BridgeContext` as an optional
+    field defaulted to ``None`` so 11c-i callers that construct via the
+    pre-α-1 four-kwarg shape continue working unchanged. α-2 adapters
+    inject an explicit ``BridgeEventSink`` via the same field."""
+    from adminme_bridge.adapters.sinks import (
+        BridgeEventSink,
+        EventLogBridgeSink,
+    )
+
+    # No sink → default None (11c-i transitional path).
+    ctx = BridgeContext(
+        member_id="m1",
+        ingest_client=object(),  # type: ignore[arg-type]
+        correlation_id_factory=lambda: "cor-1",
+        now_factory=lambda: datetime.now(timezone.utc),
+    )
+    assert ctx.sink is None
+
+    # Explicit sink kwarg → carried on the context. EventLogBridgeSink
+    # is used here because it's the cheapest impl to construct in a
+    # unit test (no IngestClient HTTP wiring).
+    class _NoopLog:
+        async def append(self, envelope: object, **kwargs: object) -> str:
+            return "ev_x"
+
+    sink = EventLogBridgeSink(_NoopLog())  # type: ignore[arg-type]
+    ctx_with_sink = BridgeContext(
+        member_id="m1",
+        ingest_client=object(),  # type: ignore[arg-type]
+        correlation_id_factory=lambda: "cor-1",
+        now_factory=lambda: datetime.now(timezone.utc),
+        sink=sink,
+    )
+    assert isinstance(ctx_with_sink.sink, BridgeEventSink)
+    assert ctx_with_sink.sink is sink
+
+
+def test_bridge_context_field_order_preserves_positional_arg_compatibility() -> None:
+    """F-3 pin: ``sink`` lives at the END of the field list so the 11c-i
+    positional construction shape ``(member_id, ingest_client,
+    correlation_id_factory, now_factory)`` keeps working. If a future
+    refactor inserts ``sink`` before ``now_factory``, this test fails
+    loudly — the positional break would silently re-bind ``sink`` over
+    callers that pass a callable for ``now_factory`` positionally."""
+    field_order = [f.name for f in fields(BridgeContext)]
+    assert field_order[:4] == [
+        "member_id",
+        "ingest_client",
+        "correlation_id_factory",
+        "now_factory",
+    ]
+    assert field_order[-1] == "sink"
+    # And constructable via positional args (no `sink` supplied).
+    ctx = BridgeContext(
+        "m1",
+        object(),  # type: ignore[arg-type]
+        lambda: "cor-1",
+        lambda: datetime.now(timezone.utc),
+    )
+    assert ctx.member_id == "m1"
+    assert ctx.sink is None
 
 
 def test_adapter_status_defaults_and_restart_counter_mutates() -> None:
