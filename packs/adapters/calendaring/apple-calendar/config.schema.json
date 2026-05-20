@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Apple Calendar adapter config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["calendar_identifier", "member_id"],
+  "properties": {
+    "calendar_identifier": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EventKit EKCalendar identifier (calendarIdentifier) the adapter polls and writes to. Resolved from the OS-level Calendar.app account at bootstrap (prompt 16 wizard)."
+    },
+    "member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Household member whose EventKit grant this adapter uses. Drives the central-pack's owner_member_id sharing discriminator on the future calendar projection."
+    },
+    "poll_window_days": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30,
+      "description": "Forward-looking window (days from now) for the EKEventStore predicate. Defaults to 30; tune up for long-horizon planning."
+    },
+    "poll_interval_s": {
+      "type": "integer",
+      "minimum": 10,
+      "default": 60,
+      "description": "In-process inbound-poll cadence in seconds. Defaults to 60s; pack.yaml's cron is a heartbeat the supervisor uses to detect a wedged adapter."
+    },
+    "sensitivity_floor": {
+      "type": "string",
+      "enum": ["normal", "privileged"],
+      "default": "normal",
+      "description": "Adapter sensitivity floor. Config may RAISE the floor but cannot LOWER it below the hardcoded class default per SYSTEM_INVARIANTS.md §6 invariant 10."
+    }
+  }
+}
