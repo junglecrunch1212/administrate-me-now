@@ -79,6 +79,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.events.envelope import EventEnvelope
 from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
     ListItemAddedV1,
     ListItemCompletedV1,
@@ -401,6 +402,17 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         self._observation_manager: Any = None
         self._observation_event_log: Any = None
 
+        # [D18, D22, memo 04 §2.2] Dual-deployment instance state.
+        # Defaults preserve the central path byte-for-byte (F-2); bridge
+        # branch flips these in :meth:`start`. ``_sharing_model_value``
+        # surfaces the per-A-1 row discriminator (memo 05 §2.5 / §5.4)
+        # as an instance attribute rather than via payload, because the
+        # registered schemas use ``extra="forbid"`` and α-2 registers
+        # no new schemas (§1).
+        self._deployment_target: Literal["central", "bridge"] = "central"
+        self._sharing_model_value: str = "shared_central"
+        self._bridge_sink: Any = None
+
     # ------------------------------------------------------------------
     # Adapter Protocol
     # ------------------------------------------------------------------
@@ -416,7 +428,54 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         BIDIRECTIONAL §"Polling cadence" + §"Outbound write cadence".
         Tests exercise the underlying helpers directly to avoid
         blocking on the loop; this method is the supervisor-facing
-        lifecycle hook only."""
+        lifecycle hook only.
+
+        Dual-deployment (α-2): ``ctx.config["deployment_target"]`` selects
+        ``"central"`` (default — existing 11b-i + 11r-c behavior, byte-
+        for-byte per F-2) or ``"bridge"`` (per-member iCloud, emit via
+        the wrapper-injected sink per memo 04 §2.2 / [§6.19]).
+        """
+        # [D18, D22, docs/10-split-memo-11b-ii-alpha.md §2] Resolve the
+        # deployment branch from ctx.config. Default ``"central"`` keeps
+        # existing instances backwards-compatible (F-2).
+        deployment_target = ctx.config.get("deployment_target", "central")
+        if deployment_target not in ("central", "bridge"):
+            raise ValueError(
+                "config.deployment_target must be 'central' or 'bridge'; "
+                f"got {deployment_target!r}"
+            )
+        self._deployment_target = deployment_target
+        # [A-1, memo 05 §2.5 / §5.4] central rows on the ``lists``
+        # projection carry ``"shared_central"``; bridge rows carry
+        # ``"per_member_isolated"``. Surfaced as an instance attribute
+        # for downstream projection annotation (schemas are
+        # ``extra="forbid"`` — no payload modification per §1).
+        self._sharing_model_value = (
+            "per_member_isolated"
+            if deployment_target == "bridge"
+            else "shared_central"
+        )
+
+        if deployment_target == "bridge":
+            # [§1.4, A-3, memo 04 §2.2] Wrapper synthesizes ctx.config
+            # with the per-member Apple ID identity + injected sink.
+            bridge_member_id = ctx.config.get(
+                "_bridge_member_id"
+            ) or ctx.config.get("member_id")
+            if not isinstance(bridge_member_id, str) or not bridge_member_id:
+                raise ValueError(
+                    "bridge deployment requires ctx.config['_bridge_member_id'] "
+                    "or ctx.config['member_id'] as a non-empty string"
+                )
+            self._config["member_id"] = bridge_member_id
+            sink = ctx.config.get("_bridge_sink")
+            if sink is None:
+                raise ValueError(
+                    "bridge deployment requires ctx.config['_bridge_sink'] "
+                    "(an adminme_bridge.adapters.sinks.BridgeEventSink)"
+                )
+            self._bridge_sink = sink
+
         target_list_identifier = self._config.get("target_list_identifier")
         member_id = self._config.get("member_id")
         if not isinstance(target_list_identifier, str) or not target_list_identifier:
@@ -1283,7 +1342,23 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         """Best-effort append. Mirrors the supervisor's duck-typed
         contract: any object with ``append_sync(...)`` or ``append(...)``
         works, and a failure on emit must not crash the adapter — the
-        log itself may be down."""
+        log itself may be down.
+
+        α-2 dual-deployment branch: ``deployment_target=="bridge"``
+        dispatches through the wrapper-injected ``BridgeEventSink``
+        (memo 04 §2.2); central path preserved byte-for-byte (F-2). F-4:
+        the observation-mode gate upstream of every emit site is
+        unchanged, so suppressed writes skip ALL emits uniformly."""
+        if self._deployment_target == "bridge":  # [§D18, memo 04 §2.2]
+            self._append_via_bridge_sink(
+                ctx=ctx,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
+            )
+            return
+
+        # ----- central path (byte-for-byte preserved from 11b-i / 11r-c) -----
         appender = getattr(ctx.event_log, "append_sync", None) or getattr(
             ctx.event_log, "append", None
         )
@@ -1302,6 +1377,70 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception(
                 "reminders adapter failed to emit %s event", event_type
+            )
+
+    def _append_via_bridge_sink(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None,
+    ) -> None:
+        """Bridge-deployment emit path. Build an ``EventEnvelope`` and
+        schedule ``sink.emit(envelope)`` on the running event loop —
+        ``_append`` is sync and called from both async + sync sites, so
+        a fire-and-forget task keeps the call shape symmetric with the
+        central path. Memo 04 §2.2: provisional ``private:<member_id>``
+        scopes are re-stamped by the central :3337 router from
+        Tailscale identity post-receipt."""
+        sink = self._bridge_sink
+        if sink is None:
+            return
+        member_id = str(self._config.get("member_id") or "")
+        now = ctx.now_factory()
+        provisional_owner_scope = (
+            f"private:{member_id}" if member_id else "private:unknown"
+        )
+        envelope = EventEnvelope(
+            event_at_ms=int(now.timestamp() * 1000),
+            tenant_id=str(self._config.get("tenant_id") or "default"),
+            type=event_type,
+            schema_version=1,
+            occurred_at=_to_iso(now),
+            recorded_at="",
+            source_adapter=self.name,
+            source_account_id=member_id or self.name,
+            owner_scope=provisional_owner_scope,
+            visibility_scope=provisional_owner_scope,
+            sensitivity=self.sensitivity_floor,
+            correlation_id=ctx.correlation_id_factory(),
+            causation_id=causation_id,
+            payload=payload,
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _log.exception(
+                "reminders adapter bridge emit skipped — no running event "
+                "loop (type=%s)",
+                event_type,
+            )
+            return
+        loop.create_task(self._dispatch_bridge_emit(envelope))
+
+    async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
+        """Best-effort sink dispatch — symmetric with the central path's
+        exception swallow so a sink-side failure doesn't crash the loop."""
+        sink = self._bridge_sink
+        if sink is None:
+            return
+        try:
+            await sink.emit(envelope)
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception(
+                "reminders adapter bridge sink emit failed for %s",
+                envelope.type,
             )
 
 
