@@ -1,0 +1,31 @@
+# Bridge connector-pack manifest — calendaring-apple-calendar-bridge.
+#
+# Per docs/11-split-memo-11b-ii-beta.md §2 (11b-ii-β-β) + memo 04 §3.1.
+# `kind: adapter` + `subkind: state-mirror` matches the bridge runtime's
+# STATE_MIRROR_SUBKIND allow-list shipped by 11b-ii-α-1
+# (bridge/adminme_bridge/packs/__init__.py::discover_packs). `entrypoint`
+# is the dotted path the bridge daemon's pack loader resolves to a class
+# satisfying α-1's StateMirrorBridgeAdapter Protocol.
+#
+# This connector-pack runs ONLY on a member's bridge Mac Mini. The central
+# CoS deployment loads the central pack at packs/adapters/calendaring/
+# apple-calendar/ via the central supervisor's own registry.
+kind: adapter
+subkind: state-mirror
+family: calendaring
+entrypoint: adminme_bridge.connector_packs.calendaring_apple_calendar_bridge:AppleCalendarBridgeAdapter
+
+pack:
+  name: calendaring-apple-calendar-bridge
+  version: 1.0.0
+  author: built-in
+  license: Apache-2.0
+
+# Documentation-only metadata. The runtime contract is the entrypoint
+# class implementing StateMirrorBridgeAdapter; the central adapter's
+# EventKit calendar logic is unchanged and lives in the central pack's
+# adapter.py (this connector-pack wraps it, deployment_target=bridge).
+documentation:
+  central_pack: packs/adapters/calendaring/apple-calendar/
+  deployment_target: bridge
+  split_memo: docs/11-split-memo-11b-ii-beta.md
