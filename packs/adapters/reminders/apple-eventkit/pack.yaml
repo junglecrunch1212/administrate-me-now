@@ -1,3 +1,18 @@
+# Top-level dual-deployment discriminators per docs/10-split-memo-11b-ii-alpha.md
+# §2 + docs/04-split-memo-11b-ii.md §2 (11b-ii-α-2). `subkind: state-mirror`
+# matches the bridge runtime's STATE_MIRROR_SUBKIND allow-list shipped by
+# 11b-ii-α-1 (bridge/adminme_bridge/packs/__init__.py:24); declarative marker
+# for tooling — the central supervisor loads this pack from its own registry
+# (see F-9 in prompt 11b-ii-α-2), while the bridge daemon loads the separate
+# bridge connector-pack at bridge/adminme_bridge/connector_packs/reminders_apple_eventkit_bridge/.
+# `deployment_targets` enumerates the two deployments the adapter supports
+# per [D18] (Reminders dual-deployment per memo 05 §5.4) + [D22] (Apple
+# Calendar dual-deployment lineage). The runtime deployment switch is the
+# `deployment_target` enum in config.schema.json (default `central`, so
+# pre-α-2 instances keep working).
+subkind: state-mirror
+deployment_targets: [central, bridge]
+
 pack:
   id: adapter:reminders-apple-eventkit
   name: Apple Reminders bidirectional adapter
