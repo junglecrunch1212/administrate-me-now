@@ -1,0 +1,13 @@
+# Apple Calendar adapter example config.
+#
+# EventKit access is granted at the OS level (Calendar.app permission
+# prompt + the EKEventStore.requestFullAccessToEvents flow); no
+# 1Password secret is involved (unlike Google Calendar). The wizard
+# (prompt 16) will own writing real values at install time; until then
+# operators edit by hand.
+
+calendar_identifier: REPLACE_WITH_EKCALENDAR_IDENTIFIER
+member_id: REPLACE_WITH_MEMBER_ID
+poll_window_days: 30
+poll_interval_s: 60
+sensitivity_floor: normal
