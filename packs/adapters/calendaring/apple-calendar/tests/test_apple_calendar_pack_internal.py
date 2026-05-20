@@ -24,10 +24,11 @@ the pack-side contract surface the pack itself owns:
    (per [UT-27]) + ``sharing_model_discriminator="owner_member_id"``
    (per memo 05 §2.5) + ``dedup_strategy={"kind": "external_id"}``
    (EKEvent's stable ``eventIdentifier``) all round-trip cleanly
-   through :func:`parse_adapter_manifest`. F-7 pinned here too: NO
-   top-level ``subkind`` / ``deployment_targets`` fields on the central
-   pack (dual-deployment is 11b-ii-β-β scope per
-   `docs/11-split-memo-11b-ii-beta.md` §2).
+   through :func:`parse_adapter_manifest`. The β-α F-7 negative pin
+   (NO top-level ``subkind`` / ``deployment_targets``) was retired by
+   11b-ii-β-β c1 once dual-deployment landed; positive assertions on
+   the new top-level fields live in the β-β c4 sibling
+   ``test_apple_calendar_dual_deployment_pack_internal.py``.
 
 3. ``test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema``
    — :meth:`_emit_calendar_event_added` produces a payload that
@@ -78,8 +79,6 @@ import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.schemas.ingest import CalendarEventAddedV1
@@ -143,10 +142,11 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
     per the pack's inbound dedupe contract.
     ``sharing_model_discriminator`` is ``owner_member_id`` per memo 05
     §2.5 — the future calendar projection's per-member-vs-shared row
-    column. F-7 also pinned: NO top-level ``subkind`` /
-    ``deployment_targets`` fields on the central-only β-α pack
-    (dual-deployment is β-β scope per
-    `docs/11-split-memo-11b-ii-beta.md` §2)."""
+    column. The β-α F-7 negative pin (asserting NO top-level
+    ``subkind`` / ``deployment_targets``) was retired by 11b-ii-β-β c1
+    once dual-deployment landed; positive assertions on the new
+    top-level fields live in the β-β c4 sibling
+    ``test_apple_calendar_dual_deployment_pack_internal.py``."""
     manifest = parse_adapter_manifest(PACK_ROOT)
 
     assert manifest.capabilities[0].kind == "Cat-B"
@@ -156,25 +156,6 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
     assert manifest.dedup_strategy == {"kind": "external_id"}
     assert manifest.sensitivity_default == "normal"
     assert manifest.observation_mode_required is True
-
-    # F-7: NO dual-deployment surface on β-α. The parser strips
-    # unknown top-level keys, so the AdapterManifest model never sees
-    # ``subkind`` / ``deployment_targets`` regardless of what the
-    # pack.yaml contains. Pin F-7 by reading pack.yaml directly and
-    # asserting the absence at the source — α-2's pack.yaml (Apple
-    # Reminders) added these top-level keys, and β-β will add them to
-    # Apple Calendar's pack.yaml the same way. Until β-β lands they
-    # must be absent here.
-    with (PACK_ROOT / "pack.yaml").open(encoding="utf-8") as f:
-        raw_manifest = yaml.safe_load(f)
-    assert "subkind" not in raw_manifest, (
-        "F-7: NO top-level subkind on β-α pack.yaml (dual-deployment "
-        "is β-β scope per docs/11-split-memo-11b-ii-beta.md §2)"
-    )
-    assert "deployment_targets" not in raw_manifest, (
-        "F-7: NO top-level deployment_targets on β-α pack.yaml "
-        "(dual-deployment is β-β scope)"
-    )
 
 
 class _FakeEventLog:

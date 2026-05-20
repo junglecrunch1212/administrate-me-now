@@ -1,3 +1,18 @@
+# Top-level dual-deployment discriminators per docs/11-split-memo-11b-ii-beta.md
+# §2 + docs/04-split-memo-11b-ii.md §2 (11b-ii-β-β). `subkind: state-mirror`
+# matches the bridge runtime's STATE_MIRROR_SUBKIND allow-list shipped by
+# 11b-ii-α-1 (bridge/adminme_bridge/packs/__init__.py); declarative marker
+# for tooling — the central supervisor loads this pack from its own registry,
+# while the bridge daemon loads the separate bridge connector-pack at
+# bridge/adminme_bridge/connector_packs/calendaring_apple_calendar_bridge/.
+# `deployment_targets` enumerates the two deployments the adapter supports
+# per [D18] (Reminders dual-deployment per memo 05 §5.4) + [D22] (Apple
+# Calendar dual-deployment lineage). The runtime deployment switch is the
+# `deployment_target` enum in config.schema.json (default `central`, so
+# pre-β-β instances keep working).
+subkind: state-mirror
+deployment_targets: [central, bridge]
+
 pack:
   id: adapter:calendaring-apple-calendar
   name: Apple Calendar central Cat-B adapter
@@ -49,8 +64,10 @@ config:
 # wrapped through `adminme.lib.observation.outbound` per [§6.20].
 # write_capabilities is asymmetric per [UT-27] (only `create_event` is
 # implemented; update_event / delete_event are out of scope per parent
-# draft). NO top-level subkind / deployment_targets — dual-deployment
-# is 11b-ii-β-β scope per docs/11-split-memo-11b-ii-beta.md §2 (F-7).
+# draft). Top-level `subkind` + `deployment_targets` were added by
+# 11b-ii-β-β c1 (docs/11-split-memo-11b-ii-beta.md §2); the runtime
+# `capabilities[*].runtime` row stays `central` (the deployment switch
+# lives in the top-level field + the `deployment_target` config enum).
 capabilities:
   - kind: Cat-B
     runtime: central
