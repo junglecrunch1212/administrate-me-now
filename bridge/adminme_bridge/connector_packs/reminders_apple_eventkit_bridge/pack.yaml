@@ -1,0 +1,31 @@
+# Bridge connector-pack manifest — reminders-apple-eventkit-bridge.
+#
+# Per docs/10-split-memo-11b-ii-alpha.md §2 (11b-ii-α-2) + memo 04 §3.1.
+# `kind: adapter` + `subkind: state-mirror` matches the bridge runtime's
+# STATE_MIRROR_SUBKIND allow-list shipped by 11b-ii-α-1
+# (bridge/adminme_bridge/packs/__init__.py::discover_packs). `entrypoint`
+# is the dotted path the bridge daemon's pack loader resolves to a class
+# satisfying α-1's StateMirrorBridgeAdapter Protocol.
+#
+# This connector-pack runs ONLY on a member's bridge Mac Mini. The central
+# CoS deployment loads the central pack at packs/adapters/reminders/
+# apple-eventkit/ via the central supervisor's own registry (F-9).
+kind: adapter
+subkind: state-mirror
+family: reminders
+entrypoint: adminme_bridge.connector_packs.reminders_apple_eventkit_bridge:AppleEventKitBridgeAdapter
+
+pack:
+  name: reminders-apple-eventkit-bridge
+  version: 1.0.0
+  author: built-in
+  license: Apache-2.0
+
+# Documentation-only metadata. The runtime contract is the entrypoint
+# class implementing StateMirrorBridgeAdapter; the central adapter's
+# bidirectional EventKit logic is unchanged and lives in the central
+# pack's adapter.py (this connector-pack wraps it, deployment_target=bridge).
+documentation:
+  central_pack: packs/adapters/reminders/apple-eventkit/
+  deployment_target: bridge
+  split_memo: docs/10-split-memo-11b-ii-alpha.md
