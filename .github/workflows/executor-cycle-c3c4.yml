@@ -1,0 +1,249 @@
+name: Executor cycle c3-c4 only (recovery)
+
+# Recovery workflow for resuming an executor cycle from c3 when BOTH c1 and
+# c2 have already shipped to main via a separate path (e.g. cherry-pick
+# recovery after stacked-base conflicts).
+#
+# 11b-ii-alpha-2 case (2026-05-20): c1 (PR #212) + c2 (PR #214 cherry-pick
+# recovery) both landed on main; c3 then repeatedly silent-commit-failed
+# under the old ANTHROPIC_API_KEY billing path ("Credit balance is too
+# low"). PR #218 forced OAuth billing. This workflow runs c3+c4 fresh.
+#
+# Why a separate workflow: executor-cycle-c2c3c4.yml re-runs c2, which for
+# this case is already on main — c2 would produce no commit and fail. The
+# full executor-cycle.yml would fail at c1 for the same reason. This
+# workflow starts at c3.
+#
+# c3 branches from main (which has c1+c2). c4 branches from the c3 branch.
+# Both PRs base on main per the 2026-05-16 stacked-merge anti-pattern fix.
+#
+# Billing: OAuth/Max-plan only. Per PR #218, ANTHROPIC_API_KEY is
+# intentionally NOT in env and --max-budget-usd is not passed — claude-code
+# uses the CLAUDE_CODE_OAUTH_TOKEN subscription path.
+#
+# Run steps include positive commit-verification: if claude produces no
+# commit, the Run step fails loudly with an actionable message instead of
+# the cryptic "No commits between main and claude/<prompt>-cN" at PR-open.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt_id:
+        description: 'Prompt ID — c1 AND c2 must already be merged to main'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: executor-cycle-c3c4
+  cancel-in-progress: false
+
+env:
+  ADMINME_MODEL_EXECUTOR: opus
+
+jobs:
+  c3:
+    name: c3 (module B)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout main (post-c1+c2-merge)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Verify prompt exists
+        run: |
+          MATCHES=$(ls prompts/_active/${{ inputs.prompt_id }}-*.md 2>/dev/null | wc -l)
+          if [ "$MATCHES" -eq 0 ]; then
+            echo "::error::No prompt file found at prompts/_active/${{ inputs.prompt_id }}-*.md"
+            exit 1
+          fi
+          ls prompts/_active/${{ inputs.prompt_id }}-*.md
+
+      - name: Verify c1+c2 are on main
+        run: |
+          if ! git log --oneline -80 | grep -q "phase ${{ inputs.prompt_id }} commit 1"; then
+            echo "::warning::No 'phase ${{ inputs.prompt_id }} commit 1' in last 80 commits on main. c1 may not be merged."
+          fi
+          if ! git log --oneline -80 | grep -q "phase ${{ inputs.prompt_id }} commit 2"; then
+            echo "::warning::No 'phase ${{ inputs.prompt_id }} commit 2' in last 80 commits on main. c2 may not be merged."
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c3)'
+
+      - name: Create c3 branch (off main, which has c1+c2)
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c3"
+
+      - name: Run c3 (commit + push only — no PR open)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c3.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 3 only. Branch strategy: stacked per BRANCH-STRATEGY.md — note: this is a recovery run; c1 AND c2 are already on main. Branch off main (already done). After commit, push to origin via the explicit-URL token pattern in the agent. DO NOT open the PR — the workflow will open it. Stop after push completes."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c3.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c3.log; then
+            echo "::error::c3 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c3.log; then
+            echo "::error::c3 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+          # Positive commit-verification: fail loud here, not cryptically at PR-open.
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+            echo "::error::c3 produced NO commit (HEAD == origin/main). Likely a transient"
+            echo "::error::claude-code drop or auth issue. Re-fire this workflow with the same"
+            echo "::error::prompt_id — it is idempotent (the new c3 push overwrites the branch)."
+            exit 1
+          fi
+
+      - name: Open c3 PR (base=main)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c3" --state all --json number,state,title || true
+          echo "--- fetch origin ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c3"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c3")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c3")
+          if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "--- creating PR (base=main) ---"
+          gh pr create \
+            --base main \
+            --head "claude/${PROMPT_ID}-c3" \
+            --title "$SUBJECT" \
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c3" --json number,url,state
+
+  c4:
+    name: c4 (integration + BUILD_LOG + PR)
+    needs: c3
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout c3 branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/${{ inputs.prompt_id }}-c3
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude-code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git
+        run: |
+          git config user.email 'claude+executor@anthropic.com'
+          git config user.name 'claude (executor-c4)'
+
+      - name: Create c4 branch (off c3)
+        run: git checkout -b "claude/${{ inputs.prompt_id }}-c4"
+
+      - name: Pre-flight stack integrity check
+        run: |
+          # Recovery context: c1+c2 already on main, so only c3 sits above
+          # origin/main. Expect at least 1 prior commit (c3).
+          EXPECTED_PRIORS=1
+          ACTUAL_PRIORS=$(git log --oneline origin/main..HEAD | wc -l)
+          if [ "$ACTUAL_PRIORS" -lt "$EXPECTED_PRIORS" ]; then
+            echo "::error::c4 branch has $ACTUAL_PRIORS prior commits; expected at least $EXPECTED_PRIORS (c3 with c1+c2 already on main)."
+            exit 1
+          fi
+          echo "Stack integrity OK: $ACTUAL_PRIORS commit(s) visible above origin/main (c3 stack; c1+c2 already on main)."
+
+      - name: Run c4 (commit + push only — no PR open)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -e
+          INSTRUCTION="Read .claude/agents/executor-c4.md fully and follow it. Work prompt: prompts/_active/${PROMPT_ID}-*.md. Execute Commit 4 only. Branch strategy: stacked per BRANCH-STRATEGY.md (recovery run; c1+c2 are on main, c3 is above). After commit, push to origin via the explicit-URL token pattern in the agent. DO NOT open the PR — the workflow will open it. Stop after push completes."
+
+          claude --print \
+                 --model "${ADMINME_MODEL_EXECUTOR}" \
+                 --permission-mode bypassPermissions \
+                 "$INSTRUCTION" \
+                 < /dev/null 2>&1 | tee /tmp/c4.log
+
+          if grep -q "<COMMIT_FAILED" /tmp/c4.log; then
+            echo "::error::c4 exited with <COMMIT_FAILED/>. See log above."
+            exit 1
+          fi
+          if grep -q "<NEEDS_AMENDMENT" /tmp/c4.log; then
+            echo "::error::c4 surfaced <NEEDS_AMENDMENT/>. Constitutional drift; Partner must handle."
+            exit 1
+          fi
+          # Positive commit-verification: HEAD must have advanced beyond the c3 commit.
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/claude/${PROMPT_ID}-c3)" ]; then
+            echo "::error::c4 produced NO commit (HEAD == c3 branch HEAD). Likely a transient"
+            echo "::error::claude-code drop or auth issue. Re-fire this workflow with the same"
+            echo "::error::prompt_id — it is idempotent."
+            exit 1
+          fi
+
+      - name: Open c4 PR (base=main)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT_ID: ${{ inputs.prompt_id }}
+        run: |
+          set -euo pipefail
+          echo "--- gh auth status ---"
+          gh auth status
+          echo "--- existing PRs for head (if any) ---"
+          gh pr list --head "claude/${PROMPT_ID}-c4" --state all --json number,state,title || true
+          echo "--- fetch origin ---"
+          git fetch origin
+          echo "--- branch state ---"
+          git log -1 --format='SHA=%H%nSubject=%s' "claude/${PROMPT_ID}-c4"
+          SUBJECT=$(git log -1 --format=%s "claude/${PROMPT_ID}-c4")
+          BODY=$(git log -1 --format=%b "claude/${PROMPT_ID}-c4")
+          if [ -z "$BODY" ]; then BODY="(no commit body)"; fi
+          echo "--- creating PR (base=main) ---"
+          gh pr create \
+            --base main \
+            --head "claude/${PROMPT_ID}-c4" \
+            --title "$SUBJECT" \
+            --body "$BODY"
+          echo "--- verifying PR ---"
+          gh pr view "claude/${PROMPT_ID}-c4" --json number,url,state
