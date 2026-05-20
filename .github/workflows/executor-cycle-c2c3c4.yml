@@ -89,7 +89,6 @@ jobs:
 
       - name: Run c2 (commit + push only — no PR open)
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
@@ -99,7 +98,6 @@ jobs:
 
           claude --print \
                  --model "${ADMINME_MODEL_EXECUTOR}" \
-                 --max-budget-usd 40 \
                  --permission-mode bypassPermissions \
                  "$INSTRUCTION" \
                  < /dev/null 2>&1 | tee /tmp/c2.log
@@ -173,7 +171,6 @@ jobs:
 
       - name: Run c3 (commit + push only — no PR open)
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
@@ -183,7 +180,6 @@ jobs:
 
           claude --print \
                  --model "${ADMINME_MODEL_EXECUTOR}" \
-                 --max-budget-usd 50 \
                  --permission-mode bypassPermissions \
                  "$INSTRUCTION" \
                  < /dev/null 2>&1 | tee /tmp/c3.log
@@ -271,7 +267,6 @@ jobs:
 
       - name: Run c4 (commit + push only — no PR open)
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMPT_ID: ${{ inputs.prompt_id }}
@@ -281,7 +276,6 @@ jobs:
 
           claude --print \
                  --model "${ADMINME_MODEL_EXECUTOR}" \
-                 --max-budget-usd 50 \
                  --permission-mode bypassPermissions \
                  "$INSTRUCTION" \
                  < /dev/null 2>&1 | tee /tmp/c4.log
