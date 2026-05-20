@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.events.envelope import EventEnvelope
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -193,6 +194,18 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
         self._observation_event_log: Any = observation_event_log
+        # [D18, D22, memo 04 §2.2] Dual-deployment instance state.
+        # Defaults preserve the central path byte-for-byte (F-2); the
+        # bridge branch flips these in :meth:`start`. ``_sharing_model_value``
+        # surfaces the row discriminator (memo 05 §2.5 / §5.4) as an
+        # instance attribute since ``calendar.event_added@v1`` is
+        # ``extra="forbid"`` and β-β registers no new schemas.
+        self._deployment_target: Literal["central", "bridge"] = "central"
+        self._sharing_model_value: str = "shared_central"
+        self._bridge_sink: Any = None
+        # F-5: retain bridge emit Tasks so they can't be GC'd mid-flight
+        # when scheduled from the sync ``_append`` call site.
+        self._bridge_emit_tasks: set[asyncio.Task[None]] = set()
 
     def _resolve_sensitivity_floor(self) -> SensitivityFloor:
         """[§6 invariant 10] config may RAISE; never lower."""
@@ -210,7 +223,50 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         return cfg_value  # type: ignore[return-value]
 
     async def start(self, *, ctx: AdapterContext) -> None:
-        """Authorize EventKit, emit ``adapter.authenticated``, run poll loop."""
+        """Authorize EventKit, emit ``adapter.authenticated``, run poll loop.
+
+        β-β dual-deployment: ``ctx.config["deployment_target"]`` selects
+        ``"central"`` (default — byte-for-byte β-α per F-2) or ``"bridge"``
+        (per-member iCloud, emit via the wrapper-injected sink per memo
+        04 §2.2 / [§6.19]).
+        """
+        # [D18, D22, docs/11-split-memo-11b-ii-beta.md §2] Default
+        # ``"central"`` keeps existing instances backwards-compatible (F-2).
+        deployment_target = ctx.config.get("deployment_target", "central")
+        if deployment_target not in ("central", "bridge"):
+            raise ValueError(
+                "config.deployment_target must be 'central' or 'bridge'; "
+                f"got {deployment_target!r}"
+            )
+        self._deployment_target = deployment_target
+        # [A-2, memo 05 §2.5 / §5.4] row discriminator surfaced as an
+        # instance attribute (schema is ``extra="forbid"``).
+        self._sharing_model_value = (
+            "per_member_isolated"
+            if deployment_target == "bridge"
+            else "shared_central"
+        )
+
+        if deployment_target == "bridge":
+            # [A-3, memo 04 §2.2] Wrapper synthesizes ctx.config with the
+            # per-member Apple ID identity + injected sink.
+            bridge_member_id = ctx.config.get(
+                "_bridge_member_id"
+            ) or ctx.config.get("member_id")
+            if not isinstance(bridge_member_id, str) or not bridge_member_id:
+                raise ValueError(
+                    "bridge deployment requires ctx.config['_bridge_member_id'] "
+                    "or ctx.config['member_id'] as a non-empty string"
+                )
+            self._config["member_id"] = bridge_member_id
+            sink = ctx.config.get("_bridge_sink")
+            if sink is None:
+                raise ValueError(
+                    "bridge deployment requires ctx.config['_bridge_sink'] "
+                    "(an adminme_bridge.adapters.sinks.BridgeEventSink)"
+                )
+            self._bridge_sink = sink
+
         calendar_identifier = self._config.get("calendar_identifier")
         member_id = self._config.get("member_id")
         if not isinstance(calendar_identifier, str) or not calendar_identifier:
@@ -456,7 +512,22 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         payload: dict[str, Any],
         causation_id: str | None = None,
     ) -> None:
-        """[§7.3, D17] append to the event log; never write projections."""
+        """[§7.3, D17] append to the event log; never write projections.
+
+        β-β: ``deployment_target=="bridge"`` dispatches through the
+        wrapper-injected ``BridgeEventSink`` (memo 04 §2.2); central path
+        preserved byte-for-byte (F-2). F-4: upstream observation gate is
+        unchanged — suppressed writes skip ALL emits uniformly."""
+        if self._deployment_target == "bridge":  # [D18, memo 04 §2.2]
+            self._append_via_bridge_sink(
+                ctx=ctx,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
+            )
+            return
+
+        # ----- central path (byte-for-byte preserved from β-α) -----
         appender = getattr(ctx.event_log, "append_sync", None) or getattr(
             ctx.event_log, "append", None
         )
@@ -475,6 +546,73 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception(
                 "apple-calendar adapter failed to emit %s event", event_type
+            )
+
+    def _append_via_bridge_sink(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None,
+    ) -> None:
+        """Bridge-deployment emit path. Build an ``EventEnvelope`` and
+        schedule ``sink.emit(envelope)`` on the running loop. F-5: retain
+        the Task in ``_bridge_emit_tasks`` (set + done-callback discard)
+        so it can't be GC'd mid-flight. Memo 04 §2.2: provisional
+        ``private:<member_id>`` scopes are re-stamped by the central
+        :3337 router from Tailscale identity post-receipt."""
+        sink = self._bridge_sink
+        if sink is None:
+            return
+        member_id = str(self._config.get("member_id") or "")
+        now = ctx.now_factory()
+        provisional_owner_scope = (
+            f"private:{member_id}" if member_id else "private:unknown"
+        )
+        envelope = EventEnvelope(
+            event_at_ms=int(now.timestamp() * 1000),
+            tenant_id=str(self._config.get("tenant_id") or "default"),
+            type=event_type,
+            schema_version=1,
+            occurred_at=_to_iso(now),
+            recorded_at="",
+            source_adapter=self.name,
+            source_account_id=member_id or self.name,
+            owner_scope=provisional_owner_scope,
+            visibility_scope=provisional_owner_scope,
+            sensitivity=self.sensitivity_floor,
+            correlation_id=ctx.correlation_id_factory(),
+            causation_id=causation_id,
+            payload=payload,
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _log.exception(
+                "apple-calendar adapter bridge emit skipped — no running "
+                "event loop (type=%s)",
+                event_type,
+            )
+            return
+        # F-5: hold the Task reference to prevent GC mid-flight; done-
+        # callback discards once the emit resolves so the set stays bounded.
+        task = loop.create_task(self._dispatch_bridge_emit(envelope))
+        self._bridge_emit_tasks.add(task)
+        task.add_done_callback(self._bridge_emit_tasks.discard)
+
+    async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
+        """Best-effort sink dispatch — symmetric with the central path's
+        exception swallow so a sink-side failure doesn't crash the loop."""
+        sink = self._bridge_sink
+        if sink is None:
+            return
+        try:
+            await sink.emit(envelope)
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception(
+                "apple-calendar adapter bridge sink emit failed for %s",
+                envelope.type,
             )
 
 
