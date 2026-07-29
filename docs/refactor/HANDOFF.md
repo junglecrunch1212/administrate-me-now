@@ -4,7 +4,9 @@ current_phase: 1
 phase_name: constitutional_reconciliation_and_truthful_baseline
 gate: 1
 gate_result: FAIL
-gate_failure_reason: local_reference_console_render_blocked_by_in_app_browser_url_security_policy
+gate_failure_reason: exact_reference_html_file_navigation_denied_by_browser_url_policy_and_policy_forbids_indirect_execution_or_alternate_browser_surfaces
+last_gate_resume_utc: 2026-07-29T23:46:26Z
+gate_resume_pre_update_sha: 47f3474b5b3a81af02023cdef63b2fd3fc8be9d4
 production_behavior_changed: false
 branch: codex/administrateme-v2-runtime
 base_sha: 64192f465606d0bcf92f5137cb0c1f0e4c729297
@@ -25,7 +27,7 @@ Gate 1 work is committed at exact artifact head `c4d682c42ff9c9833e59589422bac90
 
 This HANDOFF file is committed as metadata after the phase artifact commit. A Git commit cannot embed its own hash without changing that hash; consumers must resolve the current metadata tip with the machine-actionable `branch_tip_resolution` command above and verify it is a descendant of `phase_artifact_head_sha`. The final branch-tip SHA is also recorded in the PR and Gate 1 completion report.
 
-Gate 1 deliberately changes no production behavior. The status is FAIL only because the available in-app browser refused the local `file:` URL, so the required rendered/live interaction evidence for `ADMINISTRATEME_CONSOLE_REFERENCE.html` could not be captured. The entire HTML and its DOM interaction code were read and audited; `UX-BEHAVIOR-CONTRACT.md` does not mislabel that as rendered proof.
+Gate 1 deliberately changes no production behavior. On the 2026-07-29 resume, local, remote, and PR head were synchronized at `47f3474b5b3a81af02023cdef63b2fd3fc8be9d4`; `origin/main` remained the audited base. The exact reference render was retried through the supported browser interface. Navigation to the local `file:` URL was denied again, and the browser response expressly prohibited indirect execution, raw browser commands, URL workarounds, and alternate browser surfaces. No repository repair can change that external policy. The entire HTML and its DOM interaction code were read and audited; `UX-BEHAVIOR-CONTRACT.md` does not mislabel that as rendered proof.
 
 ## Completed
 
@@ -43,13 +45,14 @@ Gate 1 deliberately changes no production behavior. The status is FAIL only beca
 
 | Command/check | Result |
 |---|---|
-| `python -m pytest --collect-only -q --tb=short` | 1,170 collected; 10 collection errors (4 bridge package path, 6 POSIX `fcntl`). |
-| Portable root run with `PYTHONPATH=bridge` and six directly blocked modules ignored | 1,160 passed, 20 failed, 3 skipped, 3 warnings. |
+| Branch/PR synchronization | Local, `origin/codex/administrateme-v2-runtime`, and draft PR head all resolved to `47f3474b5b3a81af02023cdef63b2fd3fc8be9d4`; `origin/main` remained `64192f465606d0bcf92f5137cb0c1f0e4c729297`; cascade check passed. |
+| `python -m pytest --collect-only -q --tb=short` | 1,172 current-branch tests collected (including 2 Gate 1 skeletons); 10 collection errors (4 bridge package path, 6 POSIX `fcntl`). |
+| Portable root run with `PYTHONPATH=bridge` and six directly blocked modules ignored | 1,160 passed, 20 failed, 3 skipped, 2 strict xfailed, 3 warnings in 70.94s. |
 | `PYTHONPATH=bridge python -m pytest bridge/tests -q --tb=short` | 55 passed. |
 | `ruff check . --output-format concise` | 13 existing errors. |
 | `ruff check adminme bridge/adminme_bridge --output-format concise` | Passed. |
 | `mypy adminme bridge/adminme_bridge --no-error-summary` | 5 `fcntl` errors on Windows. |
-| `bash scripts/verify_invariants.sh` | Passed. |
+| `C:\Program Files\Git\bin\bash.exe scripts/verify_invariants.sh` | Passed; plain `bash` was absent from this PowerShell PATH, so the installed Git Bash executable was used. |
 | `python scripts/demo_event_log.py` | Passed: 20 valid, invalid event rejected. |
 | `python scripts/demo_projections.py` | Failed after deriving rows: Windows cp1252 arrow output, then open checkpoint cleanup. |
 | `python scripts/demo_xlsx_forward.py` | Passed with both temporary workbooks and 2 regeneration events. |
@@ -60,7 +63,7 @@ Gate 1 deliberately changes no production behavior. The status is FAIL only beca
 | `ruff check tests/acceptance --output-format concise` | Passed. |
 | `git diff --cached --check` before artifact commit | Passed. |
 | Token-prefix/private-key scan over new files | No matches. |
-| Local browser render/interaction | Blocked by URL-security policy; no workaround used. |
+| Local browser render/interaction (resume retry) | The browser denied the exact local `file:` URL and expressly forbade indirect execution, raw browser commands, URL workarounds, or alternate browser surfaces. No workaround was used. |
 
 Full failure names and environment versions are in `BASELINE-REPORT.md`.
 
@@ -87,7 +90,7 @@ Full failure names and environment versions are in `BASELINE-REPORT.md`.
 
 ## Known risks and human action
 
-- **Human/lab action required for Gate 1 visual evidence:** render the exact baseline `ADMINISTRATEME_CONSOLE_REFERENCE.html` in an authorized local browser and capture the interactions listed in `UX-BEHAVIOR-CONTRACT.md`. Do not treat source audit as this proof.
+- **Human/lab action required for Gate 1 visual evidence:** in an authorized local browser, render the exact baseline `ADMINISTRATEME_CONSOLE_REFERENCE.html` whose SHA-256 is `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`; capture viewport screenshots and an interaction transcript for tabs, modes, view-as, approval drawer, reward toast, banners, settings panes, calendar redaction, and chat; then provide the capture locations/attachments and reply `Done` so the evidence can be verified. Do not treat source audit as this proof.
 - A maintainer must review the draft PR before any merge or Phase B family-Mac action. The target family Mac must remain untouched.
 - Phase 2 needs a supported macOS lab and Node 22 build environment; this Windows/Node-24 audit cannot certify install or frontend behavior.
 
