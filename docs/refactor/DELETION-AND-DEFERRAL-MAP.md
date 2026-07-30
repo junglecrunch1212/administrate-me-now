@@ -8,13 +8,13 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 
 | Target | Why it must go | Preconditions |
 |---|---|---|
-| Python-plugin claim and empty packages in `adminme/openclaw_plugins/` | Incompatible with the native current TypeScript plugin contract. | One TS plugin passes AC-12; history preserved in Git. |
+| Python-plugin claim and four empty files in `adminme/openclaw_plugins/` | **DELETED at Gate 4.** Incompatible with the native current TypeScript plugin contract; no runtime import referenced them. | One TS plugin passes the pinned fixture and process portions of AC-12; history is recoverable from Git. |
 | Comment-only `console/server.js` as application runtime | It starts no server and conflicts with the one-Python-process topology. | Python composition serves tested frontend/API; AC-02/18/19 pass. Node build tooling may remain. |
 | Four docstring-only product `main.py` service stubs | They advertise separate processes and stale routes without behavior. | Router namespaces exist with route compatibility tests; ownership remains. |
 | `adminme/daemons/pipeline_supervisor.py` prose stub | A separate supervisor duplicates composition ownership and contains no code. | Composition root owns runner lifecycle and AC-02/09/20 pass. |
-| AdministrateMe-side provider-fallback loop in `adminme/lib/skill_runner/wrapper.py` | OpenClaw owns model routing/fallback. | Pinned OpenClaw seam proves configured routing and records actual provenance. |
+| AdministrateMe-side provider-fallback loop in `adminme/lib/skill_runner/wrapper.py` | **DELETED at Gate 4.** OpenClaw owns model routing/fallback. | Wrapper posts once, supplies no provider/model override, validates output, and records actual returned provenance. |
 | Quick-capture prefix, direct voice-ingest, and triage route/UI claims | Superseded by member-owned tools and Cat-D bridge ingestion. | Knowledge/CRM/Lists surfaces and member bridge slice pass AC-04/18. |
-| Product-scheduling references to APScheduler or AdministrateMe cron | Duplicate OpenClaw responsibility. | All standing orders reconcile through pinned OpenClaw; internal debounce/retry timers explicitly exempt. |
+| Product-scheduling references to APScheduler or AdministrateMe cron | Duplicate OpenClaw responsibility. | Gate 4 derives five OpenClaw automation declarations and a typed standing-order trigger; AdministrateMe does not schedule them. Internal debounce/retry timers remain explicitly exempt. |
 | Legacy central `:3333–:3337` process topology | More failure domains and duplicated lifecycle without semantic value. | One root on `:3330`; compatibility aliases tested/removed deliberately; AC-19. |
 | Placeholder console test that only echoes success | Falsely signals coverage. | Real unit/browser suites exist and AC-18 runs them. |
 | Windows-illegal scaffold template filenames containing `<NAME>` | Prevent normal checkout and makes scaffolding tests non-portable. | Portable placeholder convention produces identical generated names; Linux/macOS/Windows tests pass. |

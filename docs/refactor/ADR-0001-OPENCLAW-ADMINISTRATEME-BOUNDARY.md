@@ -1,7 +1,7 @@
 # ADR-0001: OpenClaw–AdministrateMe boundary
 
-- Status: Accepted for implementation
-- Date: 2026-07-29
+- Status: Accepted and implemented at Gate 4
+- Date: 2026-07-30
 - Depends on: ADR-0000
 
 ## Decision
@@ -10,7 +10,7 @@ Gate 3 evidence: `FixtureMessagingAdapter` supplies a credential-free Cat-A sour
 
 OpenClaw is the generic assistant runtime. AdministrateMe is the typed household operational system. Integration is one native TypeScript plugin package and four explicit seams; HTTP/event schemas at the boundary are versioned and tested.
 
-The v2 implementation target is pinned to stable OpenClaw `v2026.7.1`, release commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`, npm package `openclaw@2026.7.1`, registry integrity `sha512-ge/Xss99CHAjPL/ikmH/UFoiOrjcxDB4sW3y9mhyCD+dYW3wzV7TKbAVdkrXFgAG2d2BjpJofP97zUZ+umxo8g==`. The primary GitHub release was published 2026-07-13 and reviewed 2026-07-29. No later release is adopted without a compatibility ADR and the full OpenClaw contract gate.
+Gate 4 selects the current OpenClaw source package version `2026.7.2` at commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`, reviewed 2026-07-30. This supersedes the earlier stable `v2026.7.1` implementation target because Prompt 4 requires native dashboard data/action bindings and authenticated dashboard actor context from the current source contract. The selection is an exact source snapshot, not a floating `main` dependency and not a claim that `2026.7.2` was installed from npm or exercised live on this Windows host. No different release or commit is adopted without this ADR being revised and the complete fixture plus disposable-macOS live contract gate passing.
 
 | OpenClaw owns | AdministrateMe owns |
 |---|---|
@@ -28,18 +28,18 @@ AdministrateMe will not build a generic chat store, assistant memory engine, sch
 The deliverable is one package (provisional id `administrateme`) containing narrowly scoped registrations, not one plugin per channel:
 
 - `openclaw.plugin.json` with matching id, strict JSON Schema, static contracts, and no secrets.
-- `package.json` with TypeScript source entry and built JavaScript runtime entry, `openclaw.compat.pluginApi: "2026.7.1"`, and exact `peerDependencies.openclaw: "2026.7.1"`; the macOS lab must still prove this pin before family deployment.
+- `package.json` with TypeScript source entry and built JavaScript runtime entry, `openclaw.compat.pluginApi: "2026.7.2"`, exact `peerDependencies.openclaw: "2026.7.2"`, build metadata containing the selected commit, and the source snapshot's exact Node engine `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`; the macOS lab must still prove this pin before family deployment.
 - A default TypeScript entry using the SDK helper appropriate to the selected pinned host. Registration must be safe under non-full discovery modes.
 - Loopback client code with bounded timeouts, schema validation, correlation/causation, idempotency keys, and a least-privilege shared-secret reference. It never opens SQLCipher or receives the AdministrateMe master key.
 
-Current official docs reviewed on 2026-07-29 describe `openclaw.plugin.json`, `package.json#openclaw.extensions/runtimeExtensions`, `definePluginEntry`/`defineChannelPluginEntry`, and `openclaw.compat.pluginApi`. These URLs are discovery evidence, not a floating dependency: https://docs.openclaw.ai/plugins/manifest and https://docs.openclaw.ai/plugins/sdk-entrypoints. The selected release evidence is https://github.com/openclaw/openclaw/releases/tag/v2026.7.1. Phase 2 must verify the recorded integrity/source SHA and macOS behavior before implementation. “Latest” is prohibited.
+Current official docs and source reviewed on 2026-07-30 define `openclaw.plugin.json`, `package.json#openclaw.extensions/runtimeExtensions`, `definePluginEntry`, manifest-declared tools, authenticated dashboard bindings, plugin permission requests, skills, slash commands, automations/standing orders, and typed hooks. The exact compatibility inventory and fixture/live distinction are in `OPENCLAW-COMPATIBILITY.md`. Authoritative discovery evidence is https://docs.openclaw.ai/plugins/manifest, https://docs.openclaw.ai/plugins/building-plugins, https://docs.openclaw.ai/web/dashboard-architecture, and https://github.com/openclaw/openclaw/commit/944cf08f94c334cff2b0fdf7e01187a9efa42715. “Latest” remains prohibited.
 
 ## Four preserved seams
 
 1. **Typed skills.** AdministrateMe validates versioned input, scope, and sensitivity; invokes OpenClaw’s enabled `llm-task`; validates versioned output; records actual provider/model, invocation id, token/cost/duration when available, correlation and causation. OpenClaw alone chooses provider fallback. Deterministic decisions stay in code/config. LLM output can propose but cannot write a projection.
 2. **Slash commands.** OpenClaw authenticates the channel peer and dispatches a versioned command request. AdministrateMe constructs `authMember` independently, applies domain authorization, and returns a typed response. Commands such as `/whatnow`, `/digest`, `/done`, and `/observation` remain domain operations, not generic OpenClaw commands.
 3. **Proactive standing orders.** Version-controlled program definitions and cron declarations are installed idempotently into OpenClaw. A trigger calls a narrow AdministrateMe endpoint with a stable invocation/idempotency key. AdministrateMe never duplicates the schedule.
-4. **Scoped channel/conversation bridge.** Only allowlisted, domain-relevant events cross: normalized inbound/outbound message facts, explicit conversation turns selected for domain processing, delivery/suppression/failure outcomes, and necessary peer/thread references. Generic transcript history, hidden reasoning, unrelated memory, credentials, and privileged content do not cross.
+4. **Scoped channel/conversation bridge.** Only a configured channel plus an explicit consent metadata marker may send one of `commitment_candidate`, `household_action`, or `delivery_outcome` with actor/session/channel/message correlation. No ordinary conversation turn is mirrored. Generic transcript history, hidden reasoning, unrelated memory, credentials, and privileged content do not cross.
 
 ## LLM and state-change sequence
 
@@ -60,9 +60,17 @@ Both approval systems must pass when both apply. OpenClaw approval never grants 
 - Children receive server-side route denial and data filtering. Hidden navigation is not authorization.
 - A narrow member portal is mandatory for members who must not receive OpenClaw operator/runtime access.
 
+## Threat and transport boundary
+
+- OpenClaw calls only an HTTP listener on loopback under `/api/openclaw/v1/`; the plugin rejects non-loopback configuration and the server rejects non-loopback peers.
+- A random shared bearer authenticates the installed plugin to the local process. It is injected by environment reference, never placed in a manifest, event, response, log, approval text, or test artifact, and never grants household authority.
+- AdministrateMe maps the exact trusted `channel_id|account_id|actor_id` tuple to a configured member. `senderIsOwner`, Gateway operator scopes, a paired client id, and `/tools/invoke` bearer possession are deliberately not authorization inputs. Dashboard calls without `authenticatedUserId` fail before transport.
+- All request bodies forbid unknown fields. Side-effect retries carry durable member-qualified idempotency keys and body fingerprints. OpenClaw `allow-once` permission is an extra runtime gate; domain role/scope, GuardedWrite, optimistic event id, approval, privacy, and observation are evaluated inside AdministrateMe.
+- The bridge is opt-in and allowlisted; model hooks subscribe only to sanitized `model_call_started/ended` metadata for a tracked `adminme:` session. The plugin never registers `llm_input` or `llm_output`.
+
 ## Compatibility and failure behavior
 
-- Startup fails closed if the configured OpenClaw version/API is outside the exact tested pin, the plugin manifest/config is invalid, the `llm-task` plugin is unavailable, or required schema negotiation fails.
+- The integration capability fails closed if the configured OpenClaw version/commit is outside the exact tested pin, the plugin manifest/config is invalid, the `llm-task` tool is unavailable, or required schema negotiation fails. The AdministrateMe process still opens its durable log and safe domain reads.
 - OpenClaw unavailable means deterministic/internal functions, event recording, projections, and local reads remain available. LLM/proactive/channel actions show a degraded state and do not silently fall back to a provider SDK.
 - Requests and outcomes are idempotent under at-least-once delivery. Timeouts do not imply failure; reconciliation queries or outcome events determine final state.
 - `Doctor` reports host version/pin, plugin discovery/activation, manifest validation, `llm-task` enablement and allowlist, loopback reachability, schema versions, standing-order drift, channel-bridge health, and last successful invocation without printing secrets.
@@ -76,6 +84,6 @@ Both approval systems must pass when both apply. OpenClaw approval never grants 
 - Running APScheduler or a second cron for proactive product work.
 - Treating OpenClaw operator login or approval as AdministrateMe authorization.
 
-## Gate 2 implementation note
+## Gate 4 implementation note
 
-The central composition root now represents OpenClaw integration as explicit, capability-reported seams for typed skills, slash commands, standing orders, and the scoped conversation bridge. Required seams fail readiness when unavailable; optional integrations remain explicitly disabled instead of being advertised as live. AdministrateMe does not introduce a provider SDK, fallback model router, generic chat store, or scheduler.
+`openclaw/administrateme/` is the single native package. It registers eight typed tools, seven authenticated slash commands, three dashboard reads, two dashboard actions, five derived automation declarations, one compiled per-instance SOUL workspace, explicit bridge/model hooks, and one health service. The Python composition root exposes only the authenticated loopback handlers and keeps durable integration state. The official-contract fixture passes on Windows; `npm run test:live:mac` is a deliberately guarded live install/inspect/restart/RPC gate and remains required before deployment.

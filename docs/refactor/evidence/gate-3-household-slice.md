@@ -58,4 +58,4 @@ Requests are Pydantic `extra=forbid` contracts. Identity comes from the trusted 
 
 `deterministic-ranker-v1` returns exactly six ordered horizons: `right_now`, `next`, `today`, `this_week`, `this_month`, and `someday`. A confirmed active interpersonal obligation outranks the seeded household task. Blocked, snoozed, deferred, dismissed, and completed commitments are not actionable; after completion the seeded task becomes `right_now`. Each recommendation includes obligation, urgency, owner, dependency, energy, and effort reasons.
 
-Phase 4 is intentionally limited to `test_member_bridge_knowledge_vertical_slice.py`: enrolled-member bridge ingestion through owner-scoped, private, searchable member knowledge with correction/replay/isolation proof.
+At the Gate 3 handoff, the next product slice was member-private knowledge. The subsequently issued Prompt 4 inserted the current OpenClaw seam as Gate 4; that unchanged member-knowledge slice is now Phase 5 and remains limited to `test_member_bridge_knowledge_vertical_slice.py`.

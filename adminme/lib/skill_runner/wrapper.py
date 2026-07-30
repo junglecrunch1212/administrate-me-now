@@ -75,12 +75,11 @@ class OpenClawResponseMalformed(Exception):
 
 
 class OpenClawUnreachable(Exception):
-    """Every provider in `provider_preferences` returned 5xx / network
-    failure."""
+    """OpenClaw could not complete its single routed invocation."""
 
 
 class OpenClawTimeout(Exception):
-    """Every provider in `provider_preferences` timed out."""
+    """OpenClaw's single routed invocation timed out."""
 
 
 class SkillHandlerError(Exception):
@@ -390,30 +389,19 @@ class _OpenClawCallOutcome:
     provider_model: str | None = None
 
 
-def _split_provider_model(provider_model: str) -> tuple[str, str]:
-    if "/" not in provider_model:
-        return provider_model, ""
-    provider, model = provider_model.split("/", 1)
-    return provider, model
-
-
 def _build_request_body(
     *,
     pack: LoadedPack,
     inputs: dict,
-    provider_model: str,
     session_key: str,
 ) -> dict:
     """Translate pack manifest → llm-task tool args per [ADR-0002]."""
     fm = pack.skill_frontmatter
-    provider, model = _split_provider_model(provider_model)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
     args: dict[str, Any] = {
         "prompt": pack.prompt_template,
         "input": inputs,
         "schema": pack.output_schema,
-        "provider": provider,
-        "model": model,
         "maxTokens": int(fm.get("max_tokens", 800)),
         "timeoutMs": timeout_seconds * 1000,
         "temperature": float(fm.get("temperature", 0.0)),
@@ -715,100 +703,53 @@ async def run_skill(
             duration_ms=0,
         )
 
-    # Step 6 — POST to OpenClaw, iterating provider_preferences.
-    provider_preferences = list(fm.get("provider_preferences") or [])
-    if not provider_preferences:
-        await _emit_failed(
-            runtime,
-            ctx,
-            pack_id_str=pack_id_str,
-            pack_version=pack_version,
-            failure_class="openclaw_unreachable",
-            error_detail="pack manifest declares no provider_preferences",
-            provider_attempted=None,
-            duration_ms=0,
-        )
-        raise OpenClawUnreachable("pack manifest declares no provider_preferences")
-
+    # Step 6: one POST; OpenClaw owns provider/model routing and fallback.
     token = _resolve_gateway_token(ctx.session)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
     session_key = _derive_session_key(ctx)
     started_at = time.perf_counter()
 
-    last_outcome: _OpenClawCallOutcome | None = None
-    successful: _OpenClawCallOutcome | None = None
-    chosen_provider = ""
-    for provider_model in provider_preferences:
-        body = _build_request_body(
-            pack=pack,
-            inputs=inputs,
-            provider_model=provider_model,
-            session_key=session_key,
-        )
-        outcome = await _post_one_provider(
-            runtime=runtime,
-            body=body,
-            token=token,
-            timeout_seconds=timeout_seconds,
-        )
-        last_outcome = outcome
-        if outcome.kind == "ok":
-            successful = outcome
-            chosen_provider = outcome.provider_model or provider_model
-            break
-        if outcome.kind == "malformed":
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            await _emit_failed(
-                runtime,
-                ctx,
-                pack_id_str=pack_id_str,
-                pack_version=pack_version,
-                failure_class="openclaw_malformed_response",
-                error_detail=outcome.error_detail,
-                provider_attempted=provider_model,
-                duration_ms=duration_ms,
-            )
-            raise OpenClawResponseMalformed(outcome.error_detail)
-        if outcome.kind == "deterministic_4xx":
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            await _emit_failed(
-                runtime,
-                ctx,
-                pack_id_str=pack_id_str,
-                pack_version=pack_version,
-                failure_class="openclaw_unreachable",
-                error_detail=outcome.error_detail,
-                provider_attempted=provider_model,
-                duration_ms=duration_ms,
-            )
-            raise OpenClawUnreachable(outcome.error_detail)
-        # transient or timeout — try next provider
-    if successful is None:
+    body = _build_request_body(pack=pack, inputs=inputs, session_key=session_key)
+    outcome = await _post_one_provider(
+        runtime=runtime,
+        body=body,
+        token=token,
+        timeout_seconds=timeout_seconds,
+    )
+    chosen_provider = outcome.provider_model or "openclaw-routed"
+    if outcome.kind == "malformed":
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        last = last_outcome or _OpenClawCallOutcome(
-            kind="transient", error_detail="no providers attempted"
+        await _emit_failed(
+            runtime,
+            ctx,
+            pack_id_str=pack_id_str,
+            pack_version=pack_version,
+            failure_class="openclaw_malformed_response",
+            error_detail=outcome.error_detail,
+            provider_attempted=None,
+            duration_ms=duration_ms,
         )
-        if last.kind == "timeout":
-            failure_class = "openclaw_timeout"
-            exc_cls: type[Exception] = OpenClawTimeout
-        else:
-            failure_class = "openclaw_unreachable"
-            exc_cls = OpenClawUnreachable
+        raise OpenClawResponseMalformed(outcome.error_detail)
+    if outcome.kind != "ok":
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        failure_class = (
+            "openclaw_timeout" if outcome.kind == "timeout" else "openclaw_unreachable"
+        )
+        exc_cls: type[Exception] = (
+            OpenClawTimeout if outcome.kind == "timeout" else OpenClawUnreachable
+        )
         await _emit_failed(
             runtime,
             ctx,
             pack_id_str=pack_id_str,
             pack_version=pack_version,
             failure_class=failure_class,
-            error_detail=last.error_detail,
-            provider_attempted=provider_preferences[-1]
-            if provider_preferences
-            else None,
+            error_detail=outcome.error_detail,
+            provider_attempted=None,
             duration_ms=duration_ms,
         )
-        raise exc_cls(last.error_detail)
-
-    raw_response = successful.raw_result
+        raise exc_cls(outcome.error_detail)
+    raw_response = outcome.raw_result
 
     # Step 7 — optional handler.post_process.
     if pack.handler_post_process is not None:
@@ -866,23 +807,23 @@ async def run_skill(
         ctx,
         pack_id_str=pack_id_str,
         pack_version=pack_version,
-        invocation_id=successful.invocation_id,
+        invocation_id=outcome.invocation_id,
         inputs_payload=inputs_payload,
         outputs=processed,
         provider=chosen_provider,
-        input_tokens=successful.input_tokens,
-        output_tokens=successful.output_tokens,
-        cost_usd=successful.cost_usd,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        cost_usd=outcome.cost_usd,
         duration_ms=duration_ms,
     )
 
     return SkillResult(
         output=processed,
-        openclaw_invocation_id=successful.invocation_id,
+        openclaw_invocation_id=outcome.invocation_id,
         provider=chosen_provider,
-        input_tokens=successful.input_tokens,
-        output_tokens=successful.output_tokens,
-        cost_usd=successful.cost_usd,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        cost_usd=outcome.cost_usd,
         duration_ms=duration_ms,
     )
 

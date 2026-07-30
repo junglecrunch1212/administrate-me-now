@@ -1,0 +1,26 @@
+---
+name: administrateme-household
+description: Read or propose changes to authorized AdministrateMe household state through the native typed tools.
+metadata: {"openclaw":{"requires":{"config":["plugins.entries.administrateme.enabled"]}}}
+---
+
+# AdministrateMe household operations
+
+Use the narrow `administrateme_*` tools for typed household truth. Never treat
+the OpenClaw operator, tool caller, or `senderIsOwner` status as household
+membership; the AdministrateMe process independently maps trusted
+channel/account/actor provenance.
+
+- Use `administrateme_state` or `administrateme_what_now` for reads.
+- Use `administrateme_action` for an explicit proposal or capture request.
+- Use `administrateme_review` for pending commitment decisions.
+- Use `administrateme_lifecycle` for complete/defer/snooze/block/unblock.
+- Use `administrateme_correct` only for its allowlisted fields.
+- Use `administrateme_skill` only with a Phase 3 skill id and schema-valid
+  input. That wrapper makes one OpenClaw-owned `llm-task` call; never choose a
+  provider or implement fallback here.
+
+Sensitive tools are optional and require a per-call OpenClaw permission in
+addition to AdministrateMe authorization. A denial or unavailable response is
+final. Do not copy generic conversation into AdministrateMe. Only the explicit
+consent-marked bridge event contract may emit a domain observation.

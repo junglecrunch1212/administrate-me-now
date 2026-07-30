@@ -5,8 +5,8 @@ The 14-test pyramid called out in prompt 09a:
   2. input validation fails
   3. sensitivity refusal
   4. scope refusal
-  5. provider fallback (5xx -> next provider succeeds)
-  6. all providers 5xx -> openclaw_unreachable
+  5. provider routing is delegated to one OpenClaw invocation
+  6. routed 5xx -> openclaw_unreachable without local fallback
   7. malformed 200 envelope -> openclaw_malformed_response
   8. timeout -> openclaw_timeout
   9. handler raises -> handler_raised + defensive default returned
@@ -135,6 +135,8 @@ def _ok_responder(
     input_tokens: int | None = 11,
     output_tokens: int | None = 22,
     cost_usd: float | None = 0.0001,
+    provider: str | None = "anthropic",
+    model: str | None = "claude-haiku-4-5",
 ):
     def responder(request: httpx.Request) -> httpx.Response:
         result: dict[str, Any] = {
@@ -147,6 +149,10 @@ def _ok_responder(
             result["tokens_out"] = output_tokens
         if cost_usd is not None:
             result["cost_usd"] = cost_usd
+        if provider is not None:
+            result["provider"] = provider
+        if model is not None:
+            result["model"] = model
         return httpx.Response(200, json={"ok": True, "result": result})
 
     return responder
@@ -203,8 +209,8 @@ async def test_happy_path_records_event_and_posts_correct_body(
     assert body["action"] == "json"
     assert body["dryRun"] is False
     args = body["args"]
-    assert args["provider"] == "anthropic"
-    assert args["model"] == "claude-haiku-4-5"
+    assert "provider" not in args
+    assert "model" not in args
     assert args["maxTokens"] == 200
     assert args["timeoutMs"] == 5000
     assert args["input"] == {"text": "hi"}
@@ -294,24 +300,20 @@ async def test_scope_insufficient_emits_failed_no_http_call(
 
 
 # ---------------------------------------------------------------------------
-# 5. Provider fallback
+# 5. OpenClaw-owned provider routing
 # ---------------------------------------------------------------------------
 
 
-async def test_provider_fallback_uses_second_provider(
+async def test_provider_fallback_is_not_reimplemented_by_administrateme(
     event_log: EventLog, tmp_path: Path
 ) -> None:
-    call_count = {"n": 0}
-
-    def responder(request: httpx.Request) -> httpx.Response:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return httpx.Response(
-                503, json={"ok": False, "error": {"type": "x", "message": "first 5xx"}}
-            )
-        return _ok_responder({"is_thing": True, "confidence": 0.5})(request)
-
-    transport = _MockTransport(responder)
+    transport = _MockTransport(
+        _ok_responder(
+            {"is_thing": True, "confidence": 0.5},
+            provider="openrouter",
+            model="routed-model",
+        )
+    )
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:
@@ -322,19 +324,22 @@ async def test_provider_fallback_uses_second_provider(
     finally:
         _set_runtime_for_tests(None)
 
-    assert call_count["n"] == 2
-    assert result.provider == "anthropic/claude-sonnet-4-6"
+    assert len(transport.requests) == 1
+    assert result.provider == "openrouter/routed-model"
+    args = json.loads(transport.requests[0].content)["args"]
+    assert "provider" not in args
+    assert "model" not in args
     events = await _read_all_events(event_log)
     assert len(events) == 1
     assert events[0]["type"] == "skill.call.recorded"
 
 
 # ---------------------------------------------------------------------------
-# 6. All providers 5xx
+# 6. OpenClaw routed failure
 # ---------------------------------------------------------------------------
 
 
-async def test_all_providers_5xx_emits_unreachable(
+async def test_routed_5xx_emits_unreachable_without_local_retry(
     event_log: EventLog, tmp_path: Path
 ) -> None:
     transport = _MockTransport(
@@ -356,8 +361,7 @@ async def test_all_providers_5xx_emits_unreachable(
     events = await _read_all_events(event_log)
     assert len(events) == 1
     assert events[0]["payload"]["failure_class"] == "openclaw_unreachable"
-    # Exactly three providers in pack manifest, three POST attempts.
-    assert len(transport.requests) == 3
+    assert len(transport.requests) == 1
 
 
 # ---------------------------------------------------------------------------

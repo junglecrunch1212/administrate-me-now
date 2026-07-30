@@ -111,7 +111,7 @@ No failing/skipped test was changed, removed, or reclassified to manufacture a p
 
 The repository contains valuable domain schemas, projection logic, adapter/pipeline/skill assets, scope/governance primitives, and extensive isolated tests. It is not a truthful runnable product at the baseline: the composition root, most APIs, family console, native OpenClaw plugin, `member_knowledge`, profiles/personas, and bootstrap are absent, and the durable seams are not connected. Phase 2 must start with composition and the two golden vertical slices, not cosmetic UI work.
 
-Current primary-source verification selected stable OpenClaw `v2026.7.1` (release commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`) for the compatibility contract; exact npm integrity and upgrade rules are recorded in ADR-0001. This external check did not install or execute OpenClaw on the audit host.
+At baseline time, primary-source verification selected stable OpenClaw `v2026.7.1` (release commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`). This historical finding is superseded for implementation by Gate 4's compatibility amendment in ADR-0001 and `OPENCLAW-COMPATIBILITY.md`, which select source version `2026.7.2` at commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`. Neither audit claims a live Gateway on the Windows host.
 
 ## Gate 2 delta
 

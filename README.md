@@ -15,6 +15,23 @@ This starts a temporary encrypted one-process instance, invokes the real version
 
 The default golden input asks the configured synthetic principal to reply to `sender@fixture.invalid`. Expected output has `state: "proposal_only"`, one `source_event_id`, its deterministic `ix_<source_event_id>` interaction, and one `cmt_<hash>` proposal. Approval is deliberately a separate principal action. See `docs/refactor/evidence/gate-3-household-slice.md` for the API/lifecycle contract and adversarial matrix.
 
+## Native OpenClaw seam
+
+Gate 4 adds the single plugin package at `openclaw/administrateme/`, pinned to
+OpenClaw source version `2026.7.2` and commit
+`944cf08f94c334cff2b0fdf7e01187a9efa42715`. It contains typed tools,
+dashboard bindings, slash commands, an OpenClaw-format skill, standing-order
+automation declarations, explicit conversation hooks, and the compiled
+instance SOUL workspace. The authenticated loopback API still resolves and
+authorizes household members inside AdministrateMe; an OpenClaw operator token
+or approval cannot bypass it.
+
+See `docs/refactor/OPENCLAW-COMPATIBILITY.md` for exact fixture/live evidence.
+The contract fixture and real AdministrateMe process gate run on this Windows
+development host. Live OpenClaw installation remains deliberately unclaimed
+until `npm run test:live:mac` passes on a disposable macOS lab with a Node
+version satisfying the exact source engine and the exact source checkout.
+
 ## If you're the operator (James)
 
 Start with **`ADMINISTRATEME_FIELD_MANUAL.md`** — the non-coder's guide to running this system. Chapter 1 is the most important.
@@ -85,4 +102,4 @@ See `ADMINISTRATEME_FIELD_MANUAL.md` chapter 4 for Phase B setup.
 
 ## Status
 
-In progress — the controlled v2 refactor has proven Gates 1–3. Gate 3 is the credential-free communication-to-commitment household slice documented above; Phase 4 is limited to member-owned private searchable knowledge.
+In progress — the controlled v2 refactor has proven Gates 1–4 at their declared evidence levels. Gate 4 is the current native OpenClaw seam; Phase 5 is the member-owned private searchable-knowledge slice. The family Mac remains untouched pending reviewed merge and the disposable-lab live OpenClaw gate.

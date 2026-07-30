@@ -1,6 +1,6 @@
 # Constitutional crosswalk
 
-Gate 3 implementation evidence (2026-07-30): AC-03 now proves the unified-communications, Party/Interaction, commitment proposal/review/lifecycle, observation, xlsx provenance, multi-member scope, and contextual what-now rows end to end. The authoritative process test is `tests/acceptance/test_communication_commitment_vertical_slice.py`; AC-04 member-private knowledge remains Phase 4.
+Gate 4 implementation evidence (2026-07-30): AC-03 still proves the communication/commitment slice, and AC-12's fixture/process portion now proves the current native OpenClaw package, four seams, actor boundary, dashboard, approvals, exact-once outcomes, and degraded/restart behavior. The authoritative tests are `tests/acceptance/test_communication_commitment_vertical_slice.py` and `tests/acceptance/test_openclaw_native_seam.py`; AC-04 member-private knowledge is Phase 5.
 
 No row may be removed merely because its current implementation is absent. A future semantic change updates the row, governing ADR, evidence, and executable gate in the same PR.
 
@@ -76,12 +76,12 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 |---|---|---|---|---|---|
 | C048 | OpenClaw owns generic channels/conversations/sessions/memory/model routing/cron/orchestration/tools/nodes/admin | BUILD OpenClaw; CLAW; ARCH §5 | boundary documented; generic duplicates not implemented | PRESERVE | AC-12, AC-22 |
 | C049 | AdministrateMe owns household truth, scopes, review, outcomes, workbooks | BUILD/MENTAL/ARCH | domain primitives partial | PRESERVE | AC-02–AC-18 |
-| C050 | One current native TypeScript plugin | Current OpenClaw docs + v2 contract; baseline README says Python | only Python placeholders | SUPERSEDE Python plugin plan | AC-12 |
-| C051 | Typed skills seam | BUILD skill runner; CLAW Q1; EXAMPLES skill shape | skill packs/wrapper/tests present | PRESERVE/HARDEN | AC-12 |
-| C052 | Slash-command seam | BUILD products/OpenClaw; CLAW | prose/stubs only | PRESERVE | AC-12 |
-| C053 | Proactive standing-order seam | BUILD L4/bootstrap; CLAW Q3 | program markdown/cron YAML partial; no installer | PRESERVE | AC-12 |
-| C054 | Scoped channel/conversation bridge; generic history stays OpenClaw | BUILD D6/D17; ARCH | bridge endpoint exists; plugin absent | PRESERVE | AC-03, AC-12 |
-| C055 | Every LLM call through `llm-task` with versioned schema/provenance/correlation/causation | BUILD L4; ARCH §5; CLAW; current official docs | wrapper emits provenance but no host pin; provider fallback remains local | MODERNIZE | AC-12 |
+| C050 | One current native TypeScript plugin | Current OpenClaw docs + v2 contract; baseline README says Python | Gate 4 exact-pinned package, manifest, build and fixture/process tests; Python placeholders deleted | SUPERSEDE COMPLETE (live Mac pending) | AC-12 |
+| C051 | Typed skills seam | BUILD skill runner; CLAW Q1; EXAMPLES skill shape | OpenClaw-format skill plus one-call schema wrapper and durable actual provenance | PRESERVE/HARDEN COMPLETE | AC-12 |
+| C052 | Slash-command seam | BUILD products/OpenClaw; CLAW | seven authenticated native commands dispatch to typed handlers | PRESERVE COMPLETE | AC-12 |
+| C053 | Proactive standing-order seam | BUILD L4/bootstrap; CLAW Q3 | five OpenClaw automation declarations, compiled program workspace, typed trigger; live reconcile pending | PRESERVE/HARDEN | AC-12 |
+| C054 | Scoped channel/conversation bridge; generic history stays OpenClaw | BUILD D6/D17; ARCH | explicit consent/channel/event allowlist with full provenance; generic and privileged turns excluded | PRESERVE COMPLETE | AC-03, AC-12 |
+| C055 | Every LLM call through `llm-task` with versioned schema/provenance/correlation/causation | BUILD L4; ARCH §5; CLAW; current official docs | exact-pinned one-call wrapper; no provider override/fallback; actual provenance recorded | MODERNIZE COMPLETE | AC-12 |
 | C056 | Deterministic logic stays code; LLM state change is propose-confirm only | BUILD pipeline/governance; EXAMPLES | some pipelines follow proposal pattern | PRESERVE | AC-03, AC-11 |
 | C057 | Identity-first separation and per-channel-peer scope | BUILD privacy/OpenClaw; PATTERNS session | session/scope code/tests exist; central edge missing | PRESERVE | AC-08 |
 | C058 | `authMember`/`viewMember`, owner_scope, visibility/sensitivity | PATTERNS §2/§6; BUILD privacy; DIAGRAMS | session/scope code/tests exist | PRESERVE | AC-08 |
@@ -89,7 +89,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C060 | Child server-side denial and narrow member portal | PATTERNS §7; HTML child mode; BUILD UI | mock/client patterns only | PRESERVE | AC-08, AC-18 |
 | C061 | Trusted Tailscale edge, not arbitrary header trust | PATTERNS §1 plus v2 security reconciliation | bridge reads identity header; topology enforcement absent | MODERNIZE | AC-08, AC-19 |
 | C062 | guardedWrite order: allowlist -> governance -> sliding rate limit | PATTERNS §§3–4; BUILD authority/governance | Python implementation has these three | PRESERVE/HARDEN | AC-11 |
-| C063 | Independent OpenClaw generic and AdministrateMe domain approvals | BUILD §8; PATTERNS approvals | documented, not composed | PRESERVE | AC-11, AC-12 |
+| C063 | Independent OpenClaw generic and AdministrateMe domain approvals | BUILD §8; PATTERNS approvals | optional tool exposure plus `allow-once` hook; AdministrateMe independently enforces role/scope/domain approval and exact-once retry | PRESERVE COMPLETE FOR GATE 4 | AC-11, AC-12 |
 | C064 | assistant-send allowed; draft-for-principal review; auto-send-as-principal prohibited | BUILD critical rules/governance | no end-to-end delivery path | PRESERVE | AC-11 |
 | C065 | Final content/privacy/persona guard | BUILD outbound/privacy/persona; FIELD | adapter observation wrappers exist; unified guard absent | PRESERVE | AC-11 |
 | C066 | Every terminal write/approval/suppression/delivery outcome audited | PATTERNS guardedWrite; BUILD events | guardedWrite records denials/reviews, not full composed outcomes | PRESERVE/HARDEN | AC-11 |

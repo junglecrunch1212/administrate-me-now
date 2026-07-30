@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from functools import partial
@@ -47,6 +48,7 @@ from adminme.products.bridge.routers import ingest_router
 from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
+from adminme.products.openclaw.main import router as openclaw_router
 from adminme.projections.base import Projection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
@@ -69,6 +71,8 @@ class RuntimeSettings:
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
     openclaw_enabled: bool = False
+    openclaw_shared_secret: str | None = field(default=None, repr=False)
+    openclaw_actor_identities: dict[str, str] = field(default_factory=dict)
     deterministic_openclaw_fixture: bool = False
     member_roles: dict[str, str] = field(default_factory=dict)
     fixture_member_id: str | None = None
@@ -82,6 +86,20 @@ class RuntimeSettings:
         adapters = self.adapter_config.get("adapters", [])
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
+        if self.openclaw_enabled:
+            if not self.openclaw_shared_secret or len(self.openclaw_shared_secret) < 24:
+                raise ValueError(
+                    "enabled OpenClaw transport requires an injected 24+ character secret"
+                )
+            if not self.openclaw_actor_identities:
+                raise ValueError("enabled OpenClaw transport requires actor mappings")
+            unmapped_roles = set(self.openclaw_actor_identities.values()) - set(
+                self.member_roles
+            )
+            if unmapped_roles:
+                raise ValueError(
+                    "enabled OpenClaw transport requires a role for every mapped member"
+                )
 
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
@@ -97,7 +115,42 @@ class RuntimeSettings:
             )
         root_value = os.environ.get("ADMINME_REPOSITORY_ROOT")
         root = Path(root_value) if root_value else Path(__file__).resolve().parents[2]
-        return cls(instance=instance, encryption_key=key, repository_root=root)
+        secret = os.environ.get("ADMINME_OPENCLAW_SHARED_SECRET")
+        identities_value = os.environ.get(
+            "ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON", "{}"
+        )
+        roles_value = os.environ.get("ADMINME_OPENCLAW_MEMBER_ROLES_JSON", "{}")
+        try:
+            identities = json.loads(identities_value)
+            roles = json.loads(roles_value)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "OpenClaw identity or role mapping environment is not valid JSON"
+            ) from exc
+        if not isinstance(identities, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in identities.items()
+        ):
+            raise RuntimeError(
+                "ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON must be a string map"
+            )
+        if not isinstance(roles, dict) or not all(
+            isinstance(key, str)
+            and value in {"principal", "child", "device"}
+            for key, value in roles.items()
+        ):
+            raise RuntimeError(
+                "ADMINME_OPENCLAW_MEMBER_ROLES_JSON must map members to interactive roles"
+            )
+        return cls(
+            instance=instance,
+            encryption_key=key,
+            repository_root=root,
+            openclaw_enabled=bool(secret and identities),
+            openclaw_shared_secret=secret,
+            openclaw_actor_identities=identities,
+            member_roles=roles,
+        )
 
     @classmethod
     def credential_free(
@@ -110,6 +163,9 @@ class RuntimeSettings:
         deterministic_openclaw_fixture: bool = False,
         member_roles: dict[str, str] | None = None,
         fixture_member_id: str | None = None,
+        openclaw_enabled: bool = False,
+        openclaw_shared_secret: str | None = None,
+        openclaw_actor_identities: dict[str, str] | None = None,
     ) -> "RuntimeSettings":
         """Build a no-network Phase-A configuration with generated test keys."""
 
@@ -121,6 +177,9 @@ class RuntimeSettings:
             deterministic_openclaw_fixture=deterministic_openclaw_fixture,
             member_roles=dict(member_roles or {}),
             fixture_member_id=fixture_member_id,
+            openclaw_enabled=openclaw_enabled,
+            openclaw_shared_secret=openclaw_shared_secret,
+            openclaw_actor_identities=dict(openclaw_actor_identities or {}),
         )
 
 
@@ -151,6 +210,7 @@ class AdministrateMeRuntime:
         self.pipelines: PipelineRunner | None = None
         self.adapters: AdapterSupervisor | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
+        self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
@@ -161,6 +221,7 @@ class AdministrateMeRuntime:
         self.stopping = False
         self.startup_error: str | None = None
         self._observation_active = True
+        self.openclaw_state = "degraded" if settings.openclaw_enabled else "unavailable"
 
     async def start(self) -> None:
         if self.started:
@@ -175,6 +236,7 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            await self._hydrate_openclaw_state()
             set_default_event_sink(self.events)
             self.observation = ObservationManager(
                 self.events, self.settings.instance.config_dir / "runtime.yaml"
@@ -203,7 +265,19 @@ class AdministrateMeRuntime:
             self.guarded_write = GuardedWrite(
                 ActionGateConfig(action_gates={}, rate_limits={}),
                 RateLimiter(),
-                AgentAllowlist([("user:*", ["commitment.*", "communication.*"])]),
+                AgentAllowlist(
+                    [
+                        (
+                            "user:*",
+                            [
+                                "commitment.*",
+                                "communication.*",
+                                "task.*",
+                                "household.action.*",
+                            ],
+                        )
+                    ]
+                ),
                 self.events,
             )
 
@@ -228,6 +302,18 @@ class AdministrateMeRuntime:
                     projection = projection_class()
                 self.projections.register(projection)
 
+            self.run_skill_fn = (
+                partial(
+                    run_skill,
+                    _runtime=build_fixture_runtime(
+                        event_sink=self.events,
+                        event_log=self.event_log,
+                        raw_events_dir=self.settings.instance.raw_events_dir,
+                    ),
+                )
+                if self.settings.deterministic_openclaw_fixture
+                else run_skill
+            )
             self.pipelines = PipelineRunner(
                 self.bus,
                 self.event_log,
@@ -236,18 +322,7 @@ class AdministrateMeRuntime:
                 observation_manager=self.observation,
                 guarded_write=self.guarded_write,
                 parties_conn_factory=self._parties_connection_factory,
-                run_skill_fn=(
-                    partial(
-                        run_skill,
-                        _runtime=build_fixture_runtime(
-                            event_sink=self.events,
-                            event_log=self.event_log,
-                            raw_events_dir=self.settings.instance.raw_events_dir,
-                        ),
-                    )
-                    if self.settings.deterministic_openclaw_fixture
-                    else run_skill
-                ),
+                run_skill_fn=self.run_skill_fn,
             )
             await self.pipelines.discover(
                 builtin_root=self.settings.repository_root / "packs" / "pipelines",
@@ -434,6 +509,19 @@ class AdministrateMeRuntime:
                 details={"manifest": str(manifest_path.relative_to(root))},
             )
 
+    async def _hydrate_openclaw_state(self) -> None:
+        if not self.settings.openclaw_enabled or self.event_log is None:
+            return
+        latest: dict[str, Any] | None = None
+        async for event in self.event_log.read_since(
+            types=["openclaw.integration.state_changed"]
+        ):
+            latest = event
+        if latest is not None:
+            state = latest["payload"].get("state")
+            if state in {"healthy", "degraded", "unavailable", "incompatible"}:
+                self.openclaw_state = state
+
     async def _refresh_capability_registry(self) -> None:
         assert self.projections is not None
         assert self.pipelines is not None
@@ -456,13 +544,21 @@ class AdministrateMeRuntime:
             self.capabilities[f"pipeline:{pack_id}"] = CapabilityRecord(
                 name=pack_id, kind="reactive_pipeline", state="healthy"
             )
-        standing_state: CapabilityState = (
-            "healthy" if self.settings.openclaw_enabled else "blocked"
-        )
+        if not self.settings.openclaw_enabled:
+            standing_state: CapabilityState = "blocked"
+        elif self.openclaw_state == "healthy":
+            standing_state = "healthy"
+        elif self.openclaw_state == "incompatible":
+            standing_state = "blocked"
+        else:
+            standing_state = "degraded"
         standing_reason = (
             None
-            if self.settings.openclaw_enabled
+            if standing_state == "healthy"
             else (
+                f"OpenClaw integration state: {self.openclaw_state}"
+                if self.settings.openclaw_enabled
+                else
                 "required OpenClaw gateway intentionally absent in credential-free mode"
             )
         )
@@ -559,6 +655,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(capture_router)
     app.include_router(automation_router)
     app.include_router(ingest_router)
+    app.include_router(openclaw_router)
     app.include_router(system_router)
     return app
 

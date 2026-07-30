@@ -1,0 +1,59 @@
+{
+  "name": "@administrateme/openclaw-plugin",
+  "version": "2.0.0-gate4",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "skills",
+    "workspace",
+    "automations.json",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit && npm run contract",
+    "contract": "node scripts/validate-contract.mjs",
+    "test": "vitest run",
+    "test:live:mac": "node scripts/live-mac-gate.mjs",
+    "workspace:compile": "node scripts/compile-workspace.mjs"
+  },
+  "dependencies": {
+    "typebox": "1.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  },
+  "peerDependencies": {
+    "openclaw": "2026.7.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "compat": {
+      "pluginApi": "2026.7.2",
+      "minGatewayVersion": "2026.7.2"
+    },
+    "build": {
+      "openclawVersion": "2026.7.2",
+      "pluginSdkVersion": "2026.7.2",
+      "openclawCommit": "944cf08f94c334cff2b0fdf7e01187a9efa42715"
+    }
+  }
+}
