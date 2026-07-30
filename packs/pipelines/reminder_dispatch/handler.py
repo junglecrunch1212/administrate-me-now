@@ -110,14 +110,14 @@ class ReminderDispatchPipeline:
         member_override_loader: MemberOverrideLoader | None = None,
     ) -> None:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
-        self._commitments_due_loader: CommitmentsDueLoader = (
-            commitments_due_loader or (lambda _now, _look: [])
+        self._commitments_due_loader: CommitmentsDueLoader = commitments_due_loader or (
+            lambda _now, _look: []
         )
         self._recent_reminders_loader: RecentRemindersLoader = (
             recent_reminders_loader or (lambda _now, _ded: set())
         )
-        self._member_override_loader: MemberOverrideLoader = (
-            member_override_loader or (lambda _mid: None)
+        self._member_override_loader: MemberOverrideLoader = member_override_loader or (
+            lambda _mid: None
         )
 
     async def gather(
@@ -126,9 +126,7 @@ class ReminderDispatchPipeline:
         lookahead_minutes: int,
         dedupe_minutes: int,
     ) -> dict[str, Any]:
-        commitments = list(
-            self._commitments_due_loader(now_iso, lookahead_minutes)
-        )
+        commitments = list(self._commitments_due_loader(now_iso, lookahead_minutes))
         recent_ids = set(self._recent_reminders_loader(now_iso, dedupe_minutes))
         return {
             "now_iso": now_iso,
@@ -158,9 +156,7 @@ class ReminderDispatchPipeline:
             "notes": commitment.get("notes"),
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_reminder", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_reminder", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "reminder_dispatch: compose skill failed (%s); "
@@ -230,7 +226,7 @@ class ReminderDispatchPipeline:
             {"recipient_party_id": recipient_party_id, "body_text": body_text},
             _no_op_send,
             manager=ctx.observation_manager,
-            event_log=ctx.event_log,
+            event_sink=ctx.event_sink,
             target_channel=channel,
             target_identifier=recipient_party_id,
         )
@@ -281,7 +277,7 @@ class ReminderDispatchPipeline:
                 "validation_failed": validation_failed,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -339,9 +335,7 @@ class ReminderDispatchPipeline:
         channel = self._resolve_delivery_channel(
             profile, composed.get("suggested_channel")
         )
-        delivered = await self.deliver(
-            ctx, recipient_party_id, composed_text, channel
-        )
+        delivered = await self.deliver(ctx, recipient_party_id, composed_text, channel)
         await self._emit_reminder_dispatched(
             ctx,
             commitment_id=commitment_id,
@@ -366,9 +360,7 @@ class ReminderDispatchPipeline:
         """Drive one tick: load commitments due within lookahead,
         filter out dedupe-hits and opt-outs, dispatch each surviving
         commitment via dispatch_one()."""
-        gather_result = await self.gather(
-            now_iso, lookahead_minutes, dedupe_minutes
-        )
+        gather_result = await self.gather(now_iso, lookahead_minutes, dedupe_minutes)
         recent_ids: set[str] = gather_result["recent_reminder_commitment_ids"]
         for commitment in gather_result["commitments"]:
             commitment_id = commitment.get("commitment_id")
@@ -386,13 +378,9 @@ class ReminderDispatchPipeline:
             if isinstance(override, dict):
                 if override.get("reminders_enabled") is False:
                     continue
-            await self.dispatch_one(
-                commitment, ctx, triggering_event=triggering_event
-            )
+            await self.dispatch_one(commitment, ctx, triggering_event=triggering_event)
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and exercised in tests by

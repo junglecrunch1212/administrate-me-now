@@ -29,7 +29,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
 
 
 SensitivityFloor = Literal["normal", "privileged"]
@@ -47,12 +47,12 @@ class AdapterContext:
     """Per-adapter dependency bag handed to ``Adapter.start()``.
 
     Frozen so adapters cannot mutate the context after start. Tests inject
-    fakes for ``event_log``, deterministic factories for
+    fakes for ``event_sink``, deterministic factories for
     ``correlation_id_factory``, and a frozen-clock ``now_factory`` to make
     cursor-milestone behavior testable without sleeps.
     """
 
-    event_log: "EventLog"
+    event_sink: "EventSink"
     config: dict[str, Any]
     correlation_id_factory: Callable[[], str]
     now_factory: Callable[[], datetime]
@@ -121,11 +121,8 @@ class Adapter(Protocol):
     version: str
     sensitivity_floor: SensitivityFloor
 
-    async def start(self, *, ctx: AdapterContext) -> None:
-        ...
+    async def start(self, *, ctx: AdapterContext) -> None: ...
 
-    async def stop(self) -> None:
-        ...
+    async def stop(self) -> None: ...
 
-    def status(self) -> AdapterStatus:
-        ...
+    def status(self) -> AdapterStatus: ...

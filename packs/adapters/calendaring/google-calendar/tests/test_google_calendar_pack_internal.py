@@ -64,6 +64,7 @@ with the framework test at
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -144,16 +145,18 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
 
 
 class _FakeEventLog:
-    """Records ``append_sync(**kwargs)`` calls for assertion. The
-    adapter's ``_append`` probes for ``append_sync`` first, matching the
-    Gmail / Apple Reminders patterns the framework + integration suites
-    use."""
+    """Records typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.calls.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.calls)}"
 
 
 def _make_adapter() -> Any:
@@ -171,14 +174,16 @@ def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
 
     frozen = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-pack-internal-1",
         now_factory=lambda: frozen,
     )
 
 
-def test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema() -> None:
+def test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema() -> (
+    None
+):
     """The pack's :meth:`_emit_calendar_event_added` helper produces a
     payload that validates byte-for-byte against the on-main
     :class:`CalendarEventAddedV1` schema. The schema's
@@ -203,18 +208,16 @@ def test_inbound_emit_payload_validates_against_calendar_event_added_v1_schema()
         "end": {"dateTime": "2026-05-18T16:00:00Z"},
         "location": "HQ Conference Room",
         "description": "Pack-internal round-trip",
-        "attendees": [
-            {"email": "alice@example.test", "responseStatus": "accepted"}
-        ],
+        "attendees": [{"email": "alice@example.test", "responseStatus": "accepted"}],
         "updated": "2026-05-18T14:00:00Z",
     }
-    adapter._emit_calendar_event_added(
-        ctx=ctx, calendar_id="primary@example.test", event=google_event,
+    asyncio.run(
+        adapter._emit_calendar_event_added(
+            ctx=ctx, calendar_id="primary@example.test", event=google_event
+        )
     )
 
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     # extra="forbid" — extras would raise here.
@@ -246,15 +249,15 @@ def test_six_validator_checks_return_zero_errors_and_no_advisory() -> None:
     exits 0."""
     result = validate_adapter_pack(PACK_ROOT)
 
-    assert not result.has_errors(), (
-        f"validator reports errors against fresh pack: {result.errors()}"
-    )
+    assert (
+        not result.has_errors()
+    ), f"validator reports errors against fresh pack: {result.errors()}"
     pending = [
         f
         for f in result.advisories()
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert pending == [], (
-        f"unexpected advisory_pending_retrofit on fresh pack: {pending}"
-    )
+    assert (
+        pending == []
+    ), f"unexpected advisory_pending_retrofit on fresh pack: {pending}"

@@ -64,7 +64,7 @@ def test_adapter_context_is_frozen() -> None:
         return datetime(2026, 5, 16, tzinfo=timezone.utc)
 
     ctx = AdapterContext(
-        event_log=object(),  # type: ignore[arg-type]
+        event_sink=object(),  # type: ignore[arg-type]
         config={"k": "v"},
         correlation_id_factory=lambda: "corr-1",
         now_factory=_now,

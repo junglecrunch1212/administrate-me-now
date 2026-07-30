@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     import sqlcipher3
 
     from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.governance import GuardedWrite
     from adminme.lib.observation import ObservationManager
     from adminme.lib.session import Session
@@ -76,6 +77,7 @@ class PipelineContext:
 
     session: "Session"
     event_log: "EventLog"
+    event_sink: "EventSink"
     run_skill_fn: Callable[..., Awaitable["SkillResult"]]
     outbound_fn: Callable[..., Awaitable[Any]]
     guarded_write: "GuardedWrite | None"

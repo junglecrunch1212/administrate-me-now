@@ -123,6 +123,10 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 
 ## Source coverage index
 
+## Gate 2 traceability update
+
+The runtime/delivery rows in this crosswalk are now backed by `adminme/events/writer.py`, `adminme/runtime/application.py`, the explicit registry in `adminme/projections/runner.py`, product routers under `adminme/products/`, and the process-boundary acceptance test in `tests/acceptance/test_runtime_spine.py`. This closes composition and delivery plumbing only. Rows requiring a communication-to-reviewed-commitment loop, member bridge authorization/search isolation, full workbook round trip, browser behavior, bootstrap, backup, or release rehearsal remain governed by their later acceptance gates.
+
 | Source | Material sections covered by rows |
 |---|---|
 | VISION | product thesis C001–C008; architecture C027–C028; projections C011–C024; adapters/packs C034–C043; bootstrap C079–C080 |

@@ -32,12 +32,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
-PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "crm_surface"
-)
+PACK_ROOT = Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "crm_surface"
 
 
 def _import_handler_module() -> Any:
@@ -67,7 +62,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -110,9 +105,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
     raises_for = skill_raises_for or set()
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
@@ -132,6 +125,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -244,10 +238,7 @@ async def test_no_emit_with_no_stale_parties() -> None:
 async def test_clamp_at_max_surfaced_per_week() -> None:
     """Loader returns 8 parties; max_surfaced_per_week=3 clamps to 3."""
     log = _FakeEventLog()
-    many = [
-        {"party_id": f"party-{i}", "gap_kind": "stale_contact"}
-        for i in range(8)
-    ]
+    many = [{"party_id": f"party-{i}", "gap_kind": "stale_contact"} for i in range(8)]
     pipeline = _seeded_pipeline(targets=[_target(parties=many)])
     ctx = _make_ctx(
         log,
@@ -287,9 +278,7 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
     surfaced = [c for c in log.calls if c.envelope.type == "crm.surfaced"]
     assert len(surfaced) == 1
     assert surfaced[0].envelope.payload["delivered"] is False
-    suppressed = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
-    ]
+    suppressed = [c for c in log.calls if c.envelope.type == "observation.suppressed"]
     assert len(suppressed) == 1
 
 

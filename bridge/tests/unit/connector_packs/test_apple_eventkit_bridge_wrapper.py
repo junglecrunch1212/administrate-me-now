@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 from adminme.adapters.base import AdapterContext
 from adminme_bridge.adapters.base import (
@@ -139,9 +138,7 @@ def _swap_internal_with_capture(monkeypatch: Any) -> list[_CapturingInternal]:
     # The wrapper resolves the central adapter class via
     # _load_central_adapter_class(); monkeypatching the loader keeps the
     # test independent of the file-path importlib indirection.
-    monkeypatch.setattr(
-        wrapper_mod, "_load_central_adapter_class", lambda: _factory
-    )
+    monkeypatch.setattr(wrapper_mod, "_load_central_adapter_class", lambda: _factory)
     return captured
 
 
@@ -150,7 +147,9 @@ def _swap_internal_with_capture(monkeypatch: Any) -> list[_CapturingInternal]:
 # ===========================================================================
 
 
-def test_apple_eventkit_bridge_adapter_satisfies_state_mirror_bridge_adapter_protocol() -> None:
+def test_apple_eventkit_bridge_adapter_satisfies_state_mirror_bridge_adapter_protocol() -> (
+    None
+):
     """Structural Protocol pin: ``AppleEventKitBridgeAdapter`` carries
     ``family`` + the ``start``/``stop``/``status`` methods so an
     instance passes the runtime-checkable Protocol isinstance check."""
@@ -201,9 +200,9 @@ def test_wrapper_synthesizes_adapter_context_with_deployment_target_bridge(
     assert synthesized.config["deployment_target"] == "bridge"
     assert synthesized.config["_bridge_member_id"] == "member-bridge-bob"
     assert synthesized.config["_bridge_sink"] is sink
-    # event_log is intentionally None on the bridge path (central
+    # A typed bridge writer is supplied on the bridge path (central
     # adapter's _append routes through _bridge_sink in bridge mode).
-    assert synthesized.event_log is None  # type: ignore[unreachable]
+    assert synthesized.event_sink.tenant_id == "default"
 
 
 def test_wrapper_passes_member_id_into_internal_constructor_config(
@@ -227,9 +226,7 @@ def test_wrapper_passes_member_id_into_internal_constructor_config(
     # The synthesized AdapterContext.config also carries member_id so
     # in-loop reads of ctx.config["member_id"] stay consistent.
     assert captured[0].start_ctx is not None
-    assert (
-        captured[0].start_ctx.config["member_id"] == "member-bridge-carol"
-    )
+    assert captured[0].start_ctx.config["member_id"] == "member-bridge-carol"
 
 
 def test_wrapper_propagates_factories_from_bridge_context(
@@ -329,7 +326,7 @@ def test_wrapper_status_forwards_to_internal_after_start(
     """``status()`` after a successful ``start()`` returns a bridge
     :class:`AdapterStatus` translated from the central adapter's
     status — same ``state`` + ``started_at`` + ``restart_count``."""
-    captured = _swap_internal_with_capture(monkeypatch)
+    _swap_internal_with_capture(monkeypatch)
 
     wrapper = AppleEventKitBridgeAdapter()
     bridge_ctx = _make_bridge_ctx()

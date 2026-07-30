@@ -103,8 +103,13 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.calls.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
@@ -112,7 +117,7 @@ def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     id. The Reminders adapter reads ``ctx.config`` indirectly via
     ``self._config`` so this ctx's ``config`` is left empty."""
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-test",
         now_factory=lambda: _FROZEN_NOW,
@@ -187,9 +192,7 @@ class _FakeEKEventStore:
             }
         )
         cid = (
-            self._mint_queue.pop(0)
-            if self._mint_queue
-            else f"EKID-{len(self.builds)}"
+            self._mint_queue.pop(0) if self._mint_queue else f"EKID-{len(self.builds)}"
         )
         return _FakeEKReminder(
             list_identifier=list_identifier,
@@ -206,9 +209,7 @@ class _FakeEKEventStore:
     def remove(self, reminder: Any, *, commit: bool) -> None:  # pragma: no cover
         return None
 
-    def fetch_reminders(
-        self, *, list_identifier: str | None = None
-    ) -> list[Any]:
+    def fetch_reminders(self, *, list_identifier: str | None = None) -> list[Any]:
         self.fetch_calls += 1
         if list_identifier is None:
             return list(self._inbound_reminders)
@@ -453,9 +454,7 @@ def test_outbound_emit_reminder_list_item_synced_with_direction_outbound() -> No
     event_log = _FakeEventLog()
     asyncio.run(adapter._drain_outbound_once(ctx=_ctx(event_log)))
 
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert len(synced) == 1
     call = synced[0]
     assert call["schema_version"] == 1
@@ -503,9 +502,7 @@ def test_never_sync_blocks_outbound_to_work_list() -> None:
     assert written == 0
     assert ek_store.builds == []
     assert ek_store.saves == []
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert synced == []
 
 
@@ -550,9 +547,7 @@ def _reminders_from_fixture(
     for the dedupe predicate; ``due_at`` is optional."""
     out: list[_FakeEKReminder] = []
     for entry in fixture["reminders"]:
-        lmod = datetime.fromisoformat(
-            entry["last_modified_at"].replace("Z", "+00:00")
-        )
+        lmod = datetime.fromisoformat(entry["last_modified_at"].replace("Z", "+00:00"))
         due_raw = entry.get("due_at")
         due_at = (
             datetime.fromisoformat(due_raw.replace("Z", "+00:00"))
@@ -589,30 +584,26 @@ def test_inbound_poll_emits_reminder_list_item_synced_inbound() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    emitted = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    emitted = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     # Fixture has 4 reminders. The "#private" one is never-sync; the
     # other 3 pass.
     assert emitted == 3
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert len(synced) == 3
     for call in synced:
         assert call["schema_version"] == 1
         assert call["payload"]["direction"] == "inbound"
         # [Causation] inbound carries no causation_id — iCloud is the
         # source; nothing in AdministrateMe triggered this emission.
-        assert "causation_id" not in call
+        assert call["causation_id"] is None
     # All emitted events share one sync_cycle_id from the drain batch.
     cycle_ids = {c["payload"]["sync_cycle_id"] for c in synced}
     assert len(cycle_ids) == 1
     # remind_ids match the fixture (minus the "#private" one).
     emitted_ids = {c["payload"]["remind_id"] for c in synced}
     assert "x-coredata://AdministrateMe/EKReminder/rem-private" not in emitted_ids
-    assert (
-        "x-coredata://AdministrateMe/EKReminder/rem-001" in emitted_ids
-    )
+    assert "x-coredata://AdministrateMe/EKReminder/rem-001" in emitted_ids
 
 
 def test_inbound_never_sync_blocks_200_work_case_files_reminders() -> None:
@@ -641,12 +632,10 @@ def test_inbound_never_sync_blocks_200_work_case_files_reminders() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    emitted = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    emitted = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     assert emitted == 0
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert synced == []
 
 
@@ -671,7 +660,7 @@ def test_inbound_never_sync_item_tag_blocks_private_reminders() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    emitted = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    emitted = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     assert emitted == 0
 
@@ -690,8 +679,8 @@ def test_inbound_dedupe_skips_unchanged_reminders_on_second_poll() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    first = adapter._inbound_poll_once(ctx=_ctx(event_log))
-    second = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    first = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
+    second = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     assert first == 3
     assert second == 0, (
@@ -726,7 +715,7 @@ def test_inbound_dedupe_emits_when_last_modified_advances() -> None:
     adapter = _make_adapter(ek_store=ek_store)
     event_log = _FakeEventLog()
 
-    first = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    first = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
     assert first == 1
 
     # User edits the reminder in iCloud — last_modified_at advances.
@@ -740,12 +729,10 @@ def test_inbound_dedupe_emits_when_last_modified_advances() -> None:
         last_modified_at=later_lmod,
     )
     ek_store.set_inbound_reminders([rem_v2])
-    second = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    second = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
     assert second == 1, "modified reminder must re-emit"
 
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert len(synced) == 2
     assert all(c["payload"]["remind_id"] == base_id for c in synced)
     assert synced[1]["payload"]["title"] == "Pick up milk and bread"
@@ -769,7 +756,7 @@ def test_inbound_dedupe_permissive_when_projection_resolver_absent() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    emitted = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    emitted = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     # All 3 non-never-sync reminders emit on first sight because the
     # resolver returns None for every id (permissive fallback).
@@ -802,25 +789,17 @@ def test_inbound_dedupe_consults_projection_resolver_when_present() -> None:
     def resolver_old(_remind_id: str) -> Any:
         return seen_lmod
 
-    adapter_emit = _make_adapter(
-        ek_store=ek_store, dedupe_resolver=resolver_old
-    )
+    adapter_emit = _make_adapter(ek_store=ek_store, dedupe_resolver=resolver_old)
     event_log_emit = _FakeEventLog()
-    assert (
-        adapter_emit._inbound_poll_once(ctx=_ctx(event_log_emit)) == 1
-    )
+    assert asyncio.run(adapter_emit._inbound_poll_once(ctx=_ctx(event_log_emit))) == 1
 
     # Resolver reports the same timestamp → unchanged → skip.
     def resolver_current(_remind_id: str) -> Any:
         return current_lmod
 
-    adapter_skip = _make_adapter(
-        ek_store=ek_store, dedupe_resolver=resolver_current
-    )
+    adapter_skip = _make_adapter(ek_store=ek_store, dedupe_resolver=resolver_current)
     event_log_skip = _FakeEventLog()
-    assert (
-        adapter_skip._inbound_poll_once(ctx=_ctx(event_log_skip)) == 0
-    )
+    assert asyncio.run(adapter_skip._inbound_poll_once(ctx=_ctx(event_log_skip))) == 0
 
 
 def test_inbound_cursor_advances_at_100_event_milestone() -> None:
@@ -848,7 +827,7 @@ def test_inbound_cursor_advances_at_100_event_milestone() -> None:
     adapter = _make_adapter(ek_store=ek_store)
     event_log = _FakeEventLog()
 
-    emitted = adapter._inbound_poll_once(ctx=_ctx(event_log))
+    emitted = asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
     assert emitted == 100
 
     cursor_calls = [
@@ -886,7 +865,7 @@ def test_inbound_cursor_does_not_advance_below_milestone() -> None:
     adapter = _make_adapter(ek_store=ek_store)
 
     event_log = _FakeEventLog()
-    adapter._inbound_poll_once(ctx=_ctx(event_log))
+    asyncio.run(adapter._inbound_poll_once(ctx=_ctx(event_log)))
 
     cursor_calls = [
         c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
@@ -918,9 +897,7 @@ async def test_inbound_poll_loop_bounded_via_max_inbound_cycles() -> None:
     event_log = _FakeEventLog()
     await adapter._inbound_poll(ctx=_ctx(event_log))
 
-    synced = [
-        c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
-    ]
+    synced = [c for c in event_log.calls if c["type"] == "reminder.list_item.synced"]
     assert len(synced) == 3
 
 

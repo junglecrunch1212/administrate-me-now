@@ -39,3 +39,7 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 | Physical legacy-port aliases | DEFER only while a documented migration client needs them. | Product route namespaces and one-process topology remain. |
 
 DEFER is prohibited for privacy/authorization/governance, observation, bootstrap safety, backup/restore, workbook round trip, clean install, the core OpenClaw plugin/four seams, or any required capability listed above.
+
+## Gate 2 disposition
+
+Gate 2 replaced the four product service stubs with router namespaces, replaced Windows-illegal scaffold filenames with portable placeholders, removed synchronous/duck-typed producer emission paths, and stopped treating the Bridge namespace as a separate central process. Historical placeholder files are retained only where later deletion prerequisites are not yet proven. Optional providers stay truthful: an unconfigured adapter is disabled and contributes no false readiness claim.

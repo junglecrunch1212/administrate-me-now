@@ -110,3 +110,7 @@ No failing/skipped test was changed, removed, or reclassified to manufacture a p
 The repository contains valuable domain schemas, projection logic, adapter/pipeline/skill assets, scope/governance primitives, and extensive isolated tests. It is not a truthful runnable product at the baseline: the composition root, most APIs, family console, native OpenClaw plugin, `member_knowledge`, profiles/personas, and bootstrap are absent, and the durable seams are not connected. Phase 2 must start with composition and the two golden vertical slices, not cosmetic UI work.
 
 Current primary-source verification selected stable OpenClaw `v2026.7.1` (release commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`) for the compatibility contract; exact npm integrity and upgrade rules are recorded in ADR-0001. This external check did not install or execute OpenClaw on the audit host.
+
+## Gate 2 delta
+
+The baseline remains historical evidence; Gate 2 does not rewrite its observed failures. The current branch adds the missing runtime composition root, a single typed asynchronous event writer, durable retry/poison/shutdown behavior, exact thirteen-projection registration, `member_knowledge`, real product router namespaces, central bridge ingest, portable xlsx/scaffold behavior, and process-boundary runtime acceptance. The final verified command matrix and remaining Phase 3 strict xfails are recorded in `HANDOFF.md`.

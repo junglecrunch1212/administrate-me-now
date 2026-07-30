@@ -73,3 +73,7 @@ Both approval systems must pass when both apply. OpenClaw approval never grants 
 - Reusing generic OpenClaw memory as household source of truth.
 - Running APScheduler or a second cron for proactive product work.
 - Treating OpenClaw operator login or approval as AdministrateMe authorization.
+
+## Gate 2 implementation note
+
+The central composition root now represents OpenClaw integration as explicit, capability-reported seams for typed skills, slash commands, standing orders, and the scoped conversation bridge. Required seams fail readiness when unavailable; optional integrations remain explicitly disabled instead of being advertised as live. AdministrateMe does not introduce a provider SDK, fallback model router, generic chat store, or scheduler.

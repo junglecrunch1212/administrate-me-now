@@ -67,13 +67,18 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.calls.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-send-pack-internal",
         now_factory=lambda: _FROZEN_NOW,
@@ -84,9 +89,7 @@ class _FakeSendService:
     """Minimal Gmail service surface: ``users().messages().send(...)
     .execute()``. Captures call args; returns a configurable response."""
 
-    def __init__(
-        self, *, response: dict[str, Any] | None = None
-    ) -> None:
+    def __init__(self, *, response: dict[str, Any] | None = None) -> None:
         self._response = response or {
             "id": "gmail-msg-pack-1",
             "threadId": "gmail-thr-pack-1",
@@ -122,9 +125,7 @@ class _FakeExecute:
         return dict(self._svc._response)
 
 
-def _make_adapter(
-    *, service: _FakeSendService | None = None
-) -> Any:
+def _make_adapter(*, service: _FakeSendService | None = None) -> Any:
     adapter = GmailAdapter(
         config={
             "service_account_key_ref": "op://test/v/i/f",
@@ -246,9 +247,7 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messaging_sent_v1_emit_validates_against_existing_schema() -> (
-    None
-):
+async def test_messaging_sent_v1_emit_validates_against_existing_schema() -> None:
     """End-to-end pack-internal: after a successful Phase A send (seams
     unset), the emitted ``messaging.sent`` payload validates byte-for-
     byte against :class:`MessagingSentV1` (which has ``extra='forbid'``

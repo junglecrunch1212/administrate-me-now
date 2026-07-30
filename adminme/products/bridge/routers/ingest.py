@@ -20,7 +20,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import AppendValidationError, EventLog
+from adminme.events.log import AppendValidationError
+from adminme.events.writer import EventSink
 from adminme.products.bridge.auth import (
     MemberIdResolver,
     resolve_member_id,
@@ -35,11 +36,11 @@ class BatchIngestRequest(BaseModel):
     envelopes: list[dict[str, Any]] = Field(min_length=1)
 
 
-def _get_event_log(request: Request) -> EventLog:
-    log = getattr(request.app.state, "event_log", None)
-    if log is None:
-        raise HTTPException(503, detail="event_log_unavailable")
-    return log
+def _get_event_sink(request: Request) -> EventSink:
+    events = getattr(request.app.state, "event_sink", None)
+    if events is None:
+        raise HTTPException(503, detail="event_sink_unavailable")
+    return events
 
 
 def _get_resolver(request: Request) -> MemberIdResolver:
@@ -49,7 +50,9 @@ def _get_resolver(request: Request) -> MemberIdResolver:
     return resolver
 
 
-def _stamp_owner_scope(payload: dict[str, Any], resolved_member_id: str) -> EventEnvelope:
+def _stamp_owner_scope(
+    payload: dict[str, Any], resolved_member_id: str
+) -> EventEnvelope:
     """Validate envelope shape + enforce F-3 owner_scope binding.
 
     Per memo 04 §2.2: a claimed ``owner_scope`` that disagrees with the
@@ -83,7 +86,7 @@ async def ingest_single(request: Request, payload: dict[str, Any]) -> dict[str, 
     member_id = resolve_member_id(tailscale_identity, _get_resolver(request))
     envelope = _stamp_owner_scope(payload, member_id)
     try:
-        event_id = await _get_event_log(request).append(envelope)
+        event_id = await _get_event_sink(request).write(envelope)
     except AppendValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -114,7 +117,7 @@ async def ingest_batch(request: Request, body: BatchIngestRequest) -> dict[str, 
             ) from exc
 
     try:
-        event_ids = await _get_event_log(request).append_batch(stamped)
+        event_ids = await _get_event_sink(request).write_batch(stamped)
     except AppendValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

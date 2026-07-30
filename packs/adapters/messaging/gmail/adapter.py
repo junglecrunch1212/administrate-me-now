@@ -53,6 +53,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.adapters.emission import write_adapter_event
 from adminme.lib.adapters import (
     CommunicationAdapter,
     InboundEnvelope,
@@ -98,8 +99,7 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
             "project_id": "test-project",
             "client_email": "test@test.iam.gserviceaccount.com",
             "private_key": (
-                "-----BEGIN PRIVATE KEY-----\nTESTKEY\n"
-                "-----END PRIVATE KEY-----\n"
+                "-----BEGIN PRIVATE KEY-----\nTESTKEY\n" "-----END PRIVATE KEY-----\n"
             ),
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -293,7 +293,7 @@ class GmailAdapter(CommunicationAdapter):
         self._last_advance_at = ctx.now_factory()
         # [D7] adapter.authenticated registered at v1 in events/schemas/adapters.py.
         # [D8] correlation_id minted by the supervisor-provided factory.
-        self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
 
         await self._poll_loop(ctx=ctx)
 
@@ -310,18 +310,13 @@ class GmailAdapter(CommunicationAdapter):
         """
         cycles = 0
         while not self._stop_requested:
-            if (
-                self._max_poll_cycles is not None
-                and cycles >= self._max_poll_cycles
-            ):
+            if self._max_poll_cycles is not None and cycles >= self._max_poll_cycles:
                 return
             try:
                 await self._run_poll_cycle(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
-                severity, error_kind, retry_after_s = self._classify_gmail_error(
-                    exc
-                )
-                self._emit_error(
+                severity, error_kind, retry_after_s = self._classify_gmail_error(exc)
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -349,9 +344,7 @@ class GmailAdapter(CommunicationAdapter):
         message via ``users.messages.get(format=full)``.
         """
         if self._service is None:
-            raise RuntimeError(
-                "Gmail service not initialized; call start() first"
-            )
+            raise RuntimeError("Gmail service not initialized; call start() first")
         if self._cursor is None:
             self._cursor = self._bootstrap_cursor()
             return 0
@@ -361,15 +354,13 @@ class GmailAdapter(CommunicationAdapter):
         emitted = 0
         for msg_id in message_ids:
             full_msg = self._fetch_message(msg_id)
-            self._emit_messaging_received(ctx=ctx, message=full_msg)
+            await self._emit_messaging_received(ctx=ctx, message=full_msg)
             emitted += 1
             self._events_since_advance += 1
 
         if new_history_id and new_history_id != self._cursor:
             self._cursor = new_history_id
-        self._maybe_emit_cursor_advance(
-            ctx=ctx, cursor_value=self._cursor
-        )
+        await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
         return emitted
 
     async def stop(self) -> None:
@@ -413,14 +404,10 @@ class GmailAdapter(CommunicationAdapter):
         # [§7.3, D17]: defense-in-depth input check; the Cat-A ABC's
         # OutboundMessage is frozen but does not validate non-emptiness.
         if not message.recipient:
-            raise ValueError(
-                "OutboundMessage.recipient must be a non-empty string"
-            )
+            raise ValueError("OutboundMessage.recipient must be a non-empty string")
         ctx = self._ctx
         if self._service is None:
-            raise RuntimeError(
-                "Gmail service not initialized; call start() first"
-            )
+            raise RuntimeError("Gmail service not initialized; call start() first")
 
         mime_b64 = self._build_mime_message(message)
         service = self._service
@@ -429,9 +416,12 @@ class GmailAdapter(CommunicationAdapter):
             # Wrapped in a closure so :func:`outbound` can suppress it
             # under observation mode. ``execute()`` is sync; the
             # observation seam awaits the closure.
-            return service.users().messages().send(
-                userId="me", body={"raw": mime_b64}
-            ).execute()
+            return (
+                service.users()
+                .messages()
+                .send(userId="me", body={"raw": mime_b64})
+                .execute()
+            )
 
         session = self._observation_session
         manager = self._observation_manager
@@ -440,11 +430,7 @@ class GmailAdapter(CommunicationAdapter):
         response: dict[str, Any] = {}
         suppressed = False
         try:
-            if (
-                session is not None
-                and manager is not None
-                and event_log is not None
-            ):
+            if session is not None and manager is not None and event_log is not None:
                 # [§6.20] Phase B: route through the observation seam so
                 # ``observation.suppressed`` / ``external.sent`` are
                 # emitted around the actual Gmail API call. The 11-β
@@ -460,7 +446,7 @@ class GmailAdapter(CommunicationAdapter):
                     },
                     _gmail_api_send,
                     manager=manager,
-                    event_log=event_log,
+                    event_sink=event_log,
                     target_channel=message.channel,
                     target_identifier=message.recipient,
                 )
@@ -474,11 +460,9 @@ class GmailAdapter(CommunicationAdapter):
                 # ``Adapter`` Protocol surface unchanged per memo 08 §5.
                 response = await _gmail_api_send()
         except BaseException as exc:  # noqa: BLE001 — classify & emit
-            severity, error_kind, retry_after_s = (
-                self._classify_gmail_error(exc)
-            )
+            severity, error_kind, retry_after_s = self._classify_gmail_error(exc)
             if ctx is not None:
-                self._emit_error(
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -494,23 +478,15 @@ class GmailAdapter(CommunicationAdapter):
             now_dt = ctx.now_factory()
         else:
             now_dt = datetime.now(timezone.utc)
-        sent_at_iso = now_dt.astimezone(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        sent_at_iso = now_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         subject_meta = (
             message.metadata.get("subject")
             if isinstance(message.metadata, dict)
             else None
         )
-        subject_value: str | None = (
-            str(subject_meta) if subject_meta else None
-        )
-        thread_id_value: str | None = (
-            None if suppressed else response.get("threadId")
-        )
-        delivery_status: Literal["queued", "sent"] = (
-            "queued" if suppressed else "sent"
-        )
+        subject_value: str | None = str(subject_meta) if subject_meta else None
+        thread_id_value: str | None = None if suppressed else response.get("threadId")
+        delivery_status: Literal["queued", "sent"] = "queued" if suppressed else "sent"
         sent_payload: dict[str, Any] = {
             "source_channel": "gmail",
             "to_identifier": message.recipient,
@@ -521,15 +497,13 @@ class GmailAdapter(CommunicationAdapter):
             "delivery_status": delivery_status,
         }
         if ctx is not None:
-            self._append(
+            await self._append(
                 ctx=ctx,
                 event_type="messaging.sent",
                 payload=sent_payload,
             )
 
-        external_id_value: str | None = (
-            None if suppressed else response.get("id")
-        )
+        external_id_value: str | None = None if suppressed else response.get("id")
         return SendResult(
             delivered=not suppressed,
             external_id=external_id_value,
@@ -592,9 +566,7 @@ class GmailAdapter(CommunicationAdapter):
             )
         return str(history_id)
 
-    def _fetch_history(
-        self, start_history_id: str
-    ) -> tuple[str, list[dict[str, Any]]]:
+    def _fetch_history(self, start_history_id: str) -> tuple[str, list[dict[str, Any]]]:
         """Page through ``users.history.list`` until ``nextPageToken``
         is absent. Returns (latest_history_id, [history_records...])."""
         records: list[dict[str, Any]] = []
@@ -659,9 +631,7 @@ class GmailAdapter(CommunicationAdapter):
             return None
 
     @classmethod
-    def _extract_bodies(
-        cls, payload: dict[str, Any]
-    ) -> tuple[str | None, str | None]:
+    def _extract_bodies(cls, payload: dict[str, Any]) -> tuple[str | None, str | None]:
         """BFS the MIME tree; return (text_plain, text_html) — first hit
         per MIME type wins."""
         body_text: str | None = None
@@ -711,9 +681,7 @@ class GmailAdapter(CommunicationAdapter):
     # ------------------------------------------------------------------
     # Emission helpers
     # ------------------------------------------------------------------
-    def _emit_authenticated(
-        self, *, ctx: AdapterContext, op_ref: str
-    ) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
         """Append an ``adapter.authenticated`` v1 event to the event
         log. Carries the 1Password reference, NEVER the secret itself."""
         payload = {
@@ -723,11 +691,9 @@ class GmailAdapter(CommunicationAdapter):
             "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "scopes": list(self.SCOPES),
         }
-        self._append(
-            ctx=ctx, event_type="adapter.authenticated", payload=payload
-        )
+        await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
 
-    def _emit_messaging_received(
+    async def _emit_messaging_received(
         self, *, ctx: AdapterContext, message: dict[str, Any]
     ) -> None:
         """Translate a Gmail ``users.messages.get`` response into a
@@ -750,11 +716,11 @@ class GmailAdapter(CommunicationAdapter):
             "received_at": received_iso,
             "attachments": [],
         }
-        self._append(
+        await self._append(
             ctx=ctx, event_type="messaging.received", payload=event_payload
         )
 
-    def _maybe_emit_cursor_advance(
+    async def _maybe_emit_cursor_advance(
         self, *, ctx: AdapterContext, cursor_value: str
     ) -> None:
         """Emit ``adapter.cursor_advanced`` v1 only if one of the
@@ -784,14 +750,14 @@ class GmailAdapter(CommunicationAdapter):
             "events_since_last": events,
             "advanced_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        self._append(
+        await self._append(
             ctx=ctx, event_type="adapter.cursor_advanced", payload=payload
         )
         self._events_since_advance = 0
         self._last_advance_at = now
         self._status.last_cursor_advance_at = now
 
-    def _emit_error(
+    async def _emit_error(
         self,
         *,
         ctx: AdapterContext,
@@ -813,9 +779,9 @@ class GmailAdapter(CommunicationAdapter):
             "occurred_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
+    async def _append(
         self,
         *,
         ctx: AdapterContext,
@@ -827,22 +793,17 @@ class GmailAdapter(CommunicationAdapter):
         [§7.3, D17] adapters never write to projections — append-only
         event log is the sole write surface.
         """
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
         try:
-            appender(
-                type=event_type,
-                schema_version=1,
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
                 payload=payload,
-                correlation_id=ctx.correlation_id_factory(),
             )
         except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "gmail adapter failed to emit %s event", event_type
-            )
+            _log.exception("gmail adapter failed to emit %s event", event_type)
 
     # ------------------------------------------------------------------
     # Error classification

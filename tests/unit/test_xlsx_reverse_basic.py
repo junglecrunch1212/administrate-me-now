@@ -34,6 +34,7 @@ from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -106,6 +107,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -117,13 +119,26 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     await runner.start()
 
     # Seed: 1 person + 1 task (sensitivity=normal) + 1 task (sensitivity=sensitive)
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "P1", "sort_name": "P1",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "first task",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "P1",
+                "sort_name": "P1",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "first task",
+            },
+        )
+    )
     last = await log.append(
         _envelope(
             "task.created",
@@ -133,8 +148,13 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     )
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -147,14 +167,16 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(OPS_WORKBOOK_NAME)
     await forward.regenerate_now(FINANCE_WORKBOOK_NAME)
 
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=0.5,
         delete_undo_window_s=0.05,
@@ -171,6 +193,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
             "ctx": ctx,
             "forward": forward,
             "reverse": reverse,
+            "events": events,
             "cursor": cursor,
         }
     finally:
@@ -182,6 +205,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
 
 def _open_ops(config: Any) -> tuple[Any, Any]:
     path = config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME
@@ -208,6 +232,7 @@ def _row_index_by_task_id(ws: Any, task_id: str) -> int | None:
 # ----------------------------------------------------------------------
 # Tests
 # ----------------------------------------------------------------------
+
 
 async def test_no_edits_no_events(rig: dict[str, Any]) -> None:
     reverse = rig["reverse"]
@@ -317,7 +342,7 @@ async def test_delete_cancelled_within_window(rig: dict[str, Any]) -> None:
     reverse = XlsxReverseDaemon(
         config,
         rig["ctx"],
-        event_log=log,
+        event_sink=rig["events"],
         flush_wait_s=0.05,
         forward_lock_timeout_s=0.5,
         delete_undo_window_s=2.0,

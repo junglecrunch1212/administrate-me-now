@@ -78,13 +78,9 @@ def _extract_text_and_inputs(
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
     version: str = "1.0.0"
-    triggers: Triggers = {
-        "events": ["messaging.received", "telephony.sms_received"]
-    }
+    triggers: Triggers = {"events": ["messaging.received", "telephony.sms_received"]}
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in (
             "messaging.received",
@@ -165,7 +161,7 @@ class NoiseFilteringPipeline:
                 "skill_version": SKILL_VERSION,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

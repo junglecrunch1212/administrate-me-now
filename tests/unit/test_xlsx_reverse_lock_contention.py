@@ -24,6 +24,7 @@ from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -90,6 +91,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -100,13 +102,24 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     runner.register(MoneyProjection())
     await runner.start()
 
-    last = await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "first task",
-    }))
+    last = await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "first task",
+            },
+        )
+    )
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -119,12 +132,14 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(OPS_WORKBOOK_NAME)
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=0.5,
         delete_undo_window_s=0.05,
@@ -149,6 +164,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
 # Tests
 # ----------------------------------------------------------------------
 
+
 async def test_forward_lock_held_emits_skipped(
     rig: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -165,26 +181,22 @@ async def test_forward_lock_held_emits_skipped(
 
     await reverse.run_cycle_now(OPS_WORKBOOK_NAME)
 
-    skipped = await _events_of_type(
-        log, "xlsx.reverse_skipped_during_forward", cursor
-    )
+    skipped = await _events_of_type(log, "xlsx.reverse_skipped_during_forward", cursor)
     assert len(skipped) == 1
     assert skipped[0]["payload"]["skip_reason"] == "forward_lock_held"
     projected = await _events_of_type(log, "xlsx.reverse_projected", cursor)
     assert projected == []
 
 
-async def test_forward_lock_released_in_time_proceeds(
-    rig: dict[str, Any]
-) -> None:
+async def test_forward_lock_released_in_time_proceeds(rig: dict[str, Any]) -> None:
     config = rig["config"]
     reverse = rig["reverse"]
     log = rig["log"]
     cursor = rig["cursor"]
 
-    lock_path = (
-        config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME
-    ).with_suffix(".xlsx.lock")
+    lock_path = (config.xlsx_workbooks_dir / OPS_WORKBOOK_NAME).with_suffix(
+        ".xlsx.lock"
+    )
 
     holder_release = threading.Event()
 
@@ -205,9 +217,7 @@ async def test_forward_lock_released_in_time_proceeds(
 
     holder.join(timeout=1.0)
 
-    skipped = await _events_of_type(
-        log, "xlsx.reverse_skipped_during_forward", cursor
-    )
+    skipped = await _events_of_type(log, "xlsx.reverse_skipped_during_forward", cursor)
     projected = await _events_of_type(log, "xlsx.reverse_projected", cursor)
     assert skipped == []
     assert len(projected) == 1
@@ -242,6 +252,6 @@ async def test_skipped_does_not_emit_reverse_projected(
     await reverse.run_cycle_now(OPS_WORKBOOK_NAME)
 
     projected = await _events_of_type(log, "xlsx.reverse_projected", cursor)
-    assert projected == [], (
-        "skip cycle MUST NOT emit xlsx.reverse_projected; spec §3.11"
-    )
+    assert (
+        projected == []
+    ), "skip cycle MUST NOT emit xlsx.reverse_projected; spec §3.11"

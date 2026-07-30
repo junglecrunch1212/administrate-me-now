@@ -67,7 +67,7 @@ from adminme.daemons.xlsx_sync.sheet_schemas import (
     descriptor_for,
 )
 from adminme.events.envelope import EventEnvelope
-from adminme.events.log import EventLog
+from adminme.events.writer import EventSink
 from adminme.lib.governance import GuardedWrite
 from adminme.lib.instance_config import InstanceConfig
 from adminme.lib.session import (
@@ -125,7 +125,7 @@ class XlsxReverseDaemon:
         config: InstanceConfig,
         query_context: XlsxQueryContext,
         *,
-        event_log: EventLog,
+        event_sink: EventSink,
         flush_wait_s: float = 2.0,
         forward_lock_timeout_s: float = 10.0,
         delete_undo_window_s: float = 5.0,
@@ -134,7 +134,7 @@ class XlsxReverseDaemon:
     ) -> None:
         self._config = config
         self._ctx = query_context
-        self._log_ = event_log
+        self._events = event_sink
         self._flush_wait_s = flush_wait_s
         self._forward_lock_timeout_s = forward_lock_timeout_s
         self._delete_undo_window_s = delete_undo_window_s
@@ -293,9 +293,7 @@ class XlsxReverseDaemon:
                 detected = None
         return build_session_from_xlsx_reverse_daemon(detected, self._config)
 
-    async def _cycle_under_serialization(
-        self, workbook: str, *, waited: bool
-    ) -> None:
+    async def _cycle_under_serialization(self, workbook: str, *, waited: bool) -> None:
         del waited  # debounce wait handled by ``_schedule_cycle``
         start_ms = int(time.time() * 1000)
         path = self._config.xlsx_workbooks_dir / workbook
@@ -336,8 +334,7 @@ class XlsxReverseDaemon:
                                 current_rows: list[dict[str, Any]] = []
                             else:
                                 headers = [
-                                    str(h) if h is not None else ""
-                                    for h in rows[0]
+                                    str(h) if h is not None else "" for h in rows[0]
                                 ]
                                 current_rows = [
                                     {headers[i]: raw[i] for i in range(len(headers))}
@@ -368,9 +365,7 @@ class XlsxReverseDaemon:
                             if sheet_name not in wb.sheetnames:
                                 continue
                             ws = wb[sheet_name]
-                            raw_rows = [
-                                list(r) for r in ws.iter_rows(values_only=True)
-                            ]
+                            raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
                             live_hash = hash_readonly_sheet(raw_rows)
                             prior_hash = read_readonly_state(
                                 self._config.xlsx_workbooks_dir,
@@ -445,7 +440,7 @@ class XlsxReverseDaemon:
         # principal authorship attaches to the domain events emitted
         # within the cycle, not to the cycle's terminal signal.
         duration_ms = max(0, int(time.time() * 1000) - start_ms)
-        await self._log_.append(
+        await self._events.write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=self._config.tenant_id,
@@ -474,7 +469,7 @@ class XlsxReverseDaemon:
         # the device-role placeholder per the same rationale as
         # xlsx.reverse_projected above.
         del session
-        await self._log_.append(
+        await self._events.write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=self._config.tenant_id,
@@ -530,9 +525,7 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Tasks pathway
     # ------------------------------------------------------------------
-    async def _emit_tasks(
-        self, result: DiffResult, session: Session
-    ) -> list[str]:
+    async def _emit_tasks(self, result: DiffResult, session: Session) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
             task_id = row.get("task_id") or ""
@@ -602,9 +595,7 @@ class XlsxReverseDaemon:
             )
         return emitted
 
-    async def _emit_task_deleted(
-        self, task_id: str, session: Session
-    ) -> None:
+    async def _emit_task_deleted(self, task_id: str, session: Session) -> None:
         sensitivity = self._lookup_sensitivity(
             self._ctx.tasks_conn, "tasks", "task_id", task_id
         )
@@ -736,9 +727,7 @@ class XlsxReverseDaemon:
     # ------------------------------------------------------------------
     # Raw Data pathway
     # ------------------------------------------------------------------
-    async def _emit_raw_data(
-        self, result: DiffResult, session: Session
-    ) -> list[str]:
+    async def _emit_raw_data(self, result: DiffResult, session: Session) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
             is_manual = bool(row.get("is_manual"))
@@ -752,7 +741,9 @@ class XlsxReverseDaemon:
                 flow_id = _mint_id("flow_")
             amount = row.get("amount")
             try:
-                amount_minor = int(round(float(amount) * 100)) if amount is not None else 0
+                amount_minor = (
+                    int(round(float(amount) * 100)) if amount is not None else 0
+                )
             except (TypeError, ValueError):
                 _log.warning("[reverse] manual row amount unparseable; skipping")
                 continue
@@ -795,9 +786,7 @@ class XlsxReverseDaemon:
         for row in result.deleted:
             is_manual = bool(row.get("is_manual"))
             if not is_manual:
-                _log.warning(
-                    "[reverse] Plaid row deletion via xlsx ignored"
-                )
+                _log.warning("[reverse] Plaid row deletion via xlsx ignored")
                 continue
             flow_id = row.get("txn_id")
             if not flow_id:
@@ -811,9 +800,7 @@ class XlsxReverseDaemon:
             )
         return emitted
 
-    async def _emit_money_flow_deleted(
-        self, flow_id: str, session: Session
-    ) -> None:
+    async def _emit_money_flow_deleted(self, flow_id: str, session: Session) -> None:
         sensitivity = self._lookup_sensitivity(
             self._ctx.money_conn, "money_flows", "flow_id", flow_id
         )
@@ -957,7 +944,7 @@ class XlsxReverseDaemon:
             actor_identity=session.auth_member_id,
             payload=payload,
         )
-        return await self._log_.append(envelope)
+        return await self._events.write(envelope)
 
 
 __all__ = ["XlsxReverseDaemon"]

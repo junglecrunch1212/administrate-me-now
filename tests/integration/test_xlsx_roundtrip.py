@@ -23,6 +23,7 @@ from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -94,6 +95,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -108,6 +110,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
             "config": config,
             "log": log,
             "bus": bus,
+            "events": events,
             "runner": runner,
         }
     finally:
@@ -119,77 +122,155 @@ async def test_full_round_trip(rig: dict[str, Any]) -> None:
     config = rig["config"]
     log = rig["log"]
     bus = rig["bus"]
+    events = rig["events"]
     runner = rig["runner"]
 
     # Seed ~15 events across the fixture surface area.
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "P1", "sort_name": "P1",
-    }))
-    await log.append(_envelope("party.created", {
-        "party_id": "p2", "kind": "person",
-        "display_name": "P2", "sort_name": "P2",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "first task",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t2", "title": "second task",
-    }))
-    await log.append(_envelope("commitment.proposed", {
-        "commitment_id": "c1",
-        "kind": "reply",
-        "owed_by_member_id": "p1",
-        "owed_to_party_id": "p2",
-        "text_summary": "say hi",
-        "confidence": 0.9,
-        "strength": "confident",
-    }))
-    await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r1",
-        "linked_kind": "household",
-        "linked_id": "household",
-        "kind": "maintenance",
-        "rrule": "FREQ=MONTHLY",
-        "next_occurrence": "2026-05-01T09:00:00Z",
-    }))
-    await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r2",
-        "linked_kind": "household",
-        "linked_id": "household",
-        "kind": "checkin",
-        "rrule": "FREQ=WEEKLY",
-        "next_occurrence": "2026-05-02T09:00:00Z",
-    }))
-    await log.append(_envelope("account.added", {
-        "account_id": "a1", "display_name": "Checking",
-        "organization_party_id": "p1", "kind": "bank",
-        "status": "active", "attributes": {"last4": "1234"},
-    }))
-    await log.append(_envelope("money_flow.recorded", {
-        "flow_id": "fp1", "amount_minor": 1000, "currency": "USD",
-        "occurred_at": "2026-04-20T10:00:00Z",
-        "kind": "paid", "linked_account": "a1",
-        "source_adapter": "plaid",
-    }))
-    await log.append(_envelope("money_flow.recorded", {
-        "flow_id": "fp2", "amount_minor": 2500, "currency": "USD",
-        "occurred_at": "2026-04-21T10:00:00Z",
-        "kind": "paid", "linked_account": "a1",
-        "source_adapter": "plaid",
-    }))
-    last = await log.append(_envelope("money_flow.manually_added", {
-        "flow_id": "fm1", "amount_minor": 4321, "currency": "USD",
-        "occurred_at": "2026-04-22T10:00:00Z",
-        "kind": "paid",
-        "category": "groceries",
-        "notes": "manual entry",
-        "added_by_party_id": "p1",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "P1",
+                "sort_name": "P1",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p2",
+                "kind": "person",
+                "display_name": "P2",
+                "sort_name": "P2",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "first task",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t2",
+                "title": "second task",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "commitment.proposed",
+            {
+                "commitment_id": "c1",
+                "kind": "reply",
+                "owed_by_member_id": "p1",
+                "owed_to_party_id": "p2",
+                "text_summary": "say hi",
+                "confidence": 0.9,
+                "strength": "confident",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r1",
+                "linked_kind": "household",
+                "linked_id": "household",
+                "kind": "maintenance",
+                "rrule": "FREQ=MONTHLY",
+                "next_occurrence": "2026-05-01T09:00:00Z",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r2",
+                "linked_kind": "household",
+                "linked_id": "household",
+                "kind": "checkin",
+                "rrule": "FREQ=WEEKLY",
+                "next_occurrence": "2026-05-02T09:00:00Z",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "account.added",
+            {
+                "account_id": "a1",
+                "display_name": "Checking",
+                "organization_party_id": "p1",
+                "kind": "bank",
+                "status": "active",
+                "attributes": {"last4": "1234"},
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.recorded",
+            {
+                "flow_id": "fp1",
+                "amount_minor": 1000,
+                "currency": "USD",
+                "occurred_at": "2026-04-20T10:00:00Z",
+                "kind": "paid",
+                "linked_account": "a1",
+                "source_adapter": "plaid",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.recorded",
+            {
+                "flow_id": "fp2",
+                "amount_minor": 2500,
+                "currency": "USD",
+                "occurred_at": "2026-04-21T10:00:00Z",
+                "kind": "paid",
+                "linked_account": "a1",
+                "source_adapter": "plaid",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.manually_added",
+            {
+                "flow_id": "fm1",
+                "amount_minor": 4321,
+                "currency": "USD",
+                "occurred_at": "2026-04-22T10:00:00Z",
+                "kind": "paid",
+                "category": "groceries",
+                "notes": "manual entry",
+                "added_by_party_id": "p1",
+            },
+        )
+    )
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -202,14 +283,16 @@ async def test_full_round_trip(rig: dict[str, Any]) -> None:
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(OPS_WORKBOOK_NAME)
     await forward.regenerate_now(FINANCE_WORKBOOK_NAME)
 
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=2.0,
         delete_undo_window_s=0.1,
@@ -245,15 +328,11 @@ async def test_full_round_trip(rig: dict[str, Any]) -> None:
         )
         assert rec_deleted == []
 
-        task_updated = await _events_of_type(
-            log, "task.updated", cursor_pre_ops_cycle
-        )
+        task_updated = await _events_of_type(log, "task.updated", cursor_pre_ops_cycle)
         assert len(task_updated) == 1
         assert task_updated[0]["payload"]["task_id"] == "t1"
 
-        task_created = await _events_of_type(
-            log, "task.created", cursor_pre_ops_cycle
-        )
+        task_created = await _events_of_type(log, "task.created", cursor_pre_ops_cycle)
         # The original t1 / t2 already exist; only the appended blank-id row
         # produces a new task.created from this cycle.
         assert len(task_created) == 1
@@ -337,9 +416,7 @@ async def test_full_round_trip(rig: dict[str, Any]) -> None:
             log, "xlsx.reverse_projected", cursor_pre_finance_cycle
         )
         assert len(projected_fin) == 1
-        assert (
-            projected_fin[0]["payload"]["workbook_name"] == FINANCE_WORKBOOK_NAME
-        )
+        assert projected_fin[0]["payload"]["workbook_name"] == FINANCE_WORKBOOK_NAME
     finally:
         await reverse.stop()
 
@@ -360,17 +437,31 @@ async def test_ut7_reverse_emits_attribute_detected_principal(
     config = rig["config"]
     log = rig["log"]
     bus = rig["bus"]
+    events = rig["events"]
     runner = rig["runner"]
 
     # Seed a single party + an existing task so the cycle has both an ADD
     # path and an UPDATE path to exercise.
-    await log.append(_envelope("party.created", {
-        "party_id": "principal_a", "kind": "person",
-        "display_name": "principal_a", "sort_name": "principal_a",
-    }))
-    seed = await log.append(_envelope("task.created", {
-        "task_id": "ut7_t1", "title": "ut7 baseline task",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "principal_a",
+                "kind": "person",
+                "display_name": "principal_a",
+                "sort_name": "principal_a",
+            },
+        )
+    )
+    seed = await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "ut7_t1",
+                "title": "ut7 baseline task",
+            },
+        )
+    )
     await bus.notify(seed)
     for name in ("parties", "tasks"):
         await _wait_idle(bus, f"projection:{name}")
@@ -384,14 +475,16 @@ async def test_ut7_reverse_emits_attribute_detected_principal(
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(OPS_WORKBOOK_NAME)
 
     detected_principal = "principal_a"
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=2.0,
         delete_undo_window_s=0.1,
@@ -431,9 +524,7 @@ async def test_ut7_reverse_emits_attribute_detected_principal(
         assert updated[0]["payload"]["updated_by_party_id"] == detected_principal
 
         # The terminal cycle event stays system-attributed.
-        projected = await _events_of_type(
-            log, "xlsx.reverse_projected", cursor_pre
-        )
+        projected = await _events_of_type(log, "xlsx.reverse_projected", cursor_pre)
         assert len(projected) == 1
         assert projected[0]["actor_identity"] == "xlsx_reverse"
     finally:

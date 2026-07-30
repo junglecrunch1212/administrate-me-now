@@ -47,10 +47,12 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventSink
 from adminme.lib.instance_config import InstanceConfig
 from adminme.projections.base import Projection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
@@ -140,18 +142,40 @@ class XlsxWorkbooksProjection(Projection):
     def __init__(
         self,
         config: InstanceConfig,
-        query_context: XlsxQueryContext,
+        query_context: XlsxQueryContext | None,
         *,
         event_log: EventLog,
+        event_sink: EventSink,
+        query_context_factory: Callable[[], XlsxQueryContext] | None = None,
         debounce_s: float = 5.0,
     ) -> None:
         self._config = config
+        if query_context is None and query_context_factory is None:
+            raise ValueError("query_context or query_context_factory is required")
         self._ctx = query_context
+        self._query_context_factory = query_context_factory
         self._log = event_log
+        self._events = event_sink
         self._debounce_s = debounce_s
         self._pending_tasks: dict[str, asyncio.Task[None]] = {}
         self._regen_lock = asyncio.Lock()
         self._config.xlsx_workbooks_dir.mkdir(parents=True, exist_ok=True)
+
+    def _query_context(self) -> XlsxQueryContext:
+        if self._ctx is not None:
+            return self._ctx
+        assert self._query_context_factory is not None
+        return self._query_context_factory()
+
+    async def stop(self) -> None:
+        """Cancel and join pending debounce tasks before DB connections close."""
+
+        tasks = [task for task in self._pending_tasks.values() if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._pending_tasks.clear()
 
     # ------------------------------------------------------------------
     # Projection contract
@@ -194,9 +218,7 @@ class XlsxWorkbooksProjection(Projection):
             try:
                 await self.regenerate_now(workbook)
             except Exception:
-                _log.exception(
-                    "xlsx_workbooks: regeneration failed for %s", workbook
-                )
+                _log.exception("xlsx_workbooks: regeneration failed for %s", workbook)
 
         self._pending_tasks[workbook] = loop.create_task(_wait_then_run())
 
@@ -220,6 +242,7 @@ class XlsxWorkbooksProjection(Projection):
         )
 
         start_ms = int(time.time() * 1000)
+        query_context = self._query_context()
         path = self._config.xlsx_workbooks_dir / workbook
         lock_path = path.with_suffix(path.suffix + ".lock")
         last_event_id = await self._log.latest_event_id() or ""
@@ -229,14 +252,14 @@ class XlsxWorkbooksProjection(Projection):
                 if workbook == OPS_WORKBOOK_NAME:
                     build_ops_workbook(
                         path,
-                        self._ctx,
+                        query_context,
                         tenant_id=self._config.tenant_id,
                         last_event_id=last_event_id,
                     )
                 else:
                     build_finance_workbook(
                         path,
-                        self._ctx,
+                        query_context,
                         tenant_id=self._config.tenant_id,
                         last_event_id=last_event_id,
                     )
@@ -249,14 +272,12 @@ class XlsxWorkbooksProjection(Projection):
 
         await asyncio.to_thread(_under_lock)
 
-        sheets = (
-            _BIDIRECTIONAL_SHEETS[workbook] + _READONLY_SHEETS[workbook]
-        )
+        sheets = _BIDIRECTIONAL_SHEETS[workbook] + _READONLY_SHEETS[workbook]
         duration_ms = int(time.time() * 1000) - start_ms
 
         # Emit xlsx.regenerated as a SYSTEM event per [§2.2] resolution.
         # This is the ONLY emit in this projection.
-        await self._log.append(
+        await self._events.write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=self._config.tenant_id,
@@ -301,23 +322,15 @@ class XlsxWorkbooksProjection(Projection):
                 if not rows:
                     write_sheet_state(workbooks_dir, workbook, sheet_name, [])
                     continue
-                headers = [
-                    str(h) if h is not None else "" for h in rows[0]
-                ]
+                headers = [str(h) if h is not None else "" for h in rows[0]]
                 row_dicts: list[dict[str, Any]] = []
                 for raw in rows[1:]:
-                    row_dicts.append(
-                        {headers[i]: raw[i] for i in range(len(headers))}
-                    )
-                write_sheet_state(
-                    workbooks_dir, workbook, sheet_name, row_dicts
-                )
+                    row_dicts.append({headers[i]: raw[i] for i in range(len(headers))})
+                write_sheet_state(workbooks_dir, workbook, sheet_name, row_dicts)
             for sheet_name in _READONLY_SHEETS.get(workbook, []):
                 ws = wb[sheet_name]
                 raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
-                write_readonly_state(
-                    workbooks_dir, workbook, sheet_name, raw_rows
-                )
+                write_readonly_state(workbooks_dir, workbook, sheet_name, raw_rows)
         finally:
             wb.close()
 

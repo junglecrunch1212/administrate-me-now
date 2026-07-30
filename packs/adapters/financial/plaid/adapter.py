@@ -77,6 +77,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.adapters.emission import write_adapter_event
 from adminme.lib.adapters import InboundDataAdapter
 
 logger = logging.getLogger(__name__)
@@ -312,7 +313,7 @@ class PlaidAdapter(InboundDataAdapter):
         self._status.state = "running"
         self._status.started_at = ctx.now_factory()
 
-        self._emit_authenticated(ctx, item_access_token_ref)
+        await self._emit_authenticated(ctx, item_access_token_ref)
 
         # One institution-health probe at startup so the operator sees a
         # current DEGRADED / DOWN status in their inbox without waiting
@@ -341,9 +342,7 @@ class PlaidAdapter(InboundDataAdapter):
         try:
             while not self._stop_event.is_set():
                 try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(), timeout=interval_s
-                    )
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=interval_s)
                     break
                 except asyncio.TimeoutError:
                     if plaid_item_id:
@@ -386,9 +385,7 @@ class PlaidAdapter(InboundDataAdapter):
           prompt deliverable; the receiver must not crash on them today.
         """
         if self._webhook_verifier is None:
-            logger.warning(
-                "plaid adapter: webhook arrived before start(); dropping"
-            )
+            logger.warning("plaid adapter: webhook arrived before start(); dropping")
             return
         if not self._webhook_verifier(payload):
             logger.warning(
@@ -402,7 +399,7 @@ class PlaidAdapter(InboundDataAdapter):
         if webhook_code == "SYNC_UPDATES_AVAILABLE":
             await self._sync_transactions(item_id, webhook_triggered=True)
         elif webhook_code == "ITEM_LOGIN_REQUIRED":
-            self._emit_adapter_error(
+            await self._emit_adapter_error(
                 severity="fatal",
                 error_kind="auth_failed",
                 message=(
@@ -483,7 +480,7 @@ class PlaidAdapter(InboundDataAdapter):
             severity, error_kind = _ERROR_KIND_BY_TYPE.get(
                 type(exc), ("transient", "unknown")
             )
-            self._emit_adapter_error(
+            await self._emit_adapter_error(
                 severity=severity,
                 error_kind=error_kind,
                 message=f"{type(exc).__name__}: {exc}",
@@ -496,7 +493,7 @@ class PlaidAdapter(InboundDataAdapter):
         total_events = len(added) + len(modified) + len(removed)
         self._events_since_last_cursor_advance += total_events
 
-        self._emit_money_flow_plaid_synced(
+        await self._emit_money_flow_plaid_synced(
             member_id=member_id,
             plaid_item_id=plaid_item_id,
             institution_id=institution_id,
@@ -509,7 +506,7 @@ class PlaidAdapter(InboundDataAdapter):
             webhook_triggered=webhook_triggered,
         )
 
-        self._maybe_emit_cursor_advanced(next_cursor)
+        await self._maybe_emit_cursor_advanced(next_cursor)
 
     # ------------------------------------------------------------------
     # institution health
@@ -548,7 +545,7 @@ class PlaidAdapter(InboundDataAdapter):
             severity, error_kind = _ERROR_KIND_BY_TYPE.get(
                 type(exc), ("transient", "unknown")
             )
-            self._emit_adapter_error(
+            await self._emit_adapter_error(
                 severity=severity,
                 error_kind=error_kind,
                 message=(
@@ -573,7 +570,7 @@ class PlaidAdapter(InboundDataAdapter):
             product_status = detail.get("status")
             if product_status in (None, "HEALTHY"):
                 continue
-            self._emit_adapter_error(
+            await self._emit_adapter_error(
                 severity="transient",
                 error_kind="api_changed",
                 message=(
@@ -586,12 +583,10 @@ class PlaidAdapter(InboundDataAdapter):
     # ------------------------------------------------------------------
     # internals — emit helpers
     # ------------------------------------------------------------------
-    def _emit_authenticated(
+    async def _emit_authenticated(
         self, ctx: AdapterContext, token_storage_ref: str
     ) -> None:
-        """Append an ``adapter.authenticated`` event via the context's
-        event_log. The supervisor's pattern (best-effort + tolerant of
-        either ``append_sync`` or ``append``) is mirrored here."""
+        """Write an ``adapter.authenticated`` event through the context sink."""
         payload = {
             "adapter_name": self.name,
             "adapter_family": self.family,
@@ -599,9 +594,9 @@ class PlaidAdapter(InboundDataAdapter):
             "authenticated_at": _format_iso(ctx.now_factory()),
             "scopes": ["transactions:read", "institutions:read"],
         }
-        self._append(ctx, "adapter.authenticated", payload)
+        await self._append(ctx, "adapter.authenticated", payload)
 
-    def _emit_adapter_error(
+    async def _emit_adapter_error(
         self,
         *,
         severity: str,
@@ -625,9 +620,9 @@ class PlaidAdapter(InboundDataAdapter):
             "occurred_at": _format_iso(ctx.now_factory()),
         }
         self._status.last_error = payload
-        self._append(ctx, "adapter.error", payload)
+        await self._append(ctx, "adapter.error", payload)
 
-    def _emit_money_flow_plaid_synced(
+    async def _emit_money_flow_plaid_synced(
         self,
         *,
         member_id: str,
@@ -657,9 +652,9 @@ class PlaidAdapter(InboundDataAdapter):
             "synced_at": _format_iso(ctx.now_factory()),
             "webhook_triggered": webhook_triggered,
         }
-        self._append(ctx, "money_flow.plaid_synced", payload)
+        await self._append(ctx, "money_flow.plaid_synced", payload)
 
-    def _maybe_emit_cursor_advanced(self, cursor_value: str) -> None:
+    async def _maybe_emit_cursor_advanced(self, cursor_value: str) -> None:
         """Emit ``adapter.cursor_advanced`` if the event threshold or
         the time threshold has been crossed. Resets the running tallies
         when it fires. Per the cross-cutting milestone discipline:
@@ -686,35 +681,30 @@ class PlaidAdapter(InboundDataAdapter):
             "events_since_last": self._events_since_last_cursor_advance,
             "advanced_at": _format_iso(now),
         }
-        self._append(ctx, "adapter.cursor_advanced", payload)
+        await self._append(ctx, "adapter.cursor_advanced", payload)
         self._events_since_last_cursor_advance = 0
         self._last_cursor_advance_at = now
         self._status.last_cursor_advance_at = now
 
-    def _append(
+    async def _append(
         self, ctx: AdapterContext, event_type: str, payload: dict[str, Any]
     ) -> None:
-        """Best-effort append. Mirrors the supervisor's duck-typed
-        contract: any object with ``append_sync(...)`` or ``append(...)``
-        is acceptable, and a failure on emit must not crash the adapter
-        (the log may itself be down — surfacing the failure in this
-        adapter's logs is enough)."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
+        """Best-effort write through the typed event-sink contract.
+
+        A failed emit must not crash the adapter; the structured adapter log
+        remains the diagnostic path when the event store itself is down.
+        """
         try:
-            appender(
-                type=event_type,
-                schema_version=1,
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=ctx.config,
+                event_type=event_type,
                 payload=payload,
-                correlation_id=ctx.correlation_id_factory(),
             )
         except Exception:  # noqa: BLE001
-            logger.exception(
-                "plaid adapter failed to emit %s", event_type
-            )
+            logger.exception("plaid adapter failed to emit %s", event_type)
 
 
 class PlaidAdapterError(RuntimeError):

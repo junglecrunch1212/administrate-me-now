@@ -110,11 +110,11 @@ def test_bridge_context_construction_with_optional_sink() -> None:
     # Explicit sink kwarg → carried on the context. EventLogBridgeSink
     # is used here because it's the cheapest impl to construct in a
     # unit test (no IngestClient HTTP wiring).
-    class _NoopLog:
-        async def append(self, envelope: object, **kwargs: object) -> str:
+    class _NoopSink:
+        async def write(self, envelope: object, **kwargs: object) -> str:
             return "ev_x"
 
-    sink = EventLogBridgeSink(_NoopLog())  # type: ignore[arg-type]
+    sink = EventLogBridgeSink(_NoopSink())  # type: ignore[arg-type]
     ctx_with_sink = BridgeContext(
         member_id="m1",
         ingest_client=object(),  # type: ignore[arg-type]

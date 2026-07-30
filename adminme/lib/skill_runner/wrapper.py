@@ -12,7 +12,7 @@ Public surface:
 - `SkillContext` — frozen dataclass carrying Session + correlation +
   observation/dry-run flags.
 - `SkillResult` — output + provider + token/cost provenance + duration.
-- `set_default_event_log(log)` — module-level injection used by service
+- `set_default_event_sink(events)` — module-level injection used by service
   start (08b's outbound() uses the same pattern).
 - Four exceptions: `SkillInputInvalid`, `SkillSensitivityRefused`,
   `SkillScopeInsufficient`, `OpenClawResponseMalformed`.
@@ -41,7 +41,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner.pack_loader import LoadedPack, load_pack
 
 if TYPE_CHECKING:
-    from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.session import Session
 
 _log = logging.getLogger(__name__)
@@ -123,15 +123,15 @@ class SkillResult:
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_EVENT_LOG: "EventLog | None" = None
+_DEFAULT_EVENT_SINK: "EventSink | None" = None
 
 
-def set_default_event_log(log: "EventLog") -> None:
-    """Wire the module-level event log used by `run_skill()` when no
+def set_default_event_sink(events: "EventSink | None") -> None:
+    """Wire the module-level event sink used by `run_skill()` when no
     per-call override is supplied. Bootstrap §7 calls this at service
     start; tests inject a per-test log via `_runtime`."""
-    global _DEFAULT_EVENT_LOG
-    _DEFAULT_EVENT_LOG = log
+    global _DEFAULT_EVENT_SINK
+    _DEFAULT_EVENT_SINK = events
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ class _Runtime:
     """Test-injectable bundle. Production callers do not construct this
     directly; production wiring lives in bootstrap."""
 
-    event_log: "EventLog"
+    event_sink: "EventSink"
     raw_events_dir: Path
     httpx_client_factory: Any = None  # callable() -> httpx.AsyncClient | None
     gateway_url: str = OPENCLAW_GATEWAY_URL
@@ -156,10 +156,10 @@ def _set_runtime_for_tests(runtime: _Runtime | None) -> None:
 def _resolve_runtime() -> _Runtime:
     if _RUNTIME_OVERRIDE is not None:
         return _RUNTIME_OVERRIDE
-    if _DEFAULT_EVENT_LOG is None:
+    if _DEFAULT_EVENT_SINK is None:
         raise RuntimeError(
-            "skill_runner: no default EventLog configured; "
-            "call set_default_event_log(...) at service start"
+            "skill_runner: no default EventSink configured; "
+            "call set_default_event_sink(...) at service start"
         )
     # Production resolves raw_events_dir via InstanceConfig at bootstrap.
     # If we land here without an override AND no instance dir, surface
@@ -171,7 +171,7 @@ def _resolve_runtime() -> _Runtime:
             "raw_events_dir per [§15]"
         )
     return _Runtime(
-        event_log=_DEFAULT_EVENT_LOG,
+        event_sink=_DEFAULT_EVENT_SINK,
         raw_events_dir=Path(instance_dir) / "data" / "raw_events",
     )
 
@@ -239,7 +239,7 @@ async def _emit_failed(
         },
         actor_identity=ctx.session.auth_member_id,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
 async def _emit_suppressed(
@@ -265,7 +265,7 @@ async def _emit_suppressed(
         },
         actor_identity=ctx.session.auth_member_id,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
 async def _emit_recorded(
@@ -302,7 +302,7 @@ async def _emit_recorded(
         },
         actor_identity=ctx.session.auth_member_id,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
 def _spill_inputs_if_large(
@@ -418,7 +418,11 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         )
     # llm-task returns details.json containing the parsed JSON per
     # docs/reference/openclaw/tools/llm-task.md.
-    parsed = result.get("details", {}).get("json") if isinstance(result.get("details"), dict) else None
+    parsed = (
+        result.get("details", {}).get("json")
+        if isinstance(result.get("details"), dict)
+        else None
+    )
     # Allow callers / mocks to put the parsed object at result.json directly
     # for simplicity (the reference llm-task docs show details.json but the
     # Lobster example collapses it). Try both.
@@ -437,9 +441,15 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         kind="ok",
         raw_result=parsed,
         invocation_id=invocation_id if isinstance(invocation_id, str) else None,
-        input_tokens=result.get("tokens_in") if isinstance(result.get("tokens_in"), int) else None,
-        output_tokens=result.get("tokens_out") if isinstance(result.get("tokens_out"), int) else None,
-        cost_usd=result.get("cost_usd") if isinstance(result.get("cost_usd"), (int, float)) else None,
+        input_tokens=result.get("tokens_in")
+        if isinstance(result.get("tokens_in"), int)
+        else None,
+        output_tokens=result.get("tokens_out")
+        if isinstance(result.get("tokens_out"), int)
+        else None,
+        cost_usd=result.get("cost_usd")
+        if isinstance(result.get("cost_usd"), (int, float))
+        else None,
     )
 
 
@@ -519,7 +529,9 @@ async def run_skill(
     runtime = _resolve_runtime()
 
     # Step 1 — load pack.
-    pack = load_pack(Path(skill_id) if Path(skill_id).is_absolute() else _resolve_pack_root(skill_id))
+    pack = load_pack(
+        Path(skill_id) if Path(skill_id).is_absolute() else _resolve_pack_root(skill_id)
+    )
     pack_id_str = pack.pack_id
     pack_version = pack.version
     fm = pack.skill_frontmatter
@@ -558,9 +570,7 @@ async def run_skill(
                 provider_attempted=None,
                 duration_ms=0,
             )
-            raise SkillSensitivityRefused(
-                "skill refuses privileged inputs"
-            )
+            raise SkillSensitivityRefused("skill refuses privileged inputs")
 
     # Step 4 — scope check.
     required_scopes = list(fm.get("context_scopes_required") or [])
@@ -577,9 +587,7 @@ async def run_skill(
             provider_attempted=None,
             duration_ms=0,
         )
-        raise SkillScopeInsufficient(
-            f"session missing required scopes: {missing}"
-        )
+        raise SkillScopeInsufficient(f"session missing required scopes: {missing}")
 
     # Step 5 — observation / dry-run short-circuit.
     outbound_affecting = bool(fm.get("outbound_affecting", False))
@@ -678,7 +686,9 @@ async def run_skill(
         # transient or timeout — try next provider
     if successful is None:
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        last = last_outcome or _OpenClawCallOutcome(kind="transient", error_detail="no providers attempted")
+        last = last_outcome or _OpenClawCallOutcome(
+            kind="transient", error_detail="no providers attempted"
+        )
         if last.kind == "timeout":
             failure_class = "openclaw_timeout"
             exc_cls: type[Exception] = OpenClawTimeout
@@ -692,7 +702,9 @@ async def run_skill(
             pack_version=pack_version,
             failure_class=failure_class,
             error_detail=last.error_detail,
-            provider_attempted=provider_preferences[-1] if provider_preferences else None,
+            provider_attempted=provider_preferences[-1]
+            if provider_preferences
+            else None,
             duration_ms=duration_ms,
         )
         raise exc_cls(last.error_detail)
@@ -845,5 +857,5 @@ __all__ = [
     "SkillScopeInsufficient",
     "SkillSensitivityRefused",
     "run_skill",
-    "set_default_event_log",
+    "set_default_event_sink",
 ]

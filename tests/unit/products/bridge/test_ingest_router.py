@@ -27,7 +27,7 @@ from adminme.products.bridge.auth import (
 )
 
 
-class _FakeEventLog:
+class _FakeEventSink:
     """Async-compatible double for :class:`EventLog`.
 
     The bridge router only needs ``append`` / ``append_batch`` —
@@ -38,35 +38,37 @@ class _FakeEventLog:
         self.events: list[EventEnvelope] = []
         self._counter = 0
 
-    async def append(self, envelope: EventEnvelope) -> str:
+    async def write(self, envelope: EventEnvelope, **_kwargs: Any) -> str:
         self._counter += 1
         eid = f"ev_test_{self._counter:04d}"
         self.events.append(envelope)
         return eid
 
-    async def append_batch(self, envelopes: list[EventEnvelope]) -> list[str]:
+    async def write_batch(
+        self, envelopes: list[EventEnvelope], **_kwargs: Any
+    ) -> list[str]:
         ids: list[str] = []
         for env in envelopes:
-            ids.append(await self.append(env))
+            ids.append(await self.write(env))
         return ids
 
 
 def _client_with_state(
     *,
-    log: _FakeEventLog | None = None,
+    log: _FakeEventSink | None = None,
     resolver: DictMemberIdResolver | None = None,
-) -> tuple[TestClient, _FakeEventLog]:
+) -> tuple[TestClient, _FakeEventSink]:
     """Build an app with wired-up state. TestClient triggers lifespan;
     pre-seeded state survives because the lifespan only injects if the
     attribute is unset."""
     app = create_app()
-    app.state.event_log = log or _FakeEventLog()
+    app.state.event_sink = log or _FakeEventSink()
     app.state.member_id_resolver = resolver or DictMemberIdResolver(
         {"m1@example.ts.net": "m1"}
     )
     app.state.ingest_count = 0
     client = TestClient(app)
-    return client, app.state.event_log
+    return client, app.state.event_sink
 
 
 def _envelope_dict(
@@ -241,9 +243,7 @@ def test_ingest_single_503_when_event_log_unavailable() -> None:
     """No event log wired → loud 503, NOT silent acceptance of writes
     that would otherwise be dropped."""
     app = create_app()
-    app.state.member_id_resolver = DictMemberIdResolver(
-        {"m1@example.ts.net": "m1"}
-    )
+    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
     app.state.ingest_count = 0
     # NB: app.state.event_log deliberately unset.
     client = TestClient(app)
@@ -253,7 +253,7 @@ def test_ingest_single_503_when_event_log_unavailable() -> None:
         headers={TAILSCALE_IDENTITY_HEADER: "m1@example.ts.net"},
     )
     assert resp.status_code == 503
-    assert resp.json()["detail"] == "event_log_unavailable"
+    assert resp.json()["detail"] == "event_sink_unavailable"
 
 
 def test_ingest_batch_empty_envelopes_list_returns_422() -> None:

@@ -70,14 +70,22 @@ class BridgeSupervisor:
                 await adapter.stop()
             except Exception:  # noqa: BLE001 — best-effort
                 logger.exception("bridge adapter stop() raised")
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # Give in-flight startup/emission work a bounded chance to commit
+        # before cancellation. Bridge sinks can be waiting on SQLCipher or
+        # an HTTP response when shutdown begins.
+        _done, pending = (
+            await asyncio.wait(self._tasks, timeout=5.0)
+            if self._tasks
+            else (set(), set())
+        )
+        for task in pending:
+            task.cancel()
         for task in self._tasks:
             try:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        self._tasks.clear()
 
     def snapshot(self) -> dict:
         return {
@@ -124,7 +132,9 @@ async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
         central_endpoint_url=config.central_endpoint,
         tailscale_identity_header=config.tailscale_identity,
     )
-    supervisor = BridgeSupervisor(config=config, ingest_client=ingest_client, packs=packs)
+    supervisor = BridgeSupervisor(
+        config=config, ingest_client=ingest_client, packs=packs
+    )
     try:
         await _run_until_signal(supervisor)
     finally:

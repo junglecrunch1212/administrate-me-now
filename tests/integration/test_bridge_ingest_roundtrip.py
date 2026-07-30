@@ -22,7 +22,9 @@ import httpx
 import pytest
 
 from adminme.events.envelope import EventEnvelope
+from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.products.bridge.app import create_app
 from adminme.products.bridge.auth import DictMemberIdResolver
@@ -64,14 +66,16 @@ async def rig(tmp_path: Path):
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    await bus.start()
     app = create_app()
-    app.state.event_log = log
-    app.state.member_id_resolver = DictMemberIdResolver(
-        {"m1@example.ts.net": "m1"}
-    )
+    app.state.event_sink = EventWriter(log, bus)
+    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://central") as http:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://central"
+    ) as http:
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
@@ -80,6 +84,7 @@ async def rig(tmp_path: Path):
         try:
             yield {"log": log, "ingest": ingest, "app": app}
         finally:
+            await bus.stop()
             await log.close()
 
 
@@ -147,7 +152,9 @@ async def test_bridge_ingest_batch_partial_failure_rejects_whole_batch_end_to_en
 
     envelopes = [
         _envelope_dict(bridge_node_id="bridge-node-001"),
-        _envelope_dict(bridge_node_id="bridge-node-002", owner_scope="private:m2"),  # bad
+        _envelope_dict(
+            bridge_node_id="bridge-node-002", owner_scope="private:m2"
+        ),  # bad
         _envelope_dict(bridge_node_id="bridge-node-003"),
     ]
     result = await ingest.submit_batch(envelopes)

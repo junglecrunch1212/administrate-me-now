@@ -93,3 +93,7 @@ Required typed outcomes include: proposed, approved, rejected, held-for-review, 
 ## Profiles, personas, and tenant neutrality
 
 Required built-in profiles are `adhd_executive`, `minimalist_parent`, `power_user`, `kid_scoreboard`, and `ambient_entity`. Required built-in persona archetypes are `poopsy`, `butler_classic`, `friendly_robot`, and `quiet_assistant`. These are tenant-neutral templates; examples such as a named household belong only in explicitly marked external/fixture packs. Profile controls per-member UX/engines; persona controls instance voice/theme/templates. Neither controls authority, governance, or model routing.
+
+## Gate 2 implementation status
+
+The runtime now provides the infrastructure needed to preserve these distinctions: every projection capability has an explicit registration, `member_knowledge` has owner/scope-aware schema, handlers, and queries, and derivative pipeline facts travel through the same causation-aware writer. This is infrastructure completion, not product-loop completion: the communication-to-reviewed-commitment and member-bridge-to-authorized-knowledge slices remain strict Phase 3 acceptance targets.

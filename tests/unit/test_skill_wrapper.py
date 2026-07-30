@@ -31,6 +31,7 @@ import httpx
 import pytest
 
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.events.registry import ensure_autoloaded
 from adminme.lib.session import Session
 from adminme.lib.skill_runner.pack_loader import invalidate_cache
@@ -55,6 +56,11 @@ CLASSIFY_TEST_PACK = REPO_ROOT / "packs" / "skills" / "classify_test"
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 
 TEST_KEY = b"k" * 32
+
+
+class _NoopBus:
+    async def notify(self, _event_id: str) -> None:
+        return None
 
 
 @pytest.fixture(autouse=True)
@@ -111,19 +117,25 @@ def _runtime_for(
     if transport is None:
         client_factory = None
     else:
+
         def client_factory():
             return httpx.AsyncClient(transport=transport, timeout=10.0)
+
     return _Runtime(
-        event_log=event_log,
+        event_sink=EventWriter(event_log, _NoopBus()),  # type: ignore[arg-type]
         raw_events_dir=raw_dir,
         httpx_client_factory=client_factory,
     )
 
 
-def _ok_responder(parsed_json: dict, *, invocation_id: str = "inv-1",
-                  input_tokens: int | None = 11,
-                  output_tokens: int | None = 22,
-                  cost_usd: float | None = 0.0001):
+def _ok_responder(
+    parsed_json: dict,
+    *,
+    invocation_id: str = "inv-1",
+    input_tokens: int | None = 11,
+    output_tokens: int | None = 22,
+    cost_usd: float | None = 0.0001,
+):
     def responder(request: httpx.Request) -> httpx.Response:
         result: dict[str, Any] = {
             "details": {"json": parsed_json},
@@ -136,6 +148,7 @@ def _ok_responder(parsed_json: dict, *, invocation_id: str = "inv-1",
         if cost_usd is not None:
             result["cost_usd"] = cost_usd
         return httpx.Response(200, json={"ok": True, "result": result})
+
     return responder
 
 
@@ -154,9 +167,7 @@ async def _read_all_events(log: EventLog) -> list[dict[str, Any]]:
 async def test_happy_path_records_event_and_posts_correct_body(
     event_log: EventLog, tmp_path: Path
 ) -> None:
-    transport = _MockTransport(
-        _ok_responder({"is_thing": True, "confidence": 0.9})
-    )
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:
@@ -295,7 +306,9 @@ async def test_provider_fallback_uses_second_provider(
     def responder(request: httpx.Request) -> httpx.Response:
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return httpx.Response(503, json={"ok": False, "error": {"type": "x", "message": "first 5xx"}})
+            return httpx.Response(
+                503, json={"ok": False, "error": {"type": "x", "message": "first 5xx"}}
+            )
         return _ok_responder({"is_thing": True, "confidence": 0.5})(request)
 
     transport = _MockTransport(responder)
@@ -325,7 +338,9 @@ async def test_all_providers_5xx_emits_unreachable(
     event_log: EventLog, tmp_path: Path
 ) -> None:
     transport = _MockTransport(
-        lambda r: httpx.Response(500, json={"ok": False, "error": {"type": "x", "message": "down"}})
+        lambda r: httpx.Response(
+            500, json={"ok": False, "error": {"type": "x", "message": "down"}}
+        )
     )
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
@@ -404,9 +419,7 @@ async def test_timeout_emits_openclaw_timeout(
 async def test_handler_raises_returns_defensive_default(
     event_log: EventLog, tmp_path: Path
 ) -> None:
-    transport = _MockTransport(
-        _ok_responder({"is_thing": True, "confidence": 0.9})
-    )
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:
@@ -440,9 +453,7 @@ async def test_handler_raises_returns_defensive_default(
 async def test_output_invalid_raises_when_no_defensive_default(
     event_log: EventLog, tmp_path: Path
 ) -> None:
-    transport = _MockTransport(
-        _ok_responder({"is_thing": True, "confidence": 0.9})
-    )
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:
@@ -504,9 +515,7 @@ async def test_observation_mode_short_circuits_outbound_affecting_pack(
 # ---------------------------------------------------------------------------
 
 
-async def test_dry_run_suppresses_call(
-    event_log: EventLog, tmp_path: Path
-) -> None:
+async def test_dry_run_suppresses_call(event_log: EventLog, tmp_path: Path) -> None:
     transport = _MockTransport(lambda r: pytest.fail("HTTP must not fire"))
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
@@ -532,9 +541,7 @@ async def test_dry_run_suppresses_call(
 async def test_large_inputs_spill_to_raw_events(
     event_log: EventLog, tmp_path: Path
 ) -> None:
-    transport = _MockTransport(
-        _ok_responder({"is_thing": True, "confidence": 0.9})
-    )
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
     runtime = _runtime_for(event_log, tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:

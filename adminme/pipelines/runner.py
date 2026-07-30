@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventSink
 from adminme.lib.governance import GuardedWrite
 from adminme.lib.instance_config import InstanceConfig
 from adminme.lib.observation import ObservationManager, outbound
@@ -72,6 +73,7 @@ class PipelineRunner:
         self,
         bus: EventBus,
         event_log: EventLog,
+        event_sink: EventSink,
         instance_config: InstanceConfig,
         *,
         observation_manager: ObservationManager | None = None,
@@ -80,6 +82,7 @@ class PipelineRunner:
     ) -> None:
         self._bus = bus
         self._log = event_log
+        self._events = event_sink
         self._config = instance_config
         self._observation_manager = observation_manager
         self._guarded_write = guarded_write
@@ -144,7 +147,7 @@ class PipelineRunner:
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
-    async def start(self) -> None:
+    async def start(self, *, start_bus: bool = True) -> None:
         """Subscribe each reactive pack to the bus, then start the bus
         if it isn't already running. Subscriptions must be registered
         before ``bus.start()`` per [§1.10]."""
@@ -160,7 +163,8 @@ class PipelineRunner:
             self._bus.subscribe(subscriber_id, types, self._make_callback(pack))
         # `EventBus.start()` is a no-op if already running, so this is
         # safe for both test and production wiring orderings.
-        await self._bus.start()
+        if start_bus:
+            await self._bus.start()
 
     async def stop(self) -> None:
         """No-op; bus shutdown is owned by the bus's own ``stop()``.
@@ -208,6 +212,7 @@ class PipelineRunner:
             ctx = PipelineContext(
                 session=session,
                 event_log=self._log,
+                event_sink=self._events,
                 run_skill_fn=run_skill,
                 outbound_fn=outbound,
                 guarded_write=self._guarded_write,

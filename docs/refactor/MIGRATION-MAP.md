@@ -62,4 +62,15 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Historical prompts/build logs | `prompts/`, `docs/build_log.md`, handoffs/memos | useful provenance but stale future instructions | KEEP as history | Exclude from governing instruction chain; link from current contracts only when relevant. |
 | Vendored provider references | `docs/reference/` | large snapshots create lint noise and API staleness | DEFER refresh per optional integration | Exclude from runtime/lint or validate separately; never use as floating current contract. |
 
-No production file is changed by this Gate 1 classification.
+Gate 1 itself changed no production file. Gate 2 has now executed the runtime-spine subset of this map.
+
+## Gate 2 migration delta
+
+| Subsystem | Gate 2 result | Remaining boundary |
+|---|---|---|
+| Event writes and durable delivery | `EventSink`/`EventWriter` is the sole typed producer contract; it commits a single event or atomic batch before bus notification. Durable checkpoints advance only after success; retry and poison metadata survive restart. | Full forced-kill and outbound ambiguity matrices remain AC-09/20. |
+| SQLCipher lifecycle | Log open/migration, locking, wrong-key failure, rollback, close, and encrypted reopen are owned by the runtime. | Backup/restore and legacy migration fixtures remain AC-15/20. |
+| Runtime and projections | One `RuntimeApplication` owns lifecycle and registers exactly parties, interactions, artifacts, commitments, tasks, recurrences, calendars, places_assets_accounts, money, vector_search, xlsx_workbooks, member_knowledge, and lists. | Per-capability semantic/replay equivalence remains AC-07. |
+| Producers | Pipeline packs, adapter packs/supervisor, governance, observation, skills, bridge ingestion, and xlsx paths use the injected event sink; synchronous capability probes are removed. | End-to-end product semantics remain Phase 3+. |
+| Product topology | Core, Comms, Capture, Automation, Bridge, and System are namespaces inside one FastAPI application with truthful liveness/readiness. | Full UX and authorization behavior remains AC-08/18/19. |
+| Portability | Xlsx locking supports Windows and POSIX; scaffold templates use portable filenames; bridge task shutdown is bounded. | Clean macOS installation/rehearsal remains AC-01/21. |

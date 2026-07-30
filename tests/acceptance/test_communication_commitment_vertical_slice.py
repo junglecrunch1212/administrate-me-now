@@ -1,9 +1,8 @@
 """Golden process acceptance: communication through completed commitment.
 
-This is intentionally red behind a strict xfail during Gate 1. Release gating
-runs pytest with ``--runxfail`` so the explicit failure cannot be reported as a
-pass. Phase 2 must replace the sentinel with a black-box fixture that starts the
-real composition root; isolated fake logs/buses/projections are not acceptable.
+Gate 2 now has a black-box composition-root fixture in ``test_runtime_spine``.
+This strict xfail remains for the Phase 3 product slice that fixture does not
+yet claim: communication through reviewed commitment completion and what-now.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ REQUIRED_STAGES = (
 
 @pytest.mark.xfail(
     strict=True,
-    reason="MISSING_CAPABILITY: no production runtime closes the communication-to-outcome loop",
+    reason="MISSING_CAPABILITY: the composed product path does not yet close the communication-to-outcome loop",
 )
 def test_communication_to_commitment_completion_recalculates_whatnow() -> None:
     """Start real processes and prove every stage in ``REQUIRED_STAGES``.

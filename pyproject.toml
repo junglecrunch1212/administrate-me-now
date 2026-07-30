@@ -92,6 +92,9 @@ markers = [
 [tool.mypy]
 python_version = "3.11"
 
+[tool.ruff.lint.per-file-ignores]
+"docs/reference/plaid/python-sdk-plaid_api.py" = ["F401"]
+
 [[tool.mypy.overrides]]
 module = ["sqlcipher3", "sqlcipher3.*"]
 ignore_missing_imports = true

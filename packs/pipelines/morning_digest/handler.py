@@ -91,7 +91,9 @@ def _coerce_profile_format(profile: dict[str, Any] | None) -> str:
 def _ids_from(items: list[dict[str, Any]] | None) -> set[str]:
     if not items:
         return set()
-    return {str(item["id"]) for item in items if isinstance(item, dict) and "id" in item}
+    return {
+        str(item["id"]) for item in items if isinstance(item, dict) and "id" in item
+    }
 
 
 class MorningDigestPipeline:
@@ -125,9 +127,7 @@ class MorningDigestPipeline:
             lambda _mid, _today: []
         )
 
-    async def gather(
-        self, member_id: str, today_iso: str
-    ) -> dict[str, Any]:
+    async def gather(self, member_id: str, today_iso: str) -> dict[str, Any]:
         """Aggregate projection state into a single payload. Loaders are
         synchronous callables; real on-disk loaders will likely become
         thin wrappers around `asyncio.to_thread(...)` per [D14]."""
@@ -174,9 +174,7 @@ class MorningDigestPipeline:
             "reward_stats": gather_result["reward_stats"],
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_morning_digest", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_morning_digest", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "morning_digest: compose skill failed (%s); "
@@ -215,9 +213,7 @@ class MorningDigestPipeline:
                 return False
         return True
 
-    def _resolve_delivery_channel(
-        self, profile: dict[str, Any] | None
-    ) -> str:
+    def _resolve_delivery_channel(self, profile: dict[str, Any] | None) -> str:
         if isinstance(profile, dict):
             channel = profile.get("delivery_channel")
             if isinstance(channel, str) and channel:
@@ -254,7 +250,7 @@ class MorningDigestPipeline:
             {"member_id": member_id, "body_text": body_text},
             _no_op_send,
             manager=ctx.observation_manager,
-            event_log=ctx.event_log,
+            event_sink=ctx.event_sink,
             target_channel=channel,
             target_identifier=member_id,
         )
@@ -301,7 +297,7 @@ class MorningDigestPipeline:
                 "today_iso": today_iso,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -361,9 +357,7 @@ class MorningDigestPipeline:
             triggering_event=triggering_event,
         )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner (the runner skips
         on absence of `triggers.events` per `runner.py:131-138`); this

@@ -94,8 +94,8 @@ class CustodyBriefPipeline:
         self._coparent_targets_loader: CoparentTargetsLoader = (
             coparent_targets_loader or (lambda _brief_date: [])
         )
-        self._member_override_loader: MemberOverrideLoader = (
-            member_override_loader or (lambda _mid: None)
+        self._member_override_loader: MemberOverrideLoader = member_override_loader or (
+            lambda _mid: None
         )
 
     async def gather(
@@ -130,9 +130,7 @@ class CustodyBriefPipeline:
             "medication_notes": medication_notes,
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_custody_brief", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_custody_brief", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "custody_brief: compose skill failed (%s); emitting "
@@ -200,7 +198,7 @@ class CustodyBriefPipeline:
             {"member_id": member_id, "body_text": body_text},
             _no_op_send,
             manager=ctx.observation_manager,
-            event_log=ctx.event_log,
+            event_sink=ctx.event_sink,
             target_channel=channel,
             target_identifier=member_id,
         )
@@ -251,7 +249,7 @@ class CustodyBriefPipeline:
                 "validation_failed": validation_failed,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -270,9 +268,7 @@ class CustodyBriefPipeline:
         coparent_member_id = target.get("coparent_member_id")
         if not isinstance(coparent_member_id, str) or not coparent_member_id:
             return
-        child_member_ids = [
-            str(c) for c in (target.get("child_member_ids") or []) if c
-        ]
+        child_member_ids = [str(c) for c in (target.get("child_member_ids") or []) if c]
         if not child_member_ids:
             return
 
@@ -365,9 +361,7 @@ class CustodyBriefPipeline:
                 triggering_event=triggering_event,
             )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and is exercised in tests by

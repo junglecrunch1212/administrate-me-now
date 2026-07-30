@@ -2,6 +2,8 @@
 
 Status: **PASS**
 
+Gate 2 note: these Gate 1 artifacts remain immutable reference evidence. The runtime-spine refactor adds server namespaces and lifecycle behavior, but makes no frontend implementation claim; AC-18 still requires a production browser suite.
+
 Run from the repository root:
 
 ```powershell

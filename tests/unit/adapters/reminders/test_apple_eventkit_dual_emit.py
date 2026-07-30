@@ -57,9 +57,7 @@ from adminme.lib.adapters import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-REMINDERS_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+REMINDERS_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 
 
 def _load_apple_eventkit_module() -> Any:
@@ -90,17 +88,26 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-dual-emit",
         now_factory=lambda: _FROZEN_NOW,
     )
+
+
+def _emit_inbound_synced(adapter: Any, **kwargs: Any) -> None:
+    asyncio.run(adapter._emit_inbound_synced(**kwargs))
 
 
 class _FakeEKReminder:
@@ -163,9 +170,7 @@ class _FakeEKEventStore:
             }
         )
         cid = (
-            self._mint_queue.pop(0)
-            if self._mint_queue
-            else f"EKID-{len(self.builds)}"
+            self._mint_queue.pop(0) if self._mint_queue else f"EKID-{len(self.builds)}"
         )
         return _FakeEKReminder(
             list_identifier=list_identifier,
@@ -188,8 +193,12 @@ def _make_adapter(
     ek_store: _FakeEKEventStore | None = None,
     member_role: str = "adult",
 ) -> Any:
-    store = ek_store if ek_store is not None else _FakeEKEventStore(
-        list_names={"list-household-001": "AdministrateMe Household"}
+    store = (
+        ek_store
+        if ek_store is not None
+        else _FakeEKEventStore(
+            list_names={"list-household-001": "AdministrateMe Household"}
+        )
     )
     adapter = AppleEventKitAdapter(
         config={
@@ -262,9 +271,7 @@ def test_outbound_emits_list_item_added_alongside_legacy_synced() -> None:
     synced_calls = [
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     ]
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(synced_calls) == 1
     assert len(added_calls) == 1
 
@@ -284,9 +291,7 @@ def test_outbound_dual_emit_payload_validates_against_list_item_added_v1() -> No
 
     _drive_outbound(adapter, _make_ctx(event_log))
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     payload = added_call["payload"]
     instance = ListItemAddedV1.model_validate(payload)
     assert instance.member_id == "member-001"
@@ -319,9 +324,7 @@ def test_outbound_dual_emit_same_causation_id_as_legacy() -> None:
     synced_call = next(
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     )
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert synced_call["causation_id"] == "evt-dispatch-42"
     assert added_call["causation_id"] == "evt-dispatch-42"
     assert synced_call["causation_id"] == added_call["causation_id"]
@@ -343,9 +346,7 @@ def test_outbound_dual_emit_same_correlation_id_as_legacy() -> None:
     synced_call = next(
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     )
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert synced_call["correlation_id"] == "corr-dual-emit"
     assert added_call["correlation_id"] == "corr-dual-emit"
 
@@ -425,9 +426,7 @@ def test_dual_emit_both_skipped_when_outbound_suppressed(
         # is "did not perform the side effect." The save MUST NOT run.
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     event_log = _FakeEventLog()
     written = _drive_outbound(adapter, _make_ctx(event_log))
@@ -438,9 +437,7 @@ def test_dual_emit_both_skipped_when_outbound_suppressed(
     assert [
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     ] == []
-    assert [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ] == []
+    assert [c for c in event_log.calls if c["type"] == "list_item.added"] == []
     # The wrapped save did NOT execute against the fake store.
     assert ek_store.saves == []
 
@@ -492,7 +489,8 @@ def test_inbound_first_observation_emits_list_item_added() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=reminder,
         sync_cycle_id="cycle-inbound-A",
@@ -530,7 +528,8 @@ def test_inbound_completion_flip_emits_list_item_completed() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_open,
         sync_cycle_id="cycle-inbound-B1",
@@ -546,15 +545,14 @@ def test_inbound_completion_flip_emits_list_item_completed() -> None:
         last_modified_at=_FROZEN_NOW + timedelta(minutes=5),
         completed=True,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_done,
         sync_cycle_id="cycle-inbound-B2",
     )
 
-    completed_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.completed"
-    ]
+    completed_calls = [c for c in event_log.calls if c["type"] == "list_item.completed"]
     assert len(completed_calls) == 1
     instance = ListItemCompletedV1.model_validate(completed_calls[0]["payload"])
     assert instance.completed is True
@@ -583,7 +581,8 @@ def test_inbound_other_field_change_emits_list_item_updated() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_v1,
         sync_cycle_id="cycle-edit-1",
@@ -598,15 +597,14 @@ def test_inbound_other_field_change_emits_list_item_updated() -> None:
         last_modified_at=_FROZEN_NOW + timedelta(minutes=5),
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_v2,
         sync_cycle_id="cycle-edit-2",
     )
 
-    updated_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.updated"
-    ]
+    updated_calls = [c for c in event_log.calls if c["type"] == "list_item.updated"]
     assert len(updated_calls) == 1
     payload = updated_calls[0]["payload"]
     assert payload["title"] == "Buy milk and bread"
@@ -640,7 +638,8 @@ def test_inbound_list_item_updated_field_updates_excludes_unchanged_fields() -> 
         last_modified_at=_FROZEN_NOW,
         **common_kwargs,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_v1,
         sync_cycle_id="cycle-1",
@@ -650,15 +649,14 @@ def test_inbound_list_item_updated_field_updates_excludes_unchanged_fields() -> 
         last_modified_at=_FROZEN_NOW + timedelta(minutes=2),
         **common_kwargs,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem_v2,
         sync_cycle_id="cycle-2",
     )
 
-    updated_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.updated"
-    )
+    updated_call = next(c for c in event_log.calls if c["type"] == "list_item.updated")
     field_updates = updated_call["payload"]["field_updates"]
     # `title` changed, `last_modified_at` changed; nothing else.
     assert set(field_updates.keys()) == {"title", "last_modified_at"}
@@ -692,14 +690,12 @@ def test_inbound_dual_emit_legacy_and_new_share_correlation_id() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(ctx=ctx, reminder=rem, sync_cycle_id="cyc-corr")
+    _emit_inbound_synced(adapter, ctx=ctx, reminder=rem, sync_cycle_id="cyc-corr")
 
     synced_call = next(
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     )
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert synced_call["correlation_id"] == added_call["correlation_id"]
     assert added_call["correlation_id"] == "corr-dual-emit"
 
@@ -723,7 +719,8 @@ def test_inbound_dual_emit_sync_cycle_id_matches_legacy() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem,
         sync_cycle_id="cyc-shared-9",
@@ -732,9 +729,7 @@ def test_inbound_dual_emit_sync_cycle_id_matches_legacy() -> None:
     synced_call = next(
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     )
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert synced_call["payload"]["sync_cycle_id"] == "cyc-shared-9"
     assert added_call["payload"]["sync_cycle_id"] == "cyc-shared-9"
 
@@ -760,15 +755,14 @@ def test_inbound_dual_emit_member_id_propagates_from_adapter_config() -> None:
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem,
         sync_cycle_id="cyc-m",
     )
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert added_call["payload"]["member_id"] == "member-001"
 
 
@@ -795,15 +789,14 @@ def test_inbound_dual_emit_priority_propagates_through_ordinal_scale(
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem,
         sync_cycle_id="cyc-prio",
     )
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert added_call["payload"]["priority"] == ek_priority
     # Schema-side validation pin: the canonical Literal accepts.
     ListItemAddedV1.model_validate(added_call["payload"])
@@ -857,15 +850,9 @@ def test_inbound_completion_flip_followed_by_field_change_emits_updated() -> Non
         (rem_done, "cyc-2"),
         (rem_edited, "cyc-3"),
     ):
-        adapter._emit_inbound_synced(
-            ctx=ctx, reminder=rem, sync_cycle_id=cycle
-        )
+        _emit_inbound_synced(adapter, ctx=ctx, reminder=rem, sync_cycle_id=cycle)
 
-    kinds = [
-        c["type"]
-        for c in event_log.calls
-        if c["type"].startswith("list_item.")
-    ]
+    kinds = [c["type"] for c in event_log.calls if c["type"].startswith("list_item.")]
     assert kinds == ["list_item.added", "list_item.completed", "list_item.updated"]
 
 
@@ -891,7 +878,8 @@ def test_inbound_dual_emit_legacy_payload_unchanged_from_pre_dual_shape() -> Non
         last_modified_at=_FROZEN_NOW,
         completed=False,
     )
-    adapter._emit_inbound_synced(
+    _emit_inbound_synced(
+        adapter,
         ctx=_make_ctx(event_log),
         reminder=rem,
         sync_cycle_id="cyc-legacy",

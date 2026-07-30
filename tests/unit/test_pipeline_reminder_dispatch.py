@@ -29,10 +29,7 @@ from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "reminder_dispatch"
+    Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "reminder_dispatch"
 )
 
 
@@ -63,7 +60,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -105,9 +102,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         if skill_raises is not None:
@@ -123,6 +118,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -182,9 +178,7 @@ async def test_emit_on_due_commitment() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("2026-05-15T09:30:00+00:00", ctx)
-    dispatched = [
-        c for c in log.calls if c.envelope.type == "reminder.dispatched"
-    ]
+    dispatched = [c for c in log.calls if c.envelope.type == "reminder.dispatched"]
     assert len(dispatched) == 1
     env = dispatched[0].envelope
     assert env.payload["commitment_id"] == "commit-1"
@@ -249,17 +243,13 @@ async def test_skill_failure_emits_sentinel_no_outbound() -> None:
         observation_manager=_FakeObservationManager(active=True),
     )
     await pipeline.dispatch("2026-05-15T09:30:00+00:00", ctx)
-    dispatched = [
-        c for c in log.calls if c.envelope.type == "reminder.dispatched"
-    ]
+    dispatched = [c for c in log.calls if c.envelope.type == "reminder.dispatched"]
     assert len(dispatched) == 1
     assert dispatched[0].envelope.payload["validation_failed"] is True
     assert dispatched[0].envelope.payload["delivered"] is False
     assert dispatched[0].envelope.payload["composed_text"] == ""
     # No observation events on the sentinel path.
-    assert all(
-        c.envelope.type == "reminder.dispatched" for c in log.calls
-    )
+    assert all(c.envelope.type == "reminder.dispatched" for c in log.calls)
 
 
 @pytest.mark.asyncio
@@ -280,15 +270,11 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
         observation_manager=_FakeObservationManager(active=True),
     )
     await pipeline.dispatch("2026-05-15T09:30:00+00:00", ctx)
-    dispatched = [
-        c for c in log.calls if c.envelope.type == "reminder.dispatched"
-    ]
+    dispatched = [c for c in log.calls if c.envelope.type == "reminder.dispatched"]
     assert len(dispatched) == 1
     assert dispatched[0].envelope.payload["delivered"] is False
     assert dispatched[0].envelope.payload["validation_failed"] is False
-    suppressed = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
-    ]
+    suppressed = [c for c in log.calls if c.envelope.type == "observation.suppressed"]
     assert len(suppressed) == 1
 
 
@@ -312,9 +298,7 @@ async def test_per_member_reminders_disabled_skips() -> None:
 
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_outbound_fn(*a: Any, **kw: Any) -> Any:
         raise AssertionError("opt-out path must NOT call outbound")
@@ -322,6 +306,7 @@ async def test_per_member_reminders_disabled_skips() -> None:
     ctx = PipelineContext(
         session=session,
         event_log=log,
+        event_sink=log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -351,9 +336,7 @@ async def test_causation_and_correlation_propagate() -> None:
         observation_manager=_FakeObservationManager(active=True),
     )
     await pipeline.dispatch("2026-05-15T09:30:00+00:00", ctx)
-    dispatched = [
-        c for c in log.calls if c.envelope.type == "reminder.dispatched"
-    ]
+    dispatched = [c for c in log.calls if c.envelope.type == "reminder.dispatched"]
     assert dispatched[0].correlation_id == "corr-XYZ"
     assert dispatched[0].causation_id == "tick-trigger-eid"
 
@@ -393,7 +376,5 @@ async def test_handle_routes_through_dispatch() -> None:
         "payload": {"now_iso": "2026-05-15T09:30:00+00:00"},
     }
     await pipeline.handle(triggering_event, ctx)
-    dispatched = [
-        c for c in log.calls if c.envelope.type == "reminder.dispatched"
-    ]
+    dispatched = [c for c in log.calls if c.envelope.type == "reminder.dispatched"]
     assert len(dispatched) == 1

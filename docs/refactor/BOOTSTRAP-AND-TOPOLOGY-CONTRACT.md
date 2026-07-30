@@ -65,3 +65,7 @@ Observation begins before any connector/action becomes live and remains active f
 ## Bootstrap acceptance evidence
 
 Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
+
+## Gate 2 implementation status
+
+The central runtime now owns one SQLCipher event log, one durable bus, one typed commit-before-notify writer, thirteen projections, reactive pipelines, adapter/xlsx lifecycles, product namespaces, bridge ingest, and system readiness/liveness. Startup unwinds partially opened resources on failure. Shutdown first rejects new writes, then drains producers and consumers within bounds before closing projection stores, bus state, and the encrypted log. The ten-section installer, macOS rehearsal, browser assets, and full Doctor remain later gates; they are not falsely reported as runtime-ready capabilities.

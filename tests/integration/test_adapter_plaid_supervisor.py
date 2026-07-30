@@ -54,22 +54,13 @@ class _RecordingEventLog:
     def __init__(self) -> None:
         self.appended: list[dict[str, Any]] = []
 
-    def append_sync(
-        self,
-        *,
-        type: str,
-        schema_version: int,
-        payload: dict[str, Any],
-        correlation_id: str,
-    ) -> None:
-        self.appended.append(
-            {
-                "type": type,
-                "schema_version": schema_version,
-                "payload": payload,
-                "correlation_id": correlation_id,
-            }
-        )
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.appended.append(envelope.model_dump())
+        return f"event-{len(self.appended)}"
 
 
 class _FakePlaidClient:
@@ -79,9 +70,7 @@ class _FakePlaidClient:
         self.institution_calls: list[dict[str, Any]] = []
 
     def transactions_sync(self, *, access_token: str, cursor: str) -> dict[str, Any]:
-        self.transactions_calls.append(
-            {"access_token": access_token, "cursor": cursor}
-        )
+        self.transactions_calls.append({"access_token": access_token, "cursor": cursor})
         return self._response
 
     def institutions_get_by_id(
@@ -156,9 +145,7 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
     in the shared event log; supervisor status reports ``running``."""
     log = _RecordingEventLog()
     sync_response = {
-        "added": [
-            {"transaction_id": "txn-1", "account_id": "acct-1", "amount": -10.0}
-        ],
+        "added": [{"transaction_id": "txn-1", "account_id": "acct-1", "amount": -10.0}],
         "modified": [],
         "removed": [],
         "accounts": [{"account_id": "acct-1"}],
@@ -177,7 +164,7 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
 
     def _ctx_factory() -> AdapterContext:
         return AdapterContext(
-            event_log=log,  # type: ignore[arg-type]
+            event_sink=log,  # type: ignore[arg-type]
             config=_adapter_config(),
             correlation_id_factory=lambda: "corr-supervisor-plaid",
             now_factory=lambda: datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc),
@@ -217,10 +204,7 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
     assert payload["webhook_triggered"] is True
     assert payload["sync_cursor"] == "cursor-after-webhook-sync"
     # Auth event landed once during start().
-    assert (
-        len([e for e in log.appended if e["type"] == "adapter.authenticated"])
-        == 1
-    )
+    assert len([e for e in log.appended if e["type"] == "adapter.authenticated"]) == 1
 
 
 @pytest.mark.asyncio
@@ -249,7 +233,7 @@ async def test_supervisor_plaid_item_login_required_emits_fatal(
 
     def _ctx_factory() -> AdapterContext:
         return AdapterContext(
-            event_log=log,  # type: ignore[arg-type]
+            event_sink=log,  # type: ignore[arg-type]
             config=_adapter_config(),
             correlation_id_factory=lambda: "corr-supervisor-plaid-fatal",
             now_factory=lambda: datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc),

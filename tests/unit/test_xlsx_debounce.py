@@ -21,6 +21,7 @@ import pytest
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -48,6 +49,7 @@ async def projection_rig(tmp_path: Path):
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -68,11 +70,14 @@ async def projection_rig(tmp_path: Path):
         money_conn=runner.connection("money"),
     )
     projection = XlsxWorkbooksProjection(
-        config, ctx, event_log=log, debounce_s=0.15
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.15
     )
     try:
         yield {
-            "config": config, "log": log, "bus": bus, "runner": runner,
+            "config": config,
+            "log": log,
+            "bus": bus,
+            "runner": runner,
             "projection": projection,
         }
     finally:

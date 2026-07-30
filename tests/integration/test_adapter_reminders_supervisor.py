@@ -44,9 +44,7 @@ from adminme.daemons.adapter_supervisor import AdapterSupervisor
 pytestmark = pytest.mark.requires_live_services
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REMINDERS_PACK_ROOT = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+REMINDERS_PACK_ROOT = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 FIXTURES = REMINDERS_PACK_ROOT / "tests" / "fixtures"
 
 _FROZEN_NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
@@ -80,15 +78,19 @@ def _load_inbound_fixture() -> dict[str, Any]:
 class _RecordingEventLog:
     """Recording event log shared by the supervisor + adapter contexts.
 
-    Mirrors the 11a integration test's recording log surface: the
-    Reminders adapter and the supervisor both probe for ``append_sync``
-    first per their respective ``_append`` helpers."""
+    Mirrors the 11a integration test's typed recording-sink surface shared
+    by the Reminders adapter and supervisor."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
     def by_type(self, event_type: str) -> list[dict[str, Any]]:
         return [c for c in self.calls if c.get("type") == event_type]
@@ -159,9 +161,7 @@ class _FakeEKEventStore:
             }
         )
         cid = (
-            self._mint_queue.pop(0)
-            if self._mint_queue
-            else f"EKID-{len(self.builds)}"
+            self._mint_queue.pop(0) if self._mint_queue else f"EKID-{len(self.builds)}"
         )
         return _FakeEKReminder(
             list_identifier=list_identifier,
@@ -178,9 +178,7 @@ class _FakeEKEventStore:
     def remove(self, reminder: Any, *, commit: bool) -> None:  # pragma: no cover
         return None
 
-    def fetch_reminders(
-        self, *, list_identifier: str | None = None
-    ) -> list[Any]:
+    def fetch_reminders(self, *, list_identifier: str | None = None) -> list[Any]:
         self.fetch_calls += 1
         if list_identifier is None:
             return list(self._inbound_reminders)
@@ -202,9 +200,7 @@ def _reminders_from_fixture(
     predicate; ``due_at`` is optional."""
     out: list[_FakeEKReminder] = []
     for entry in fixture["reminders"]:
-        lmod = datetime.fromisoformat(
-            entry["last_modified_at"].replace("Z", "+00:00")
-        )
+        lmod = datetime.fromisoformat(entry["last_modified_at"].replace("Z", "+00:00"))
         due_raw = entry.get("due_at")
         due_at = (
             datetime.fromisoformat(due_raw.replace("Z", "+00:00"))
@@ -291,7 +287,7 @@ def _supervisor(
 
     def _ctx_factory() -> AdapterContext:
         return AdapterContext(
-            event_log=event_log,  # type: ignore[arg-type]
+            event_sink=event_log,  # type: ignore[arg-type]
             config={},
             correlation_id_factory=_next_corr,
             now_factory=lambda: _FROZEN_NOW,
@@ -345,9 +341,7 @@ async def test_supervisor_inbound_round_trip_emits_synced_inbound(
     adapter = _build_reminders_adapter(ek_store=ek_store)
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     await sup.start()
     try:
@@ -365,7 +359,7 @@ async def test_supervisor_inbound_round_trip_emits_synced_inbound(
         # docs/reference/apple-eventkit/access.md.
         assert (
             auth[0]["payload"]["token_storage_ref"]
-            == "os://reminders-permission"
+            == "op://local-system/reminders/permission"
         )
 
         # 3 of 4 fixture reminders pass the never-sync filter; one event
@@ -375,14 +369,11 @@ async def test_supervisor_inbound_round_trip_emits_synced_inbound(
         assert len(synced) == 3
         for call in synced:
             assert call["payload"]["direction"] == "inbound"
-            assert "causation_id" not in call
+            assert call["causation_id"] is None
 
         # The "#private" reminder is filtered.
         emitted_ids = {c["payload"]["remind_id"] for c in synced}
-        assert (
-            "x-coredata://AdministrateMe/EKReminder/rem-private"
-            not in emitted_ids
-        )
+        assert "x-coredata://AdministrateMe/EKReminder/rem-private" not in emitted_ids
 
         # No adapter.error on the happy path.
         assert event_log.by_type("adapter.error") == []
@@ -393,10 +384,7 @@ async def test_supervisor_inbound_round_trip_emits_synced_inbound(
     finally:
         await sup.stop()
         snap_after = sup.snapshot()
-        assert (
-            snap_after["adapters"]["reminders-apple-eventkit"]["state"]
-            == "stopped"
-        )
+        assert snap_after["adapters"]["reminders-apple-eventkit"]["state"] == "stopped"
 
 
 # ---------------------------------------------------------------------------
@@ -443,9 +431,7 @@ async def test_supervisor_outbound_round_trip_emits_synced_outbound(
     )
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     await sup.start()
     try:
@@ -502,28 +488,20 @@ async def test_supervisor_parses_real_repo_channels_yaml_has_reminders_entry(
 
     repo_channels = REPO_ROOT / "config" / "channels.yaml"
     copied = tmp_path / "channels.yaml"
-    copied.write_text(
-        repo_channels.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    copied.write_text(repo_channels.read_text(encoding="utf-8"), encoding="utf-8")
 
-    sup = _supervisor(
-        config_path=copied, event_log=_RecordingEventLog(), adapters=[]
-    )
+    sup = _supervisor(config_path=copied, event_log=_RecordingEventLog(), adapters=[])
     config = sup.load_config()
 
     adapters_entries = config["adapters"]
     assert isinstance(adapters_entries, list)
     rem = next(
-        (
-            a
-            for a in adapters_entries
-            if a.get("kind") == "reminders-apple-eventkit"
-        ),
+        (a for a in adapters_entries if a.get("kind") == "reminders-apple-eventkit"),
         None,
     )
-    assert rem is not None, (
-        "config/channels.yaml is missing the reminders-apple-eventkit entry"
-    )
+    assert (
+        rem is not None
+    ), "config/channels.yaml is missing the reminders-apple-eventkit entry"
     assert rem["family"] == "reminders"
     assert rem["sensitivity_floor"] == "normal"
     rem_config = rem["config"]

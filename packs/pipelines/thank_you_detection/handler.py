@@ -183,9 +183,7 @@ class ThankYouDetectionPipeline:
     def __init__(self) -> None:
         self._config_override: dict[str, Any] | None = None
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Inbound-only thank-you detection.
 
         F-5 carry-forward: returns silently on any non-`messaging.received`
@@ -376,8 +374,7 @@ class ThankYouDetectionPipeline:
             "kind": "other",
             "owed_by_member_id": receiving_member_id,
             "owed_to_party_id": str(
-                extract_output.get("recipient_party_id")
-                or sender_party["party_id"]
+                extract_output.get("recipient_party_id") or sender_party["party_id"]
             ),
             "text_summary": suggested_text or "(no summary extracted)",
             "urgency": str(extract_output.get("urgency", "this_week")),
@@ -406,7 +403,7 @@ class ThankYouDetectionPipeline:
             sensitivity="normal",
             payload=proposed_payload,
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -440,7 +437,7 @@ class ThankYouDetectionPipeline:
                 "source_event_id": source_event_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

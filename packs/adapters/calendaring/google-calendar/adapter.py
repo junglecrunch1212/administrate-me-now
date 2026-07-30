@@ -22,6 +22,7 @@ import subprocess
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.adapters.emission import write_adapter_event
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -64,18 +65,20 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
         }
     op_bin = shutil.which("op")
     if op_bin is None:
-        raise RuntimeError(
-            f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}"
-        )
+        raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
     proc = subprocess.run(
         [op_bin, "read", "--no-newline", op_ref],
-        check=True, capture_output=True, timeout=15,
+        check=True,
+        capture_output=True,
+        timeout=15,
     )
     return json.loads(proc.stdout.decode("utf-8"))
 
 
 def _default_service_factory(
-    credentials_json: dict[str, Any], scopes: list[str], subject_email: str,
+    credentials_json: dict[str, Any],
+    scopes: list[str],
+    subject_email: str,
 ) -> Any:
     """Build Calendar v3 service; lazy import keeps SDK out of CI."""
     from google.oauth2.service_account import Credentials
@@ -115,7 +118,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     # capabilities. One Cat-B entry declaring the EXISTING on-main
     # ``calendar.event_added`` family — NO new schema per [D7].
     capabilities: ClassVar[list[Any]] = [
-        {"kind": "Cat-B", "runtime": "central", "event_families": ["calendar.event_added"]},
+        {
+            "kind": "Cat-B",
+            "runtime": "central",
+            "event_families": ["calendar.event_added"],
+        },
     ]
 
     # [UT-27] asymmetric — declare ONLY what is implemented.
@@ -143,7 +150,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
-        self._credentials_resolver = credentials_resolver or _default_credentials_resolver
+        self._credentials_resolver = (
+            credentials_resolver or _default_credentials_resolver
+        )
         self._service_factory = service_factory or _default_service_factory
         # [§6 invariant 10] resolve floor at construction; raise on downgrade.
         self.sensitivity_floor: SensitivityFloor = (  # type: ignore[misc]
@@ -200,7 +209,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
-        self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
         await self._poll_loop(ctx=ctx)
 
     async def stop(self) -> None:
@@ -222,11 +231,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             try:
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
-                severity, error_kind, retry_after_s = (
-                    self._classify_calendar_error(exc)
-                )
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
@@ -249,9 +258,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             )
         calendar_id = str(self._config["calendar_id"])
         time_min = ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ")
-        events = self._fetch_events(
-            calendar_id=calendar_id, time_min=time_min
-        )
+        events = self._fetch_events(calendar_id=calendar_id, time_min=time_min)
         emitted = 0
         for event in events:
             event_id = event.get("id")
@@ -259,16 +266,14 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 continue
             if event_id in self._seen_inbound:
                 continue
-            self._emit_calendar_event_added(
+            await self._emit_calendar_event_added(
                 ctx=ctx, calendar_id=calendar_id, event=event
             )
             self._seen_inbound[event_id] = str(event.get("updated") or "")
             emitted += 1
         return emitted
 
-    def _fetch_events(
-        self, *, calendar_id: str, time_min: str
-    ) -> list[dict[str, Any]]:
+    def _fetch_events(self, *, calendar_id: str, time_min: str) -> list[dict[str, Any]]:
         """Page ``events.list(singleEvents=True, orderBy=startTime,
         timeMin=...)`` until ``nextPageToken`` is absent."""
         records: list[dict[str, Any]] = []
@@ -290,26 +295,32 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 break
         return records
 
-    def _emit_calendar_event_added(
-        self, *, ctx: AdapterContext, calendar_id: str, event: dict[str, Any],
+    async def _emit_calendar_event_added(
+        self,
+        *,
+        ctx: AdapterContext,
+        calendar_id: str,
+        event: dict[str, Any],
     ) -> None:
         """Map a Google event onto ``CalendarEventAddedV1`` per [D7] +
         canonical 11a's "MAP DON'T REGISTER"."""
-        self._append(ctx=ctx, event_type="calendar.event_added", payload={
-            "source": "google_calendar",
-            "external_event_id": str(event.get("id") or ""),
-            "calendar_id": calendar_id,
-            "summary": str(event.get("summary") or ""),
-            "start": _extract_when(event.get("start")),
-            "end": _extract_when(event.get("end")),
-            "location": event.get("location"),
-            "attendees": list(event.get("attendees") or []),
-            "body": event.get("description"),
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="calendar.event_added",
+            payload={
+                "source": "google_calendar",
+                "external_event_id": str(event.get("id") or ""),
+                "calendar_id": calendar_id,
+                "summary": str(event.get("summary") or ""),
+                "start": _extract_when(event.get("start")),
+                "end": _extract_when(event.get("end")),
+                "location": event.get("location"),
+                "attendees": list(event.get("attendees") or []),
+                "body": event.get("description"),
+            },
+        )
 
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """[UT-27] gate already checked ``operation.kind``. Phase B routes
         ``events.insert`` through :func:`observation_outbound` per
         [§6.20]; Phase A direct-calls when seams are unset."""
@@ -364,27 +375,25 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     },
                     _do_insert,
                     manager=manager,
-                    event_log=event_log,
+                    event_sink=event_log,
                     target_channel="calendaring-google-calendar",
                     target_identifier=calendar_id,
                 )
                 if outbound_result.suppressed:
                     # F-3 (HARD): suppressed → unapplied; caller does NOT
                     # emit externally-visible side effects.
-                    return WriteResult(
-                        applied=False, external_id=None, suppressed=True
-                    )
+                    return WriteResult(applied=False, external_id=None, suppressed=True)
                 response = outbound_result.result or {}
             else:
                 response = await _do_insert()
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             ctx = self._ctx
-            severity, error_kind, retry_after_s = (
-                self._classify_calendar_error(exc)
-            )
+            severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
             if ctx is not None:
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
@@ -403,19 +412,28 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         (out of scope per parent draft) will dispatch through this hook."""
         return None
 
-    def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
         """``adapter.authenticated@v1``; carries op-ref, NEVER the secret."""
-        self._append(ctx=ctx, event_type="adapter.authenticated", payload={
-            "adapter_name": self.name,
-            "adapter_family": self.family,
-            "token_storage_ref": op_ref,
-            "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "scopes": list(self.SCOPES),
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="adapter.authenticated",
+            payload={
+                "adapter_name": self.name,
+                "adapter_family": self.family,
+                "token_storage_ref": op_ref,
+                "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scopes": list(self.SCOPES),
+            },
+        )
 
-    def _emit_error(
-        self, *, ctx: AdapterContext, severity: str, error_kind: str,
-        error_message: str, retry_after_s: int | None,
+    async def _emit_error(
+        self,
+        *,
+        ctx: AdapterContext,
+        severity: str,
+        error_kind: str,
+        error_message: str,
+        retry_after_s: int | None,
     ) -> None:
         """``adapter.error@v1`` — drives the supervisor's backoff."""
         payload: dict[str, Any] = {
@@ -428,28 +446,27 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             "occurred_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
-        self, *, ctx: AdapterContext, event_type: str,
-        payload: dict[str, Any], causation_id: str | None = None,
+    async def _append(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None = None,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
         try:
-            appender(**kwargs)
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
+            )
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception(
                 "google-calendar adapter failed to emit %s event", event_type
@@ -474,7 +491,8 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 status = None
             retry_header: Any = (
                 resp.get("retry-after") or resp.get("Retry-After")
-                if hasattr(resp, "get") else None
+                if hasattr(resp, "get")
+                else None
             )
             try:
                 retry_after = int(retry_header) if retry_header is not None else None
@@ -493,4 +511,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         return ("transient", "unknown", retry_after)
 
 
-__all__ = ["CredentialsResolver", "GOOGLE_CALENDAR_SCOPES", "GoogleCalendarAdapter", "ServiceFactory"]
+__all__ = [
+    "CredentialsResolver",
+    "GOOGLE_CALENDAR_SCOPES",
+    "GoogleCalendarAdapter",
+    "ServiceFactory",
+]

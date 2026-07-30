@@ -25,6 +25,7 @@ import pytest
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventSink, EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
 from adminme.lib.session import build_internal_session
@@ -32,9 +33,7 @@ from adminme.pipelines import invalidate_cache, load_pipeline_pack
 from adminme.pipelines.base import PipelineContext
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REMINDER_DISPATCH_PACK_ROOT = (
-    REPO_ROOT / "packs" / "pipelines" / "reminder_dispatch"
-)
+REMINDER_DISPATCH_PACK_ROOT = REPO_ROOT / "packs" / "pipelines" / "reminder_dispatch"
 CRM_SURFACE_PACK_ROOT = REPO_ROOT / "packs" / "pipelines" / "crm_surface"
 CUSTODY_BRIEF_PACK_ROOT = REPO_ROOT / "packs" / "pipelines" / "custody_brief"
 TEST_KEY = b"i" * 32
@@ -140,31 +139,27 @@ def _trigger_event(eid: str) -> dict[str, Any]:
 
 async def _build_runtime(
     tmp_path: Path, *, observation_active: bool
-) -> tuple[
-    Any, EventLog, EventBus, ObservationManager, PipelineContext, Any
-]:
+) -> tuple[Any, EventLog, EventBus, ObservationManager, PipelineContext, Any]:
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runtime_path = tmp_path / "config" / "runtime.yaml"
-    obs_mgr = ObservationManager(
-        event_log=log, runtime_config_path=runtime_path
-    )
+    obs_mgr = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
     if not observation_active:
         await obs_mgr.disable(actor="test", reason="test_setup_off")
 
-    session = build_internal_session(
-        "pipeline_runner", "device", config.tenant_id
-    )
-    return config, log, bus, obs_mgr, session, None
+    session = build_internal_session("pipeline_runner", "device", config.tenant_id)
+    return config, log, bus, obs_mgr, session, events
 
 
 def _make_ctx(
     log: EventLog,
     session: Any,
     obs_mgr: ObservationManager,
+    events: EventSink,
     *,
     skill_outputs: dict[str, Any],
     expected_skill_id: str,
@@ -183,6 +178,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=log,
+        event_sink=events,
         run_skill_fn=fake_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -200,7 +196,7 @@ async def test_reminder_dispatch_observation_off_round_trip(
 ) -> None:
     """Obs OFF → outbound() lands external.sent; reminder.dispatched
     payload carries delivered=true, validation_failed=false."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
     pack = load_pipeline_pack(REMINDER_DISPATCH_PACK_ROOT)
@@ -209,6 +205,7 @@ async def test_reminder_dispatch_observation_off_round_trip(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Reminder: call doc at 10:00.",
             "suggested_channel": "imessage",
@@ -226,9 +223,7 @@ async def test_reminder_dispatch_observation_off_round_trip(
         await pack.instance.handle(triggering, ctx)
 
         all_events = await _read_all(log)
-        dispatched = [
-            e for e in all_events if e["type"] == "reminder.dispatched"
-        ]
+        dispatched = [e for e in all_events if e["type"] == "reminder.dispatched"]
         assert len(dispatched) == 1
         payload = dispatched[0]["payload"]
         assert payload["commitment_id"] == "commit-1"
@@ -239,9 +234,7 @@ async def test_reminder_dispatch_observation_off_round_trip(
         assert payload["channel"] == "imessage"
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert len(sent) == 1
         assert suppressed == []
     finally:
@@ -254,7 +247,7 @@ async def test_reminder_dispatch_observation_on_suppresses(
 ) -> None:
     """Obs ON → outbound() suppresses; reminder.dispatched still emits
     with delivered=false; observation.suppressed lands."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
     pack = load_pipeline_pack(REMINDER_DISPATCH_PACK_ROOT)
@@ -263,6 +256,7 @@ async def test_reminder_dispatch_observation_on_suppresses(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Reminder: call doc at 10:00.",
             "suggested_channel": "imessage",
@@ -280,18 +274,14 @@ async def test_reminder_dispatch_observation_on_suppresses(
         await pack.instance.handle(triggering, ctx)
 
         all_events = await _read_all(log)
-        dispatched = [
-            e for e in all_events if e["type"] == "reminder.dispatched"
-        ]
+        dispatched = [e for e in all_events if e["type"] == "reminder.dispatched"]
         assert len(dispatched) == 1
         payload = dispatched[0]["payload"]
         assert payload["validation_failed"] is False
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert sent == []
         assert len(suppressed) == 1
     finally:
@@ -308,7 +298,7 @@ async def test_crm_surface_observation_off_round_trip(
     """Obs OFF → external.sent lands; crm.surfaced payload carries
     delivered=true, gap_kind discriminator and the loader-anchored
     surfaced_party_ids."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
     pack = load_pipeline_pack(CRM_SURFACE_PACK_ROOT)
@@ -317,6 +307,7 @@ async def test_crm_surface_observation_off_round_trip(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Catch up with party-1, party-2.",
             "suggested_channel": "imessage",
@@ -344,9 +335,7 @@ async def test_crm_surface_observation_off_round_trip(
         assert payload["delivered"] is True
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert len(sent) == 1
         assert suppressed == []
     finally:
@@ -359,7 +348,7 @@ async def test_crm_surface_observation_on_suppresses(
 ) -> None:
     """Obs ON → crm.surfaced emits with delivered=false;
     observation.suppressed lands."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
     pack = load_pipeline_pack(CRM_SURFACE_PACK_ROOT)
@@ -368,6 +357,7 @@ async def test_crm_surface_observation_on_suppresses(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Catch up with party-1, party-2.",
             "suggested_channel": "imessage",
@@ -391,9 +381,7 @@ async def test_crm_surface_observation_on_suppresses(
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert sent == []
         assert len(suppressed) == 1
     finally:
@@ -410,7 +398,7 @@ async def test_custody_brief_observation_off_round_trip(
     """Obs OFF → external.sent lands; custody_brief.composed payload
     carries delivered=true and the loader-anchored coparent + child
     ids."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
     pack = load_pipeline_pack(CUSTODY_BRIEF_PACK_ROOT)
@@ -419,6 +407,7 @@ async def test_custody_brief_observation_off_round_trip(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Tomorrow: soccer 16:00. Handoff 08:00 school.",
             "suggested_channel": "imessage",
@@ -435,9 +424,7 @@ async def test_custody_brief_observation_off_round_trip(
         await pack.instance.handle(triggering, ctx)
 
         all_events = await _read_all(log)
-        composed = [
-            e for e in all_events if e["type"] == "custody_brief.composed"
-        ]
+        composed = [e for e in all_events if e["type"] == "custody_brief.composed"]
         assert len(composed) == 1
         payload = composed[0]["payload"]
         assert payload["member_id"] == "member-a"
@@ -448,9 +435,7 @@ async def test_custody_brief_observation_off_round_trip(
         assert payload["delivered"] is True
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert len(sent) == 1
         assert suppressed == []
     finally:
@@ -463,7 +448,7 @@ async def test_custody_brief_observation_on_suppresses(
 ) -> None:
     """Obs ON → custody_brief.composed emits with delivered=false;
     observation.suppressed lands."""
-    _config, log, bus, obs_mgr, session, _ = await _build_runtime(
+    _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
     pack = load_pipeline_pack(CUSTODY_BRIEF_PACK_ROOT)
@@ -472,6 +457,7 @@ async def test_custody_brief_observation_on_suppresses(
         log,
         session,
         obs_mgr,
+        events,
         skill_outputs={
             "composed_text": "Tomorrow: soccer 16:00. Handoff 08:00 school.",
             "suggested_channel": "imessage",
@@ -488,18 +474,14 @@ async def test_custody_brief_observation_on_suppresses(
         await pack.instance.handle(triggering, ctx)
 
         all_events = await _read_all(log)
-        composed = [
-            e for e in all_events if e["type"] == "custody_brief.composed"
-        ]
+        composed = [e for e in all_events if e["type"] == "custody_brief.composed"]
         assert len(composed) == 1
         payload = composed[0]["payload"]
         assert payload["validation_failed"] is False
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [
-            e for e in all_events if e["type"] == "observation.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
         assert sent == []
         assert len(suppressed) == 1
     finally:

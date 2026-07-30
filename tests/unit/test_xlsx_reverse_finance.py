@@ -28,6 +28,7 @@ from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -109,6 +110,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -120,33 +122,68 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     await runner.start()
 
     # Seed: 1 person, 1 account, 1 Plaid flow, 1 manual flow.
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "P1", "sort_name": "P1",
-    }))
-    await log.append(_envelope("account.added", {
-        "account_id": "a1", "display_name": "Checking",
-        "organization_party_id": "p1", "kind": "bank",
-        "status": "active", "attributes": {"last4": "1234"},
-    }))
-    await log.append(_envelope("money_flow.recorded", {
-        "flow_id": "fp1", "amount_minor": 1234, "currency": "USD",
-        "occurred_at": "2026-04-20T10:00:00Z",
-        "kind": "paid", "linked_account": "a1",
-        "source_adapter": "plaid",
-    }))
-    last = await log.append(_envelope("money_flow.manually_added", {
-        "flow_id": "fm1", "amount_minor": 4321, "currency": "USD",
-        "occurred_at": "2026-04-21T10:00:00Z",
-        "kind": "paid",
-        "category": "groceries",
-        "notes": "manual flow",
-        "added_by_party_id": "p1",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "P1",
+                "sort_name": "P1",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "account.added",
+            {
+                "account_id": "a1",
+                "display_name": "Checking",
+                "organization_party_id": "p1",
+                "kind": "bank",
+                "status": "active",
+                "attributes": {"last4": "1234"},
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.recorded",
+            {
+                "flow_id": "fp1",
+                "amount_minor": 1234,
+                "currency": "USD",
+                "occurred_at": "2026-04-20T10:00:00Z",
+                "kind": "paid",
+                "linked_account": "a1",
+                "source_adapter": "plaid",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.manually_added",
+            {
+                "flow_id": "fm1",
+                "amount_minor": 4321,
+                "currency": "USD",
+                "occurred_at": "2026-04-21T10:00:00Z",
+                "kind": "paid",
+                "category": "groceries",
+                "notes": "manual flow",
+                "added_by_party_id": "p1",
+            },
+        )
+    )
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -159,12 +196,14 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(FINANCE_WORKBOOK_NAME)
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=0.5,
         delete_undo_window_s=0.05,
@@ -186,7 +225,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
 
 
 async def test_manual_row_add_emits_money_flow_manually_added(
-    rig: dict[str, Any]
+    rig: dict[str, Any],
 ) -> None:
     reverse = rig["reverse"]
     log = rig["log"]
@@ -238,9 +277,7 @@ async def test_plaid_row_add_drops_warn(
 
     added = await _events_of_type(log, "money_flow.manually_added", cursor)
     assert added == []
-    assert any(
-        "non-manual row added via xlsx" in r.message for r in caplog.records
-    )
+    assert any("non-manual row added via xlsx" in r.message for r in caplog.records)
 
 
 async def test_manual_row_delete_after_window(rig: dict[str, Any]) -> None:
@@ -287,8 +324,7 @@ async def test_plaid_row_delete_drops_warn(
     deleted = await _events_of_type(log, "money_flow.manually_deleted", cursor)
     assert deleted == []
     assert any(
-        "Plaid row deletion via xlsx ignored" in r.message
-        for r in caplog.records
+        "Plaid row deletion via xlsx ignored" in r.message for r in caplog.records
     )
 
 
@@ -319,8 +355,7 @@ async def test_assigned_category_edit_drops_info(
         evs = await _events_of_type(log, ev_type, cursor)
         assert evs == []
     assert any(
-        "money_flow.recategorized not registered" in r.message
-        for r in caplog.records
+        "money_flow.recategorized not registered" in r.message for r in caplog.records
     )
 
 
@@ -350,6 +385,5 @@ async def test_amount_edit_on_manual_row_drops_info(
         evs = await _events_of_type(log, ev_type, cursor)
         assert evs == []
     assert any(
-        "money_flow.recategorized not registered" in r.message
-        for r in caplog.records
+        "money_flow.recategorized not registered" in r.message for r in caplog.records
     )

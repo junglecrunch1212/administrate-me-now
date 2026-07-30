@@ -79,6 +79,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.adapters.emission import write_adapter_event
 from adminme.events.envelope import EventEnvelope
 from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
     ListItemAddedV1,
@@ -142,7 +143,7 @@ NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
 # per docs/reference/apple-eventkit/access.md; no 1Password secret is
 # involved (unlike Gmail's service-account JSON or Plaid's item access
 # token). The string is recorded on ``adapter.authenticated`` for audit.
-_OS_TOKEN_STORAGE_REF = "os://reminders-permission"
+_OS_TOKEN_STORAGE_REF = "op://local-system/reminders/permission"
 
 _DEFAULT_INBOUND_INTERVAL_S = 30
 _DEFAULT_OUTBOUND_INTERVAL_S = 30
@@ -451,17 +452,15 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # for downstream projection annotation (schemas are
         # ``extra="forbid"`` — no payload modification per §1).
         self._sharing_model_value = (
-            "per_member_isolated"
-            if deployment_target == "bridge"
-            else "shared_central"
+            "per_member_isolated" if deployment_target == "bridge" else "shared_central"
         )
 
         if deployment_target == "bridge":
             # [§1.4, A-3, memo 04 §2.2] Wrapper synthesizes ctx.config
             # with the per-member Apple ID identity + injected sink.
-            bridge_member_id = ctx.config.get(
-                "_bridge_member_id"
-            ) or ctx.config.get("member_id")
+            bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
+                "member_id"
+            )
             if not isinstance(bridge_member_id, str) or not bridge_member_id:
                 raise ValueError(
                     "bridge deployment requires ctx.config['_bridge_member_id'] "
@@ -497,14 +496,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # [D7] adapter.authenticated registered at v1 in
         # adminme/events/schemas/adapters.py. [D8] correlation_id is
         # minted by the supervisor-provided factory.
-        self._emit_authenticated(ctx=ctx)
+        await self._emit_authenticated(ctx=ctx)
 
         self._outbound_task = asyncio.create_task(self._outbound_poll(ctx=ctx))
         self._inbound_task = asyncio.create_task(self._inbound_poll(ctx=ctx))
         try:
-            await asyncio.gather(
-                self._outbound_task, self._inbound_task
-            )
+            await asyncio.gather(self._outbound_task, self._inbound_task)
         except asyncio.CancelledError:
             return
 
@@ -571,7 +568,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 await self._drain_outbound_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
-                self._emit_error(
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -711,7 +708,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "sync_cycle_id": sync_cycle_id,
         }
         causation_id = str(upstream.get("id") or "") or None
-        self._append(
+        await self._append(
             ctx=ctx,
             event_type="reminder.list_item.synced",
             payload=payload,
@@ -740,7 +737,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "last_modified_at": _to_iso(now),
             "sync_cycle_id": sync_cycle_id,
         }
-        self._append(
+        await self._append(
             ctx=ctx,
             event_type="list_item.added",
             payload=list_item_added_payload,
@@ -752,9 +749,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ExternalStateMirrorAdapter ABC — Cat-B abstract method
     # implementations per prompt 11r-c §7 c2 / [UT-27] / [§6.20].
     # ------------------------------------------------------------------
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """Per-operation write implementation. Invoked by
         :meth:`apply_write` only after the [UT-27] capability gate
         passes — the gate guarantees ``operation.kind`` is in
@@ -827,22 +822,18 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 },
                 _do_save,
                 manager=manager,
-                event_log=event_log,
+                event_sink=event_log,
                 target_channel="reminders-apple-eventkit",
                 target_identifier=str(payload["target_list_id"]),
             )
             if outbound_result.suppressed:
-                return WriteResult(
-                    applied=False, external_id=None, suppressed=True
-                )
+                return WriteResult(applied=False, external_id=None, suppressed=True)
         else:
             # Phase A — seams unset; the existing production save path
             # is preserved byte-for-byte.
             await _do_save()
 
-        remind_id = str(
-            getattr(reminder, "calendarItemIdentifier", "") or ""
-        )
+        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
         return WriteResult(
             applied=True, external_id=remind_id or None, suppressed=False
         )
@@ -901,7 +892,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             completed=bool(payload.get("completed", False)),
             last_modified_at=last_modified_at,
         )
-        self._emit_inbound_synced(
+        await self._emit_inbound_synced(
             ctx=ctx, reminder=synthetic, sync_cycle_id=sync_cycle_id
         )
 
@@ -955,11 +946,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 return None
             urgency = str(payload.get("urgency") or "this_week")
             preview = payload.get("source_message_preview")
-            notes = (
-                preview[:2000]
-                if isinstance(preview, str) and preview
-                else None
-            )
+            notes = preview[:2000] if isinstance(preview, str) and preview else None
             return {
                 "member_id": owner,
                 "title": summary[:500],
@@ -992,10 +979,10 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             ):
                 return
             try:
-                self._inbound_poll_once(ctx=ctx)
+                await self._inbound_poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
-                self._emit_error(
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -1012,7 +999,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             except asyncio.CancelledError:
                 return
 
-    def _inbound_poll_once(self, *, ctx: AdapterContext) -> int:
+    async def _inbound_poll_once(self, *, ctx: AdapterContext) -> int:
         """Run one inbound cycle. Returns the count of
         ``reminder.list_item.synced`` events emitted (i.e., post never-
         sync filter + dedupe). One ``sync_cycle_id`` covers every
@@ -1030,11 +1017,11 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         for rem in reminders:
             if not self._is_new_or_modified(rem):
                 continue
-            self._emit_inbound_synced(
+            await self._emit_inbound_synced(
                 ctx=ctx, reminder=rem, sync_cycle_id=sync_cycle_id
             )
             emitted += 1
-        self._maybe_emit_inbound_cursor_advance(ctx=ctx)
+        await self._maybe_emit_inbound_cursor_advance(ctx=ctx)
         return emitted
 
     def _fetch_reminders_filtered(self) -> list[Any]:
@@ -1099,7 +1086,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             return False
         return current_lmod > prior_lmod
 
-    def _emit_inbound_synced(
+    async def _emit_inbound_synced(
         self,
         *,
         ctx: AdapterContext,
@@ -1144,9 +1131,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             priority = 0
         completed = bool(getattr(reminder, "completed", False))
         lmod = getattr(reminder, "last_modified_at", None)
-        emit_lmod: datetime = (
-            lmod if isinstance(lmod, datetime) else ctx.now_factory()
-        )
+        emit_lmod: datetime = lmod if isinstance(lmod, datetime) else ctx.now_factory()
 
         payload: dict[str, Any] = {
             "member_id": member_id,
@@ -1164,7 +1149,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         }
         # [Causation invariant] inbound has no upstream AdministrateMe
         # event — iCloud is the source — so causation_id is left unset.
-        self._append(
+        await self._append(
             ctx=ctx, event_type="reminder.list_item.synced", payload=payload
         )
 
@@ -1223,7 +1208,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                             diff_field
                         )
             new_list_item_payload["field_updates"] = field_updates
-        self._append(
+        await self._append(
             ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
         )
 
@@ -1241,9 +1226,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             self._inbound_cursors[list_id] = emit_lmod
         self._events_since_inbound_advance += 1
 
-    def _maybe_emit_inbound_cursor_advance(
-        self, *, ctx: AdapterContext
-    ) -> None:
+    async def _maybe_emit_inbound_cursor_advance(self, *, ctx: AdapterContext) -> None:
         """Emit ``adapter.cursor_advanced`` v1 only on milestone.
         Gated on whichever fires first: 100 emissions since the last
         advance OR 5 minutes of wall clock since the last advance with
@@ -1267,13 +1250,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         )
         if not (events_threshold or time_threshold):
             return
-        cursor_value = json.dumps(
-            {
-                lid: _to_iso(ts)
-                for lid, ts in sorted(self._inbound_cursors.items())
-            },
-            sort_keys=True,
-        ) or "{}"
+        cursor_value = (
+            json.dumps(
+                {lid: _to_iso(ts) for lid, ts in sorted(self._inbound_cursors.items())},
+                sort_keys=True,
+            )
+            or "{}"
+        )
         payload = {
             "adapter_name": self.name,
             "adapter_family": self.family,
@@ -1282,7 +1265,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "events_since_last": events,
             "advanced_at": _to_iso(now),
         }
-        self._append(
+        await self._append(
             ctx=ctx, event_type="adapter.cursor_advanced", payload=payload
         )
         self._events_since_inbound_advance = 0
@@ -1292,7 +1275,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ------------------------------------------------------------------
     # emission helpers (mirror gmail / plaid patterns)
     # ------------------------------------------------------------------
-    def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
         """Append ``adapter.authenticated`` v1. Carries the OS-level
         permission reference instead of a 1Password op:// ref — EventKit
         access is granted at the OS level, no secret to store."""
@@ -1303,11 +1286,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "authenticated_at": _to_iso(ctx.now_factory()),
             "scopes": ["reminders:read", "reminders:write"],
         }
-        self._append(
-            ctx=ctx, event_type="adapter.authenticated", payload=payload
-        )
+        await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
 
-    def _emit_error(
+    async def _emit_error(
         self,
         *,
         ctx: AdapterContext,
@@ -1329,9 +1310,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "occurred_at": _to_iso(ctx.now_factory()),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
+    async def _append(
         self,
         *,
         ctx: AdapterContext,
@@ -1339,10 +1320,10 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         payload: dict[str, Any],
         causation_id: str | None = None,
     ) -> None:
-        """Best-effort append. Mirrors the supervisor's duck-typed
-        contract: any object with ``append_sync(...)`` or ``append(...)``
-        works, and a failure on emit must not crash the adapter — the
-        log itself may be down.
+        """Best-effort write through the typed event-sink contract.
+
+        A failed emit must not crash the adapter; the structured adapter log
+        remains the diagnostic path when the event store itself is down.
 
         α-2 dual-deployment branch: ``deployment_target=="bridge"``
         dispatches through the wrapper-injected ``BridgeEventSink``
@@ -1350,7 +1331,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         the observation-mode gate upstream of every emit site is
         unchanged, so suppressed writes skip ALL emits uniformly."""
         if self._deployment_target == "bridge":  # [§D18, memo 04 §2.2]
-            self._append_via_bridge_sink(
+            await self._append_via_bridge_sink(
                 ctx=ctx,
                 event_type=event_type,
                 payload=payload,
@@ -1359,27 +1340,20 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             return
 
         # ----- central path (byte-for-byte preserved from 11b-i / 11r-c) -----
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
         try:
-            appender(**kwargs)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "reminders adapter failed to emit %s event", event_type
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
             )
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception("reminders adapter failed to emit %s event", event_type)
 
-    def _append_via_bridge_sink(
+    async def _append_via_bridge_sink(
         self,
         *,
         ctx: AdapterContext,
@@ -1419,7 +1393,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             payload=payload,
         )
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             _log.exception(
                 "reminders adapter bridge emit skipped — no running event "
@@ -1427,7 +1401,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 event_type,
             )
             return
-        loop.create_task(self._dispatch_bridge_emit(envelope))
+        await self._dispatch_bridge_emit(envelope)
 
     async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
         """Best-effort sink dispatch — symmetric with the central path's

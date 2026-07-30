@@ -36,18 +36,15 @@ import sqlcipher3
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.skill_runner import OpenClawTimeout, SkillResult
 from adminme.pipelines import invalidate_cache, load_pipeline_pack
 from adminme.pipelines.runner import PipelineRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-COMMITMENT_PACK_ROOT = (
-    REPO_ROOT / "packs" / "pipelines" / "commitment_extraction"
-)
-PARTIES_SCHEMA = (
-    REPO_ROOT / "adminme" / "projections" / "parties" / "schema.sql"
-)
+COMMITMENT_PACK_ROOT = REPO_ROOT / "packs" / "pipelines" / "commitment_extraction"
+PARTIES_SCHEMA = REPO_ROOT / "adminme" / "projections" / "parties" / "schema.sql"
 TEST_KEY = b"i" * 32
 
 
@@ -66,7 +63,7 @@ def _seed_parties_db(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlcipher3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlcipher3.Row
-    conn.execute(f"PRAGMA key = \"{_key_pragma()}\"")
+    conn.execute(f'PRAGMA key = "{_key_pragma()}"')
     conn.execute("PRAGMA journal_mode=WAL")
     schema = PARTIES_SCHEMA.read_text(encoding="utf-8")
     conn.executescript(schema)
@@ -105,7 +102,7 @@ def _seed_parties_db(
 def _open_parties_conn(db_path: Path) -> Iterator[sqlcipher3.Connection]:
     conn = sqlcipher3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlcipher3.Row
-    conn.execute(f"PRAGMA key = \"{_key_pragma()}\"")
+    conn.execute(f'PRAGMA key = "{_key_pragma()}"')
     try:
         yield conn
     finally:
@@ -161,9 +158,7 @@ def _clear_caches() -> Any:
     invalidate_cache()
 
 
-def _classify_output(
-    *, confidence: float, is_candidate: bool = True
-) -> dict[str, Any]:
+def _classify_output(*, confidence: float, is_candidate: bool = True) -> dict[str, Any]:
     return {
         "is_candidate": is_candidate,
         "confidence": confidence,
@@ -242,6 +237,7 @@ async def test_commitment_extraction_emits_proposed_for_above_threshold(
     runner = PipelineRunner(
         bus,
         log,
+        EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
     )
@@ -271,9 +267,7 @@ async def test_commitment_extraction_emits_proposed_for_above_threshold(
         )
 
         all_events = await _read_all(log)
-        proposed = [
-            e for e in all_events if e["type"] == "commitment.proposed"
-        ]
+        proposed = [e for e in all_events if e["type"] == "commitment.proposed"]
         assert len(proposed) == 1
         e = proposed[0]
         assert e["causation_id"] == triggering_eid
@@ -313,6 +307,7 @@ async def test_commitment_extraction_emits_suppressed_for_below_threshold(
     runner = PipelineRunner(
         bus,
         log,
+        EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
     )
@@ -342,9 +337,7 @@ async def test_commitment_extraction_emits_suppressed_for_below_threshold(
         )
 
         all_events = await _read_all(log)
-        suppressed = [
-            e for e in all_events if e["type"] == "commitment.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "commitment.suppressed"]
         assert len(suppressed) == 1
         e = suppressed[0]
         assert e["causation_id"] == triggering_eid
@@ -386,6 +379,7 @@ async def test_commitment_extraction_emits_suppressed_on_skill_timeout(
     runner = PipelineRunner(
         bus,
         log,
+        EventWriter(log, bus),
         config,
         parties_conn_factory=lambda: _open_parties_conn(parties_db),
     )
@@ -415,9 +409,7 @@ async def test_commitment_extraction_emits_suppressed_on_skill_timeout(
         )
 
         all_events = await _read_all(log)
-        suppressed = [
-            e for e in all_events if e["type"] == "commitment.suppressed"
-        ]
+        suppressed = [e for e in all_events if e["type"] == "commitment.suppressed"]
         assert len(suppressed) == 1
         e = suppressed[0]
         assert e["causation_id"] == triggering_eid

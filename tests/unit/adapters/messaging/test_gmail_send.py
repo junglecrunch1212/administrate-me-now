@@ -79,8 +79,13 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
@@ -88,7 +93,7 @@ def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     correlation id. The frozen clock makes ``sent_at`` assertions
     stable; the fixed correlation id mirrors the pack-internal tests."""
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-send-test",
         now_factory=lambda: _FROZEN_NOW,
@@ -152,9 +157,7 @@ class _FakeHttpResponse:
     """httplib2-style mapping with a ``status`` attribute, sufficient
     for :meth:`GmailAdapter._classify_gmail_error`."""
 
-    def __init__(
-        self, *, status: int, headers: dict[str, str] | None = None
-    ) -> None:
+    def __init__(self, *, status: int, headers: dict[str, str] | None = None) -> None:
         self.status = status
         self._headers = {k.lower(): v for k, v in (headers or {}).items()}
 
@@ -294,7 +297,7 @@ async def test_send_happy_path_with_seams_populated(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str,
         target_identifier: str,
     ) -> OutboundResult:
@@ -304,7 +307,7 @@ async def test_send_happy_path_with_seams_populated(
                 "action": action,
                 "payload": dict(payload),
                 "manager": manager,
-                "event_log": event_log,
+                "event_log": event_sink,
                 "target_channel": target_channel,
                 "target_identifier": target_identifier,
             }
@@ -315,9 +318,7 @@ async def test_send_happy_path_with_seams_populated(
 
     monkeypatch.setattr(_adapter_mod, "outbound", fake_outbound)
 
-    service = _FakeSendService(
-        response={"id": "gmail-msg-001", "threadId": "thr-001"}
-    )
+    service = _FakeSendService(response={"id": "gmail-msg-001", "threadId": "thr-001"})
     session_sentinel = object()
     manager_sentinel = object()
     obs_log_sentinel = object()
@@ -391,7 +392,7 @@ async def test_send_observation_suppressed_path(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str,
         target_identifier: str,
     ) -> OutboundResult:
@@ -429,9 +430,7 @@ async def test_send_observation_suppressed_path(
     # Full body is still captured for the audit log.
     assert payload["body_text"] == "suppressed body"
 
-    assert result == SendResult(
-        delivered=False, external_id=None, suppressed=True
-    )
+    assert result == SendResult(delivered=False, external_id=None, suppressed=True)
 
 
 # ---------------------------------------------------------------------------
@@ -482,9 +481,7 @@ async def test_send_emits_only_existing_messaging_sent_fields() -> None:
     on the model means any drift introducing a new field would fail
     validation. This pins F-6 (MAP DON'T REGISTER) — Gmail outbound
     reuses the on-main schema; no new fields, no new schema."""
-    service = _FakeSendService(
-        response={"id": "gmail-x", "threadId": "thr-x"}
-    )
+    service = _FakeSendService(response={"id": "gmail-x", "threadId": "thr-x"})
     adapter = _make_adapter(service=service)
     event_log = _FakeEventLog()
     _seed_ctx(adapter, event_log)
@@ -624,9 +621,7 @@ async def test_send_full_body_text_not_truncated() -> None:
     the FULL body — the existing schema's field is ``str | None`` with
     no length cap. A 5000-char body round-trips byte-for-byte. Pins
     the prompt's §1 invariant ("FULL body, not a truncated preview")."""
-    service = _FakeSendService(
-        response={"id": "gmail-y", "threadId": "thr-y"}
-    )
+    service = _FakeSendService(response={"id": "gmail-y", "threadId": "thr-y"})
     adapter = _make_adapter(service=service)
     event_log = _FakeEventLog()
     _seed_ctx(adapter, event_log)

@@ -75,9 +75,7 @@ from adminme.lib.adapters import (
 from adminme.lib.pack_registry.validator import validate_adapter_pack
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REMINDERS_PACK_ROOT = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+REMINDERS_PACK_ROOT = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 
 
 def _load_apple_eventkit_module() -> Any:
@@ -123,7 +121,9 @@ def _make_adapter() -> Any:
     )
 
 
-def test_retrofit_supervisor_loaded_apple_eventkit_inherits_external_state_mirror_adapter() -> None:
+def test_retrofit_supervisor_loaded_apple_eventkit_inherits_external_state_mirror_adapter() -> (
+    None
+):
     """The supervisor's adapter-loading code path (file-path importlib
     — same path as the existing supervisor integration test) yields a
     class that inherits from :class:`ExternalStateMirrorAdapter`. Per
@@ -141,7 +141,9 @@ def test_retrofit_supervisor_loaded_apple_eventkit_inherits_external_state_mirro
     assert not issubclass(AppleEventKitAdapter, PersonalKnowledgeAdapter)
 
 
-def test_retrofit_apple_eventkit_write_capabilities_gate_rejects_undeclared_kinds_through_loader() -> None:
+def test_retrofit_apple_eventkit_write_capabilities_gate_rejects_undeclared_kinds_through_loader() -> (
+    None
+):
     """The [UT-27] gate on the base-class :meth:`apply_write` is what
     makes the asymmetric ``write_capabilities`` declaration
     load-bearing rather than decorative. The shipped outbound surface
@@ -186,12 +188,12 @@ def test_retrofit_validator_clean_on_supervisor_loaded_pack() -> None:
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert pending == [], (
-        f"advisory_pending_retrofit still present post-retrofit: {pending}"
-    )
-    assert not result.has_errors(), (
-        f"validator reports errors post-retrofit: {result.errors()}"
-    )
+    assert (
+        pending == []
+    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    assert (
+        not result.has_errors()
+    ), f"validator reports errors post-retrofit: {result.errors()}"
 
 
 # ===========================================================================
@@ -218,15 +220,18 @@ _INTEGRATION_FROZEN_NOW = datetime(2026, 5, 17, 19, 0, 0, tzinfo=timezone.utc)
 
 
 class _IntegrationEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion. Mirrors
-    the duck-typed contract :meth:`AppleEventKitAdapter._append` reads
-    via ``getattr(ctx.event_log, "append_sync", ...)``."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 class _IntegrationEKReminder:
@@ -307,7 +312,7 @@ def _make_dual_emit_adapter(ek_store: _IntegrationEKEventStore) -> Any:
 
 def _make_dual_emit_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integ-dual-emit",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
@@ -358,9 +363,7 @@ def test_supervisor_loaded_adapter_emits_both_event_families_on_outbound() -> No
     synced_calls = [
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     ]
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(synced_calls) == 1, (
         f"expected exactly one reminder.list_item.synced emit, "
         f"got {len(synced_calls)}"
@@ -428,10 +431,12 @@ def test_supervisor_loaded_adapter_emits_both_event_families_on_inbound() -> Non
         calendar_item_identifier="EKID-integ-inbound-1",
     )
     reminder_initial.completed = False
-    adapter._emit_inbound_synced(
-        ctx=ctx,
-        reminder=reminder_initial,
-        sync_cycle_id="cycle-integ-inbound-A",
+    asyncio.run(
+        adapter._emit_inbound_synced(
+            ctx=ctx,
+            reminder=reminder_initial,
+            sync_cycle_id="cycle-integ-inbound-A",
+        )
     )
 
     # ---- Observation #2: same id, completion flips False → True.
@@ -444,10 +449,12 @@ def test_supervisor_loaded_adapter_emits_both_event_families_on_inbound() -> Non
         calendar_item_identifier="EKID-integ-inbound-1",
     )
     reminder_completed.completed = True
-    adapter._emit_inbound_synced(
-        ctx=ctx,
-        reminder=reminder_completed,
-        sync_cycle_id="cycle-integ-inbound-B",
+    asyncio.run(
+        adapter._emit_inbound_synced(
+            ctx=ctx,
+            reminder=reminder_completed,
+            sync_cycle_id="cycle-integ-inbound-B",
+        )
     )
 
     # Two legacy + two new emits; legacy + new interleave in append order.
@@ -479,12 +486,10 @@ def test_supervisor_loaded_adapter_emits_both_event_families_on_inbound() -> Non
     # Inbound: causation_id unset on BOTH halves (iCloud is the source —
     # no upstream AdministrateMe event to chain).
     for call in legacy_calls + new_family_calls:
-        assert "causation_id" not in call
+        assert call["causation_id"] is None
 
     # Branch 1: first-observation payload validates against ListItemAddedV1.
-    added_instance = ListItemAddedV1.model_validate(
-        new_family_calls[0]["payload"]
-    )
+    added_instance = ListItemAddedV1.model_validate(new_family_calls[0]["payload"])
     assert added_instance.item_external_id == "EKID-integ-inbound-1"
     assert added_instance.list_external_id == "list-household-001"
     assert added_instance.list_name == "Integration Household"

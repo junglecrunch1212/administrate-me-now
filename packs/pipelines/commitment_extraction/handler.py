@@ -143,9 +143,7 @@ def _thresholds_for_member(
 class CommitmentExtractionPipeline:
     pack_id: str = "pipeline:commitment_extraction"
     version: str = "4.2.0"
-    triggers: Triggers = {
-        "events": ["messaging.received", "messaging.sent"]
-    }
+    triggers: Triggers = {"events": ["messaging.received", "messaging.sent"]}
 
     # `_PACK_ROOT` is set at module import for the in-pack default config
     # lookup; tests that want a custom config patch ``self._config_override``
@@ -155,9 +153,7 @@ class CommitmentExtractionPipeline:
     def __init__(self) -> None:
         self._config_override: dict[str, Any] | None = None
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in ("messaging.received", "messaging.sent"):
             return
@@ -347,8 +343,7 @@ class CommitmentExtractionPipeline:
                 extract_output.get("owed_by_member_id") or receiving_member_id
             ),
             "owed_to_party_id": str(
-                extract_output.get("owed_to_party_id")
-                or sender_party["party_id"]
+                extract_output.get("owed_to_party_id") or sender_party["party_id"]
             ),
             "text_summary": str(extract_output.get("text_summary", ""))[:500]
             or "(no summary extracted)",
@@ -379,7 +374,7 @@ class CommitmentExtractionPipeline:
             sensitivity="normal",
             payload=proposed_payload,
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -413,7 +408,7 @@ class CommitmentExtractionPipeline:
                 "source_event_id": source_event_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

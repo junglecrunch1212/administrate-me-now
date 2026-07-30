@@ -1,8 +1,8 @@
 """Golden process acceptance: member bridge into private domain knowledge.
 
-This is intentionally red behind a strict xfail during Gate 1. Release gating
-uses ``--runxfail``. Phase 2 must drive a real bridge client and central runtime;
-direct handler calls or manually inserted projection rows are not substitutes.
+Gate 2 now has a black-box composition-root fixture in ``test_runtime_spine``.
+This strict xfail remains for the Phase 3 product slice that fixture does not
+yet claim: member-private bridge knowledge through scoped retrieval.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ REQUIRED_STAGES = (
 
 @pytest.mark.xfail(
     strict=True,
-    reason="MISSING_CAPABILITY: member_knowledge and its composed bridge/search path do not exist",
+    reason="MISSING_CAPABILITY: the bridge authorization/search/replay product slice is not yet closed",
 )
 def test_member_bridge_knowledge_is_private_searchable_and_replayable() -> None:
     """Start real bridge/runtime processes and prove all required stages.

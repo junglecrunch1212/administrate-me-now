@@ -94,6 +94,15 @@ class SkillCallSuppressedV1(BaseModel):
     correlation_id: str | None = None
 
 
+class RuntimeStartedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    projection_names: list[str]
+    reactive_pipeline_ids: list[str]
+    standing_order_ids: list[str]
+    observation_active: bool
+    capability_state: Literal["healthy", "observation_only", "degraded", "blocked"]
+
+
 registry.register("xlsx.regenerated", 1, XlsxRegeneratedV1)
 registry.register("xlsx.reverse_projected", 1, XlsxReverseProjectedV1)
 registry.register(
@@ -101,3 +110,4 @@ registry.register(
 )
 registry.register("skill.call.failed", 1, SkillCallFailedV1)
 registry.register("skill.call.suppressed", 1, SkillCallSuppressedV1)
+registry.register("runtime.started", 1, RuntimeStartedV1)

@@ -38,7 +38,7 @@ import yaml
 from adminme.events.envelope import EventEnvelope
 
 if TYPE_CHECKING:
-    from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.session import Session
 
 _log = logging.getLogger(__name__)
@@ -115,10 +115,10 @@ class ObservationManager:
 
     def __init__(
         self,
-        event_log: "EventLog",
+        event_sink: "EventSink",
         runtime_config_path: Path,
     ) -> None:
-        self._log = event_log
+        self._events = event_sink
         self._path = runtime_config_path
         # Lock guards the read-modify-write of toggle operations; reads do
         # not need the lock because file reads are atomic at the size we
@@ -188,7 +188,7 @@ class ObservationManager:
         # Resolve tenant via the log's configured connection: we keep the
         # contract simple and require the toggle caller (CLI / wizard) to
         # provide a tenant-bound EventLog.
-        tenant_id = getattr(self._log, "_tenant_id_hint", None) or "tenant-default"
+        tenant_id = getattr(self._events, "tenant_id", None) or "tenant-default"
         envelope = EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id=tenant_id,
@@ -208,7 +208,7 @@ class ObservationManager:
                 timestamp_field: timestamp_value,
             },
         )
-        await self._log.append(envelope)
+        await self._events.write(envelope)
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@ async def outbound(
     action_fn: Callable[[], Awaitable[Any]],
     *,
     manager: ObservationManager,
-    event_log: "EventLog",
+    event_sink: "EventSink",
     target_channel: str = "unknown",
     target_identifier: str = "unknown",
 ) -> OutboundResult:
@@ -284,7 +284,7 @@ async def outbound(
                 "observation_mode_active": True,
             },
         )
-        await event_log.append(suppressed, correlation_id=session.correlation_id)
+        await event_sink.write(suppressed, correlation_id=session.correlation_id)
         return OutboundResult(suppressed=True)
 
     result = await action_fn()
@@ -309,7 +309,7 @@ async def outbound(
             "session_correlation_id": session.correlation_id,
         },
     )
-    await event_log.append(sent, correlation_id=session.correlation_id)
+    await event_sink.write(sent, correlation_id=session.correlation_id)
     return OutboundResult(suppressed=False, result=result)
 
 

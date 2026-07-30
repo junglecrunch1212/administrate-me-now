@@ -6,10 +6,8 @@ messaging/gmail/``) are exercised together end-to-end through one
 authenticate + one full poll cycle.
 
 The supervisor mints an ``AdapterContext`` per managed adapter via the
-injected ``ctx_factory``; the Gmail adapter writes via the context's
-``event_log.append_sync`` (the pack's adapter.py prefers ``append_sync``
-when present so tests can inject a recording fake without instantiating
-the SQLite-backed ``adminme.events.log.EventLog``). The recording log
+injected ``ctx_factory``; the Gmail adapter writes through the context's
+typed asynchronous event sink. The recording sink
 captures every typed event the adapter emits and lets us assert the full
 end-to-end emission shape for ``adapter.authenticated`` +
 ``messaging.received`` + ``adapter.cursor_advanced`` + ``adapter.error``.
@@ -73,9 +71,8 @@ def _fixture(name: str) -> dict[str, Any]:
 class _RecordingEventLog:
     """Recording event log shared by the supervisor + adapter contexts.
 
-    The Gmail adapter and the supervisor both probe for ``append_sync``
-    first per ``adapter.py:_append`` and ``adapter_supervisor.py
-    :_emit_adapter_error``; this fake satisfies that surface without
+    The Gmail adapter and supervisor share one typed writer contract;
+    this fake satisfies that surface without
     pulling in the SQLite-backed ``EventLog`` (whose ``append`` is async
     + requires a constructed ``EventEnvelope``, mismatched against the
     keyword-only kwargs the adapter passes)."""
@@ -83,8 +80,13 @@ class _RecordingEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
     def by_type(self, event_type: str) -> list[dict[str, Any]]:
         return [c for c in self.calls if c.get("type") == event_type]
@@ -202,9 +204,7 @@ def _build_gmail_adapter(
     def _resolver(_ref: str) -> dict[str, Any]:
         return {"type": "service_account", "client_email": "ci@test"}
 
-    def _factory(
-        _creds: dict[str, Any], _scopes: list[str], _subject: str
-    ) -> Any:
+    def _factory(_creds: dict[str, Any], _scopes: list[str], _subject: str) -> Any:
         return service
 
     adapter = GmailAdapter(
@@ -257,7 +257,7 @@ def _supervisor(
 
     def _ctx_factory() -> AdapterContext:
         return AdapterContext(
-            event_log=event_log,  # type: ignore[arg-type]
+            event_sink=event_log,  # type: ignore[arg-type]
             config={},
             correlation_id_factory=_next_corr,
             now_factory=lambda: _FROZEN_NOW,
@@ -315,15 +315,11 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
     adapter._events_since_advance = adapter.CURSOR_MILESTONE_EVENTS - 2
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     await sup.start()
     try:
-        await _wait_for(
-            lambda: len(event_log.by_type("adapter.cursor_advanced")) == 1
-        )
+        await _wait_for(lambda: len(event_log.by_type("adapter.cursor_advanced")) == 1)
 
         # adapter.authenticated exactly once with the right shape.
         auth = event_log.by_type("adapter.authenticated")
@@ -333,10 +329,7 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
         assert auth[0]["payload"]["adapter_family"] == "messaging"
         assert auth[0]["payload"]["scopes"] == [GMAIL_READONLY_SCOPE]
         # token_storage_ref carries the op-ref, NEVER raw secret material.
-        assert (
-            auth[0]["payload"]["token_storage_ref"]
-            == "op://test/vault/gmail/sa"
-        )
+        assert auth[0]["payload"]["token_storage_ref"] == "op://test/vault/gmail/sa"
         assert "PRIVATE KEY" not in auth[0]["payload"]["token_storage_ref"]
 
         # messaging.received fires once per added Gmail message
@@ -364,16 +357,14 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
 
         # Supervisor's status snapshot reflects the running adapter.
         snap = sup.snapshot()
-        assert (
-            snap["adapters"]["messaging-gmail-api"]["state"]
-            in {"running", "stopped"}
-        )
+        assert snap["adapters"]["messaging-gmail-api"]["state"] in {
+            "running",
+            "stopped",
+        }
     finally:
         await sup.stop()
         snap_after = sup.snapshot()
-        assert (
-            snap_after["adapters"]["messaging-gmail-api"]["state"] == "stopped"
-        )
+        assert snap_after["adapters"]["messaging-gmail-api"]["state"] == "stopped"
 
 
 # ---------------------------------------------------------------------------
@@ -427,18 +418,14 @@ async def test_supervisor_emits_adapter_error_on_crash_then_restarts(
         sleeps.append(seconds)
         await real_sleep(0)
 
-    monkeypatch.setattr(
-        "adminme.daemons.adapter_supervisor.asyncio.sleep", _fast_sleep
-    )
+    monkeypatch.setattr("adminme.daemons.adapter_supervisor.asyncio.sleep", _fast_sleep)
 
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
     event_log = _RecordingEventLog()
     adapter = _CrashOnceThenStableAdapter()
 
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
     await sup.start()
     try:
         await _wait_for(lambda: adapter.start_count >= 2)
@@ -477,9 +464,7 @@ async def test_supervisor_parses_real_repo_channels_yaml(tmp_path: Path) -> None
     copied = tmp_path / "channels.yaml"
     copied.write_text(repo_channels.read_text(encoding="utf-8"), encoding="utf-8")
 
-    sup = _supervisor(
-        config_path=copied, event_log=_RecordingEventLog(), adapters=[]
-    )
+    sup = _supervisor(config_path=copied, event_log=_RecordingEventLog(), adapters=[])
     config = sup.load_config()
 
     assert config["adapter_supervisor_port"] == 8081
@@ -532,15 +517,11 @@ async def test_supervisor_status_endpoint_serves_snapshot(tmp_path: Path) -> Non
     adapter = _build_gmail_adapter(service=service, max_poll_cycles=0)
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
     await sup.start()
     try:
         # Wait for the adapter task to authenticate (one round trip).
-        await _wait_for(
-            lambda: len(event_log.by_type("adapter.authenticated")) == 1
-        )
+        await _wait_for(lambda: len(event_log.by_type("adapter.authenticated")) == 1)
 
         # Hit /status via stdlib urllib in a worker thread so we don't
         # block the supervisor's event loop.
@@ -605,9 +586,7 @@ async def test_supervisor_correlation_ids_propagate_to_adapter_events(
 
     await sup.start()
     try:
-        await _wait_for(
-            lambda: len(event_log.by_type("adapter.cursor_advanced")) >= 1
-        )
+        await _wait_for(lambda: len(event_log.by_type("adapter.cursor_advanced")) >= 1)
 
         # All emitted events from this adapter carry one of the minted
         # correlation ids — the adapter never invented its own.
@@ -636,9 +615,7 @@ async def test_supervisor_correlation_ids_propagate_to_adapter_events(
 # ---------------------------------------------------------------------------
 
 
-def test_retrofit_supervisor_loaded_gmail_inherits_communication_adapter() -> (
-    None
-):
+def test_retrofit_supervisor_loaded_gmail_inherits_communication_adapter() -> None:
     """The supervisor's adapter-loading code path (file-path importlib,
     mirrored by ``_load_gmail_module``) yields a class that inherits from
     :class:`CommunicationAdapter`. Per memo 08 §3.3, this is the contract
@@ -653,9 +630,7 @@ def test_retrofit_supervisor_loaded_gmail_inherits_communication_adapter() -> (
     assert issubclass(GmailAdapter, CommunicationAdapter)
 
 
-async def test_retrofit_send_method_is_a_real_implementation_through_loader() -> (
-    None
-):
+async def test_retrofit_send_method_is_a_real_implementation_through_loader() -> None:
     """The ``send`` abstract method is now a REAL Gmail v1
     ``users.messages.send`` implementation (post-11a c2 — supersedes the
     11r-a ``NotImplementedError`` stub). Verifying through the same
@@ -729,17 +704,13 @@ async def test_retrofit_validator_clean_after_supervisor_lifecycle(
     adapter = _build_gmail_adapter(service=service, max_poll_cycles=2)
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     await sup.start()
     try:
         # memo 08 §5: the existing inbound emit path stays unchanged.
         # The retrofit must not regress messaging.received emission.
-        await _wait_for(
-            lambda: len(event_log.by_type("messaging.received")) == 2
-        )
+        await _wait_for(lambda: len(event_log.by_type("messaging.received")) == 2)
 
         # The _on_inbound hook is callable on the live adapter instance
         # (the ABC abstract method satisfied by an honest no-op stub).
@@ -763,12 +734,12 @@ async def test_retrofit_validator_clean_after_supervisor_lifecycle(
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert pending == [], (
-        f"advisory_pending_retrofit still present post-retrofit: {pending}"
-    )
-    assert not result.has_errors(), (
-        f"validator reports errors post-retrofit: {result.errors()}"
-    )
+    assert (
+        pending == []
+    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    assert (
+        not result.has_errors()
+    ), f"validator reports errors post-retrofit: {result.errors()}"
 
 
 # ---------------------------------------------------------------------------
@@ -822,18 +793,14 @@ async def test_supervisor_loads_gmail_send_path_works_through_loader(
             return _SendUsers()
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     await sup.start()
     try:
         # Wait for start() to complete so adapter._ctx is populated by
         # the supervisor's ctx_factory (start() then yields immediately
         # because max_poll_cycles=0).
-        await _wait_for(
-            lambda: len(event_log.by_type("adapter.authenticated")) == 1
-        )
+        await _wait_for(lambda: len(event_log.by_type("adapter.authenticated")) == 1)
 
         # Override the fake service so the send chain hits our recorder.
         adapter._service = _SendService()
@@ -943,9 +910,7 @@ async def test_supervisor_observation_off_send_calls_gmail_directly(
             return _SendUsers()
 
     event_log = _RecordingEventLog()
-    sup = _supervisor(
-        config_path=channels, event_log=event_log, adapters=[adapter]
-    )
+    sup = _supervisor(config_path=channels, event_log=event_log, adapters=[adapter])
 
     # Monkey-patch the adapter module's ``outbound`` to a recorder; the
     # Phase-A path must NOT call it.
@@ -957,9 +922,7 @@ async def test_supervisor_observation_off_send_calls_gmail_directly(
 
     await sup.start()
     try:
-        await _wait_for(
-            lambda: len(event_log.by_type("adapter.authenticated")) == 1
-        )
+        await _wait_for(lambda: len(event_log.by_type("adapter.authenticated")) == 1)
 
         adapter._service = _SendService()
         # Patch via the adapter's loaded module (file-path importlib

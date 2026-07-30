@@ -23,6 +23,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.pipelines import invalidate_cache, load_pipeline_pack
 from adminme.pipelines.runner import PipelineRunner
@@ -106,7 +107,7 @@ async def test_end_to_end_dispatch(tmp_path: Path) -> None:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
 
     await runner.discover(
         builtin_root=PIPELINES_FIXTURE_ROOT / "echo_logger",
@@ -126,9 +127,7 @@ async def test_end_to_end_dispatch(tmp_path: Path) -> None:
                 )
             )
             await bus.notify(last_eid)
-        await _wait_for_checkpoint(
-            bus, "pipeline:pipeline:echo_logger", last_eid
-        )
+        await _wait_for_checkpoint(bus, "pipeline:pipeline:echo_logger", last_eid)
         pack = load_pipeline_pack(ECHO_LOGGER_ROOT)
         assert pack.instance.__class__._count_for_test() == 10  # type: ignore[attr-defined]
     finally:
@@ -143,7 +142,7 @@ async def test_filter_skips_non_matching_types(tmp_path: Path) -> None:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(ECHO_LOGGER_ROOT)
     runner.register(pack)
 
@@ -173,9 +172,7 @@ async def test_filter_skips_non_matching_types(tmp_path: Path) -> None:
             )
         )
         await bus.notify(rid2)
-        await _wait_for_checkpoint(
-            bus, "pipeline:pipeline:echo_logger", rid2
-        )
+        await _wait_for_checkpoint(bus, "pipeline:pipeline:echo_logger", rid2)
 
         assert pack.instance.__class__._count_for_test() == 2  # type: ignore[attr-defined]
     finally:
@@ -191,7 +188,7 @@ async def test_restart_survival(tmp_path: Path) -> None:
     log = EventLog(config, TEST_KEY)
 
     bus_a = EventBus(log, config.bus_checkpoint_path)
-    runner_a = PipelineRunner(bus_a, log, config)
+    runner_a = PipelineRunner(bus_a, log, EventWriter(log, bus_a), config)
     pack = load_pipeline_pack(ECHO_LOGGER_ROOT)
     runner_a.register(pack)
     await runner_a.start()
@@ -205,9 +202,7 @@ async def test_restart_survival(tmp_path: Path) -> None:
             )
         )
         await bus_a.notify(last_eid)
-    await _wait_for_checkpoint(
-        bus_a, "pipeline:pipeline:echo_logger", last_eid
-    )
+    await _wait_for_checkpoint(bus_a, "pipeline:pipeline:echo_logger", last_eid)
     assert pack.instance.__class__._count_for_test() == 5  # type: ignore[attr-defined]
     await runner_a.stop()
     await bus_a.stop()
@@ -217,7 +212,7 @@ async def test_restart_survival(tmp_path: Path) -> None:
     # appends to confirm checkpoint resumption.
     pack.instance.__class__.reset()  # type: ignore[attr-defined]
     bus_b = EventBus(log, config.bus_checkpoint_path)
-    runner_b = PipelineRunner(bus_b, log, config)
+    runner_b = PipelineRunner(bus_b, log, EventWriter(log, bus_b), config)
     runner_b.register(pack)
     await runner_b.start()
     try:
@@ -231,9 +226,7 @@ async def test_restart_survival(tmp_path: Path) -> None:
                 )
             )
             await bus_b.notify(last_eid_b)
-        await _wait_for_checkpoint(
-            bus_b, "pipeline:pipeline:echo_logger", last_eid_b
-        )
+        await _wait_for_checkpoint(bus_b, "pipeline:pipeline:echo_logger", last_eid_b)
         # Only the 5 new events should be delivered to the post-restart
         # runner; the prior 5 are already past the checkpoint.
         assert pack.instance.__class__._count_for_test() == 5  # type: ignore[attr-defined]
@@ -252,7 +245,7 @@ async def test_causation_wiring(tmp_path: Path) -> None:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(ECHO_EMITTER_ROOT)
     runner.register(pack)
 

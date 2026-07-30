@@ -68,3 +68,7 @@ All eleven files were read from start to finish at the baseline. SHA-256 makes t
 - Phase 2 starts with composition and the two golden vertical slices. It may change production code only behind executable compatibility gates.
 - Optional providers may be deferred. Required product functions, projections, privacy/governance, workbook round trip, bootstrap safety, and the four OpenClaw seams may not.
 - Gate 1 contains contracts and test skeletons only; it changes no production behavior.
+
+## Gate 2 implementation note
+
+Gate 2 implements, without changing this decision, the one-process runtime spine described here: a single typed asynchronous `EventSink`, commit-before-notify delivery, one durable bus owner, all thirteen explicit projection registrations (including `member_knowledge`), product router namespaces, bridge ingest, and bounded lifecycle ownership. The two golden product slices remain Phase 3 work and cannot be inferred from the runtime-spine pass.

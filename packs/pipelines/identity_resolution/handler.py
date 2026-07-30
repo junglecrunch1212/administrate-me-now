@@ -194,9 +194,7 @@ class IdentityResolutionPipeline:
         # production uses the empty-list default per the module docstring.
         self._candidate_loader = candidate_loader or _default_candidate_loader
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         # Outbound events skip — outbound resolution is the recipient's
         # responsibility per [BUILD.md §1120], deferred.
@@ -209,9 +207,7 @@ class IdentityResolutionPipeline:
             return
 
         payload = event.get("payload") or {}
-        from_id, kind, value_normalized = _classify_identifier(
-            event_type, payload
-        )
+        from_id, kind, value_normalized = _classify_identifier(event_type, payload)
         if not value_normalized:
             return
 
@@ -288,7 +284,7 @@ class IdentityResolutionPipeline:
                 "source_event_id": source_event_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -323,7 +319,7 @@ class IdentityResolutionPipeline:
                 "sort_name": from_id.lower(),
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             party_envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -349,7 +345,7 @@ class IdentityResolutionPipeline:
                 "primary_for_kind": True,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             identifier_envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

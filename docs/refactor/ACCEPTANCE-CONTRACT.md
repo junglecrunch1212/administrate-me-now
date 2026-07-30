@@ -12,7 +12,7 @@ Standard environment: supported macOS lab, Python 3.11, Node 22 build tool, exac
 |---|---|---|
 | AC-00 | `git diff --check && git status --porcelain` after build/test cleanup | Clean tracked tree; generated evidence stored only in declared artifact directory; no secret/unrelated file. |
 | AC-01 | `./scripts/acceptance/clean-install.sh --fixture two-adult-one-child` | From a fresh macOS account/volume: locked install, all ten bootstrap sections, observation on, secret-reference scan clean, repeat run no-op, Doctor healthy. |
-| AC-02 | `python -m pytest tests/acceptance/test_runtime_composition.py --runxfail -q` | One Python process composes log, durable bus, 13 projections, pipelines, adapters/xlsx, product namespaces and browser assets; append commits then wakes consumers; readiness truthful. |
+| AC-02 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_runtime_spine.py -q` | One Python process composes the encrypted log, durable bus, exact 13 projections, pipelines, adapters/xlsx, product namespaces, and bridge ingest; append commits before waking consumers; readiness, shutdown, and encrypted reopen are truthful. |
 | AC-03 | `python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py --runxfail -q` | Credential-free inbound communication -> durable event -> bus -> Parties/Interactions -> commitment proposal -> review/approval -> API/xlsx -> completion/outcome -> projections/workbook -> changed what-now. Restart/retry creates no duplicate. |
 | AC-04 | `python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q` | Enrolled member bridge -> owner-stamped knowledge event -> `member_knowledge` and allowed `vector_search`; another member/child/ambient/OpenClaw generic memory cannot read it; correction/replay proven. |
 | AC-05 | `python -m pytest tests/acceptance/test_semantic_separation_and_feedback.py --runxfail -q` | Calendar/task/commitment/list/recurrence/scheduler schemas and stores remain distinct; Cat-B external edit round-trips; completion/defer/snooze/block/correction updates linked projections without type collapse. |
@@ -48,12 +48,16 @@ bash scripts/verify_invariants.sh
 cd console && npm ci && npm test
 ```
 
-During Phase 2, the two committed golden skeletons are the first required red-to-green targets:
+Gate 2 replaces the runtime spine and adds its own process-boundary acceptance test. The two end-to-end product slices remain strict Phase 3 targets:
 
 ```bash
 PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py --runxfail -q
 PYTHONPATH=bridge python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q
 ```
+
+## Gate 2 status
+
+AC-02 is implemented by `adminme.runtime.RuntimeApplication` and `tests/acceptance/test_runtime_spine.py`. The test boots a real runtime process, verifies readiness and the exact 13-projection registry, ingests through `/api/bridge`, performs bounded shutdown, and reopens the encrypted log. AC-03 and AC-04 intentionally remain strict xfail skeletons; ordinary pytest may report them as expected xfails, while `--runxfail` must continue to fail until Phase 3 closes the product loops.
 
 ## Evidence schema
 

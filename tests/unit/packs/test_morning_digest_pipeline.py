@@ -23,10 +23,7 @@ from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "packs"
-    / "pipelines"
-    / "morning_digest"
+    Path(__file__).resolve().parents[3] / "packs" / "pipelines" / "morning_digest"
 )
 
 
@@ -63,7 +60,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -105,9 +102,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         if skill_raises is not None:
@@ -123,6 +118,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -181,12 +177,15 @@ async def test_defensive_default_with_all_no_op_loaders_emits_sentinel() -> None
     body_text → validation guard rejects → sentinel emits."""
     log = _FakeEventLog()
     pipeline = MorningDigestPipeline()
-    ctx = _make_ctx(log, skill_outputs={
-        "body_text": "",
-        "claimed_event_ids": [],
-        "validation_failed": True,
-        "reasons": ["skill_failure_defensive_default"],
-    })
+    ctx = _make_ctx(
+        log,
+        skill_outputs={
+            "body_text": "",
+            "claimed_event_ids": [],
+            "validation_failed": True,
+            "reasons": ["skill_failure_defensive_default"],
+        },
+    )
     await pipeline.dispatch("member-a", "2026-05-05", ctx)
     assert len(log.calls) == 1
     env = log.calls[0].envelope
@@ -215,10 +214,7 @@ async def test_skill_failure_emits_sentinel_no_outbound() -> None:
     assert digest_events[0].envelope.payload["delivered"] is False
     assert digest_events[0].envelope.payload["body_text"] == SENTINEL_BODY
     # No observation events on the sentinel path.
-    assert all(
-        c.envelope.type == "digest.composed"
-        for c in log.calls
-    )
+    assert all(c.envelope.type == "digest.composed" for c in log.calls)
 
 
 # ---------------------------------------------------------------------------

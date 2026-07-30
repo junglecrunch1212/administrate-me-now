@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.governance import (
     ActionGateConfig,
     AgentAllowlist,
@@ -36,6 +37,16 @@ from adminme.lib.governance import (
 from adminme.lib.session import Session, build_internal_session
 
 TEST_KEY = b"g" * 32
+
+
+class _NoopBus:
+    async def notify(self, _event_id: str) -> None:
+        return None
+
+
+def _sink(log: EventLog) -> EventWriter:
+    return EventWriter(log, _NoopBus())  # type: ignore[arg-type]
+
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 GOVERNANCE_FIXTURE = FIXTURES / "governance" / "sample_governance.yaml"
@@ -246,7 +257,7 @@ async def gw(
         config=config,
         limiter=RateLimiter(),
         allowlist=allowlist,
-        event_log=log,
+        event_sink=_sink(log),
     )
 
 
@@ -257,9 +268,7 @@ async def _read_events_of_type(log: EventLog, type_: str) -> list[dict[str, Any]
     return out
 
 
-async def test_layer1_allowlist_denial(
-    gw: GuardedWrite, log: EventLog
-) -> None:
+async def test_layer1_allowlist_denial(gw: GuardedWrite, log: EventLog) -> None:
     # daemon:xlsx_reverse cannot do outbound.send.
     s = _xlsx_reverse_session()
     result = await gw.check(s, "outbound.send", {"to": "x"})
@@ -271,9 +280,7 @@ async def test_layer1_allowlist_denial(
     assert denials[0]["payload"]["agent_id"] == "daemon:xlsx_reverse"
 
 
-async def test_layer2_governance_deny(
-    gw: GuardedWrite, log: EventLog
-) -> None:
+async def test_layer2_governance_deny(gw: GuardedWrite, log: EventLog) -> None:
     s = _user_session()
     # noise.create is gated as 'deny' but the user:* agent_id allows it.
     # Wait — user:* allowlist doesn't include noise.create, so allowlist
@@ -336,7 +343,7 @@ async def test_layer3_rate_limit_exhaustion(
         config=config,
         limiter=RateLimiter(),
         allowlist=allowlist,
-        event_log=log,
+        event_sink=_sink(log),
     )
     s = build_internal_session("internal_caller", "device", "tenant-a")
     r1 = await gw.check(s, "burst.action", {})

@@ -23,9 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -34,7 +32,9 @@ import pytest
 
 import adminme.events.schemas.bridge  # noqa: F401  — registers bridge.enrolled@v1
 from adminme.events.envelope import EventEnvelope
+from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.products.bridge.app import create_app
 from adminme.products.bridge.auth import DictMemberIdResolver
@@ -135,14 +135,16 @@ async def central_rig(tmp_path: Path):
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    await bus.start()
     app = create_app()
-    app.state.event_log = log
-    app.state.member_id_resolver = DictMemberIdResolver(
-        {"m1@example.ts.net": "m1"}
-    )
+    app.state.event_sink = EventWriter(log, bus)
+    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://central") as http:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://central"
+    ) as http:
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
@@ -151,6 +153,7 @@ async def central_rig(tmp_path: Path):
         try:
             yield {"log": log, "ingest": ingest}
         finally:
+            await bus.stop()
             await log.close()
 
 
@@ -212,8 +215,10 @@ async def test_mock_cat_b_adapter_emits_via_event_log_sink_for_test_fixture(
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    await bus.start()
     try:
-        sink = EventLogBridgeSink(log)
+        sink = EventLogBridgeSink(EventWriter(log, bus))
         envelope = _envelope(correlation_id="cor-α1-fallback")
         adapter = _MockCatBAdapter(sink=sink, envelope=envelope)
 
@@ -253,4 +258,5 @@ async def test_mock_cat_b_adapter_emits_via_event_log_sink_for_test_fixture(
         # fallback ONLY" per the sink's docstring.
         assert stored["owner_scope"] == "private:m1"
     finally:
+        await bus.stop()
         await log.close()

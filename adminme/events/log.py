@@ -178,12 +178,21 @@ class EventLog:
         self._lock = asyncio.Lock()
         self._id_gen = _EventIdGenerator()
         self._closed = False
+        self._tenant_id_hint = (
+            db_path.tenant_id if isinstance(db_path, _InstanceConfig) else None
+        )
         self._migrate()
         ensure_autoloaded()
 
     # ------------------------------------------------------------------
     # connection management
     # ------------------------------------------------------------------
+    @property
+    def tenant_id(self) -> str | None:
+        """Configured tenant when the log was opened from InstanceConfig."""
+
+        return self._tenant_id_hint
+
     def _open_connection(self) -> sqlcipher3.Connection:
         conn = sqlcipher3.connect(
             str(self._db_path),
@@ -191,7 +200,7 @@ class EventLog:
             check_same_thread=False,
         )
         conn.row_factory = sqlcipher3.Row
-        conn.execute(f"PRAGMA key = \"{self._key_pragma}\"")
+        conn.execute(f'PRAGMA key = "{self._key_pragma}"')
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
@@ -226,10 +235,24 @@ class EventLog:
             )
 
     async def close(self) -> None:
+        # Closing a SQLCipher connection while an ``asyncio.to_thread`` DB
+        # call still owns it can crash in native code.  The same lock guards
+        # every connection operation, so close is queued behind in-flight
+        # work and repeated shutdown is harmless.
+        async with self._lock:
+            if self._closed:
+                return
+            await asyncio.to_thread(self._conn.close)
+            self._closed = True
+
+    def _ensure_open(self) -> None:
         if self._closed:
-            return
-        self._closed = True
-        await asyncio.to_thread(self._conn.close)
+            raise EventLogError("event log is closed")
+
+    async def _run_locked(self, func: Any, *args: Any) -> Any:
+        async with self._lock:
+            self._ensure_open()
+            return await asyncio.to_thread(func, *args)
 
     # ------------------------------------------------------------------
     # writes
@@ -267,6 +290,7 @@ class EventLog:
             prepared.append((row, event_id))
 
         async with self._lock:
+            self._ensure_open()
             await asyncio.to_thread(self._insert_rows, [r for r, _ in prepared])
         return [eid for _, eid in prepared]
 
@@ -334,8 +358,8 @@ class EventLog:
             envelope.tenant_id,
             envelope.owner_scope,
             envelope.type,
-            envelope.schema_version,      # legacy `version` column (mirror)
-            envelope.schema_version,      # canonical schema_version column
+            envelope.schema_version,  # legacy `version` column (mirror)
+            envelope.schema_version,  # canonical schema_version column
             envelope.occurred_at,
             recorded_at,
             envelope.source_adapter,
@@ -344,7 +368,7 @@ class EventLog:
             envelope.sensitivity,
             effective_correlation,
             effective_causation,
-            None,                          # legacy `source` column — unused
+            None,  # legacy `source` column — unused
             payload_json,
             envelope.raw_ref,
             envelope.actor_identity,
@@ -384,14 +408,14 @@ class EventLog:
         if limit <= 0:
             raise ValueError("limit must be positive")
         if cursor is not None:
-            exists = await asyncio.to_thread(self._event_exists, cursor)
+            exists = await self._run_locked(self._event_exists, cursor)
             if not exists:
                 raise CursorNotFound(cursor)
 
         batch_size = max(limit, 500)
         last = cursor
         while True:
-            rows = await asyncio.to_thread(
+            rows = await self._run_locked(
                 self._read_page,
                 last,
                 batch_size,
@@ -439,7 +463,7 @@ class EventLog:
         return list(cur.execute(sql, params))
 
     async def get(self, event_id: str) -> dict[str, Any] | None:
-        row = await asyncio.to_thread(self._get_one, event_id)
+        row = await self._run_locked(self._get_one, event_id)
         return _row_to_event(row) if row else None
 
     def _get_one(self, event_id: str) -> sqlcipher3.Row | None:
@@ -451,7 +475,7 @@ class EventLog:
         return cur.fetchone()
 
     async def get_by_correlation(self, correlation_id: str) -> list[dict[str, Any]]:
-        rows = await asyncio.to_thread(self._get_correlation, correlation_id)
+        rows = await self._run_locked(self._get_correlation, correlation_id)
         return [_row_to_event(r) for r in rows]
 
     def _get_correlation(self, correlation_id: str) -> list[sqlcipher3.Row]:
@@ -465,7 +489,7 @@ class EventLog:
         )
 
     async def latest_event_id(self) -> str | None:
-        return await asyncio.to_thread(self._latest_event_id)
+        return await self._run_locked(self._latest_event_id)
 
     def _latest_event_id(self) -> str | None:
         cur = self._conn.cursor()
@@ -475,7 +499,7 @@ class EventLog:
         return row[0] if row else None
 
     async def count(self) -> int:
-        return await asyncio.to_thread(self._count)
+        return await self._run_locked(self._count)
 
     def _count(self) -> int:
         cur = self._conn.cursor()
@@ -487,7 +511,7 @@ class EventLog:
         *,
         types: list[str] | None = None,
     ) -> int:
-        return await asyncio.to_thread(
+        return await self._run_locked(
             self._count_since,
             cursor,
             tuple(types) if types else None,

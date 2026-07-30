@@ -16,7 +16,7 @@ exists solely to:
   (b) synthesize a central :class:`AdapterContext` from the bridge's
       :class:`BridgeContext` — the two context types are structurally
       distinct (``BridgeContext`` carries ``ingest_client``/``sink``;
-      ``AdapterContext`` carries ``event_log``/``config``);
+      ``AdapterContext`` carries the typed ``event_sink``/``config``);
   (c) inject an :class:`IngestClientBridgeSink` (α-1) into the
       synthesized ``AdapterContext`` config under ``_bridge_sink`` so
       the central adapter's bridge-mode emit path
@@ -42,7 +42,11 @@ from typing import Any, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext
 from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
-from adminme_bridge.adapters.sinks import BridgeEventSink, IngestClientBridgeSink
+from adminme_bridge.adapters.sinks import (
+    BridgeEventSink,
+    BridgeTransportEventSink,
+    IngestClientBridgeSink,
+)
 
 
 # The central pack lives under ``packs/adapters/calendaring/apple-calendar/``
@@ -66,13 +70,9 @@ def _load_central_adapter_class() -> Any:
     cached = sys.modules.get(module_name)
     if cached is not None:
         return cached.AppleCalendarAdapter
-    spec = importlib.util.spec_from_file_location(
-        module_name, _CENTRAL_ADAPTER_PATH
-    )
+    spec = importlib.util.spec_from_file_location(module_name, _CENTRAL_ADAPTER_PATH)
     if spec is None or spec.loader is None:  # pragma: no cover — defensive
-        raise ImportError(
-            f"failed to spec central adapter at {_CENTRAL_ADAPTER_PATH}"
-        )
+        raise ImportError(f"failed to spec central adapter at {_CENTRAL_ADAPTER_PATH}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -143,11 +143,9 @@ class AppleCalendarBridgeAdapter:
         internal = AppleCalendarAdapter(config=internal_config)
         self._internal = internal
 
-        # Synthesize a central AdapterContext. event_log=None is
-        # intentional on the bridge path — the central adapter's
-        # _append() routes through _bridge_sink when
-        # deployment_target=="bridge" (see adapter.py
-        # _append_via_bridge_sink). ``config`` carries the bridge-only
+        # Synthesize a complete central AdapterContext. Bridge transport is
+        # adapted to the typed EventSink while _bridge_sink preserves the
+        # existing dual-deployment transport branch. ``config`` carries the bridge-only
         # discriminators in addition to the constructor config so
         # ctx.config["member_id"] / ["calendar_identifier"] reads
         # remain consistent across emit-site call shapes.
@@ -158,7 +156,10 @@ class AppleCalendarBridgeAdapter:
             "_bridge_sink": sink,
         }
         synthesized: AdapterContext = AdapterContext(
-            event_log=None,  # type: ignore[arg-type]
+            event_sink=BridgeTransportEventSink(
+                sink,
+                tenant_id=str(internal_config.get("tenant_id") or "default"),
+            ),
             config=synthesized_config,
             correlation_id_factory=ctx.correlation_id_factory,
             now_factory=ctx.now_factory,

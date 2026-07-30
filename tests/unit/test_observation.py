@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.observation import (
     ObservationManager,
     ObservationState,
@@ -30,6 +31,15 @@ from adminme.lib.observation import (
 from adminme.lib.session import Session, build_internal_session
 
 TEST_KEY = b"o" * 32
+
+
+class _NoopBus:
+    async def notify(self, _event_id: str) -> None:
+        return None
+
+
+def _sink(log: EventLog) -> EventWriter:
+    return EventWriter(log, _NoopBus())  # type: ignore[arg-type]
 
 
 def _session(tenant_id: str = "tenant-a") -> Session:
@@ -58,7 +68,7 @@ def runtime_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def manager(log: EventLog, runtime_path: Path) -> ObservationManager:
-    return ObservationManager(event_log=log, runtime_config_path=runtime_path)
+    return ObservationManager(event_sink=_sink(log), runtime_config_path=runtime_path)
 
 
 async def _read_events_of_type(log: EventLog, type_: str) -> list[dict[str, Any]]:
@@ -121,9 +131,9 @@ async def test_toggle_round_trip_via_fresh_manager(
 ) -> None:
     """A fresh manager pointing at the same runtime.yaml sees the persisted
     state — matters for console restart."""
-    m1 = ObservationManager(event_log=log, runtime_config_path=runtime_path)
+    m1 = ObservationManager(event_sink=_sink(log), runtime_config_path=runtime_path)
     await m1.disable(actor="member-principal", reason="ready_for_live")
-    m2 = ObservationManager(event_log=log, runtime_config_path=runtime_path)
+    m2 = ObservationManager(event_sink=_sink(log), runtime_config_path=runtime_path)
     assert await m2.is_active() is False
 
 
@@ -182,7 +192,7 @@ async def test_outbound_suppresses_when_active(
         payload=payload,
         action_fn=action_fn,
         manager=manager,
-        event_log=log,
+        event_sink=_sink(log),
         target_channel="imessage",
         target_identifier="+15555550100",
     )
@@ -216,7 +226,7 @@ async def test_outbound_does_not_emit_external_sent_when_active(
         payload={},
         action_fn=action_fn,
         manager=manager,
-        event_log=log,
+        event_sink=_sink(log),
     )
     sent = await _read_events_of_type(log, "external.sent")
     assert sent == []
@@ -246,7 +256,7 @@ async def test_outbound_calls_action_fn_when_inactive(
         payload=payload,
         action_fn=action_fn,
         manager=manager,
-        event_log=log,
+        event_sink=_sink(log),
         target_channel="imessage",
         target_identifier="+15555550100",
     )
@@ -281,7 +291,7 @@ async def test_outbound_propagates_action_fn_exceptions(
             payload={},
             action_fn=action_fn,
             manager=manager,
-            event_log=log,
+            event_sink=_sink(log),
         )
     # external.sent must NOT be emitted on the failure path.
     sent = await _read_events_of_type(log, "external.sent")

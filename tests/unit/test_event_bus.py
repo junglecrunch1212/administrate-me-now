@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from adminme.events.bus import EventBus, LAG_WARN_THRESHOLD
+from adminme.events.bus import EventBus, LAG_WARN_THRESHOLD, RETRY_BACKOFF_S
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.events.registry import registry
@@ -186,13 +186,18 @@ async def test_subscriber_becomes_degraded_after_threshold(tmp_path: Path) -> No
 
     await _wait_for(
         lambda: (
-            calls >= 3
-            and bus._subscribers["doomed"].degraded  # type: ignore[attr-defined]
+            calls >= 3 and bus._subscribers["doomed"].degraded  # type: ignore[attr-defined]
         ),
         timeout=5.0,
     )
     status = await bus.subscriber_status("doomed")
     assert status["degraded"] is True
+    assert status["poison_event_id"] == eid
+    assert status["retry_policy"] == {
+        "delivery": "at_least_once",
+        "failure_threshold": 3,
+        "backoff_seconds": RETRY_BACKOFF_S,
+    }
     # further appends do not get delivered
     await log.append(_event(2))
     await bus.notify("dummy")
@@ -202,6 +207,15 @@ async def test_subscriber_becomes_degraded_after_threshold(tmp_path: Path) -> No
 
     # reset restores delivery — rewrite callback via a new subscriber would be
     # cleaner, but reset_subscriber alone is what the API advertises.
+    # Poison metadata and degraded state survive a full bus restart.
+    await bus.stop()
+    bus = EventBus(log, tmp_path / "bus.db", failure_threshold=3)
+    bus.subscribe("doomed", "*", always_fail)
+    persisted = await bus.subscriber_status("doomed")
+    assert persisted["degraded"] is True
+    assert persisted["poison_event_id"] == eid
+    await bus.start()
+
     await bus.reset_subscriber("doomed")
     # callback still raises, so it'll fail again — but the degraded flag was
     # lifted and the retry loop is running.
@@ -252,7 +266,9 @@ async def test_checkpoint_persists_across_restart(tmp_path: Path) -> None:
     await log.close()
 
 
-async def test_subscriber_registered_after_events_replays_on_start(tmp_path: Path) -> None:
+async def test_subscriber_registered_after_events_replays_on_start(
+    tmp_path: Path,
+) -> None:
     log = EventLog(tmp_path / "events.db", TEST_KEY)
     # events exist before any subscriber does
     ids = [await log.append(_event(i)) for i in range(10)]

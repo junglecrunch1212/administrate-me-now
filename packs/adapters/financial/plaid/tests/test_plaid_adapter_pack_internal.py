@@ -52,28 +52,18 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 class _RecordingEventLog:
-    """Append-only stub event log for tests. Mirrors the supervisor's
-    duck-typed expectation: any object that has ``append_sync(...)``."""
+    """Recording typed asynchronous event sink for tests."""
 
     def __init__(self) -> None:
         self.appended: list[dict[str, Any]] = []
 
-    def append_sync(
-        self,
-        *,
-        type: str,
-        schema_version: int,
-        payload: dict[str, Any],
-        correlation_id: str,
-    ) -> None:
-        self.appended.append(
-            {
-                "type": type,
-                "schema_version": schema_version,
-                "payload": payload,
-                "correlation_id": correlation_id,
-            }
-        )
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.appended.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.appended)}"
 
 
 def _make_ctx(
@@ -83,7 +73,7 @@ def _make_ctx(
 ) -> tuple[AdapterContext, _RecordingEventLog]:
     log = _RecordingEventLog()
     ctx = AdapterContext(
-        event_log=log,  # type: ignore[arg-type]
+        event_sink=log,  # type: ignore[arg-type]
         config=config,
         correlation_id_factory=lambda: "corr-plaid-test",
         now_factory=now_factory
@@ -319,9 +309,7 @@ def test_start_rejects_non_op_reference_for_access_token() -> None:
     config schema's regex catches this at load time; this is the
     in-adapter belt-and-braces."""
     adapter = PlaidAdapter()
-    ctx, _log = _make_ctx(
-        _valid_config(item_access_token_ref="plaintext-token-leaked")
-    )
+    ctx, _log = _make_ctx(_valid_config(item_access_token_ref="plaintext-token-leaked"))
 
     with pytest.raises(PlaidAdapterError, match="item_access_token_ref"):
         asyncio.run(adapter.start(ctx=ctx))
@@ -632,7 +620,9 @@ def test_sync_transactions_skips_cursor_advanced_below_milestone() -> None:
     asyncio.run(_go())
 
     advances = [e for e in log.appended if e["type"] == "adapter.cursor_advanced"]
-    assert advances == [], "fewer than 100 events + <5min elapsed should not emit cursor_advanced"
+    assert (
+        advances == []
+    ), "fewer than 100 events + <5min elapsed should not emit cursor_advanced"
 
 
 # ---------------------------------------------------------------------------
@@ -765,8 +755,7 @@ def test_fetch_institution_health_emits_transient_on_degraded_product() -> None:
     # products do not emit.
     assert len(errors) == 2, [e["payload"] for e in errors]
     products_flagged = sorted(
-        e["payload"]["error_message"].split("product ")[1].split(" ")[0]
-        for e in errors
+        e["payload"]["error_message"].split("product ")[1].split(" ")[0] for e in errors
     )
     assert products_flagged == ["'identity'", "'transactions_updates'"]
     for err in errors:

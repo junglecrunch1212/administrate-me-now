@@ -64,9 +64,7 @@ from adminme.lib.pack_registry.parser import parse_adapter_manifest
 from adminme.lib.pack_registry.validator import validate_adapter_pack
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-REMINDERS_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+REMINDERS_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 
 
 def _load_apple_eventkit_module() -> Any:
@@ -135,9 +133,7 @@ class _FakeEKEventStore:
                 "priority": priority,
             }
         )
-        return _FakeEKReminder(
-            calendar_item_identifier=f"EKID-{len(self.builds)}"
-        )
+        return _FakeEKReminder(calendar_item_identifier=f"EKID-{len(self.builds)}")
 
     def save(self, reminder: Any, *, commit: bool) -> None:
         self.saves.append((reminder, commit))
@@ -306,7 +302,7 @@ async def test_apply_write_routes_through_observation_outbound(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str = "unknown",
         target_identifier: str = "unknown",
     ) -> Any:
@@ -318,7 +314,7 @@ async def test_apply_write_routes_through_observation_outbound(
                 "action": action,
                 "payload": payload,
                 "manager": manager,
-                "event_log": event_log,
+                "event_log": event_sink,
                 "target_channel": target_channel,
                 "target_identifier": target_identifier,
             }
@@ -409,9 +405,9 @@ def test_validator_no_pending_retrofit_advisory() -> None:
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert pending == [], (
-        f"advisory_pending_retrofit still present post-retrofit: {pending}"
-    )
+    assert (
+        pending == []
+    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
 
 
 def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
@@ -422,9 +418,9 @@ def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
     05 §3.4."""
     result = validate_adapter_pack(REMINDERS_PACK_DIR)
 
-    assert not result.has_errors(), (
-        f"validator reports errors post-retrofit: {result.errors()}"
-    )
+    assert (
+        not result.has_errors()
+    ), f"validator reports errors post-retrofit: {result.errors()}"
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +495,7 @@ async def test_on_external_change_delegates_to_emit_inbound_synced() -> None:
     # _on_external_change short-circuits on ctx is None — populate the
     # captured ctx slot directly (start() would normally do this).
     adapter._ctx = AdapterContext(
-        event_log=object(),  # type: ignore[arg-type]
+        event_sink=object(),  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-test",
         now_factory=lambda: datetime(2026, 5, 17, 0, 0, 0, tzinfo=timezone.utc),
@@ -507,7 +503,7 @@ async def test_on_external_change_delegates_to_emit_inbound_synced() -> None:
 
     captured: list[dict[str, Any]] = []
 
-    def _recording_emit(*, ctx: Any, reminder: Any, sync_cycle_id: str) -> None:
+    async def _recording_emit(*, ctx: Any, reminder: Any, sync_cycle_id: str) -> None:
         captured.append(
             {
                 "ctx": ctx,

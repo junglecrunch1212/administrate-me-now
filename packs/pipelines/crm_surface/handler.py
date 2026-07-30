@@ -126,11 +126,11 @@ class CrmSurfacePipeline:
         member_override_loader: MemberOverrideLoader | None = None,
     ) -> None:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
-        self._crm_targets_loader: CrmTargetsLoader = (
-            crm_targets_loader or (lambda _week: [])
+        self._crm_targets_loader: CrmTargetsLoader = crm_targets_loader or (
+            lambda _week: []
         )
-        self._member_override_loader: MemberOverrideLoader = (
-            member_override_loader or (lambda _mid: None)
+        self._member_override_loader: MemberOverrideLoader = member_override_loader or (
+            lambda _mid: None
         )
 
     async def gather(
@@ -157,9 +157,7 @@ class CrmSurfacePipeline:
             "surfaced_parties": surfaced_parties,
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_crm_surface", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_crm_surface", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "crm_surface: compose skill failed (%s); emitting "
@@ -211,7 +209,7 @@ class CrmSurfacePipeline:
             {"member_id": member_id, "body_text": body_text},
             _no_op_send,
             manager=ctx.observation_manager,
-            event_log=ctx.event_log,
+            event_sink=ctx.event_sink,
             target_channel=channel,
             target_identifier=member_id,
         )
@@ -262,7 +260,7 @@ class CrmSurfacePipeline:
                 "validation_failed": validation_failed,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -285,7 +283,9 @@ class CrmSurfacePipeline:
         if not clamped:
             return
         party_ids = [
-            str(p["party_id"]) for p in clamped if isinstance(p, dict) and "party_id" in p
+            str(p["party_id"])
+            for p in clamped
+            if isinstance(p, dict) and "party_id" in p
         ]
         if not party_ids:
             return
@@ -296,7 +296,12 @@ class CrmSurfacePipeline:
         composed = await self.compose(
             ctx, member_id, week_of_date, profile_format, clamped
         )
-        if composed is None or not isinstance(composed.get("composed_text"), str) or not composed["composed_text"].strip() or composed.get("validation_failed", False):
+        if (
+            composed is None
+            or not isinstance(composed.get("composed_text"), str)
+            or not composed["composed_text"].strip()
+            or composed.get("validation_failed", False)
+        ):
             await self._emit_crm_surfaced(
                 ctx,
                 member_id=member_id,
@@ -357,9 +362,7 @@ class CrmSurfacePipeline:
                 triggering_event=triggering_event,
             )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and is exercised in tests by

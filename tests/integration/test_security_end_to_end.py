@@ -37,6 +37,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.governance import (
     GuardedWrite,
     RateLimiter,
@@ -114,13 +115,12 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     (instance_dir / "config").mkdir()
-    (instance_dir / "config" / "instance.yaml").write_text(
-        "tenant_id: tenant-a\n"
-    )
+    (instance_dir / "config" / "instance.yaml").write_text("tenant_id: tenant-a\n")
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     log._tenant_id_hint = "tenant-a"  # type: ignore[attr-defined]
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(TasksProjection())
     runner.register(CalendarsProjection())
@@ -130,6 +130,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
             "config": config,
             "log": log,
             "bus": bus,
+            "events": events,
             "runner": runner,
             "instance_dir": instance_dir,
         }
@@ -291,6 +292,7 @@ async def test_guarded_write_then_outbound_suppresses_during_observation(
     ``observation.suppressed`` with the full would-have-sent payload, and
     no ``external.sent`` event lands."""
     log: EventLog = rig["log"]
+    events: EventWriter = rig["events"]
     instance_dir: Path = rig["instance_dir"]
 
     config_obj = load_governance_config(GOVERNANCE_FIXTURE)
@@ -299,10 +301,10 @@ async def test_guarded_write_then_outbound_suppresses_during_observation(
         config=config_obj,
         limiter=RateLimiter(),
         allowlist=allowlist,
-        event_log=log,
+        event_sink=events,
     )
     runtime_path = instance_dir / "config" / "runtime.yaml"
-    manager = ObservationManager(event_log=log, runtime_config_path=runtime_path)
+    manager = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
     # Default-on: no runtime.yaml exists.
     assert await manager.is_active() is True
 
@@ -334,7 +336,7 @@ async def test_guarded_write_then_outbound_suppresses_during_observation(
         payload={"member_id": "principal_a", "tier": "weekly_summary"},
         action_fn=push_action,
         manager=manager,
-        event_log=log,
+        event_sink=events,
         target_channel="apns",
         target_identifier="device-token-redacted",
     )

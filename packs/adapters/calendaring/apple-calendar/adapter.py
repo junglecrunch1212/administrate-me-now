@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.adapters.emission import write_adapter_event
 from adminme.events.envelope import EventEnvelope
 from adminme.lib.adapters import (
     ChangeEnvelope,
@@ -69,7 +70,7 @@ _DEFAULT_POLL_WINDOW_DAYS: int = 30
 # OS-level access ref. EventKit grants Calendar access at the OS level
 # (``requestFullAccessToEvents``); no 1Password secret involved. Same
 # pattern as Apple Reminders.
-_OS_TOKEN_STORAGE_REF: str = "os://calendar-permission"
+_OS_TOKEN_STORAGE_REF: str = "op://local-system/calendar/permission"
 
 _APPLE_CALENDAR_SCOPES: list[str] = ["calendar:read", "calendar:write"]
 
@@ -136,14 +137,20 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
     adds dual-deployment."""
 
     name: ClassVar[str] = "calendaring-apple-calendar"
-    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = "calendaring"
+    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
+        "calendaring"
+    )
     version: ClassVar[str] = "1.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] one Cat-B entry declaring EXISTING
     # ``calendar.event_added`` family — NO new schema per [D7].
     capabilities: ClassVar[list[Any]] = [
-        {"kind": "Cat-B", "runtime": "central", "event_families": ["calendar.event_added"]},
+        {
+            "kind": "Cat-B",
+            "runtime": "central",
+            "event_families": ["calendar.event_added"],
+        },
     ]
 
     # [UT-27] asymmetric — declare ONLY what is implemented.
@@ -242,17 +249,15 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         # [A-2, memo 05 §2.5 / §5.4] row discriminator surfaced as an
         # instance attribute (schema is ``extra="forbid"``).
         self._sharing_model_value = (
-            "per_member_isolated"
-            if deployment_target == "bridge"
-            else "shared_central"
+            "per_member_isolated" if deployment_target == "bridge" else "shared_central"
         )
 
         if deployment_target == "bridge":
             # [A-3, memo 04 §2.2] Wrapper synthesizes ctx.config with the
             # per-member Apple ID identity + injected sink.
-            bridge_member_id = ctx.config.get(
-                "_bridge_member_id"
-            ) or ctx.config.get("member_id")
+            bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
+                "member_id"
+            )
             if not isinstance(bridge_member_id, str) or not bridge_member_id:
                 raise ValueError(
                     "bridge deployment requires ctx.config['_bridge_member_id'] "
@@ -284,7 +289,7 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
-        self._emit_authenticated(ctx=ctx)
+        await self._emit_authenticated(ctx=ctx)
         await self._poll_loop(ctx=ctx)
 
     async def stop(self) -> None:
@@ -307,8 +312,10 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=None,
                 )
@@ -333,7 +340,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         now = ctx.now_factory()
         window_end = now + timedelta(days=self._poll_window_days)
         events = self._store.fetch_events(
-            calendar_identifier=calendar_identifier, start=now, end=window_end,
+            calendar_identifier=calendar_identifier,
+            start=now,
+            end=window_end,
         )
         emitted = 0
         for event in events:
@@ -343,14 +352,16 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 continue
             if event_id in self._seen_inbound:
                 continue
-            self._emit_calendar_event_added(
-                ctx=ctx, calendar_identifier=calendar_identifier, event=event,
+            await self._emit_calendar_event_added(
+                ctx=ctx,
+                calendar_identifier=calendar_identifier,
+                event=event,
             )
             self._seen_inbound[event_id] = now
             emitted += 1
         return emitted
 
-    def _emit_calendar_event_added(
+    async def _emit_calendar_event_added(
         self,
         *,
         ctx: AdapterContext,
@@ -361,20 +372,25 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         title = event.title()
         location = event.location()
         notes = event.notes()
-        self._append(ctx=ctx, event_type="calendar.event_added", payload={
-            "source": "apple_calendar",
-            "external_event_id": str(event.eventIdentifier() or ""),
-            "calendar_id": calendar_identifier,
-            "summary": str(title) if title is not None else "",
-            "start": _to_iso(event.startDate()),
-            "end": _to_iso(event.endDate()),
-            "location": str(location) if location is not None else None,
-            "attendees": _attendees(event.attendees()),
-            "body": str(notes) if notes is not None else None,
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="calendar.event_added",
+            payload={
+                "source": "apple_calendar",
+                "external_event_id": str(event.eventIdentifier() or ""),
+                "calendar_id": calendar_identifier,
+                "summary": str(title) if title is not None else "",
+                "start": _to_iso(event.startDate()),
+                "end": _to_iso(event.endDate()),
+                "location": str(location) if location is not None else None,
+                "attendees": _attendees(event.attendees()),
+                "body": str(notes) if notes is not None else None,
+            },
+        )
 
     async def _apply_write_impl(
-        self, operation: WriteOperation,
+        self,
+        operation: WriteOperation,
     ) -> WriteResult:
         """[UT-27] gate already checked ``operation.kind``. Phase B routes
         the save through :func:`observation_outbound` per [§6.20]; Phase A
@@ -399,7 +415,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         start_value = payload.get("start")
         end_value = payload.get("end")
         location = payload.get("location")
-        notes = payload.get("body") or payload.get("notes") or payload.get("description")
+        notes = (
+            payload.get("body") or payload.get("notes") or payload.get("description")
+        )
         attendees_raw = payload.get("attendees")
         attendees = list(attendees_raw) if attendees_raw is not None else None
 
@@ -431,12 +449,14 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                     {
                         "calendar_id": calendar_identifier,
                         "summary": summary,
-                        "start": _to_iso(start_value) if start_value is not None else "",
+                        "start": _to_iso(start_value)
+                        if start_value is not None
+                        else "",
                         "end": _to_iso(end_value) if end_value is not None else "",
                     },
                     _do_save,
                     manager=manager,
-                    event_log=event_log,
+                    event_sink=event_log,
                     target_channel="calendaring-apple-calendar",
                     target_identifier=calendar_identifier,
                 )
@@ -444,7 +464,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                     # F-3 (HARD): suppressed → unapplied; caller does NOT
                     # emit externally-visible side effects.
                     return WriteResult(
-                        applied=False, external_id=None, suppressed=True,
+                        applied=False,
+                        external_id=None,
+                        suppressed=True,
                     )
             else:
                 await _do_save()
@@ -452,8 +474,10 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             ctx = self._ctx
             severity, error_kind = _classify_eventkit_error(exc)
             if ctx is not None:
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=None,
                 )
@@ -462,7 +486,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         external_id_raw = event.eventIdentifier()
         external_id = str(external_id_raw) if external_id_raw else None
         return WriteResult(
-            applied=True, external_id=external_id, suppressed=False,
+            applied=True,
+            external_id=external_id,
+            suppressed=False,
         )
 
     async def _on_external_change(self, envelope: ChangeEnvelope) -> None:
@@ -471,18 +497,22 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         will dispatch here."""
         return None
 
-    def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
         """Append ``adapter.authenticated`` v1 with the OS-level access
         ref (EventKit grants at the OS level — no secret to store)."""
-        self._append(ctx=ctx, event_type="adapter.authenticated", payload={
-            "adapter_name": self.name,
-            "adapter_family": self.family,
-            "token_storage_ref": _OS_TOKEN_STORAGE_REF,
-            "authenticated_at": _to_iso(ctx.now_factory()),
-            "scopes": list(self.SCOPES),
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="adapter.authenticated",
+            payload={
+                "adapter_name": self.name,
+                "adapter_family": self.family,
+                "token_storage_ref": _OS_TOKEN_STORAGE_REF,
+                "authenticated_at": _to_iso(ctx.now_factory()),
+                "scopes": list(self.SCOPES),
+            },
+        )
 
-    def _emit_error(
+    async def _emit_error(
         self,
         *,
         ctx: AdapterContext,
@@ -502,9 +532,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             "occurred_at": _to_iso(ctx.now_factory()),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
+    async def _append(
         self,
         *,
         ctx: AdapterContext,
@@ -519,7 +549,7 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         preserved byte-for-byte (F-2). F-4: upstream observation gate is
         unchanged — suppressed writes skip ALL emits uniformly."""
         if self._deployment_target == "bridge":  # [D18, memo 04 §2.2]
-            self._append_via_bridge_sink(
+            await self._append_via_bridge_sink(
                 ctx=ctx,
                 event_type=event_type,
                 payload=payload,
@@ -528,27 +558,20 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             return
 
         # ----- central path (byte-for-byte preserved from β-α) -----
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
         try:
-            appender(**kwargs)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "apple-calendar adapter failed to emit %s event", event_type
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
             )
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception("apple-calendar adapter failed to emit %s event", event_type)
 
-    def _append_via_bridge_sink(
+    async def _append_via_bridge_sink(
         self,
         *,
         ctx: AdapterContext,
@@ -597,9 +620,8 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             return
         # F-5: hold the Task reference to prevent GC mid-flight; done-
         # callback discards once the emit resolves so the set stays bounded.
-        task = loop.create_task(self._dispatch_bridge_emit(envelope))
-        self._bridge_emit_tasks.add(task)
-        task.add_done_callback(self._bridge_emit_tasks.discard)
+        del loop
+        await self._dispatch_bridge_emit(envelope)
 
     async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
         """Best-effort sink dispatch — symmetric with the central path's

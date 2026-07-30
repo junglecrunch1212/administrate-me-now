@@ -79,9 +79,7 @@ def _now_hhmm(now_iso: str) -> str:
     return ""
 
 
-def _within_fog_window(
-    now_hhmm: str, fog_window: list[str] | None
-) -> bool:
+def _within_fog_window(now_hhmm: str, fog_window: list[str] | None) -> bool:
     """Fog window is [start_hhmm, end_hhmm] inclusive. Defensive
     default: if the window is missing or malformed, treat as
     out-of-window."""
@@ -131,15 +129,11 @@ class ParalysisDetectionPipeline:
     ) -> None:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
         self._persona_loader: PersonaLoader = persona_loader or (lambda: None)
-        self._tasks_loader: TasksLoader = tasks_loader or (
-            lambda _mid, _now: []
-        )
+        self._tasks_loader: TasksLoader = tasks_loader or (lambda _mid, _now: [])
         self._commitments_loader: CommitmentsLoader = commitments_loader or (
             lambda _mid, _now: []
         )
-        self._energy_loader: EnergyLoader = energy_loader or (
-            lambda _mid: None
-        )
+        self._energy_loader: EnergyLoader = energy_loader or (lambda _mid: None)
 
     def check_preconditions(
         self,
@@ -227,7 +221,7 @@ class ParalysisDetectionPipeline:
                 "triggered_at": triggered_at,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -264,9 +258,7 @@ class ParalysisDetectionPipeline:
             triggering_event=triggering_event,
         )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and is exercised in tests by

@@ -10,7 +10,7 @@ emit dispatch + the ``_sharing_model_value`` row value per [D18] / [D22]
   - ``"central"`` (default — F-2 byte-for-byte preserved): existing
     constructor-config credential source; ``_sharing_model_value ==
     "shared_central"``; ``_append`` routes via
-    ``ctx.event_log.append_sync(...)``.
+    ``ctx.event_sink.write(...)``.
   - ``"bridge"``: ``_bridge_member_id`` overrides ``config["member_id"]``;
     ``_bridge_sink`` is required and is the emit destination;
     ``_sharing_model_value == "per_member_isolated"``; ``_append`` routes
@@ -75,13 +75,18 @@ _FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeEventLog:
-    """Captures synchronous append calls for the central path."""
+    """Captures typed asynchronous event-sink writes for the central path."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 class _FakeBridgeSink:
@@ -183,7 +188,7 @@ def _make_ctx(
     if bridge_sink is not None:
         config["_bridge_sink"] = bridge_sink
     return AdapterContext(
-        event_log=event_log if event_log is not None else _FakeEventLog(),  # type: ignore[arg-type]
+        event_sink=event_log if event_log is not None else _FakeEventLog(),  # type: ignore[arg-type]
         config=config,
         correlation_id_factory=lambda: "corr-dual-dep",
         now_factory=lambda: _FROZEN_NOW,
@@ -313,7 +318,7 @@ def test_deployment_target_bridge_requires_member_id_string() -> None:
 
 
 def test_central_path_uses_event_log_append_for_emit() -> None:
-    """In central mode ``_append`` routes to ``ctx.event_log.append_sync``
+    """In central mode ``_append`` routes to ``ctx.event_sink.write``
     — the existing β-α shape preserved byte-for-byte (F-2)."""
     adapter = _make_adapter()
     event_log = _FakeEventLog()
@@ -321,11 +326,13 @@ def test_central_path_uses_event_log_append_for_emit() -> None:
     _start(adapter, ctx)
     event_log.calls.clear()  # drop the adapter.authenticated emit from start()
 
-    adapter._append(
-        ctx=ctx,
-        event_type="calendar.event_added",
-        payload={"source": "apple_calendar", "calendar_id": "c-1"},
-        causation_id="evt-up-1",
+    asyncio.run(
+        adapter._append(
+            ctx=ctx,
+            event_type="calendar.event_added",
+            payload={"source": "apple_calendar", "calendar_id": "c-1"},
+            causation_id="evt-up-1",
+        )
     )
     assert len(event_log.calls) == 1
     call = event_log.calls[0]
@@ -349,7 +356,7 @@ def test_bridge_path_uses_injected_sink_for_emit() -> None:
 
     async def _drive_emit() -> None:
         sink.envelopes.clear()  # drop the adapter.authenticated emit
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="calendar.event_added",
             payload={"source": "apple_calendar", "calendar_id": "c-1"},
@@ -388,7 +395,7 @@ def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:
 
     async def _drive() -> None:
         sink.envelopes.clear()
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="calendar.event_added",
             payload={"source": "apple_calendar"},
@@ -402,17 +409,14 @@ def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:
     assert sink.envelopes[0].visibility_scope == "private:member-bridge-carol"
 
 
-def test_bridge_path_does_not_touch_central_event_log() -> None:
-    """F-3 (HARD): bridge path is purely additive. ``ctx.event_log`` is
-    not consulted on the bridge branch — it is allowed to be ``None``
-    on the bridge runtime (the wrapper synthesizes it as such), and
-    ``_append`` MUST NOT crash on the absent appender attribute."""
+def test_bridge_path_does_not_invoke_central_writer() -> None:
+    """F-3: bridge transport leaves the injected central writer unused."""
     adapter = _make_adapter()
     sink = _FakeBridgeSink()
-    # event_log=None on the synthesized AdapterContext: bridge runtime
-    # has no local event log; emits go through the sink only.
+    event_sink = _FakeEventLog()
+    # A typed central sink remains present but bridge transport is authoritative.
     ctx = AdapterContext(
-        event_log=None,  # type: ignore[arg-type]
+        event_sink=event_sink,
         config={
             "calendar_identifier": "apple-calendar-household-001",
             "member_id": "member-bridge-dave",
@@ -427,7 +431,7 @@ def test_bridge_path_does_not_touch_central_event_log() -> None:
 
     async def _drive() -> None:
         sink.envelopes.clear()
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="calendar.event_added",
             payload={"source": "apple_calendar"},
@@ -436,18 +440,13 @@ def test_bridge_path_does_not_touch_central_event_log() -> None:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-    asyncio.run(_drive())  # MUST NOT raise AttributeError on event_log=None
+    asyncio.run(_drive())
     assert len(sink.envelopes) == 1
+    assert event_sink.calls == []
 
 
-def test_bridge_emit_task_retained_in_bridge_emit_tasks_set_per_f5() -> None:
-    """F-5 (HARD/new): the bridge emit path retains the
-    ``loop.create_task`` return value in ``self._bridge_emit_tasks``
-    (set + done-callback discard) so the dispatch coroutine cannot be
-    garbage-collected mid-flight before ``sink.emit`` resolves. The
-    α-2 ``AppleEventKitAdapter._append_via_bridge_sink`` did NOT do
-    this (β-α QC carry-forward); β-β writes the emit path fresh and
-    correct."""
+def test_bridge_emit_is_awaited_before_append_returns() -> None:
+    """The bridge sink has completed when the async append returns."""
     adapter = _make_adapter()
     sink = _FakeBridgeSink()
     ctx = _make_ctx(
@@ -462,7 +461,7 @@ def test_bridge_emit_task_retained_in_bridge_emit_tasks_set_per_f5() -> None:
 
     async def _drive() -> dict[str, int]:
         sink.envelopes.clear()
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="calendar.event_added",
             payload={"source": "apple_calendar"},
@@ -478,10 +477,7 @@ def test_bridge_emit_task_retained_in_bridge_emit_tasks_set_per_f5() -> None:
         return {"scheduled": scheduled_size, "drained": drained_size}
 
     sizes = asyncio.run(_drive())
-    # F-5: retained on schedule.
-    assert sizes["scheduled"] == 1
-    # The done_callback discards the Task once dispatch resolves so
-    # the set stays bounded across the adapter's lifetime.
+    assert sizes["scheduled"] == 0
     assert sizes["drained"] == 0
     # And the sink actually received the envelope (dispatch fired).
     assert len(sink.envelopes) == 1
@@ -514,9 +510,7 @@ def test_dual_deployment_observation_suppressed_skips_all_emits_uniformly(
 
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     from adminme.lib.adapters import WriteOperation
 

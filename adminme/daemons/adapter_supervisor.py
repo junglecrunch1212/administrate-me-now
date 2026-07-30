@@ -34,6 +34,7 @@ from typing import Any, Callable
 import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
+from adminme.events.envelope import EventEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class AdapterSupervisor:
 
         sup = AdapterSupervisor(
             config_path=Path("config/channels.yaml"),
-            ctx_factory=lambda: AdapterContext(event_log=..., config={}, ...),
+            ctx_factory=lambda: AdapterContext(event_sink=..., config={}, ...),
             adapter_loader=load_my_adapters,
         )
         await sup.start()
@@ -95,13 +96,14 @@ class AdapterSupervisor:
         ctx_factory: Callable[[], AdapterContext],
         adapter_loader: AdapterLoader = _noop_loader,
         clock: Callable[[], float] | None = None,
+        config_data: dict[str, Any] | None = None,
     ) -> None:
         self._config_path = config_path
         self._ctx_factory = ctx_factory
         self._loader = adapter_loader
         self._clock = clock or _monotonic
         self._managed: dict[str, _ManagedAdapter] = {}
-        self._config: dict[str, Any] = {}
+        self._config: dict[str, Any] = dict(config_data or {})
         self._http_server: asyncio.base_events.Server | None = None
         self._stopping = False
 
@@ -220,8 +222,9 @@ class AdapterSupervisor:
                     "error_kind": "unknown",
                     "error_message": f"{type(exc).__name__}: {exc}",
                     "retry_after_s": int(managed.backoff_s),
-                    "occurred_at": datetime.now(timezone.utc)
-                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "occurred_at": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
                 }
                 managed.status.last_error = error_payload
                 managed.status.state = "backoff"
@@ -233,7 +236,7 @@ class AdapterSupervisor:
                     type(exc).__name__,
                     managed.backoff_s,
                 )
-                self._emit_adapter_error(ctx, error_payload)
+                await self._emit_adapter_error(ctx, error_payload)
                 try:
                     await asyncio.sleep(managed.backoff_s)
                 except asyncio.CancelledError:
@@ -242,28 +245,34 @@ class AdapterSupervisor:
                 managed.backoff_s = min(managed.backoff_s * 2, MAX_BACKOFF_S)
         managed.status.state = "stopped"
 
-    def _emit_adapter_error(
+    async def _emit_adapter_error(
         self, ctx: AdapterContext, payload: dict[str, Any]
     ) -> None:
-        """Append an ``adapter.error`` event via the context's event_log.
-
-        Best-effort: a failure here must not crash the supervisor (the
-        log may itself be down). Production wires a real EventLog;
-        tests inject a fake whose ``append`` records the call."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
+        """Write ``adapter.error`` through the one asynchronous EventSink."""
         try:
-            appender(
-                type="adapter.error",
-                schema_version=1,
-                payload=payload,
-                correlation_id=ctx.correlation_id_factory(),
+            correlation_id = ctx.correlation_id_factory()
+            await ctx.event_sink.write(
+                EventEnvelope(
+                    event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                    tenant_id=ctx.event_sink.tenant_id or "tenant-default",
+                    type="adapter.error",
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="adapter_supervisor",
+                    source_account_id=str(payload.get("adapter_name") or "system"),
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    sensitivity="normal",
+                    correlation_id=correlation_id,
+                    payload=payload,
+                ),
+                correlation_id=correlation_id,
             )
         except Exception:  # noqa: BLE001
-            logger.exception("supervisor failed to emit adapter.error for %s", payload.get("adapter_name"))
+            logger.exception(
+                "supervisor failed to emit adapter.error for %s",
+                payload.get("adapter_name"),
+            )
 
     async def _handle_http(
         self,
@@ -282,7 +291,11 @@ class AdapterSupervisor:
                 if line in (b"\r\n", b""):
                     break
             parts = request_line.split()
-            if len(parts) >= 2 and parts[0] == b"GET" and parts[1].startswith(b"/status"):
+            if (
+                len(parts) >= 2
+                and parts[0] == b"GET"
+                and parts[1].startswith(b"/status")
+            ):
                 body = json.dumps(self.snapshot()).encode("utf-8")
                 headers = (
                     b"HTTP/1.1 200 OK\r\n"
@@ -292,7 +305,9 @@ class AdapterSupervisor:
                 )
                 writer.write(headers + body)
             else:
-                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                writer.write(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
             await writer.drain()
         finally:
             writer.close()
@@ -313,7 +328,9 @@ def _status_to_dict(status: AdapterStatus) -> dict[str, Any]:
         "last_cursor_advance_at": status.last_cursor_advance_at.isoformat()
         if status.last_cursor_advance_at is not None
         else None,
-        "started_at": status.started_at.isoformat() if status.started_at is not None else None,
+        "started_at": status.started_at.isoformat()
+        if status.started_at is not None
+        else None,
         "restart_count": status.restart_count,
         "next_backoff_s": status.next_backoff_s,
     }
@@ -327,5 +344,3 @@ __all__ = [
     "MAX_BACKOFF_S",
     "UPTIME_RESET_S",
 ]
-
-

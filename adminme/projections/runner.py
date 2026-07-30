@@ -25,6 +25,7 @@ No path literals in this module.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -35,7 +36,19 @@ from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.lib.instance_config import InstanceConfig
 from adminme.projections.base import Projection
+from adminme.projections.artifacts import ArtifactsProjection
+from adminme.projections.calendars import CalendarsProjection
+from adminme.projections.commitments import CommitmentsProjection
+from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.lists import ListsProjection
+from adminme.projections.member_knowledge import MemberKnowledgeProjection
+from adminme.projections.money import MoneyProjection
+from adminme.projections.parties import PartiesProjection
+from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
+from adminme.projections.recurrences import RecurrencesProjection
+from adminme.projections.tasks import TasksProjection
+from adminme.projections.vector_search import VectorSearchProjection
+from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 
 _log = logging.getLogger(__name__)
 
@@ -44,6 +57,18 @@ _log = logging.getLogger(__name__)
 # [D18] enumerates the 13 first-party projections; this tuple is the registration
 # anchor consumed by integration tests and bootstrap code.
 DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
+    PartiesProjection,
+    InteractionsProjection,
+    ArtifactsProjection,
+    CommitmentsProjection,
+    TasksProjection,
+    RecurrencesProjection,
+    CalendarsProjection,
+    PlacesAssetsAccountsProjection,
+    MoneyProjection,
+    VectorSearchProjection,
+    XlsxWorkbooksProjection,
+    MemberKnowledgeProjection,
     ListsProjection,
 )
 
@@ -99,7 +124,7 @@ class ProjectionRunner:
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
-    async def start(self) -> None:
+    async def start(self, *, start_bus: bool = True) -> None:
         """Open each projection's DB, apply schema.sql if new, subscribe to
         the bus with one callback per projection that dispatches to apply()."""
         if self._started:
@@ -120,13 +145,25 @@ class ProjectionRunner:
                 types,
                 self._make_callback(name, projection),
             )
-        await self._bus.start()
+        if start_bus:
+            await self._bus.start()
 
-    async def stop(self) -> None:
+    async def stop(self, *, stop_bus: bool = True) -> None:
         if not self._started:
             return
         self._started = False
-        await self._bus.stop()
+        if stop_bus:
+            await self._bus.stop()
+        for projection in self._projections.values():
+            stop = getattr(projection, "stop", None)
+            if stop is None:
+                continue
+            try:
+                result = stop()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                _log.exception("error stopping projection %s", projection.name)
         for conn in self._conns.values():
             try:
                 await asyncio.to_thread(conn.close)
@@ -156,7 +193,9 @@ class ProjectionRunner:
             db_path = self._config.projection_db_path(projection_name)
             await asyncio.to_thread(self._remove_if_exists, db_path)
 
-            conn = await asyncio.to_thread(self._open_projection_db, projection_name, projection)
+            conn = await asyncio.to_thread(
+                self._open_projection_db, projection_name, projection
+            )
             self._conns[projection_name] = conn
 
             # Replay every event through apply() inline. Handlers are
@@ -271,7 +310,7 @@ class ProjectionRunner:
             check_same_thread=False,
         )
         conn.row_factory = sqlcipher3.Row
-        conn.execute(f"PRAGMA key = \"{self._key_pragma}\"")
+        conn.execute(f'PRAGMA key = "{self._key_pragma}"')
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
