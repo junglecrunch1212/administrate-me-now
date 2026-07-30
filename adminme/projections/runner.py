@@ -324,6 +324,7 @@ class ProjectionRunner:
         schema_sql = self._read_schema(projection)
         cur = conn.cursor()
         cur.executescript(schema_sql)
+        projection.migrate_schema(conn)
         # Stamp projection version in a tiny metadata table for debugging.
         cur.executescript(
             "CREATE TABLE IF NOT EXISTS _projection_meta ("

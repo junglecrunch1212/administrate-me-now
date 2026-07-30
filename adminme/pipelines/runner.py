@@ -79,6 +79,7 @@ class PipelineRunner:
         observation_manager: ObservationManager | None = None,
         guarded_write: GuardedWrite | None = None,
         parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None,
+        run_skill_fn: Callable[..., Awaitable[Any]] | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
@@ -87,6 +88,7 @@ class PipelineRunner:
         self._observation_manager = observation_manager
         self._guarded_write = guarded_write
         self._parties_conn_factory = parties_conn_factory
+        self._run_skill_fn = run_skill_fn or run_skill
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -213,7 +215,7 @@ class PipelineRunner:
                 session=session,
                 event_log=self._log,
                 event_sink=self._events,
-                run_skill_fn=run_skill,
+                run_skill_fn=self._run_skill_fn,
                 outbound_fn=outbound,
                 guarded_write=self._guarded_write,
                 observation_manager=self._observation_manager,

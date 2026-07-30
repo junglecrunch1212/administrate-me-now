@@ -1,5 +1,7 @@
 # Gate 1 baseline report
 
+Gate 3 continuity note (2026-07-30): this remains immutable baseline evidence. The first complete household slice is additive on `codex/administrateme-v2-runtime`; it does not revise any Gate 1 audit result or console-reference hash.
+
 - Audit date: 2026-07-29 (America/New_York)
 - Rendered evidence follow-up: 2026-07-30 UTC
 - Repository: `junglecrunch1212/administrate-me-now` (public)

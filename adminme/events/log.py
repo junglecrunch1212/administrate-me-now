@@ -88,6 +88,10 @@ class AppendValidationError(EventLogError):
     registered Pydantic model."""
 
 
+class IdempotencyConflict(EventLogError):
+    """An idempotency key was reused outside its original event identity."""
+
+
 def _encode_crockford(value: int, length: int) -> str:
     if value < 0:
         raise ValueError("value must be non-negative")
@@ -154,6 +158,7 @@ class EventLog:
     MIGRATIONS: tuple[tuple[int, str], ...] = (
         (1, "0001_initial.sql"),
         (2, "0002_full_envelope.sql"),
+        (3, "0003_idempotency_keys.sql"),
     )
 
     def __init__(
@@ -291,8 +296,10 @@ class EventLog:
 
         async with self._lock:
             self._ensure_open()
-            await asyncio.to_thread(self._insert_rows, [r for r, _ in prepared])
-        return [eid for _, eid in prepared]
+            resolved_ids = await asyncio.to_thread(
+                self._insert_rows, [r for r, _ in prepared]
+            )
+        return resolved_ids
 
     def _prepare_row(
         self,
@@ -372,27 +379,73 @@ class EventLog:
             payload_json,
             envelope.raw_ref,
             envelope.actor_identity,
+            envelope.idempotency_key,
         )
         return row, event_id
 
-    def _insert_rows(self, rows: list[tuple[Any, ...]]) -> None:
+    def _insert_rows(self, rows: list[tuple[Any, ...]]) -> list[str]:
         cur = self._conn.cursor()
         cur.execute("BEGIN IMMEDIATE")
+        resolved_ids: list[str] = []
         try:
-            cur.executemany(
-                "INSERT INTO events"
-                "  (event_id, event_at_ms, tenant_id, owner_scope, type, version,"
-                "   schema_version, occurred_at, recorded_at, source_adapter,"
-                "   source_account_id, visibility_scope, sensitivity,"
-                "   correlation_id, causation_id, source, payload,"
-                "   raw_ref, actor_identity)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+            for row in rows:
+                try:
+                    cur.execute(
+                        "INSERT INTO events"
+                        "  (event_id, event_at_ms, tenant_id, owner_scope, type, version,"
+                        "   schema_version, occurred_at, recorded_at, source_adapter,"
+                        "   source_account_id, visibility_scope, sensitivity,"
+                        "   correlation_id, causation_id, source, payload,"
+                        "   raw_ref, actor_identity, idempotency_key)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        row,
+                    )
+                    resolved_ids.append(str(row[0]))
+                except sqlcipher3.IntegrityError as exc:
+                    idempotency_key = row[19]
+                    if idempotency_key is None:
+                        raise
+                    existing = cur.execute(
+                        "SELECT event_id, tenant_id, owner_scope, type, schema_version, "
+                        "source_adapter, source_account_id, visibility_scope, sensitivity, "
+                        "payload, raw_ref "
+                        "FROM events WHERE tenant_id = ? AND idempotency_key = ?",
+                        (row[2], idempotency_key),
+                    ).fetchone()
+                    if existing is None:
+                        raise
+                    stored_identity = (
+                        existing["owner_scope"],
+                        existing["type"],
+                        existing["schema_version"],
+                        existing["source_adapter"],
+                        existing["source_account_id"],
+                        existing["visibility_scope"],
+                        existing["sensitivity"],
+                        existing["payload"],
+                        existing["raw_ref"],
+                    )
+                    incoming_identity = (
+                        row[3],
+                        row[4],
+                        row[6],
+                        row[9],
+                        row[10],
+                        row[11],
+                        row[12],
+                        row[16],
+                        row[17],
+                    )
+                    if stored_identity != incoming_identity:
+                        raise IdempotencyConflict(
+                            "idempotency key already belongs to a different event identity"
+                        ) from exc
+                    resolved_ids.append(str(existing["event_id"]))
             cur.execute("COMMIT")
         except Exception:
             cur.execute("ROLLBACK")
             raise
+        return resolved_ids
 
     # ------------------------------------------------------------------
     # reads
@@ -478,6 +531,36 @@ class EventLog:
         rows = await self._run_locked(self._get_correlation, correlation_id)
         return [_row_to_event(r) for r in rows]
 
+    async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
+        rows = await self._run_locked(self._get_causation, causation_id)
+        return [_row_to_event(r) for r in rows]
+
+    def _get_causation(self, causation_id: str) -> list[sqlcipher3.Row]:
+        cur = self._conn.cursor()
+        return list(
+            cur.execute(
+                _SELECT_COLUMNS
+                + " FROM events WHERE causation_id = ? ORDER BY event_id ASC",
+                (causation_id,),
+            )
+        )
+
+    async def get_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        row = await self._run_locked(self._get_idempotency, tenant_id, idempotency_key)
+        return _row_to_event(row) if row else None
+
+    def _get_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> sqlcipher3.Row | None:
+        cur = self._conn.cursor()
+        return cur.execute(
+            _SELECT_COLUMNS
+            + " FROM events WHERE tenant_id = ? AND idempotency_key = ?",
+            (tenant_id, idempotency_key),
+        ).fetchone()
+
     def _get_correlation(self, correlation_id: str) -> list[sqlcipher3.Row]:
         cur = self._conn.cursor()
         return list(
@@ -543,7 +626,7 @@ _SELECT_COLUMNS = (
     "       schema_version, occurred_at, recorded_at, source_adapter,"
     "       source_account_id, visibility_scope, sensitivity,"
     "       correlation_id, causation_id, source, payload,"
-    "       raw_ref, actor_identity"
+    "       raw_ref, actor_identity, idempotency_key"
 )
 
 
@@ -571,6 +654,7 @@ def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
         "payload": json.loads(row["payload"]),
         "raw_ref": row["raw_ref"],
         "actor_identity": row["actor_identity"],
+        "idempotency_key": row["idempotency_key"],
     }
 
 

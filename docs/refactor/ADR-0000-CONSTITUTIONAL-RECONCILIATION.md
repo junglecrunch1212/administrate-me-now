@@ -1,11 +1,13 @@
 # ADR-0000: Constitutional reconciliation
 
-- Status: Accepted for Gate 1
+- Status: Accepted; exercised through Gate 3
 - Date: 2026-07-29
 - Scope: semantics and first-Mac deployment topology
 - Baseline: `64192f465606d0bcf92f5137cb0c1f0e4c729297`
 
 ## Decision
+
+Gate 3 realization: the first complete household slice preserves this decision in executable form. Communication facts and lifecycle outcomes are append-only events; projections, the versioned product APIs, xlsx, and deterministic what-now are derived consumers. The credential-free fixture is explicitly synthetic and travels through the same Cat-A and `llm-task` seams as production composition.
 
 AdministrateMe v2 preserves the household product and its domain contracts while modernizing the central deployment into one long-lived Python composition root. It does not authorize production deletion in Gate 1. Every later change must prove semantic compatibility through `ACCEPTANCE-CONTRACT.md` and update the crosswalk and handoff.
 

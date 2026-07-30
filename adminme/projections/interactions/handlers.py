@@ -36,6 +36,10 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _handle_messaging(envelope, conn, direction="outbound", family="messaging")
     elif event_type == "telephony.sms_received":
         _handle_sms(envelope, conn)
+    elif event_type == "interaction.participant_resolved":
+        _handle_participant_resolved(envelope, conn)
+    elif event_type == "messaging.classified":
+        _handle_classified(envelope, conn)
     else:
         return
 
@@ -66,10 +70,10 @@ def _handle_messaging(
         INSERT INTO interactions (
             interaction_id, tenant_id, direction, channel_family,
             channel_specific, occurred_at, subject, summary, body_ref,
-            thread_id, raw_event_ids, owner_scope, visibility_scope,
+            thread_id, native_message_id, raw_event_ids, owner_scope, visibility_scope,
             sensitivity, response_urgency, suggested_action, auto_handled,
             last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, interaction_id) DO UPDATE SET
             direction        = excluded.direction,
             channel_family   = excluded.channel_family,
@@ -79,11 +83,13 @@ def _handle_messaging(
             summary          = excluded.summary,
             body_ref         = excluded.body_ref,
             thread_id        = excluded.thread_id,
+            native_message_id = excluded.native_message_id,
             raw_event_ids    = excluded.raw_event_ids,
             owner_scope      = excluded.owner_scope,
             visibility_scope = excluded.visibility_scope,
             sensitivity      = excluded.sensitivity,
             last_event_id    = excluded.last_event_id
+        WHERE interactions.last_event_id < excluded.last_event_id
         """,
         (
             interaction_id,
@@ -96,6 +102,7 @@ def _handle_messaging(
             None,
             body_ref,
             p.get("thread_id"),
+            p.get("native_message_id"),
             json.dumps([envelope["event_id"]], separators=(",", ":")),
             envelope["owner_scope"],
             envelope["visibility_scope"],
@@ -112,13 +119,19 @@ def _handle_messaging(
     for role_key, payload_key in (("from", "from_identifier"), ("to", "to_identifier")):
         if payload_key not in p:
             continue
-        conn.execute(
-            "INSERT INTO interaction_participants "
-            "(tenant_id, interaction_id, party_id, role) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(tenant_id, interaction_id, party_id, role) DO NOTHING",
-            (envelope["tenant_id"], interaction_id, p[payload_key], role_key),
-        )
+        existing_role = conn.execute(
+            "SELECT 1 FROM interaction_participants "
+            "WHERE tenant_id=? AND interaction_id=? AND role=? LIMIT 1",
+            (envelope["tenant_id"], interaction_id, role_key),
+        ).fetchone()
+        if existing_role is None:
+            conn.execute(
+                "INSERT INTO interaction_participants "
+                "(tenant_id, interaction_id, party_id, role) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, interaction_id, party_id, role) DO NOTHING",
+                (envelope["tenant_id"], interaction_id, p[payload_key], role_key),
+            )
 
 
 def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
@@ -147,6 +160,7 @@ def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             visibility_scope = excluded.visibility_scope,
             sensitivity      = excluded.sensitivity,
             last_event_id    = excluded.last_event_id
+        WHERE interactions.last_event_id < excluded.last_event_id
         """,
         (
             interaction_id,
@@ -177,3 +191,55 @@ def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             "ON CONFLICT(tenant_id, interaction_id, party_id, role) DO NOTHING",
             (envelope["tenant_id"], interaction_id, p[payload_key], role_key),
         )
+
+
+def _handle_participant_resolved(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    advanced = conn.execute(
+        "UPDATE interactions SET last_event_id=? "
+        "WHERE tenant_id=? AND interaction_id=? AND last_event_id < ?",
+        (
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["interaction_id"],
+            envelope["event_id"],
+        ),
+    ).rowcount
+    if not advanced:
+        return
+    conn.execute(
+        "DELETE FROM interaction_participants "
+        "WHERE tenant_id=? AND interaction_id=? AND role=?",
+        (envelope["tenant_id"], p["interaction_id"], p["role"]),
+    )
+    conn.execute(
+        "INSERT INTO interaction_participants "
+        "(tenant_id, interaction_id, party_id, role) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(tenant_id, interaction_id, party_id, role) DO NOTHING",
+        (
+            envelope["tenant_id"],
+            p["interaction_id"],
+            p["party_id"],
+            p["role"],
+        ),
+    )
+
+
+def _handle_classified(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    p = envelope["payload"]
+    interaction_id = f"ix_{p['source_event_id']}"
+    conn.execute(
+        "UPDATE interactions SET classification=?, classification_confidence=?, "
+        "last_event_id=? WHERE tenant_id=? AND interaction_id=? "
+        "AND last_event_id < ?",
+        (
+            p["classification"],
+            p["confidence"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            interaction_id,
+            envelope["event_id"],
+        ),
+    )

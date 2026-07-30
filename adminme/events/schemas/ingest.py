@@ -27,6 +27,29 @@ class MessagingReceivedV1(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class MessagingReceivedV2(MessagingReceivedV1):
+    """Provider-identifiable communication fact used by current Cat-A adapters.
+
+    Version 2 is additive: v1 remains readable, while every new adapter event
+    carries the provider-native immutable message identifier needed for
+    request and delivery deduplication.
+    """
+
+    native_message_id: str = Field(min_length=1, max_length=240)
+
+
+class InteractionParticipantResolvedV1(BaseModel):
+    """Identity pipeline result linking an interaction role to a Party."""
+
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1)
+    interaction_id: str = Field(min_length=1)
+    party_id: str = Field(min_length=1)
+    role: Literal["from", "to", "cc", "bcc", "mentioned"]
+    identifier_kind: str = Field(min_length=1)
+    identifier_normalized: str = Field(min_length=1)
+
+
 class MessagingSentV1(BaseModel):
     model_config = {"extra": "forbid"}
     source_channel: str = Field(min_length=1)
@@ -108,6 +131,10 @@ class MessagingClassifiedV1(BaseModel):
 
 
 registry.register("messaging.received", 1, MessagingReceivedV1)
+registry.register("messaging.received", 2, MessagingReceivedV2)
+registry.register(
+    "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
+)
 registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)

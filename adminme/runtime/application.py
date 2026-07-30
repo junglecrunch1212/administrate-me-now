@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+from functools import partial
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -16,6 +18,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -33,7 +36,10 @@ from adminme.lib.instance_config import (
     resolve_instance_dir,
 )
 from adminme.lib.observation import ObservationManager
+from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import set_default_event_sink
+from adminme.lib.skill_runner.fixture import build_fixture_runtime
+from adminme.lib.skill_runner.wrapper import run_skill
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
 from adminme.products.bridge.auth import DictMemberIdResolver
@@ -63,6 +69,9 @@ class RuntimeSettings:
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
     openclaw_enabled: bool = False
+    deterministic_openclaw_fixture: bool = False
+    member_roles: dict[str, str] = field(default_factory=dict)
+    fixture_member_id: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.encryption_key) != 32:
@@ -98,6 +107,9 @@ class RuntimeSettings:
         encryption_key: bytes,
         repository_root: Path,
         member_identities: dict[str, str] | None = None,
+        deterministic_openclaw_fixture: bool = False,
+        member_roles: dict[str, str] | None = None,
+        fixture_member_id: str | None = None,
     ) -> "RuntimeSettings":
         """Build a no-network Phase-A configuration with generated test keys."""
 
@@ -106,6 +118,9 @@ class RuntimeSettings:
             encryption_key=encryption_key,
             repository_root=repository_root,
             member_identities=dict(member_identities or {}),
+            deterministic_openclaw_fixture=deterministic_openclaw_fixture,
+            member_roles=dict(member_roles or {}),
+            fixture_member_id=fixture_member_id,
         )
 
 
@@ -132,8 +147,11 @@ class AdministrateMeRuntime:
         self.bus: EventBus | None = None
         self.events: EventWriter | None = None
         self.projections: ProjectionRunner | None = None
+        self.xlsx_projection: XlsxWorkbooksProjection | None = None
         self.pipelines: PipelineRunner | None = None
         self.adapters: AdapterSupervisor | None = None
+        self.fixture_adapter: FixtureMessagingAdapter | None = None
+        self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
         self.member_id_resolver = DictMemberIdResolver(settings.member_identities)
@@ -161,10 +179,31 @@ class AdministrateMeRuntime:
             self.observation = ObservationManager(
                 self.events, self.settings.instance.config_dir / "runtime.yaml"
             )
+            if self.settings.deterministic_openclaw_fixture:
+                fixture_member = self.settings.fixture_member_id or next(
+                    (
+                        member_id
+                        for member_id, role in sorted(
+                            self.settings.member_roles.items()
+                        )
+                        if role == "principal"
+                    ),
+                    "member_fixture_principal",
+                )
+                self.fixture_adapter = FixtureMessagingAdapter(
+                    event_sink=self.events,
+                    observation_manager=self.observation,
+                    member_id=fixture_member,
+                    default_session=build_internal_session(
+                        fixture_member,
+                        "principal",
+                        self.settings.instance.tenant_id,
+                    ),
+                )
             self.guarded_write = GuardedWrite(
                 ActionGateConfig(action_gates={}, rate_limits={}),
                 RateLimiter(),
-                AgentAllowlist([]),
+                AgentAllowlist([("user:*", ["commitment.*", "communication.*"])]),
                 self.events,
             )
 
@@ -184,6 +223,7 @@ class AdministrateMeRuntime:
                         event_sink=self.events,
                         query_context_factory=self._xlsx_query_context,
                     )
+                    self.xlsx_projection = projection
                 else:
                     projection = projection_class()
                 self.projections.register(projection)
@@ -196,6 +236,18 @@ class AdministrateMeRuntime:
                 observation_manager=self.observation,
                 guarded_write=self.guarded_write,
                 parties_conn_factory=self._parties_connection_factory,
+                run_skill_fn=(
+                    partial(
+                        run_skill,
+                        _runtime=build_fixture_runtime(
+                            event_sink=self.events,
+                            event_log=self.event_log,
+                            raw_events_dir=self.settings.instance.raw_events_dir,
+                        ),
+                    )
+                    if self.settings.deterministic_openclaw_fixture
+                    else run_skill
+                ),
             )
             await self.pipelines.discover(
                 builtin_root=self.settings.repository_root / "packs" / "pipelines",
@@ -275,6 +327,44 @@ class AdministrateMeRuntime:
         if self.events is None:
             raise RuntimeError("event writer unavailable")
         return self.events
+
+    async def wait_for_projection(
+        self, projection_name: str, event_id: str, *, timeout_s: float = 8.0
+    ) -> None:
+        if self.bus is None:
+            raise RuntimeError("event bus unavailable")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status = await self.bus.subscriber_status(f"projection:{projection_name}")
+            checkpoint = status.get("checkpoint_event_id")
+            if checkpoint is not None and checkpoint >= event_id:
+                return
+            if status.get("degraded"):
+                raise RuntimeError(
+                    f"projection {projection_name} degraded at "
+                    f"{status.get('poison_event_id')}"
+                )
+            await asyncio.sleep(0.01)
+        raise TimeoutError(f"projection {projection_name} did not reach {event_id}")
+
+    async def wait_for_subscriber(
+        self, subscriber_id: str, event_id: str, *, timeout_s: float = 8.0
+    ) -> None:
+        if self.bus is None:
+            raise RuntimeError("event bus unavailable")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            status = await self.bus.subscriber_status(subscriber_id)
+            checkpoint = status.get("checkpoint_event_id")
+            if checkpoint is not None and checkpoint >= event_id:
+                return
+            if status.get("degraded"):
+                raise RuntimeError(
+                    f"subscriber {subscriber_id} degraded at "
+                    f"{status.get('poison_event_id')}"
+                )
+            await asyncio.sleep(0.01)
+        raise TimeoutError(f"subscriber {subscriber_id} did not reach {event_id}")
 
     def _xlsx_query_context(self) -> XlsxQueryContext:
         if self.projections is None:

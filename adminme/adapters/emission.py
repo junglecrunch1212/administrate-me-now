@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from adminme.adapters.base import AdapterContext, SensitivityFloor
-from adminme.events.envelope import EventEnvelope
+from adminme.events.envelope import EventEnvelope, Sensitivity
 
 
 async def write_adapter_event(
@@ -19,6 +19,11 @@ async def write_adapter_event(
     payload: dict[str, Any],
     causation_id: str | None = None,
     correlation_id: str | None = None,
+    schema_version: int = 1,
+    idempotency_key: str | None = None,
+    raw_ref: str | None = None,
+    occurred_at_override: str | None = None,
+    sensitivity_override: Sensitivity | None = None,
 ) -> str:
     """Construct the canonical envelope and await the one EventSink.
 
@@ -49,15 +54,20 @@ async def write_adapter_event(
         event_at_ms=event_at_ms,
         tenant_id=tenant_id,
         type=event_type,
-        schema_version=1,
-        occurred_at=occurred_at_text,
+        schema_version=schema_version,
+        occurred_at=occurred_at_override or occurred_at_text,
         source_adapter=adapter_name,
         source_account_id=source_account_id,
         owner_scope=owner_scope,
         visibility_scope=owner_scope,
-        sensitivity=("privileged" if sensitivity_floor == "privileged" else "normal"),
+        sensitivity=(
+            sensitivity_override
+            or ("privileged" if sensitivity_floor == "privileged" else "normal")
+        ),
         correlation_id=correlation,
         causation_id=causation_id,
+        idempotency_key=idempotency_key,
+        raw_ref=raw_ref,
         payload=payload,
     )
     return await ctx.event_sink.write(

@@ -1,5 +1,7 @@
 # Constitutional crosswalk
 
+Gate 3 implementation evidence (2026-07-30): AC-03 now proves the unified-communications, Party/Interaction, commitment proposal/review/lifecycle, observation, xlsx provenance, multi-member scope, and contextual what-now rows end to end. The authoritative process test is `tests/acceptance/test_communication_commitment_vertical_slice.py`; AC-04 member-private knowledge remains Phase 4.
+
 No row may be removed merely because its current implementation is absent. A future semantic change updates the row, governing ADR, evidence, and executable gate in the same PR.
 
 Disposition meanings:

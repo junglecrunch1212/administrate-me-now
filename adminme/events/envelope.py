@@ -48,6 +48,7 @@ class EventEnvelope(BaseModel):
     payload: dict[str, Any]
     raw_ref: str | None = None
     actor_identity: str | None = None
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=240)
 
     @field_validator("occurred_at", "recorded_at")
     @classmethod

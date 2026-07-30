@@ -30,12 +30,12 @@ is a placeholder until a real adapter ships and richer normalization
 
 from __future__ import annotations
 
-import secrets
+import hashlib
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import PipelineContext, Triggers, parties_connection
 
 MERGE_THRESHOLD = 0.85
 
@@ -171,8 +171,8 @@ def _default_candidate_loader(kind: str) -> list[dict[str, Any]]:
     return []
 
 
-def _new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(11)}"
+def _stable_id(prefix: str, value: str) -> str:
+    return f"{prefix}_{hashlib.sha256(value.encode()).hexdigest()[:22]}"
 
 
 class IdentityResolutionPipeline:
@@ -211,12 +211,35 @@ class IdentityResolutionPipeline:
         if not value_normalized:
             return
 
-        candidates = self._candidate_loader(kind)
+        if self._candidate_loader is not _default_candidate_loader:
+            candidates = self._candidate_loader(kind)
+        elif ctx.parties_conn_factory is not None:
+            with parties_connection(ctx.parties_conn_factory) as conn:
+                candidates = [
+                    dict(row)
+                    for row in conn.execute(
+                        """SELECT party_id, value, value_normalized
+                             FROM identifiers
+                            WHERE tenant_id = ? AND kind = ?
+                            ORDER BY rowid DESC LIMIT 100""",
+                        (ctx.session.tenant_id, kind),
+                    ).fetchall()
+                ]
+        else:
+            candidates = []
         # If a candidate already owns this exact value_normalized, it's a
         # hit — nothing to emit (the parties projection already has the
         # link).
         for cand in candidates:
             if str(cand.get("value_normalized", "")) == value_normalized:
+                if ctx.parties_conn_factory is not None:
+                    await self._emit_participant_resolved(
+                        event=event,
+                        ctx=ctx,
+                        party_id=str(cand["party_id"]),
+                        kind=kind,
+                        value_normalized=value_normalized,
+                    )
                 return
 
         best = _pick_best_match(
@@ -248,6 +271,43 @@ class IdentityResolutionPipeline:
             from_id=from_id,
             kind=kind,
             value_normalized=value_normalized,
+        )
+
+    async def _emit_participant_resolved(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        party_id: str,
+        kind: str,
+        value_normalized: str,
+    ) -> None:
+        source_event_id = str(event["event_id"])
+        envelope = EventEnvelope(
+            event_at_ms=event["event_at_ms"],
+            tenant_id=event["tenant_id"],
+            type="interaction.participant_resolved",
+            schema_version=1,
+            occurred_at=EventEnvelope.now_utc_iso(),
+            source_adapter="identity_resolution",
+            source_account_id="pipeline",
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=f"identity:resolved:{source_event_id}:from",
+            payload={
+                "source_event_id": source_event_id,
+                "interaction_id": f"ix_{source_event_id}",
+                "party_id": party_id,
+                "role": "from",
+                "identifier_kind": kind,
+                "identifier_normalized": value_normalized,
+            },
+        )
+        await ctx.event_sink.write(
+            envelope,
+            correlation_id=ctx.correlation_id,
+            causation_id=ctx.triggering_event_id,
         )
 
     async def _emit_merge_suggested(
@@ -299,8 +359,9 @@ class IdentityResolutionPipeline:
         kind: str,
         value_normalized: str,
     ) -> None:
-        party_id = _new_id("party")
-        identifier_id = _new_id("ident")
+        stable_seed = f"{kind}:{value_normalized}"
+        party_id = _stable_id("party", stable_seed)
+        identifier_id = _stable_id("ident", stable_seed)
         party_envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -312,6 +373,7 @@ class IdentityResolutionPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity="normal",
+            idempotency_key=f"identity:party:{stable_seed}",
             payload={
                 "party_id": party_id,
                 "kind": "person",
@@ -335,6 +397,7 @@ class IdentityResolutionPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity="normal",
+            idempotency_key=f"identity:identifier:{stable_seed}",
             payload={
                 "identifier_id": identifier_id,
                 "party_id": party_id,

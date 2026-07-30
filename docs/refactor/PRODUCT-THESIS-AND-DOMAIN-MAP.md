@@ -1,5 +1,7 @@
 # Product thesis and domain map
 
+Gate 3 evidence: the first full household signal-to-outcome loop is executable without credentials. A synthetic inbound communication becomes a scoped Interaction with a resolved Party, an LLM-derived proposal with recorded provenance, a principal-reviewed commitment, an observation-safe delivery intent, API/xlsx read models, lifecycle outcomes, and a changed six-horizon what-now recommendation. This proves one representative slice; it does not claim the still-deferred member-private knowledge slice or optional providers.
+
 ## Product promise
 
 AdministrateMe is a private, household-scale Chief of Staff that turns distributed family signals into trustworthy next actions. It is simultaneously six things; none is optional:

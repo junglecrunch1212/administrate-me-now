@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS interactions (
     summary            TEXT,
     body_ref           TEXT,
     thread_id          TEXT,
+    native_message_id  TEXT,
     raw_event_ids      TEXT NOT NULL,          -- JSON array
     owner_scope        TEXT NOT NULL,
     visibility_scope   TEXT NOT NULL,
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS interactions (
     response_urgency   TEXT,
     suggested_action   TEXT,
     auto_handled       INTEGER NOT NULL DEFAULT 0,
+    classification     TEXT,
+    classification_confidence REAL,
     last_event_id      TEXT NOT NULL,
     PRIMARY KEY (tenant_id, interaction_id)
 );
@@ -36,7 +39,6 @@ CREATE INDEX IF NOT EXISTS idx_interactions_tenant_occurred
     ON interactions(tenant_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_interactions_tenant_thread
     ON interactions(tenant_id, thread_id);
-
 CREATE TABLE IF NOT EXISTS interaction_participants (
     tenant_id          TEXT NOT NULL,
     interaction_id     TEXT NOT NULL,

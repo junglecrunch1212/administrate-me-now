@@ -2,6 +2,19 @@
 
 A household chief-of-staff platform built on OpenClaw. Event-sourced, projection-based, multi-member, privacy-aware.
 
+## Credential-free canonical demo
+
+From the repository root, run:
+
+```powershell
+$env:PYTHONPATH = "bridge"
+python -m adminme.cli.main demo canonical-message
+```
+
+This starts a temporary encrypted one-process instance, invokes the real versioned `POST /api/comms/v1/demo/canonical-message` product route, and exits after printing JSON. It uses only `.invalid` identifiers, the `fixture-messaging` Cat-A adapter, and the deterministic `fixture/deterministic-v1` OpenClaw `llm-task` transport. It reads no credential and opens no network connection.
+
+The default golden input asks the configured synthetic principal to reply to `sender@fixture.invalid`. Expected output has `state: "proposal_only"`, one `source_event_id`, its deterministic `ix_<source_event_id>` interaction, and one `cmt_<hash>` proposal. Approval is deliberately a separate principal action. See `docs/refactor/evidence/gate-3-household-slice.md` for the API/lifecycle contract and adversarial matrix.
+
 ## If you're the operator (James)
 
 Start with **`ADMINISTRATEME_FIELD_MANUAL.md`** — the non-coder's guide to running this system. Chapter 1 is the most important.
@@ -72,4 +85,4 @@ See `ADMINISTRATEME_FIELD_MANUAL.md` chapter 4 for Phase B setup.
 
 ## Status
 
-🟡 In progress — Phase A build prompts ready; code generation not yet started.
+In progress — the controlled v2 refactor has proven Gates 1–3. Gate 3 is the credential-free communication-to-commitment household slice documented above; Phase 4 is limited to member-owned private searchable knowledge.

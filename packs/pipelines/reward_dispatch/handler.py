@@ -211,6 +211,7 @@ class RewardDispatchPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity="normal",
+            idempotency_key=f"reward:{source_event_id}",
             payload={
                 "member_id": member_id,
                 "tier": tier,

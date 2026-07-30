@@ -12,8 +12,35 @@ from typing import Any
 
 import sqlcipher3
 
-from adminme.lib.scope import filter_rows
+from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
+
+
+def get_interaction(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    interaction_id: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM interactions WHERE tenant_id=? AND interaction_id=?",
+        (session.tenant_id, interaction_id),
+    ).fetchone()
+    return filter_one(session, dict(row) if row is not None else None)
+
+
+def recent(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM interactions WHERE tenant_id=? "
+        "ORDER BY occurred_at DESC LIMIT ?",
+        (session.tenant_id, limit),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
 
 
 def recent_with(

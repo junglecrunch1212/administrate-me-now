@@ -1,5 +1,7 @@
 # Migration map
 
+Gate 3 update (2026-07-30): the event log now has additive idempotency keys; Interactions records provider-native message ids, classification, and Party-resolved participants; Commitments has replay-safe proposal handling and complete/defer/snooze/block/unblock outcomes; Comms/Core expose typed v1 APIs; xlsx protects source/scope/lifecycle provenance; what-now is a deterministic projection read. AC-03 covers live delivery, rebuild, crash-after-append, and restart. The member bridge knowledge slice is the unambiguous Phase 4 boundary.
+
 Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** retains semantics/code with compatibility coverage; **HARDEN** retains the core but closes a proven seam; **REWRITE** replaces scaffolding or incompatible implementation behind tests; **DEFER** is allowed only for an optional provider; **DELETE** occurs only after its replacement passes.
 
 | Subsystem | First-party paths | Evidence at baseline | Class | Migration requirement |

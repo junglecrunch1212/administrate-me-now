@@ -79,9 +79,7 @@ class ScopeViolation(Exception):
     and refuses [§6.4]."""
 
 
-def allowed_read(
-    session: "Session", sensitivity: str, owner_scope: str
-) -> bool:
+def allowed_read(session: "Session", sensitivity: str, owner_scope: str) -> bool:
     """Mirror of the SQL WHERE clause from BUILD.md L3-continued, applied
     in Python to a single (sensitivity, owner_scope) pair [DIAGRAMS.md §5].
 
@@ -158,9 +156,7 @@ def privacy_filter(session: "Session", row: dict[str, Any]) -> dict[str, Any]:
         return row
 
     # Non-owner of privileged content — collapse to busy block.
-    redacted: dict[str, Any] = {
-        k: row[k] for k in _REDACTED_KEEP_FIELDS if k in row
-    }
+    redacted: dict[str, Any] = {k: row[k] for k in _REDACTED_KEEP_FIELDS if k in row}
     redacted["title"] = _BUSY_TITLE
     redacted["kind"] = "busy_block"
     redacted["display_hint"] = "privileged"
@@ -233,9 +229,7 @@ def child_hidden_tag_filter(session: "Session", row: dict[str, Any]) -> bool:
     return True
 
 
-def filter_rows(
-    session: "Session", rows: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+def filter_rows(session: "Session", rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Bundle ``allowed_read`` + ``privacy_filter`` + ``child_hidden_tag_filter``
     + coach-strip into a single helper called by every projection query
     [BUILD.md L3-continued].
@@ -250,6 +244,12 @@ def filter_rows(
     for row in rows:
         sens = row.get("sensitivity") or "normal"
         owner = row.get("owner_scope") or "shared:household"
+        visibility = row.get("visibility_scope") or "shared:household"
+        if not (
+            visibility in session.allowed_scopes
+            or (visibility.startswith("org:") and "org:*" in session.allowed_scopes)
+        ):
+            continue
         if not allowed_read(session, sens, owner):
             continue
         filtered = privacy_filter(session, row)
@@ -261,9 +261,7 @@ def filter_rows(
     return out
 
 
-def filter_one(
-    session: "Session", row: dict[str, Any] | None
-) -> dict[str, Any] | None:
+def filter_one(session: "Session", row: dict[str, Any] | None) -> dict[str, Any] | None:
     """Single-row variant of ``filter_rows``."""
     if row is None:
         return None

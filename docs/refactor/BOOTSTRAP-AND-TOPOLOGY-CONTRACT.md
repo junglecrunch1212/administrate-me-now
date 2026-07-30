@@ -1,5 +1,7 @@
 # Bootstrap and topology contract
 
+Gate 3 realization: the canonical household demo boots the same one-process composition root in a temporary encrypted instance and invokes `POST /api/comms/v1/demo/canonical-message`. `python -m adminme.cli.main demo canonical-message` is a non-credential operator entry point to that route. The deterministic Cat-A and OpenClaw transports are explicit fixture capabilities; they create no extra runtime process and open no network connection.
+
 ## Deployment boundary
 
 ### Central family hub

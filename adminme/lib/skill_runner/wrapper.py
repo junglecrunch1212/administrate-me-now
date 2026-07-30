@@ -105,6 +105,10 @@ class SkillContext:
     correlation_id: str | None = None
     observation_mode_active: bool = False
     dry_run: bool = False
+    triggering_event_id: str | None = None
+    owner_scope: str = "shared:household"
+    visibility_scope: str = "shared:household"
+    sensitivity: str = "normal"
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ class _Runtime:
     raw_events_dir: Path
     httpx_client_factory: Any = None  # callable() -> httpx.AsyncClient | None
     gateway_url: str = OPENCLAW_GATEWAY_URL
+    event_log: Any = None
 
 
 _RUNTIME_OVERRIDE: _Runtime | None = None
@@ -192,6 +197,8 @@ def _build_envelope(
     schema_version: int,
     payload: dict,
     actor_identity: str,
+    owner_scope: str = "shared:household",
+    visibility_scope: str = "shared:household",
     sensitivity: str = "normal",
 ) -> EventEnvelope:
     now_iso = EventEnvelope.now_utc_iso()
@@ -204,8 +211,8 @@ def _build_envelope(
         recorded_at=now_iso,
         source_adapter="skill_runner",
         source_account_id="system",
-        owner_scope="shared:household",
-        visibility_scope="shared:household",
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
         sensitivity=sensitivity,  # type: ignore[arg-type]
         actor_identity=actor_identity,
         payload=payload,
@@ -238,7 +245,14 @@ async def _emit_failed(
             "duration_ms_until_failure": duration_ms,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
+    if ctx.triggering_event_id:
+        envelope.idempotency_key = (
+            f"skill:failed:{ctx.triggering_event_id}:{pack_id_str}:{failure_class}"
+        )
     await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
@@ -264,7 +278,14 @@ async def _emit_suppressed(
             "correlation_id": correlation,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
+    if ctx.triggering_event_id:
+        envelope.idempotency_key = (
+            f"skill:suppressed:{ctx.triggering_event_id}:{pack_id_str}:{reason}"
+        )
     await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
@@ -301,8 +322,20 @@ async def _emit_recorded(
             "duration_ms": duration_ms,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
-    await runtime.event_sink.write(envelope, correlation_id=correlation)
+    envelope.idempotency_key = (
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        if ctx.triggering_event_id
+        else None
+    )
+    await runtime.event_sink.write(
+        envelope,
+        correlation_id=correlation,
+        causation_id=ctx.triggering_event_id,
+    )
 
 
 def _spill_inputs_if_large(
@@ -354,6 +387,7 @@ class _OpenClawCallOutcome:
     output_tokens: int | None = None
     cost_usd: float | None = None
     error_detail: str = ""
+    provider_model: str | None = None
 
 
 def _split_provider_model(provider_model: str) -> tuple[str, str]:
@@ -450,6 +484,11 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         cost_usd=result.get("cost_usd")
         if isinstance(result.get("cost_usd"), (int, float))
         else None,
+        provider_model=(
+            f"{result.get('provider')}/{result.get('model')}"
+            if result.get("provider") and result.get("model")
+            else None
+        ),
     )
 
 
@@ -524,9 +563,10 @@ async def run_skill(
     ctx: SkillContext,
     *,
     input_sensitivities: dict[str, str] | None = None,
+    _runtime: _Runtime | None = None,
 ) -> SkillResult:
     """Validate + invoke an OpenClaw skill. See module docstring."""
-    runtime = _resolve_runtime()
+    runtime = _runtime or _resolve_runtime()
 
     # Step 1 — load pack.
     pack = load_pack(
@@ -535,6 +575,65 @@ async def run_skill(
     pack_id_str = pack.pack_id
     pack_version = pack.version
     fm = pack.skill_frontmatter
+
+    idempotency_key = (
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        if ctx.triggering_event_id
+        else None
+    )
+    if idempotency_key and runtime.event_log is not None:
+        prior = await runtime.event_log.get_by_idempotency(
+            ctx.session.tenant_id, idempotency_key
+        )
+        if prior is not None:
+            payload = prior["payload"]
+            return SkillResult(
+                output=dict(payload["outputs"]),
+                openclaw_invocation_id=payload.get("openclaw_invocation_id"),
+                provider=str(payload["provider"]),
+                input_tokens=payload.get("input_tokens"),
+                output_tokens=payload.get("output_tokens"),
+                cost_usd=payload.get("cost_usd"),
+                duration_ms=int(payload["duration_ms"]),
+            )
+        related = await runtime.event_log.get_by_causation(ctx.triggering_event_id)
+        prior_terminal = next(
+            (
+                event
+                for event in reversed(related)
+                if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
+                and event["payload"].get("skill_name") == pack_id_str
+            ),
+            None,
+        )
+        if prior_terminal is not None:
+            payload = prior_terminal["payload"]
+            if prior_terminal["type"] == "skill.call.suppressed":
+                defensive_default = fm.get("on_failure") or {}
+                return SkillResult(
+                    output=(
+                        defensive_default if isinstance(defensive_default, dict) else {}
+                    ),
+                    openclaw_invocation_id=None,
+                    provider="suppressed",
+                    input_tokens=None,
+                    output_tokens=None,
+                    cost_usd=None,
+                    duration_ms=0,
+                )
+            failure_class = str(payload.get("failure_class") or "")
+            error_detail = str(payload.get("error_detail") or failure_class)
+            error_type: type[Exception] = {
+                "input_invalid": SkillInputInvalid,
+                "sensitivity_refused": SkillSensitivityRefused,
+                "scope_insufficient": SkillScopeInsufficient,
+                "openclaw_malformed_response": OpenClawResponseMalformed,
+                "openclaw_timeout": OpenClawTimeout,
+                "openclaw_unreachable": OpenClawUnreachable,
+                "handler_raised": SkillHandlerError,
+                "output_invalid": SkillOutputInvalid,
+            }.get(failure_class, OpenClawUnreachable)
+            raise error_type(error_detail)
 
     # Step 2 — input validation.
     try:
@@ -655,7 +754,7 @@ async def run_skill(
         last_outcome = outcome
         if outcome.kind == "ok":
             successful = outcome
-            chosen_provider = provider_model
+            chosen_provider = outcome.provider_model or provider_model
             break
         if outcome.kind == "malformed":
             duration_ms = int((time.perf_counter() - started_at) * 1000)

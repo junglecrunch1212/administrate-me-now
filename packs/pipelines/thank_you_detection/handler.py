@@ -88,7 +88,7 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import PipelineContext, Triggers, parties_connection
 from adminme.projections.parties.queries import find_party_by_identifier
 
 _log = logging.getLogger(__name__)
@@ -199,6 +199,16 @@ class ThankYouDetectionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        if event.get("sensitivity") == "privileged":
+            await self._emit_suppressed(
+                event=event,
+                ctx=ctx,
+                reason="privileged_input",
+                confidence=0.0,
+                threshold=float(config.get("min_confidence", 0.55)),
+                source_event_id=source_event_id,
+            )
+            return
 
         # 1. Defense-in-depth: parties_conn_factory missing → suppress.
         if ctx.parties_conn_factory is None:
@@ -224,7 +234,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        with ctx.parties_conn_factory() as conn:
+        with parties_connection(ctx.parties_conn_factory) as conn:
             sender_party = find_party_by_identifier(
                 conn,
                 ctx.session,
@@ -244,7 +254,12 @@ class ThankYouDetectionPipeline:
             return
 
         # 2. Receiving member.
-        receiving_member_id = str(payload.get("to_identifier", ""))
+        owner_scope = str(event.get("owner_scope", ""))
+        receiving_member_id = (
+            owner_scope.removeprefix("private:")
+            if owner_scope.startswith("private:")
+            else str(payload.get("to_identifier", ""))
+        )
         if not receiving_member_id:
             await self._emit_suppressed(
                 event=event,
@@ -271,13 +286,32 @@ class ThankYouDetectionPipeline:
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
+            triggering_event_id=source_event_id,
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
         )
         message_text = str(payload.get("body_text") or "")
         classify_inputs: dict[str, Any] = {
-            "message_text": message_text,
-            "sender_party_id": str(sender_party["party_id"]),
-            "receiving_member_id": receiving_member_id,
-            "thread_context": [],
+            "principal_member_id": receiving_member_id,
+            "party_summary": {
+                "party_id": str(sender_party["party_id"]),
+                "name": str(
+                    sender_party.get("display_name") or sender_party["party_id"]
+                ),
+                "tier": 3,
+                "tags": sorted(party_tags),
+            },
+            "interaction_context": {
+                "recent_messages": [
+                    {
+                        "from_member_or_party": str(sender_party["party_id"]),
+                        "text": message_text,
+                        "when": str(payload.get("received_at") or event["occurred_at"]),
+                    }
+                ],
+                "recent_events": [],
+            },
         }
 
         try:
@@ -400,7 +434,8 @@ class ThankYouDetectionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=(f"thankyou:proposal:{source_event_id}"),
             payload=proposed_payload,
         )
         await ctx.event_sink.write(
@@ -429,7 +464,8 @@ class ThankYouDetectionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=(f"thankyou:suppressed:{source_event_id}:{reason}"),
             payload={
                 "reason": reason,
                 "confidence": round(confidence, 4),

@@ -87,6 +87,8 @@ class NoiseFilteringPipeline:
             "telephony.sms_received",
         ):
             return
+        if event.get("sensitivity") == "privileged":
+            return
 
         payload = event.get("payload") or {}
         prepared = _extract_text_and_inputs(event_type, payload)
@@ -98,6 +100,10 @@ class NoiseFilteringPipeline:
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
+            triggering_event_id=str(source_event_id),
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
         )
 
         try:
@@ -152,7 +158,8 @@ class NoiseFilteringPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=f"messaging:classified:{source_event_id}",
             payload={
                 "source_event_id": source_event_id,
                 "classification": classification,

@@ -52,6 +52,7 @@ class CommitmentSuppressedV1(BaseModel):
         "below_confidence_threshold",
         "dedupe_hit",
         "skill_failure_defensive_default",
+        "privileged_input",
     ]
     confidence: float = Field(ge=0.0, le=1.0)
     threshold: float = Field(ge=0.0, le=1.0)
@@ -116,6 +117,31 @@ class CommitmentSnoozedV1(BaseModel):
     snoozed_at: str = Field(min_length=1)
     snoozed_until: str = Field(min_length=1)
     snoozed_by_party_id: str = Field(min_length=1)
+
+
+class CommitmentDeferredV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    deferred_at: str = Field(min_length=1)
+    deferred_until: str = Field(min_length=1)
+    deferred_by_party_id: str = Field(min_length=1)
+    reason: str | None = None
+
+
+class CommitmentBlockedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    blocked_at: str = Field(min_length=1)
+    blocked_by_party_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CommitmentUnblockedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    commitment_id: str = Field(min_length=1)
+    unblocked_at: str = Field(min_length=1)
+    unblocked_by_party_id: str = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class CommitmentCancelledV1(BaseModel):
@@ -224,9 +250,7 @@ class DigestComposedV1(BaseModel):
     model_config = {"extra": "forbid"}
     member_id: str = Field(min_length=1)
     body_text: str
-    profile_format: Literal[
-        "fog_aware", "compressed", "carousel", "child", "none"
-    ]
+    profile_format: Literal["fog_aware", "compressed", "carousel", "child", "none"]
     validation_failed: bool
     delivered: bool
     today_iso: str = Field(min_length=10)
@@ -346,6 +370,9 @@ registry.register("commitment.completed", 1, CommitmentCompletedV1)
 registry.register("commitment.dismissed", 1, CommitmentDismissedV1)
 registry.register("commitment.edited", 1, CommitmentEditedV1)
 registry.register("commitment.snoozed", 1, CommitmentSnoozedV1)
+registry.register("commitment.deferred", 1, CommitmentDeferredV1)
+registry.register("commitment.blocked", 1, CommitmentBlockedV1)
+registry.register("commitment.unblocked", 1, CommitmentUnblockedV1)
 registry.register("commitment.cancelled", 1, CommitmentCancelledV1)
 registry.register("commitment.delegated", 1, CommitmentDelegatedV1)
 registry.register("commitment.expired", 1, CommitmentExpiredV1)

@@ -1,5 +1,7 @@
 # Deletion and deferral map
 
+Gate 3 update: Core and Comms are no longer docstring-only service stubs. They are versioned router namespaces in the Gate 2 process and now own the first complete commitment review/lifecycle and deterministic what-now surface. Capture/Knowledge and Automation retain their deferred product work; no legacy production path was deleted in this gate.
+
 Gate 1 deletes no production behavior. A future delete lands only in the same PR as a passing replacement/negative test and a crosswalk/handoff update.
 
 ## Delete after replacement

@@ -6,6 +6,8 @@
 
 ## Decision
 
+Gate 3 evidence: `FixtureMessagingAdapter` supplies a credential-free Cat-A source and an in-memory HTTP-contract client supplies a pinned deterministic response at OpenClaw's existing `llm-task` boundary. Pipeline code still calls only `run_skill`; emitted `skill.call.recorded` facts report the actual `fixture/deterministic-v1` provider/model. The fixture is enabled only by explicit runtime settings and is not a second assistant, scheduler, policy engine, or provider integration.
+
 OpenClaw is the generic assistant runtime. AdministrateMe is the typed household operational system. Integration is one native TypeScript plugin package and four explicit seams; HTTP/event schemas at the boundary are versioned and tested.
 
 The v2 implementation target is pinned to stable OpenClaw `v2026.7.1`, release commit `2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4`, npm package `openclaw@2026.7.1`, registry integrity `sha512-ge/Xss99CHAjPL/ikmH/UFoiOrjcxDB4sW3y9mhyCD+dYW3wzV7TKbAVdkrXFgAG2d2BjpJofP97zUZ+umxo8g==`. The primary GitHub release was published 2026-07-13 and reviewed 2026-07-29. No later release is adopted without a compatibility ADR and the full OpenClaw contract gate.

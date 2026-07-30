@@ -22,7 +22,8 @@ dispatched event and calls ``handle()``.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
@@ -87,6 +88,20 @@ class PipelineContext:
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
 
 
+@contextmanager
+def parties_connection(factory: Callable[[], Any]) -> Iterator[Any]:
+    """Open either the production connection or an existing context seam."""
+    candidate = factory()
+    if hasattr(candidate, "__enter__") and hasattr(candidate, "__exit__"):
+        with candidate as conn:
+            yield conn
+        return
+    try:
+        yield candidate
+    finally:
+        candidate.close()
+
+
 @runtime_checkable
 class Pipeline(Protocol):
     """Pipeline protocol. The class declared in ``pipeline.yaml`` under
@@ -104,4 +119,5 @@ __all__ = [
     "PipelineContext",
     "PipelinePackLoadError",
     "Triggers",
+    "parties_connection",
 ]

@@ -1,70 +1,79 @@
 ---
 schema_version: 1
-current_phase: 2
-phase_name: runtime_spine_replacement
-gate: 2
+current_phase: 3
+phase_name: first_complete_household_slice
+gate: 3
 gate_result: PASS
-verified_local_date: 2026-07-29
+verified_local_date: 2026-07-30
 branch: codex/administrateme-v2-runtime
 branch_tip_resolution: git rev-parse HEAD
 gate_1_artifact_sha: c4d682c42ff9c9833e59589422bac90eec590173
 gate_1_artifact_tree_sha: 5bc5e3733c456cbffbf12dcd51ba0b1744889ab6
 draft_pr_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
-next_phase: 3
-next_phase_name: close_the_two_golden_product_slices
+next_phase: 4
+next_phase_name: member_bridge_private_searchable_knowledge
 ---
 
 # Handoff
 
 ## State
 
-Gate 2 passes on `codex/administrateme-v2-runtime`. The branch preserves the Gate 1 artifact and replaces the disconnected central lifecycle with one production-shaped Python composition root. Resolve the immutable Gate 2 commit with `branch_tip_resolution`; this document cannot contain the hash of the commit that contains itself.
+Gate 3 passes on `codex/administrateme-v2-runtime`. The branch preserves the Gate 1 artifact and Gate 2 one-process runtime, then closes the first complete household slice with no credential, provider SDK, network dependency, second runtime, or alternate ingestion path.
 
-The runtime boots credential-free from a temporary encrypted instance, reports truthful readiness, registers exactly thirteen projection capabilities, accepts bridge ingest inside the same application, drains in bounded order, and reopens the SQLCipher log after repeated shutdown. The existing draft PR remains the only PR for this refactor.
+`python -m adminme.cli.main demo canonical-message` starts a temporary encrypted instance and invokes the same versioned API route used by process acceptance. The default synthetic message is appended through a Cat-A adapter as `messaging.received` v2, projected to an Interaction, resolved to a Party, evaluated through the existing OpenClaw `llm-task` wrapper, and recorded as one unconfirmed commitment proposal. Principal edit/approve/dismiss, independent OpenClaw outbound approval, GuardedWrite, observation suppression, complete/defer/snooze/block/unblock outcomes, API/xlsx reads, and deterministic six-horizon what-now all use production composition.
 
-## Gate 2 implementation
+## Gate 3 implementation
 
-- `EventSink` is the typed asynchronous producer contract. `EventWriter` atomically appends a single event or batch to SQLCipher and notifies the bus only after commit. Failed appends never notify.
-- Durable delivery is at-least-once. Checkpoints advance only after successful callbacks; retry and poison metadata persist; redelivery relies on idempotent projections.
-- `RuntimeApplication` owns configuration/key validation, log, writer, one bus, projections, pipelines, adapters, xlsx services, OpenClaw standing-order capability reporting, product routers, bridge ingest, health, startup unwind, and bounded shutdown.
-- The explicit projection inventory is: `parties`, `interactions`, `artifacts`, `commitments`, `tasks`, `recurrences`, `calendars`, `places_assets_accounts`, `money`, `vector_search`, `xlsx_workbooks`, `member_knowledge`, and `lists`.
-- `member_knowledge` now has a registered schema, projection, and owner/scope-aware queries. This establishes the runtime capability; the full member bridge authorization/search/replay product slice remains Phase 3.
-- Central adapters, adapter supervisor, pipelines, governance, observation, skills, xlsx paths, and central bridge ingest use the injected writer. Legacy synchronous and duck-typed writer probes are removed. Dual-deployment member bridges adapt remote ingestion to the same typed adapter context.
-- Core, Comms, Capture/Knowledge, Automation, Bridge, and System are router namespaces in one FastAPI application. Optional providers are explicitly disabled with reasons and cannot make readiness falsely healthy.
-- SQLCipher connection ownership, wrong-key/startup unwind, append rollback, lock portability, bridge task draining, repeated close, and encrypted reopen are covered by tests.
+- Event envelopes and SQLCipher add optional durable idempotency keys through additive migration `0003`. A duplicate returns the original event only when its durable identity and payload match; corrupted reuse raises `IdempotencyConflict`.
+- `messaging.received` v2 carries a provider-native id. Interactions preserve it, store classification, and replace raw sender identifiers with Party ids through `interaction.participant_resolved`.
+- Skill-call provenance is causally linked and replay-safe. The credential-free fixture enters at the existing HTTP `llm-task` seam and records actual `fixture/deterministic-v1` provenance.
+- Privileged communication bypasses every downstream LLM boundary. Deterministic identity normalization still runs; commitment and thank-you pipelines append owner-scoped privileged-suppression audits.
+- Commitment proposals are stable and proposal-only. Old proposal redelivery cannot reset a later state. All command writes use `authMember`, principal/owner authorization, GuardedWrite, request idempotency, and optimistic event-id concurrency.
+- Core/Comms v1 routes expose pending/active commitments, Interaction evidence, edit/approve/dismiss, complete/defer/snooze/block/unblock, and what-now. Pydantic forbids unknown fields; trusted ingress is the only identity source.
+- Core v1 also exposes an authorized Inbox that merges proposal review and household Tasks at read time without merging their projections.
+- Approved delivery intent requires a separate OpenClaw approval flag and passes through the final observation filter. In the gate fixture, it appends `observation.suppressed` and never calls the transport.
+- `adminme-ops.xlsx` includes protected source, scope, sensitivity, and lifecycle provenance. Projection rebuild and workbook regeneration preserve semantic rows.
+- The deterministic ranker emits exactly `right_now`, `next`, `today`, `this_week`, `this_month`, and `someday`, with obligation/urgency/owner/dependency/energy/effort reasons. Confirmed active interpersonal work outranks the seeded Task; non-actionable lifecycle states remove it.
 
-## Exact verification evidence
+## Acceptance and adversarial evidence
+
+The authoritative proof is `tests/acceptance/test_communication_commitment_vertical_slice.py`. It exercises normal input plus duplicate requests/native ids, conflicting duplicate payload, missing and malformed auth/API input, stale writes, child/wrong-owner/view-as reads, malformed/unavailable/timed-out remote responses, temporary projection unavailability, privileged LLM exclusion, clock-skewed source occurrence, observation suppression, projection rebuild, raw SQLCipher plaintext absence, crash after append before notify, restart recovery, and no repeated semantic effect or skill invocation.
+
+Exact fixture inputs, expected semantic output, routes, matrix, and what-now policy are retained at `docs/refactor/evidence/gate-3-household-slice.md`.
+
+## Verification evidence
 
 | Command | Result |
 |---|---|
-| `PYTHONPATH=bridge python -m pytest -q --disable-warnings --maxfail=20` | **PASS:** 1,234 passed, 3 skipped, 2 expected Phase 3 xfailed, 3 warnings in 116.31s. |
-| `PYTHONPATH=bridge python -m pytest bridge/tests -q --disable-warnings` | **PASS:** 57 passed in 38.92s. |
-| `PYTHONPATH=bridge python -m pytest tests/acceptance -q --disable-warnings` | **PASS:** 1 runtime-spine acceptance passed, 2 expected Phase 3 xfailed, 2 warnings in 5.18s. |
-| `PYTHONPATH=bridge python -m pytest tests/acceptance --runxfail -q --disable-warnings` | **Truthful red gate:** runtime spine passed; exactly the two named Phase 3 product slices failed (2 failed, 1 passed). |
-| `python -m ruff check . --output-format concise` | **PASS.** The frozen Plaid SDK reference is explicitly excluded from F401 only; first-party code is not blanket-excluded. |
-| `python -m ruff format --check <all 134 changed/new Python files>` | **PASS:** 134 files already formatted. |
+| `PYTHONPATH=bridge python -m pytest -q --disable-warnings --maxfail=20` | **PASS:** 1,241 passed, 3 skipped, 1 expected Phase 4 xfailed, 3 warnings. |
+| `PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py -q --disable-warnings` | **PASS:** complete Gate 3 black-box slice. |
+| Focused event/projection/pipeline/Gate 3 suite | **PASS:** 47 passed. |
+| `python -m ruff check . --output-format concise` | **PASS.** |
 | `python -m mypy adminme bridge/adminme_bridge --no-error-summary` | **PASS.** |
 | `C:\Program Files\Git\bin\bash.exe scripts/verify_invariants.sh` | **PASS.** |
 | `git diff --check` | **PASS.** |
+| `python -m adminme.cli.main demo canonical-message` | **PASS:** prints one `proposal_only` input/output pair without credentials or network. |
+| `npm.cmd test --prefix tools/console-reference-harness` | **PASS:** retained Gate 1 proof, 12/12 interactions and 68/68 DOM assertions. |
+| `python -m pip check` | Environment-only warning: the editable package metadata names `msgraph-sdk`, `sqlcipher3-binary`, and `vobject`, which are not installed as distributions in this Windows runner. Gate 3 imports and all tests pass; no provider dependency is used by this slice. |
+| `poetry check` | Not run: Poetry is not installed in this environment. `pyproject.toml` was not changed. |
 
-The warning count is existing deprecation/configuration noise; there is no unexpected skip or xfail. The `--runxfail` result is retained as negative evidence so the Phase 3 skeletons cannot masquerade as completed behavior.
+The skips are pre-existing platform/provider skips. The single xfail is `test_member_bridge_knowledge_vertical_slice.py`, whose capability is explicitly Phase 4. No Gate 3 check is skipped or xfailed.
 
-## Gate 1 evidence retained
+## Retained prerequisites
 
-The exact Gate 1 console reference remains unchanged: source SHA-256 `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`; 12/12 interactions; 68/68 DOM assertions; zero JavaScript/page/request failures; desktop image SHA-256 `8239050463ba5dac56b5759564fec11b94eb76a3c6361182922fa830acdd2f4b`; narrow image SHA-256 `97d1fe1129cfe2f6bc94d0797037d6fb6e7464ac0218d8dd11b49f25fc597701`.
+- Gate 1 remains proven by commit `c4d682c42ff9c9833e59589422bac90eec590173`, the source hash `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`, 12/12 reference interactions, 68/68 DOM assertions, and the retained desktop/narrow image hashes.
+- Gate 2 remains proven by the production composition root and `test_runtime_spine.py`: one writer, one durable bus owner, exactly thirteen projections, product namespaces, bridge ingest, truthful capability status, encrypted reopen, and bounded shutdown.
 
 ## Remaining known failures and human action
 
-- No Gate 2 test, lint, formatting, type, invariant, replay, shutdown, registration, namespace, or process acceptance check is failing.
-- The communication-to-reviewed/completed-commitment slice and the member-bridge-to-private-searchable-knowledge slice remain strict xfails by design. They are Phase 3, not Gate 2 omissions hidden as success.
-- A maintainer must review the draft PR before merge. No credential, destructive action, target-family-Mac access, or other human input is required to prove Gate 2.
+- No Gate 3 unit, integration, process acceptance, lint, type, invariant, replay, rebuild, restart, encryption, API, CLI, or workbook check is failing.
+- Optional real providers and target-family Mac deployment were not used and are not claimed.
+- A maintainer must review the existing draft PR before merge. No credential or other human action is required to reproduce Gate 3.
 
 ## Exact next phase
 
-**Phase 3: close the two golden product slices without rebuilding the runtime spine.**
+**Phase 4 is only the member-owned bridge-to-private-searchable-knowledge slice.**
 
-1. Make `test_communication_commitment_vertical_slice.py` pass under `--runxfail`: credential-free inbound communication through durable delivery, Party/Interaction resolution, schema-bound OpenClaw extraction provenance, proposal/review/independent approvals, guarded and observation-safe action, API/workbook visibility, completion outcome, projection feedback, changed what-now, and restart idempotency.
-2. Make `test_member_bridge_knowledge_vertical_slice.py` pass under `--runxfail`: enrolled member identity, central owner stamping, private `member_knowledge`, permitted non-privileged vector representation, member/child/ambient/cross-owner denial, correction history, replay equivalence, and two-instance isolation.
-3. Preserve the single writer, single bus owner, explicit thirteen-projection registry, one-process namespaces, and Gate 2 test matrix. Do not replace the product assertions with mocks or relax the strict xfails.
+Make `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` pass without weakening it: enrolled member identity, central owner stamping, private `member_knowledge`, permitted non-privileged vector representation, member/child/ambient/cross-owner denial, correction history, replay equivalence, and two-instance isolation.
 
-Do not start with visual polish, optional providers, target-family-Mac installation, or a second runtime process.
+Do not reopen the communication/commitment runtime spine, add optional providers, redesign the console, or create another process as part of Phase 4 unless that strict acceptance exposes a concrete prerequisite defect.

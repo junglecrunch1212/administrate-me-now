@@ -39,7 +39,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -371,6 +370,39 @@ async def test_commitment_proposed_idempotent(rig: dict[str, Any]) -> None:
     assert count == 1
 
 
+async def test_old_proposal_replay_cannot_reset_completed_state(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    proposal_id = await log.append(
+        _envelope("commitment.proposed", _proposed_payload())
+    )
+    completed_id = await log.append(
+        _envelope(
+            "commitment.completed",
+            {
+                "commitment_id": "c1",
+                "completed_at": "2026-05-08T00:00:00Z",
+                "completed_by_party_id": "m1",
+                "completion_note": None,
+            },
+        )
+    )
+    await bus.notify(completed_id)
+    await _wait_for_checkpoint(bus, "projection:commitments", completed_id)
+    proposal = await log.get(proposal_id)
+    assert proposal is not None
+    from adminme.projections.commitments.handlers import apply_event
+
+    apply_event(proposal, runner.connection("commitments"))
+    row = get_commitment(runner.connection("commitments"), _S(), commitment_id="c1")
+    assert row is not None
+    assert row["status"] == "done"
+    assert row["last_event_id"] == completed_id
+
+
 async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     log = rig["log"]
     bus = rig["bus"]
@@ -579,8 +611,7 @@ async def test_scope_canary_privileged_drops_for_non_owner(
     assert row is None
 
     raw = conn.execute(
-        "SELECT count(*) FROM commitments "
-        "WHERE tenant_id = ? AND commitment_id = ?",
+        "SELECT count(*) FROM commitments " "WHERE tenant_id = ? AND commitment_id = ?",
         ("tenant-a", "c1"),
     ).fetchone()
     assert raw[0] == 1
@@ -636,6 +667,7 @@ async def test_pending_approval_ordered_desc(rig: dict[str, Any]) -> None:
             )
         )
         import asyncio
+
         await asyncio.sleep(0.01)  # ensure distinct occurred_at
 
     last = await log.latest_event_id()
