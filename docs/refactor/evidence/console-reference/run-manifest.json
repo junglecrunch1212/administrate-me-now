@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "harness_version": "1.0.0",
+  "source": {
+    "file": "ADMINISTRATEME_CONSOLE_REFERENCE.html",
+    "sha256": "98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b",
+    "url": "http://127.0.0.1:4173/ADMINISTRATEME_CONSOLE_REFERENCE.html"
+  },
+  "runtime": {
+    "node": "v24.14.1",
+    "browser": "Microsoft Edge",
+    "browser_version": "150.0.4078.99",
+    "playwright_core": "1.62.0"
+  },
+  "determinism": {
+    "desktop_viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "narrow_viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "device_scale_factor": 1,
+    "fixed_instant": "2026-04-21T13:42:00.000Z",
+    "locale": "en-US",
+    "timezone": "America/New_York",
+    "reduced_motion": true,
+    "random_value": 0.5,
+    "external_fonts": "fulfilled with empty deterministic stylesheet"
+  },
+  "results": {
+    "interactions": "PASS",
+    "dom_assertions": "PASS",
+    "javascript_console": "PASS"
+  },
+  "screenshots": {
+    "desktop.png": {
+      "bytes": 99193,
+      "sha256": "8239050463ba5dac56b5759564fec11b94eb76a3c6361182922fa830acdd2f4b"
+    },
+    "narrow.png": {
+      "bytes": 102062,
+      "sha256": "97d1fe1129cfe2f6bc94d0797037d6fb6e7464ac0218d8dd11b49f25fc597701"
+    }
+  }
+}

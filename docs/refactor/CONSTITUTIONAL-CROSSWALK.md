@@ -101,11 +101,11 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C069 | `adminme-ops.xlsx` and `adminme-finance.xlsx` are bidirectional, rebuildable projections | BUILD xlsx; DIAGRAMS; FIELD manual workflows | forward/reverse/sidecar code; platform-specific failures | PRESERVE/HARDEN | AC-13 |
 | C070 | Protected/derived cells, reverse-diff events, sidecar, locks, conflict visibility, Plaid authority, replay equivalence | BUILD xlsx contract; EXAMPLES | substantial tests, some blocked/failing on Windows | PRESERVE/HARDEN | AC-13 |
 | C071 | Today, Inbox, CRM, Capture/Knowledge, Finance, Calendar, Scoreboard, Settings | BUILD L5; HTML; ARCH §9 | HTML mock only; `console/server.js` stub | PRESERVE; rename semantics only | AC-18 |
-| C072 | Carousel/compressed/child modes | BUILD profiles; HTML; ARCH §8 | HTML mock only | PRESERVE | AC-18 |
+| C072 | Carousel/compressed/child modes | BUILD profiles; HTML; ARCH §8 | HTML reference rendered and exercised by Gate 1 harness; production app absent | PRESERVE | AC-18 |
 | C073 | Calendar privacy redaction | PATTERNS §6; HTML | Python scope tests; no real route/UI | PRESERVE | AC-08, AC-18 |
 | C074 | Dual-path reward toast with dedupe | PATTERNS §8; HTML; BUILD | reward pipeline assets; no UI/SSE | PRESERVE | AC-18 |
 | C075 | Observation/degraded banners and evidence/provenance views | PATTERNS §§9/11; HTML; selected Vellum | mock only | PRESERVE/MODERNIZE | AC-14, AC-18 |
-| C076 | Responsive/accessibility behavior | BUILD L5; HTML visual contract | not rendered; no app/tests | PRESERVE | AC-18 |
+| C076 | Responsive/accessibility behavior | BUILD L5; HTML visual contract | exact reference rendered at desktop/narrow viewports with keyboard tab activation; production app/tests absent | PRESERVE | AC-18 |
 | C077 | Quick capture/voice ingest/triage retired; Knowledge read surfaces remain | ARCH §9/D17 overrides older BUILD/HTML | product stub still claims old flow | SUPERSEDE old mutations | AC-04, AC-18 |
 | C078 | One central Python process plus pinned OpenClaw; product ownership/routes compatible | v2 contract reconciles MENTAL/BUILD multi-service ports | only bridge API implemented; no composition root | MODERNIZE | AC-02, AC-19 |
 | C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | prose/cron/order YAML only | SUPERSEDE nine-count; PRESERVE 10 | AC-01, AC-21 |
@@ -128,7 +128,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | VISION | product thesis C001–C008; architecture C027–C028; projections C011–C024; adapters/packs C034–C043; bootstrap C079–C080 |
 | BUILD | layers/log/bus/projections C009–C033; adapters/pipelines/OpenClaw C034–C068; xlsx/UI/packs/bootstrap/operations C069–C086 |
 | PATTERNS | identity/session C057–C061; guarded writes C062–C068; UI privacy/rewards/degraded/observation C071–C076 |
-| HTML | surface/navigation/modes/interactions C071–C077; superseded mock flows C077; rendering evidence gap in UX contract |
+| HTML | surface/navigation/modes/interactions C071–C077; superseded mock flows C077; rendered Gate 1 evidence in `docs/refactor/evidence/console-reference/` |
 | DIAGRAMS | dependency/event/replay/control/install/bootstrap relationships C007, C010, C025, C027, C030–C032, C041, C069, C079–C082, C090 |
 | FIELD | daily/weekly/administrative/recovery/deployment workflows C007–C008, C026, C065, C069, C081–C082, C086, C089 |
 | EXAMPLES | adapter/pipeline/skill/profile/persona pack shapes C039–C043, LLM proposal patterns C051/C056, xlsx fixtures C070, tenant-example rule C083/C088 |

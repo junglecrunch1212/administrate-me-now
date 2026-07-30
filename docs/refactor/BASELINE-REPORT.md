@@ -1,6 +1,7 @@
 # Gate 1 baseline report
 
 - Audit date: 2026-07-29 (America/New_York)
+- Rendered evidence follow-up: 2026-07-30 UTC
 - Repository: `junglecrunch1212/administrate-me-now` (public)
 - Audited commit: `64192f465606d0bcf92f5137cb0c1f0e4c729297`
 - `origin/main` at audit: same SHA; main had not advanced
@@ -37,7 +38,7 @@ Genuine conflicts found:
 
 The HTML and its inline state/event code were audited completely. Source-demonstrated interactions include all eight tabs; carousel/compressed/child modes; view-as; inbox approval drawer; reward toast; calendar busy redaction; observation and degraded banners; settings panes; and chat.
 
-Rendered interaction was attempted through the required in-app browser, but navigation to the local `file:` URL was blocked by the browser URL-security policy. The reference has no deployed URL. No local-server/data-URL/raw-host workaround was used. Therefore Gate 1 has source/DOM evidence but **no rendered visual or live interaction proof**. `UX-BEHAVIOR-CONTRACT.md` records the missing evidence and required capture. This is the only Gate 1 activity that could not be completed in the available environment.
+The evidence gap was closed with the dev/test-only harness in `tools/console-reference-harness/`, using a loopback HTTP server rather than `file:` navigation or an in-app/personal browser. Installed Microsoft Edge `150.0.4078.99` rendered the exact SHA-256-pinned source through `playwright-core@1.62.0`. All twelve declared interactions and all 68 DOM assertions passed; JavaScript console errors, uncaught page errors, and failed requests were all zero. Deterministic desktop and narrow screenshots, JSON results, and the interaction transcript are retained under `docs/refactor/evidence/console-reference/`. Quick-capture/triage success is historical reference proof only and does not reverse its SUPERSEDE disposition.
 
 ## Toolchain observed
 
@@ -52,6 +53,8 @@ Rendered interaction was attempted through the required in-app browser, but navi
 | pyright | missing | No pyright check performed. |
 | Node | 24.14.1 | Console requires `>=22 <23`; unsupported. |
 | npm | 11.11.0 | `npm.cmd` used because the PowerShell shim is blocked by local execution policy. |
+| Playwright Core | 1.62.0, exact dev dependency with lockfile integrity | Used only by the rendered-reference harness; no browser download. |
+| Microsoft Edge | 150.0.4078.99 | Installed channel used headlessly for Gate 1 reference evidence. |
 | git | 2.53.0.windows.1 | Repository operations available. |
 | GitHub CLI | 2.96.0 | Authenticated without printing credentials. |
 
@@ -72,6 +75,8 @@ Rendered interaction was attempted through the required in-app browser, but navi
 | `python scripts/demo_xlsx_roundtrip.py` | 0 | Temporary round trip produced reverse events and final total 17 events. This does not erase the pytest/mypy `fcntl` failures. |
 | `cd console && npm.cmd ci` | 1 | `EBADENGINE` on Node 24; `better-sqlite3` had no Node-24 Windows prebuild and native build could not find Visual Studio C++ tools. |
 | `cd console && npm.cmd test` | not run | Install failed first. The declared script is only `echo "tests added by prompt 14a" && exit 0`, so it would be a false placeholder, not test evidence. |
+| `npm.cmd ci --prefix tools/console-reference-harness --ignore-scripts` | 0 | Installed one exact dev dependency from the committed lockfile; 0 vulnerabilities; no browser downloaded. |
+| `npm.cmd test --prefix tools/console-reference-harness` | 0 | `CONSOLE_REFERENCE_HARNESS: PASS`; 12/12 interactions and 68/68 DOM assertions passed; 0 JavaScript console errors, page errors, or request failures. A consecutive rerun reproduced both screenshot hashes exactly. |
 | `poetry install/check` | not run | Poetry is not installed. Lockfile/manifests were inspected statically. |
 | `pyright` | not run | Tool is not installed and no supported repository command was present. |
 
