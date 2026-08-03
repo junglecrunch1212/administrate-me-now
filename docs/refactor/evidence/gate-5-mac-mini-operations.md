@@ -39,6 +39,14 @@ The cross-platform SQLCipher wheel inventory was reviewed on 2026-08-03:
 
 - https://pypi.org/project/sqlcipher3/0.6.2/
 
+## Cascade-exemption:
+
+No `prompts/PROMPT_SEQUENCE.md` cascade is required. The `docs/DECISIONS.md`
+amendment only replaces the Apple-incompatible `sqlcipher3-binary` distribution
+with the same SQLCipher event-log architecture through locked `sqlcipher3`
+0.6.2. It does not change Prompt 5 scope, ordering, acceptance obligations, or
+citations.
+
 ## Process proof
 
 `tests/acceptance/test_macos_bootstrap_operations.py` performs the complete
