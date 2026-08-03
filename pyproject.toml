@@ -27,6 +27,7 @@ keyring = "*"
 
 # L3: projections + xlsx
 openpyxl = "*"
+python-dateutil = "*"
 
 # L4: pipelines — HTTP to OpenClaw's skill runner (no provider SDKs; see §8)
 httpx = "*"
