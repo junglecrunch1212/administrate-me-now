@@ -1,6 +1,6 @@
 # Release acceptance contract
 
-Gate 4 status (2026-07-30): **AC-12 fixture/process portion PASS**. The native package passes the source-pinned official-contract fixture and the real AdministrateMe process boundary. The disposable-macOS live OpenClaw sub-gate remains an explicit pre-deployment human action and is not claimed from Windows mocks. AC-04 is now the Phase 5 product slice.
+Gate 5 status (2026-08-03): **AC-01 and AC-15 credential-free process portions PASS**. The ten-section installer, fixed operations surface, synthetic Doctor round trip, encrypted backup, validated restore, launchd contracts, secret redaction, bridge restrictions, and upgrade compatibility refusal pass locally. `macos-bootstrap.yml` and the live-Mac checklist cover what the Windows host cannot prove. Live OpenClaw, macOS grants, OAuth, and family activation remain unclaimed. AC-04 is now the Phase 6 product slice.
 
 ## Rules
 
@@ -13,7 +13,7 @@ Standard environment: supported macOS lab, Python 3.11, a Node version satisfyin
 | ID | Executable release requirement | Required evidence / pass condition |
 |---|---|---|
 | AC-00 | `git diff --check && git status --porcelain` after build/test cleanup | Clean tracked tree; generated evidence stored only in declared artifact directory; no secret/unrelated file. |
-| AC-01 | `./scripts/acceptance/clean-install.sh --fixture two-adult-one-child` | From a fresh macOS account/volume: locked install, all ten bootstrap sections, observation on, secret-reference scan clean, repeat run no-op, Doctor healthy. |
+| AC-01 | `./scripts/acceptance/clean-install.sh` | **Gate 5 process PASS:** encrypted ten-section fixture install, observation on, secret-reference scan clean, repeat run no-op, Doctor healthy. Disposable-live-mac grants remain AC-21 evidence. |
 | AC-02 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_runtime_spine.py -q` | One Python process composes the encrypted log, durable bus, exact 13 projections, pipelines, adapters/xlsx, product namespaces, and bridge ingest; append commits before waking consumers; readiness, shutdown, and encrypted reopen are truthful. |
 | AC-03 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py -q` | **Gate 3 PASS:** credential-free inbound communication -> encrypted durable event -> bus -> Parties/Interactions -> schema-bound OpenClaw fixture provenance -> proposal-only review -> independent principal approval and observation-gated delivery intent -> API/xlsx -> complete/defer/snooze/block/unblock outcomes -> changed deterministic what-now. Duplicate requests, stale writes, wrong owners/roles, bad remote responses, replay, projection rebuild, crash-after-append, and restart preserve semantics. |
 | AC-04 | `python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q` | Enrolled member bridge -> owner-stamped knowledge event -> `member_knowledge` and allowed `vector_search`; another member/child/ambient/OpenClaw generic memory cannot read it; correction/replay proven. |
@@ -27,13 +27,13 @@ Standard environment: supported macOS lab, Python 3.11, a Node version satisfyin
 | AC-12 | `npm --prefix openclaw/administrateme run check && npm --prefix openclaw/administrateme test && python -m pytest tests/acceptance/test_openclaw_native_seam.py -q`; then in disposable macOS lab `npm --prefix openclaw/administrateme run test:live:mac` | Package/API/gateway/build pins equal `2026.7.2` and source commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`; native manifest/build/pack; typed tools and dashboard; skill, slash, standing-order, scoped bridge; metadata-only model provenance; actor/member denial; observation; exact-once outcomes; durable unavailable/restart; incompatible fixture rejection. Fixture/process PASS is distinct from the required live link/install/inspect/restart/deep-RPC macOS sub-gate. |
 | AC-13 | `python -m pytest tests/acceptance/test_workbook_roundtrip.py --runxfail -q` | Both named workbooks; forward build, protected/derived rejection, editable reverse events, sidecars/locks, conflict visibility, Plaid columns immutable, concurrent retry, rebuild/replay equivalence, LibreOffice formula check. |
 | AC-14 | `python -m pytest tests/acceptance/test_degraded_operation_and_doctor.py --runxfail -q` | Empty/disabled/stale/degraded distinct; adapter watermarks/circuits; poison consumer; OpenClaw/source/workbook outage; safe reads continue; writes fail closed; Doctor actionable and secret-free. |
-| AC-15 | `./scripts/acceptance/backup-restore.sh` | Online-safe encrypted backup plus manifests; destroy disposable instance; restore on fresh path; validate log/projections/workbooks/offsets/config/plugin reconciliation; replay; wrong key/tamper fails. |
+| AC-15 | `./scripts/acceptance/backup-restore.sh` | **Gate 5 process PASS:** quiesced encrypted backup plus manifest; authenticated staging restore; active state untouched until validation; rollback copy; all 13 projections/workbooks rebuilt from the event log. Wrong-key/tamper paths fail closed. |
 | AC-16 | `./scripts/acceptance/tenant-isolation.sh` | Static email/phone/address/name and hardcoded-instance-path scan; start two instances with distinct keys/tenants/ports; concurrent identical ids cannot cross log, offsets, projections, cache, files, HTTP, OpenClaw session, or backup. |
 | AC-17 | `python -m pytest tests/acceptance/test_pack_lifecycle_profiles_personas.py --runxfail -q` | All six pack kinds validate dependencies, stage/test/build, atomic install, event, rollback; five profiles and four personas compile/behave; tenant-neutral scan; profile/persona cannot change authority/model routing. |
 | AC-18 | `cd console && npm test -- --runInBand` plus `./scripts/acceptance/browser-e2e.sh` | Eight surfaces, three modes, child denial, calendar redaction, one reward toast under dual path, banners, evidence, states, responsive breakpoints, WCAG 2.2 AA; superseded capture flows absent; sanitized rendering. |
 | AC-19 | `python -m pytest tests/acceptance/test_network_boundary.py --runxfail -q` | Only expected loopback listeners; Tailscale Serve is sole edge; spoofed identity headers rejected; legacy ports absent or tested aliases; routes preserve product ownership; member bridge endpoint least-privilege. |
 | AC-20 | `python -m pytest tests/acceptance/test_migrations_shutdown.py --runxfail -q` | Every supported old schema fixture migrates/upcasts or fails before mutation; backup made; SIGTERM under ingest/pipeline/xlsx work drains/checkpoints/closes within bound; restart is consistent; forced-kill recovery proven. |
-| AC-21 | `./scripts/acceptance/macos-bootstrap-rehearsal.sh` | Disposable clean macOS Phase-A host; interruption/resume and rollback per bootstrap section; per-member bridge + kid restrictions; observation briefing; signed report; target family Mac untouched. |
+| AC-21 | `./scripts/acceptance/macos-bootstrap-rehearsal.sh` | Gate 5 supplies the reproducible credential-free macOS job and live checklist. A disposable Apple-silicon live rehearsal must still record grants, crash/login recovery, real pinned Gateway health, and a signed report; target family Mac remains untouched. |
 | AC-22 | `./scripts/acceptance/architecture-negative-checks.sh` | No direct provider SDK/call, duplicate chat/memory/scheduler/router/gateway/app builder, Vellum runtime, plaintext secret, projection write from adapter/pipeline, or required capability marked deferred. |
 
 ## Baseline and development commands
@@ -50,16 +50,16 @@ bash scripts/verify_invariants.sh
 cd console && npm ci && npm test
 ```
 
-Gate 4 adds the source-pinned plugin fixture and real process-boundary acceptance test. The next end-to-end product slice remains strict Phase 5 work:
+Gate 5 adds the bootstrap/operations process gate. The next end-to-end product slice remains strict Phase 6 work:
 
 ```bash
 PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py --runxfail -q
 PYTHONPATH=bridge python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q
 ```
 
-## Gate 4 status
+## Gate 5 status
 
-AC-02 and AC-03 remain implemented. AC-12's non-live portion is implemented by `openclaw/administrateme/` and `tests/acceptance/test_openclaw_native_seam.py`. The TypeScript fixture proves only the used pinned SDK contract; the Python acceptance boots the encrypted composition and proves household authorization, event/projection effects, failure/restart semantics, and no operator-token shortcut. The live macOS sub-gate is deliberately guarded and remains mandatory before deployment. AC-04 remains the strict Phase 5 xfail.
+AC-02, AC-03, and AC-12's non-live portion remain implemented. Gate 5 implements AC-01 and AC-15 at the credential-free production-composition boundary through `tests/acceptance/test_macos_bootstrap_operations.py`. The same package provides `scripts/acceptance/macos-bootstrap-rehearsal.sh`, `.github/workflows/macos-bootstrap.yml`, and the human checklist in `MAC-MINI-OPERATIONS.md`. This is installer readiness, not evidence that a live provider or the future family Mac works. AC-04 remains the strict Phase 6 xfail.
 
 ## Evidence schema
 

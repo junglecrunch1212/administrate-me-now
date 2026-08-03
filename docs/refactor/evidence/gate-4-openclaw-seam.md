@@ -50,7 +50,7 @@ strings. This fixture does not emulate or claim a live Gateway.
 
 | Command | Result |
 |---|---|
-| `PYTHONPATH=bridge python -m pytest -q --disable-warnings --maxfail=20` | **PASS:** 1,244 passed, 3 skipped, 1 expected Phase 5 xfailed, 3 warnings |
+| `PYTHONPATH=bridge python -m pytest -q --disable-warnings --maxfail=20` | **PASS:** 1,244 passed, 3 skipped, 1 expected member-knowledge xfail (now Phase 6), 3 warnings |
 | `python -m pytest -q tests/acceptance/test_openclaw_native_seam.py --disable-warnings` | **PASS:** 3 process tests |
 | `npm.cmd test --prefix openclaw/administrateme` | **PASS:** 10 fixture tests |
 | `npm.cmd run check --prefix openclaw/administrateme` | **PASS:** strict TypeScript plus exact contract validator |

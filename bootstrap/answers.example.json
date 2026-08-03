@@ -1,0 +1,62 @@
+{
+  "assistant": {
+    "persona": "quiet_assistant",
+    "identity": "Household Assistant"
+  },
+  "household": {
+    "kind": "apple",
+    "members": [
+      {
+        "member_id": "member_example_principal",
+        "role": "principal",
+        "label": "Principal",
+        "tailscale_identity": "principal@example.invalid"
+      }
+    ],
+    "ambient_members": [],
+    "coparents": [],
+    "helpers": []
+  },
+  "profiles": {
+    "member_example_principal": "adhd_executive"
+  },
+  "providers": {
+    "assistant": "openclaw",
+    "optional": []
+  },
+  "plaid": {
+    "selected": false,
+    "environment": "sandbox",
+    "fake_link": false
+  },
+  "seed": {
+    "places": false,
+    "assets": false,
+    "accounts": false,
+    "recurrences": false,
+    "providers": false,
+    "schools": false,
+    "projects": false,
+    "vendors": false,
+    "crm_relationships": false
+  },
+  "integrations": {
+    "shared_lists": false,
+    "calendars": false,
+    "contacts": false,
+    "home_assistant": false,
+    "fixture_channel": false,
+    "openclaw_actor_identities": [
+      {
+        "channel_id": "imessage",
+        "account_id": "-",
+        "actor_id": "principal@example.invalid",
+        "member_id": "member_example_principal"
+      }
+    ]
+  },
+  "bridges": {
+    "apple": true,
+    "obsidian": false
+  }
+}

@@ -23,7 +23,7 @@ schemas raise ``EventValidationError`` unless
 a warning is logged and the write proceeds (useful for tests and for draft
 schema development).
 
-Async model: ``sqlcipher3-binary`` is a synchronous DB-API driver and there
+Async model: ``sqlcipher3`` is a synchronous DB-API driver and there
 is no drop-in async SQLCipher for Python today (D14). We keep a single
 writer connection guarded by an ``asyncio.Lock`` and dispatch every DB call
 via ``asyncio.to_thread``. Reads and writes therefore run off the event

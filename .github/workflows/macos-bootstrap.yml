@@ -1,0 +1,82 @@
+name: macOS bootstrap contract
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/**"
+      - "adminme/**"
+      - "openclaw/administrateme/**"
+      - "scripts/acceptance/**"
+      - "tests/acceptance/test_macos_bootstrap_operations.py"
+      - "tests/unit/bootstrap/**"
+      - ".github/workflows/macos-bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  credential-free-rehearsal:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      ADMINME_TEST_MODE: "1"
+      PYTHONPATH: bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record Apple architecture and validate architecture gates
+        run: |
+          uname -a
+          python3 <<'PY'
+          from pathlib import Path
+          from bootstrap.preflight import PreflightFailure, run_preflight
+
+          try:
+              run_preflight(
+                  Path("/tmp/never-created-adminme"),
+                  system="Darwin",
+                  machine="x86_64",
+                  macos_version="14.0",
+                  require_dependencies=False,
+                  check_filevault=False,
+              )
+          except PreflightFailure:
+              pass
+          else:
+              raise SystemExit("wrong architecture did not fail")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install exact locked Python environment
+        run: |
+          python -m pip install "poetry==2.2.1"
+          poetry install --with dev --no-interaction
+
+      - name: Validate shell entrypoints
+        run: |
+          brew install shellcheck
+          shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh
+          bash -n bootstrap/*.sh scripts/acceptance/*.sh
+
+      - name: Validate the exact native plugin contract
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+
+      - name: Credential-free clean install and recovery rehearsal
+        run: |
+          poetry run ./scripts/acceptance/clean-install.sh
+          poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh
+          poetry run ./scripts/acceptance/backup-restore.sh
+
+      - name: Static checks and secret-safe tree
+        run: |
+          poetry run ruff check bootstrap tests/unit/bootstrap tests/acceptance/test_macos_bootstrap_operations.py
+          poetry run mypy bootstrap --no-error-summary
+          git diff --check
+          test -z "$(git status --porcelain)"

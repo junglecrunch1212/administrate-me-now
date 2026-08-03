@@ -117,17 +117,17 @@ Without this pin, "per OpenClaw docs" becomes "per whatever version of the OpenC
 
 ### D13 — SQLCipher binding
 
-**Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** divergence between prompt 02 / prompt 03 spec text (`pysqlcipher3`) and what actually works.
+**Decided:** 2026-04-23. **Updated:** 2026-08-03. **Status:** SUPERSEDED BY CURRENT CROSS-PLATFORM WHEEL. **Resolves:** divergence between prompt 02 / prompt 03 spec text (`pysqlcipher3`) and what actually works.
 
-The SQLCipher binding is **`sqlcipher3-binary`**, not `pysqlcipher3`. Import name is `sqlcipher3`. ADMINISTRATEME_BUILD.md §STACK already specifies this — it is a bundled wheel requiring no system SQLCipher headers and is a drop-in replacement for `pysqlcipher3` with an identical API. `pysqlcipher3` requires `libsqlcipher-dev` on the build machine and fails to install in a vanilla sandbox.
+The SQLCipher binding is **`sqlcipher3==0.6.2`**, not `pysqlcipher3`. Import name remains `sqlcipher3`. The earlier `sqlcipher3-binary` decision was valid for the original Linux sandbox, but version 0.6.0 publishes no Apple wheel. The current `sqlcipher3` release publishes locked CPython 3.11 wheels for Apple silicon, Linux, and Windows and requires no separate SQLCipher Homebrew formula for this deployment.
 
-Every prompt that references SQLCipher must use `sqlcipher3-binary` in `pyproject.toml` and `import sqlcipher3` in Python. If a prompt's text says `pysqlcipher3`, ignore the prompt text and use `sqlcipher3-binary` — flag the divergence in the commit message, do not silently ignore it.
+Every current implementation must use the exact locked `sqlcipher3` distribution in `pyproject.toml` and `import sqlcipher3` in Python. Historical prompt text remains provenance, not an instruction to reintroduce an unavailable platform artifact.
 
 ### D14 — Event log async model
 
 **Decided:** 2026-04-23. **Status:** CONFIRMED. **Resolves:** seam left open by architecture-summary.md §3 ("In-process event bus. Asyncio queues with durable per-subscriber offsets") and BUILD.md §L2 not specifying the sync-vs-async shape of the SQLCipher connection.
 
-The EventLog exposes an async API (`async def append`, `async def read_since`, etc.) implemented over a **synchronous SQLCipher connection dispatched through `asyncio.to_thread`** and guarded by an `asyncio.Lock` for writes. Rationale: there is no drop-in async SQLCipher driver for Python in 2026; `aiosqlite` does not support SQLCipher, and `sqlcipher3-binary` is DB-API sync-only. Wrapping sync calls in `to_thread` keeps the event loop responsive without pulling in a new C extension or process model.
+The EventLog exposes an async API (`async def append`, `async def read_since`, etc.) implemented over a **synchronous SQLCipher connection dispatched through `asyncio.to_thread`** and guarded by an `asyncio.Lock` for writes. Rationale: there is no drop-in async SQLCipher driver for Python in 2026; `aiosqlite` does not support SQLCipher, and `sqlcipher3` is DB-API sync-only. Wrapping sync calls in `to_thread` keeps the event loop responsive without pulling in a second C extension or process model.
 
 Later prompts (projections, pipelines, product APIs) use the same pattern: async public API, sync DB driver, `to_thread` boundary. Any prompt proposing `aiosqlite + sqlcipher` or a persistent background thread pool should be rejected — neither is necessary and both add complexity without benefit.
 

@@ -36,6 +36,24 @@ a floating dependency.
   runtime inspect, Gateway restart, and deep RPC health. It must pass before
   the family Mac is touched.
 
+## Gate 5 host and installer matrix
+
+| Component | Supported/pinned Gate 5 contract | Enforcement |
+|---|---|---|
+| macOS | majors 14, 15, 26; 26 preferred for a new Mac mini | mutation-free shell/Python preflight |
+| CPU | native Apple silicon `arm64` only | Rosetta/x86_64 fails before instance mutation |
+| Python | `>=3.11,<3.12`, resolved from `poetry.lock` | release-specific venv and Poetry `2.2.1` |
+| Node/npm | `>=22.22.3,<23`; npm `>=10.9,<11` | installer and plugin contract checks |
+| SQLCipher | runtime `>=4.12,<5`; cross-platform `sqlcipher3==0.6.2` | Exact Poetry lock plus Doctor cipher/migration checks |
+| OpenClaw/plugin | exact existing version, commit, API, gateway, and plugin package pins | upgrade validation occurs before service replacement |
+| Bun | not required | declared false in `bootstrap/versions.json` |
+
+The stable OpenClaw pin was not silently moved during Gate 5. User launchd
+definitions invoke secret-safe Python launchers; the plugin never receives the
+event-log key. Credential-free healthy observation mode is a fake-provider
+claim only. See `MAC-MINI-OPERATIONS.md` and
+`evidence/gate-5-mac-mini-operations.md`.
+
 ## Authoritative references
 
 - https://docs.openclaw.ai/plugins/manifest

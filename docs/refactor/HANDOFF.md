@@ -1,19 +1,17 @@
 ---
 schema_version: 1
-current_phase: 4
-phase_name: current_openclaw_seam
-gate: 4
+current_phase: 5
+phase_name: mac_mini_bootstrap_and_operations
+gate: 5
 gate_result: PASS
-verified_local_date: 2026-07-30
+verified_local_date: 2026-08-03
 branch: codex/administrateme-v2-runtime
 branch_tip_resolution: git rev-parse HEAD
-gate_1_artifact_sha: c4d682c42ff9c9833e59589422bac90eec590173
-gate_1_artifact_tree_sha: 5bc5e3733c456cbffbf12dcd51ba0b1744889ab6
 draft_pr_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
-openclaw_evidence: official_contract_fixture_and_real_adminme_process
-next_phase: 5
+evidence_level: credential_free_process_and_reproducible_macos_contract
+next_phase: 6
 next_phase_name: member_bridge_private_searchable_knowledge
 ---
 
@@ -21,83 +19,91 @@ next_phase_name: member_bridge_private_searchable_knowledge
 
 ## State
 
-Gate 4 passes at the explicitly declared evidence level. The branch retains
-Gates 1–3 and now contains one current native TypeScript plugin at
-`openclaw/administrateme/`. The plugin is pinned to OpenClaw source package
-version `2026.7.2` and commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`. The exact SDK surfaces compile
-and run against an official-contract fixture; the real encrypted
-AdministrateMe composition passes the loopback process gate. A live OpenClaw
-Gateway was not run on this Windows host and is not claimed.
+Gate 5 passes at installer-readiness level. Gates 1–4 remain committed and
+unchanged. The branch now contains the Mac mini package that can preflight,
+install, configure, start, stop, diagnose, back up, restore, and guard updates
+for the exactly pinned OpenClaw plus one AdministrateMe process. It has not
+been installed on the future family Mac.
 
-## Gate 4 implementation
+The stable operator names are `bootstrap/bootstrap-macos.sh`, `install.sh`,
+`doctor.sh`, `start.sh`, `stop.sh`, `status.sh`, `backup.sh`, and `restore.sh`.
+All are Bash-syntax and ShellCheck clean; `install.sh` delegates to the
+constitutional compatibility entrypoint.
 
-- The native manifest and package declare eight typed household tools, strict
-  configuration, exact peer/API/gateway/build pins, optional side-effect
-  exposure, three dashboard reads, two dashboard actions, seven slash command
-  aliases, the skill directory, and source/built runtime entries.
-- Full trusted provenance crosses the seam: actor, mapped member, agent,
-  session key/id, channel, account, message, thread, correlation, call kind,
-  OpenClaw version, and source commit. AdministrateMe maps the exact
-  `channel|account|actor` tuple; operator scope, `/tools/invoke` bearer
-  possession, and `senderIsOwner` grant no household authority.
-- Sensitive tools require OpenClaw `allow-once` approval in addition to the
-  AdministrateMe role/scope, GuardedWrite, optimistic event-id, domain
-  approval, privacy, idempotency, and observation checks.
-- The four seams are implemented: an OpenClaw-format skill invokes the one
-  schema-valid `llm-task` wrapper; native commands dispatch typed handlers;
-  five derived OpenClaw automations invoke a typed standing-order trigger; and
-  the bridge accepts only explicit consent-marked, configured, domain events.
-  Ordinary conversation and privileged content are not mirrored.
-- Model observation is metadata-only for tracked `adminme:` sessions. The
-  plugin registers neither `llm_input` nor `llm_output`; prompt and response
-  content cannot enter the audit body.
-- The active quiet-assistant persona compiles deterministically to per-instance
-  `SOUL.md`, `IDENTITY.md`, `USER.md`, and `AGENTS.md`. Member profile additions
-  remain separate per-member overlays and persona text has no authority or
-  model-routing power.
-- The transport is bounded, secret-safe, authenticated, and loopback-only.
-  Unavailable/incompatible health is durable. The event log, projections,
-  deterministic reads, and captured household truth survive Gateway outage
-  and restart without direct-provider fallback.
-- The obsolete `adminme/openclaw_plugins/` README and three empty Python
-  package files were deleted only after import scanning and replacement tests.
+## Gate 5 implementation
 
-## Acceptance and adversarial evidence
+- `bootstrap/versions.json` pins the supported macOS majors, Apple-silicon
+  architecture, Python, Node/npm, SQLCipher binding/runtime, Homebrew, Poetry,
+  exact OpenClaw version/commit/API, ports, and the fact that Bun is unused.
+- Shell preflight rejects root, Rosetta/x86_64, unsupported macOS, FileVault
+  off, missing Command Line Tools/Homebrew, unsafe roots, and low disk before
+  instance mutation. Required formulas and a release-specific Python
+  environment are installed only after preflight and from exact lockfiles.
+- `bootstrap/wizard.py` implements all ten constitutional sections with
+  version/input-digest idempotency and independent encrypted status. A failed
+  section records failure and resumes; Section 1 failure creates no instance.
+  The operator may use the fake fixture, a local non-secret answer document,
+  or the terminal questionnaire.
+- macOS Keychain stores bootstrap/event/backup/OpenClaw/bridge material. The
+  journal is AES-GCM encrypted. Plists, config, reports, arguments, logs, and
+  diagnostic exports contain references only. The test-file provider is
+  guarded by `ADMINME_TEST_MODE=1` and never used in production.
+- Two user LaunchAgents call Python launchers; neither service runs as root.
+  The runtime is one Python process at loopback `:3330`; OpenClaw is exact-pinned
+  at loopback `:18789`. Start/stop/status are idempotent and distinguish
+  healthy/degraded/stopped/failed plus per-process state. The runtime resolves
+  the shared transport credential from Keychain and authorizes only explicit
+  OpenClaw channel/account/actor-to-member mappings.
+- Section 10 creates one encrypted package per member with Tailscale identity,
+  owner scope, central stamping, and explicit cross-owner denial. Child
+  packages prohibit Obsidian and retain kid restrictions. A non-Apple
+  household explicitly skips the section.
+- Doctor validates platform, configuration, secure references, SQLCipher and
+  migrations, all 13 projection stores/checkpoints, five adapter categories,
+  plugin compatibility, launchd/process state, loopback ports, member/bridge
+  mapping, observation workflow, disk/backup, and the real isolated canonical
+  message/review/dashboard/workbook/completion/what-now/rebuild round trip.
+  The export is machine-readable and secret-scanned.
+- Backup quiesces services, hashes an allowlisted state tree, and encrypts the
+  versioned archive. Restore authenticates in staging, rejects unsafe paths,
+  verifies all hashes, opens the event log, rebuilds all 13 projections and
+  workbooks, preserves a rollback copy, then replaces active state. A failed
+  post-restore Doctor automatically restores the prior state.
+- Upgrade validation compares the candidate's OpenClaw version, commit, API,
+  plugin package, and lockfile before backup or service replacement. A
+  compatible switch builds its isolated environment first, then uses a backup,
+  rollback pointer, and transactional launchd reconciliation; floating
+  OpenClaw is prohibited.
 
-`tests/acceptance/test_openclaw_native_seam.py` boots the production
-composition and proves missing/wrong transport auth, exact actor mapping,
-unmapped operator denial, child/private isolation, observation-only proposal,
-real skill/standing-order/bridge/model events, privileged exclusion, dashboard
-scope filtering, full audit provenance, lifecycle event plus scoped what-now,
-exact-once approval/lifecycle behavior under retry, durable unavailable state,
-restart recovery, incompatible future fixture rejection, and continued safe
-domain reads.
+## Evidence and limits
 
-The TypeScript fixture tests prove manifest-to-runtime registration, typed tool
-requests/responses, optional plus per-call approval, slash and standing-order
-dispatch, authenticated dashboard identity, generic-chat non-mirroring,
-privileged bridge exclusion, metadata-only model capture, and sanitized
-incompatible errors. `npm run contract` additionally scans for forbidden
-`llm_input`, `llm_output`, `senderIsOwner`, and OpenClaw operator invoke paths.
+The local process evidence is recorded in
+`docs/refactor/evidence/gate-5-mac-mini-operations.md`. The macOS contract is
+`.github/workflows/macos-bootstrap.yml`, with reproducible scripts under
+`scripts/acceptance/`. The live disposable-Mac checklist is in
+`MAC-MINI-OPERATIONS.md`.
 
-Exact compatibility, official references, and fixture/live distinctions are in
-`docs/refactor/OPENCLAW-COMPATIBILITY.md`; command results are retained in
-`docs/refactor/evidence/gate-4-openclaw-seam.md`.
+No Gmail, Apple, Plaid, Home Assistant, member bridge, OAuth, Tailscale grant,
+or other live-provider success is claimed. The fake Plaid state is sandbox;
+the canonical action is observation-suppressed and performs zero external
+side effects. The Windows host cannot prove FileVault, real Keychain UI,
+actual user launchd recovery, Apple permissions, or a live pinned Gateway.
 
-## Human action and live evidence
+Before any family-Mac deployment, a maintainer must review the draft PR and
+run the documented checklist on a disposable supported Apple-silicon Mac,
+including `npm --prefix openclaw/administrateme run test:live:mac` with the
+exact source checkout and explicit lab guard. That is a genuine required human
+action, not a hidden Gate 5 fixture claim.
 
-No credential or human action is required to reproduce the fixture and process
-gate. Before any family-Mac deployment, a maintainer must review the draft PR
-and run `npm --prefix openclaw/administrateme run test:live:mac` on a disposable
-supported macOS lab with a Node version satisfying the exact source engine, the exact OpenClaw source checkout,
-`OPENCLAW_SOURCE_DIR`, and explicit `ADMINME_LIVE_GATE=1`. The script links the
-plugin, inspects its live runtime, restarts the Gateway, and requires deep RPC
-health. Do not reinterpret fixture success as this live result.
+## Exact credential-free command
+
+```bash
+./bootstrap/install.sh --dry-run --fixture two-adult-one-child --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
+```
 
 ## Exact next phase
 
-**Phase 5 is only the member-owned bridge-to-private-searchable-knowledge
+**Phase 6 is only the member-owned bridge-to-private-searchable-knowledge
 slice.**
 
 Make `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` pass
@@ -106,7 +112,6 @@ private `member_knowledge`, permitted non-privileged vector representation,
 member/child/ambient/cross-owner denial, correction history, replay
 equivalence, and two-instance isolation.
 
-Do not reopen the Gate 4 OpenClaw boundary, add optional providers, redesign
-the console, create another process, introduce a scheduler/model router, or
-broaden conversation mirroring unless Phase 5 exposes a concrete prerequisite
-defect.
+Do not reopen Gate 5 paths, replace fixed script names, add a central process,
+activate live providers, redesign the console, or broaden OpenClaw conversation
+mirroring unless Phase 6 exposes a concrete prerequisite defect.

@@ -2,6 +2,19 @@
 
 A household chief-of-staff platform built on OpenClaw. Event-sourced, projection-based, multi-member, privacy-aware.
 
+## Mac mini bootstrap and operations
+
+Gate 5 provides stable, rerunnable operator commands under `bootstrap/` for
+install, Doctor, start, stop, status, encrypted backup, and rollback-safe
+restore. The exact credential-free Phase-A rehearsal is:
+
+```bash
+./bootstrap/install.sh --dry-run --fixture two-adult-one-child --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
+```
+
+This does not activate the future family Mac or claim any live provider.
+Read `docs/refactor/MAC-MINI-OPERATIONS.md` before using the package.
+
 ## Credential-free canonical demo
 
 From the repository root, run:

@@ -1,6 +1,6 @@
 # Constitutional crosswalk
 
-Gate 4 implementation evidence (2026-07-30): AC-03 still proves the communication/commitment slice, and AC-12's fixture/process portion now proves the current native OpenClaw package, four seams, actor boundary, dashboard, approvals, exact-once outcomes, and degraded/restart behavior. The authoritative tests are `tests/acceptance/test_communication_commitment_vertical_slice.py` and `tests/acceptance/test_openclaw_native_seam.py`; AC-04 member-private knowledge is Phase 5.
+Gate 5 implementation evidence (2026-08-03): AC-03 and AC-12 remain intact. AC-01/15 now prove the encrypted ten-section bootstrap, fixed scripts, Doctor canonical loop, user launchd, secure references, backup/restore replay, and bridge enrollment restrictions. The authoritative new process test is `tests/acceptance/test_macos_bootstrap_operations.py`; AC-04 member-private knowledge is Phase 6.
 
 No row may be removed merely because its current implementation is absent. A future semantic change updates the row, governing ADR, evidence, and executable gate in the same PR.
 
@@ -67,7 +67,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C043 | Four built-in persona archetypes and compiled voice/theme boundaries | BUILD “4 built-in personas”; EXAMPLES §7 | no built-in persona directories/compiler | PRESERVE; sanitize exemplar | AC-17 |
 | C044 | Progressive capability revelation, explicit empty/disabled/degraded states | Selected Vellum patterns; HTML/BUILD UI | mock demonstrates some states; runtime absent | MODERNIZE | AC-14, AC-18 |
 | C045 | Evidence-rich activity; notification signal/decision/delivery separation | Selected Vellum patterns; BUILD events | partial event types/pipelines | MODERNIZE | AC-03, AC-18 |
-| C046 | Capability registry and useful Doctor | BUILD pack/bootstrap/final checks; selected Vellum pattern | partial registry; no useful composed Doctor | MODERNIZE | AC-01, AC-14 |
+| C046 | Capability registry and useful Doctor | BUILD pack/bootstrap/final checks; selected Vellum pattern | Gate 5 Doctor checks pins, encryption/migrations, exact projections/checkpoints, workbooks, adapters, bridge/launchd/backup/observation, and the canonical round trip with a safe JSON export | MODERNIZE COMPLETE FOR BOOTSTRAP | AC-01, AC-14 |
 | C047 | Do not import Vellum runtime/memory/scheduler/workflow/gateway/builder | Refactor contract reconciliation | no Vellum runtime dependency found | PRESERVE prohibition | AC-22 |
 
 ## OpenClaw, LLM, privacy, and governance
@@ -110,14 +110,14 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C076 | Responsive/accessibility behavior | BUILD L5; HTML visual contract | exact reference rendered at desktop/narrow viewports with keyboard tab activation; production app/tests absent | PRESERVE | AC-18 |
 | C077 | Quick capture/voice ingest/triage retired; Knowledge read surfaces remain | ARCH §9/D17 overrides older BUILD/HTML | product stub still claims old flow | SUPERSEDE old mutations | AC-04, AC-18 |
 | C078 | One central Python process plus pinned OpenClaw; product ownership/routes compatible | v2 contract reconciles MENTAL/BUILD multi-service ports | only bridge API implemented; no composition root | MODERNIZE | AC-02, AC-19 |
-| C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | prose/cron/order YAML only | SUPERSEDE nine-count; PRESERVE 10 | AC-01, AC-21 |
-| C080 | Bootstrap resumable, idempotent, least-privilege, secret-safe, observation-first | BUILD bootstrap; DIAGRAMS state machine; FIELD install | implementation absent | PRESERVE | AC-01, AC-21 |
+| C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | Gate 5 encrypted state machine implements all ten sections and explicit non-Apple skip | SUPERSEDE nine-count; PRESERVE 10 COMPLETE | AC-01, AC-21 |
+| C080 | Bootstrap resumable, idempotent, least-privilege, secret-safe, observation-first | BUILD bootstrap; DIAGRAMS state machine; FIELD install | Gate 5 version/input-digest journal, Keychain references, user LaunchAgents, observation briefing, interruption/resume and rollback tests | PRESERVE COMPLETE FOR INSTALLER | AC-01, AC-21 |
 | C081 | Phase A disposable lab; Phase B only after reviewed merge | FIELD deployment; BUILD phases; v2 contract | process rule only | PRESERVE | AC-21 |
-| C082 | Backup/restore, migration/upcasters, degraded operation | BUILD final checks; FIELD recovery; DIAGRAMS | schema/upcaster primitives partial; end-to-end proof absent | PRESERVE | AC-14, AC-15, AC-20 |
+| C082 | Backup/restore, migration/upcasters, degraded operation | BUILD final checks; FIELD recovery; DIAGRAMS | Gate 5 implements authenticated backup, staging validation, rollback copy, 13-projection/workbook replay; broader legacy migration/degraded matrices remain | PRESERVE/HARDEN PARTIAL | AC-14, AC-15, AC-20 |
 | C083 | Static tenant-identity and instance-path scans | BUILD security/final tree; EXAMPLES tenant warning | invariant script has some checks; named identity canary absent | PRESERVE | AC-16 |
 | C084 | Two-instance isolation canary | BUILD multi-tenant rules; v2 contract | scoped unit tests, no two-live-instance process test | PRESERVE | AC-16 |
 | C085 | Optional provider deferral only | BUILD integrations/options; SEQ roadmap | several providers unbuilt | DEFER only CalDAV/Drive/optional channels/providers | AC-22 |
-| C086 | Clean macOS lab rehearsal before family install | FIELD phases; BUILD bootstrap; v2 contract | not performed on Windows Gate 1 host | PRESERVE | AC-21 |
+| C086 | Clean macOS lab rehearsal before family install | FIELD phases; BUILD bootstrap; v2 contract | Gate 5 supplies macOS CI/rehearsal scripts and a live checklist; real grants and family activation remain unclaimed | PRESERVE IMPLEMENTED CONTRACT; LIVE EVIDENCE PENDING | AC-21 |
 | C087 | Prompt sequence is historical ordering, not current truth | SEQ entire roadmap versus merged baseline and v2 ADRs | main stops around 11b-ii-β-β; later prompts absent | SUPERSEDE execution order; preserve dependency evidence | AC-02 |
 | C088 | Reference examples preserve typed pack shape, tests, version/provenance, not stale APIs or tenant data | EXAMPLES preamble and §§1–7 | many pack shapes implemented; examples contain exemplar data | MODERNIZE/sanitize | AC-16, AC-17 |
 | C089 | Field manual workflows remain operable through v2 UX | FIELD daily/weekly/admin/recovery workflows | no running console/product APIs | PRESERVE | AC-03, AC-06, AC-18, AC-20 |

@@ -1,6 +1,6 @@
 # Bootstrap and topology contract
 
-Gate 4 realization: the canonical demo remains credential-free, while `openclaw/administrateme/` supplies the one native external plugin. The plugin uses only an authenticated `/api/openclaw/v1/` loopback boundary; it has no event-log key, provider credential, household authorization token, generic transcript store, or scheduler. Fixture validation on Windows does not replace the guarded disposable-macOS live gate.
+Gate 5 realization: `bootstrap/` now implements the ten-section encrypted journal, fixed operator scripts, Keychain reference boundary, user LaunchAgents, credential-free Doctor round trip, encrypted backup/restore, member-bound bridge packages, and pre-replacement upgrade validation. Windows process evidence and the macOS CI contract do not replace the guarded disposable-Apple-silicon live gate or authorize family-Mac activation.
 
 ## Deployment boundary
 
@@ -68,6 +68,6 @@ Observation begins before any connector/action becomes live and remains active f
 
 Release requires fresh install, interrupted resume at every section boundary, repeat no-op, changed-input reconciliation, per-section rollback, corrupted-state fail-closed, secret scan, observation proof, backup and bare-machine restore, uninstall/disable without data destruction, one Apple-member bridge and kid-restriction rehearsal, and a two-instance parallel canary. The clean rehearsal is on a disposable macOS host; Windows results do not substitute.
 
-## Gate 2 implementation status
+## Gate 5 implementation status
 
-The central runtime now owns one SQLCipher event log, one durable bus, one typed commit-before-notify writer, thirteen projections, reactive pipelines, adapter/xlsx lifecycles, product namespaces, bridge ingest, and system readiness/liveness. Startup unwinds partially opened resources on failure. Shutdown first rejects new writes, then drains producers and consumers within bounds before closing projection stores, bus state, and the encrypted log. The ten-section installer, macOS rehearsal, browser assets, and full Doctor remain later gates; they are not falsely reported as runtime-ready capabilities.
+The central runtime foundation remains unchanged. Gate 5 adds a real installer and operations layer without another central application process. Section 1 fails before instance mutation; completed section versions/input digests are idempotent; interrupted sections resume from encrypted state. Doctor checks exact pins, architecture, loopback ports, SQLCipher/migrations, 13 projections, adapter categories, launchd, mappings, observation, disk/backup, and the canonical production-composition proof. Backup authenticates every staged file and proves replay before replacement. Live provider success is never inferred from fixture state.

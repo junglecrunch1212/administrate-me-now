@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-08-03",
+  "macos": {
+    "supported_majors": [14, 15, 26],
+    "preferred_major": 26,
+    "architecture": "arm64"
+  },
+  "python": {
+    "compatible": ">=3.11,<3.12",
+    "formula": "python@3.11",
+    "lockfile": "poetry.lock"
+  },
+  "node": {
+    "compatible": ">=22.22.3,<23",
+    "preferred": "22.23.1",
+    "formula": "node@22"
+  },
+  "bun": {
+    "required": false
+  },
+  "openclaw": {
+    "version": "2026.7.2",
+    "commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
+    "plugin_api": "2026.7.2",
+    "gateway_port": 18789
+  },
+  "administrateme": {
+    "runtime_port": 3330,
+    "plugin_package_version": "2.0.0-gate4"
+  },
+  "sqlcipher": {
+    "compatible": ">=4.12,<5",
+    "python_distribution": "sqlcipher3",
+    "python_version": "0.6.2"
+  },
+  "package_managers": {
+    "homebrew": ">=4.6,<6",
+    "poetry": "2.2.1",
+    "npm": ">=10.9,<11"
+  }
+}
