@@ -82,8 +82,7 @@ def all_active(
     """No status field on recurrences — all rows are active. Ordered by
     next_occurrence ascending."""
     rows = conn.execute(
-        "SELECT * FROM recurrences WHERE tenant_id = ? "
-        "ORDER BY next_occurrence ASC",
+        "SELECT * FROM recurrences WHERE tenant_id = ? ORDER BY next_occurrence ASC",
         (session.tenant_id,),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])

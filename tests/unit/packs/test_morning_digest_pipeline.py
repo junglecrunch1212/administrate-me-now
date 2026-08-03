@@ -305,7 +305,12 @@ async def test_validation_guard_passes_with_only_real_ids() -> None:
     env = digest_events[0].envelope
     assert env.payload["validation_failed"] is False
     assert env.payload["body_text"].startswith("Today: standup")
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
+    assert len(signals) == len(decisions) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +319,10 @@ async def test_validation_guard_passes_with_only_real_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound_but_emits_digest() -> None:
-    """Observation mode active → outbound() suppressed → digest.composed
-    emits with delivered=false; observation.suppressed lands in the log."""
+async def test_observation_mode_active_suppresses_notification_but_emits_digest() -> (
+    None
+):
+    """Observation mode produces a suppress decision and no fake delivery."""
     log = _FakeEventLog()
     pipeline = _build_pipeline_with_seeded_state()
     ctx = _make_ctx(
@@ -334,10 +340,12 @@ async def test_observation_mode_active_suppresses_outbound_but_emits_digest() ->
     assert len(digest_events) == 1
     assert digest_events[0].envelope.payload["delivered"] is False
     assert digest_events[0].envelope.payload["validation_failed"] is False
-    suppressed_events = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
     ]
-    assert len(suppressed_events) == 1
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
+    assert decisions[0].envelope.payload["reasons"] == ["observation_mode_active"]
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +354,7 @@ async def test_observation_mode_active_suppresses_outbound_but_emits_digest() ->
 
 
 @pytest.mark.asyncio
-async def test_happy_path_emits_external_sent_and_digest_composed() -> None:
+async def test_happy_path_emits_notification_intent_and_digest_composed() -> None:
     log = _FakeEventLog()
     pipeline = _build_pipeline_with_seeded_state()
     ctx = _make_ctx(
@@ -360,11 +368,17 @@ async def test_happy_path_emits_external_sent_and_digest_composed() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("member-a", "2026-05-05", ctx)
-    sent_events = [c for c in log.calls if c.envelope.type == "external.sent"]
+    signal_events = [
+        c for c in log.calls if c.envelope.type == "notification.signal.raised"
+    ]
+    decision_events = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
     digest_events = [c for c in log.calls if c.envelope.type == "digest.composed"]
-    assert len(sent_events) == 1
+    assert len(signal_events) == len(decision_events) == 1
     assert len(digest_events) == 1
-    assert digest_events[0].envelope.payload["delivered"] is True
+    assert digest_events[0].envelope.payload["delivered"] is False
+    assert signal_events[0].envelope.payload["category"] == "digest"
 
 
 # ---------------------------------------------------------------------------

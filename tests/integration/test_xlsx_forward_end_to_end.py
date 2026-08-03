@@ -189,7 +189,7 @@ async def test_xlsx_forward_end_to_end(rig: dict[str, Any]) -> None:
                     "linked_id": "hh",
                     "kind": "maintenance",
                     "rrule": "FREQ=MONTHLY",
-                    "next_occurrence": f"2026-05-0{i+1}T09:00:00Z",
+                    "next_occurrence": f"2026-05-0{i + 1}T09:00:00Z",
                 },
             )
         )
@@ -217,7 +217,7 @@ async def test_xlsx_forward_end_to_end(rig: dict[str, Any]) -> None:
                     "flow_id": f"f{i}",
                     "amount_minor": 1000 + i * 100,
                     "currency": "USD",
-                    "occurred_at": f"2026-04-{20+i:02d}T10:00:00Z",
+                    "occurred_at": f"2026-04-{20 + i:02d}T10:00:00Z",
                     "kind": "paid",
                     "linked_account": f"a{i % 2}",
                     "source_adapter": "plaid",
@@ -259,8 +259,8 @@ async def test_xlsx_forward_end_to_end(rig: dict[str, Any]) -> None:
                     "external_event_id": f"ext{i}",
                     "calendar_id": "cal1",
                     "summary": f"Event {i}",
-                    "start": f"2026-04-25T{10+i:02d}:00:00Z",
-                    "end": f"2026-04-25T{11+i:02d}:00:00Z",
+                    "start": f"2026-04-25T{10 + i:02d}:00:00Z",
+                    "end": f"2026-04-25T{11 + i:02d}:00:00Z",
                 },
             )
         )
@@ -336,9 +336,9 @@ async def test_xlsx_forward_end_to_end(rig: dict[str, Any]) -> None:
     # xlsx_workbooks EXCEPT xlsx.regenerated.
     for e in xlsx_events:
         if e["source_adapter"] == "xlsx_workbooks":
-            assert (
-                e["type"] == "xlsx.regenerated"
-            ), f"xlsx projection emitted non-system event: {e['type']}"
+            assert e["type"] == "xlsx.regenerated", (
+                f"xlsx projection emitted non-system event: {e['type']}"
+            )
 
     # Third regenerate with no intervening events → semantically equal
     # (compared cell-by-cell on the Tasks sheet).

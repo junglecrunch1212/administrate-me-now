@@ -5,10 +5,9 @@
 # per ADMINISTRATEME_BUILD.md §L1 — the adapter resolves these at start()
 # via adminme.lib.crypto. NEVER paste the raw token value here.
 #
-# The bootstrap wizard (prompt 16) will own creating the 1Password items
-# and Link-token flow; the example values below are placeholders that
-# match the JSON-schema patterns and let an operator hand-edit the config
-# until the wizard ships.
+# Bootstrap creates the secure references and Link flow. The tenant-neutral
+# references below document the schema for a deterministic configuration file;
+# they are not live credentials.
 #
 # sensitivity_floor is omitted intentionally — the pack hardcodes it to
 # `privileged` per SYSTEM_INVARIANTS.md §6 invariant 10. If present, it
@@ -27,4 +26,4 @@ institution_id: ins_109508
 
 # Optional — defaults apply if omitted.
 dedupe_window_minutes: 90
-backstop_poll_cron: "0 4 * * *"
+backstop_poll_interval_s: 86400

@@ -41,7 +41,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -182,9 +181,7 @@ async def test_money_flow_manually_deleted_sets_deleted_at(
     bus = rig["bus"]
     runner = rig["runner"]
 
-    await log.append(
-        _envelope("money_flow.manually_added", _manually_added_payload())
-    )
+    await log.append(_envelope("money_flow.manually_added", _manually_added_payload()))
     last = await log.append(
         _envelope(
             "money_flow.manually_deleted",
@@ -312,7 +309,9 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     await runner.rebuild("money")
 
     conn = runner.connection("money")
-    post = [tuple(r) for r in conn.execute("SELECT * FROM money_flows ORDER BY flow_id")]
+    post = [
+        tuple(r) for r in conn.execute("SELECT * FROM money_flows ORDER BY flow_id")
+    ]
     assert pre == post
 
 
@@ -327,17 +326,13 @@ async def test_flows_in_range_excludes_deleted(rig: dict[str, Any]) -> None:
     await log.append(
         _envelope(
             "money_flow.manually_added",
-            _manually_added_payload(
-                flow_id="fm-a", occurred_at="2026-04-10T12:00:00Z"
-            ),
+            _manually_added_payload(flow_id="fm-a", occurred_at="2026-04-10T12:00:00Z"),
         )
     )
     await log.append(
         _envelope(
             "money_flow.manually_added",
-            _manually_added_payload(
-                flow_id="fm-b", occurred_at="2026-04-15T12:00:00Z"
-            ),
+            _manually_added_payload(flow_id="fm-b", occurred_at="2026-04-15T12:00:00Z"),
         )
     )
     last = await log.append(
@@ -354,7 +349,10 @@ async def test_flows_in_range_excludes_deleted(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    rows = flows_in_range(conn, _S("tenant-a"), start_iso="2026-04-01T00:00:00Z",
+    rows = flows_in_range(
+        conn,
+        _S("tenant-a"),
+        start_iso="2026-04-01T00:00:00Z",
         end_iso="2026-04-30T23:59:59Z",
     )
     ids = {r["flow_id"] for r in rows}
@@ -439,8 +437,7 @@ async def test_category_totals_excludes_deleted_and_null(
     await _wait_for_checkpoint(bus, "projection:money", last)
 
     conn = runner.connection("money")
-    totals = category_totals(conn, _S("tenant-a"), since_iso="2026-04-01T00:00:00Z"
-    )
+    totals = category_totals(conn, _S("tenant-a"), since_iso="2026-04-01T00:00:00Z")
     assert totals == {"groceries": 3000, "transport": 5000}
 
 

@@ -68,7 +68,9 @@ class IngestClient:
     async def submit_batch(self, envelopes: list[dict[str, Any]]) -> SubmitBatchResult:
         all_ids: list[str] = []
         chunks_sent = 0
-        for chunk_offset, start in enumerate(range(0, len(envelopes), BATCH_CHUNK_SIZE)):
+        for chunk_offset, start in enumerate(
+            range(0, len(envelopes), BATCH_CHUNK_SIZE)
+        ):
             chunk = envelopes[start : start + BATCH_CHUNK_SIZE]
             result = await self._post_with_retry(
                 url=f"{self._endpoint}/api/bridge/ingest/batch",
@@ -87,7 +89,9 @@ class IngestClient:
             all_ids.extend(result.event_id or [])
         return SubmitBatchResult(ok=True, event_ids=all_ids, chunks_sent=chunks_sent)
 
-    async def _post_with_retry(self, *, url: str, payload: Any, mode: str) -> SubmitResult:
+    async def _post_with_retry(
+        self, *, url: str, payload: Any, mode: str
+    ) -> SubmitResult:
         backoff = INITIAL_BACKOFF_S
         last_error: str | None = None
         last_status = 0
@@ -107,7 +111,9 @@ class IngestClient:
             if 200 <= resp.status_code < 300:
                 data = resp.json()
                 if mode == "batch":
-                    return SubmitResult(True, data.get("event_ids", []), resp.status_code)
+                    return SubmitResult(
+                        True, data.get("event_ids", []), resp.status_code
+                    )
                 return SubmitResult(True, data.get("event_id"), resp.status_code)
             if 400 <= resp.status_code < 500 and resp.status_code != 429:
                 return SubmitResult(
@@ -123,7 +129,9 @@ class IngestClient:
             if attempt < MAX_ATTEMPTS:
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, MAX_BACKOFF_S)
-        return SubmitResult(False, None, last_status, last_error or "max_attempts_exceeded")
+        return SubmitResult(
+            False, None, last_status, last_error or "max_attempts_exceeded"
+        )
 
 
 __all__ = [

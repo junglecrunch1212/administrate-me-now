@@ -76,7 +76,9 @@ class ServiceManager:
         arguments = data.get("ProgramArguments") or []
         rendered = json.dumps(arguments).lower()
         if any(word in rendered for word in ("secret", "token", "password", "key_hex")):
-            raise RuntimeError(f"launchd arguments contain a forbidden secret hint: {path.name}")
+            raise RuntimeError(
+                f"launchd arguments contain a forbidden secret hint: {path.name}"
+            )
         return path
 
     def start(self) -> ServiceStatus:
@@ -171,11 +173,19 @@ class ServiceManager:
                 overall = "healthy"
             else:
                 overall = "degraded"
-            return ServiceStatus(overall, runtime, openclaw, observation, "fixture launchd state")
+            return ServiceStatus(
+                overall, runtime, openclaw, observation, "fixture launchd state"
+            )
         runtime_loaded = self._launchctl_loaded(RUNTIME_LABEL)
         openclaw_loaded = self._launchctl_loaded(OPENCLAW_LABEL)
         if not runtime_loaded and not openclaw_loaded:
-            return ServiceStatus("stopped", "stopped", "stopped", observation, "both services are unloaded")
+            return ServiceStatus(
+                "stopped",
+                "stopped",
+                "stopped",
+                observation,
+                "both services are unloaded",
+            )
         runtime = self._runtime_health() if runtime_loaded else "stopped"
         openclaw = "running" if openclaw_loaded else "stopped"
         if runtime in {"healthy", "observation_only"} and openclaw == "running":
@@ -184,4 +194,6 @@ class ServiceManager:
             overall = "failed"
         else:
             overall = "degraded"
-        return ServiceStatus(overall, runtime, openclaw, observation, "live launchd and loopback health")
+        return ServiceStatus(
+            overall, runtime, openclaw, observation, "live launchd and loopback health"
+        )

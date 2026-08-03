@@ -499,9 +499,9 @@ async def test_supervisor_parses_real_repo_channels_yaml_has_reminders_entry(
         (a for a in adapters_entries if a.get("kind") == "reminders-apple-eventkit"),
         None,
     )
-    assert (
-        rem is not None
-    ), "config/channels.yaml is missing the reminders-apple-eventkit entry"
+    assert rem is not None, (
+        "config/channels.yaml is missing the reminders-apple-eventkit entry"
+    )
     assert rem["family"] == "reminders"
     assert rem["sensitivity_floor"] == "normal"
     rem_config = rem["config"]

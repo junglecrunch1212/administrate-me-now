@@ -611,7 +611,7 @@ async def test_scope_canary_privileged_drops_for_non_owner(
     assert row is None
 
     raw = conn.execute(
-        "SELECT count(*) FROM commitments " "WHERE tenant_id = ? AND commitment_id = ?",
+        "SELECT count(*) FROM commitments WHERE tenant_id = ? AND commitment_id = ?",
         ("tenant-a", "c1"),
     ).fetchone()
     assert raw[0] == 1

@@ -24,12 +24,10 @@ with ``direction="outbound"`` and ``causation_id`` set to the upstream
 event id — round-trip traceability per BUILD.md APPLE REMINDERS
 BIDIRECTIONAL §"Outbound write cadence".
 
-The inbound poll (c3) fetches reminders via ``fetch_reminders`` every
-30s, applies the never-sync filter at the iCloud boundary, dedupes by
-``remind_id`` against a constructor-injected resolver (the ``reminders``
-projection slice in production; a permissive ``None``-returner in tests
-and Phase A when the projection's writer pipeline is still deferred —
-see prompt 11c §3 deferred-watch). Genuinely-new or modified reminders
+The inbound watcher fetches reminders via ``fetch_reminders`` every 30s,
+applies the never-sync filter at the iCloud boundary, and dedupes by
+``remind_id`` against a constructor-injected resolver backed by the lists
+projection in production. Genuinely-new or modified reminders
 emit ``reminder.list_item.synced`` with ``direction="inbound"`` and
 ``causation_id=None`` (iCloud is the source — no AdministrateMe event
 triggered the emission, so there's no upstream id to chain). Cursor
@@ -55,8 +53,8 @@ financial adapter.
 Per ``[§8.2, D6]``: no LLM SDK import in this module. Channel
 transport is OpenClaw's job [§8 invariant 3]; this adapter only emits
 typed events. ``[§7.3, D17]``: adapters never write projections. The
-``reminders`` projection slice is READ-ONLY from c3's inbound dedupe
-predicate; the writer pipeline ships in a future prompt.
+``lists`` projection slice is READ-ONLY from the inbound dedupe predicate;
+event-driven projection handlers own writes.
 """
 
 # [§8.2, D6] no LLM SDK imports under packs/adapters/ — channel
@@ -239,8 +237,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     Class attributes satisfy the ``Adapter`` Protocol's required fields.
     ``sensitivity_floor`` is hardcoded ``"normal"`` per [§6 invariant
     10]; any config attempt to set ``"privileged"`` raises at
-    construction. Reminders adapters cannot auto-elevate — that's a
-    deliberate operator decision for a future prompt; finer-grained
+    construction. Reminders adapters cannot auto-elevate; finer-grained
     item-level privacy lives in the never-sync predicate, not the floor.
 
     The supervisor instantiates one of these per Reminders entry in
@@ -252,8 +249,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # [§6 invariant 10, D11 (Reminders posture)]: sensitivity floor
     # hardcoded at the class level. Reminders adapters cannot be
     # ELEVATED to ``privileged`` via config — adapters never
-    # auto-elevate; that's a deliberate operator decision for a future
-    # prompt. JSON-schema rejects most malformed inputs at load time;
+    # auto-elevate. JSON-schema rejects most malformed inputs at load time;
     # ``__init__`` is the defense-in-depth runtime check.
     name: ClassVar[str] = "reminders-apple-eventkit"
     family: ClassVar[Literal["reminders", "calendaring", "contacts"]] = "reminders"
@@ -281,22 +277,16 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     write_capabilities: ClassVar[list[str]] = ["create_reminder"]
 
     # [memo 05 §2.5, PM-35] projection-row column distinguishing
-    # per-member vs shared rows on the future ``lists`` / ``reminders``
-    # projection (Cohort D 11f). Single-deployment central in 11r-c.
+    # per-member vs shared rows on the ``lists`` projection.
     sharing_model_discriminator: ClassVar[str] = "owner_member_id"
 
     PACK_ID: str = "adapter:reminders-apple-eventkit"
 
     OUTBOUND_INTERVAL_S: int = _DEFAULT_OUTBOUND_INTERVAL_S
-    """In-process outbound write cadence. ``pack.yaml``'s ``*/1 * * * *``
-    cron is a heartbeat; the 30s sub-cadence is the active outbound
-    rate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Outbound write
-    cadence"."""
+    """Provider-watch outbound cadence declared by the pack manifest."""
 
     INBOUND_INTERVAL_S: int = _DEFAULT_INBOUND_INTERVAL_S
-    """In-process inbound poll cadence (c3). Same rationale as the
-    outbound: pack.yaml's cron is a heartbeat, the 30s sub-cadence is
-    the active polling rate per §"Polling cadence"."""
+    """Provider-watch inbound polling cadence."""
 
     CURSOR_MILESTONE_EVENTS: int = 100
     CURSOR_MILESTONE_INTERVAL_S: int = 300
@@ -326,8 +316,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # [§6 invariant 10] re-assert the class-level floor against the
         # resolved config. Reminders does NOT allow raising to
         # ``privileged`` via config (unlike Gmail) because adapter-level
-        # elevation would be a deliberate operator decision for a
-        # future prompt — finer-grained item-level privacy lives in the
+        # elevation is prohibited; finer-grained item-level privacy lives in the
         # never-sync predicate, not the floor.
         configured_floor = self._config.get("sensitivity_floor", "normal")
         if configured_floor != "normal":

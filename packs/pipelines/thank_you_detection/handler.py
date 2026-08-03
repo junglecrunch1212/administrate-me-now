@@ -60,8 +60,8 @@ parties-DB connection inside ``handle()`` and closes via context
 manager (10a connection-management note); the runner does NOT own
 per-pipeline DB connections.
 
-The five inlined helpers (`_classify_identifier`, `_load_config`,
-`_thresholds_for_member`, `_new_commitment_id`, `_emit_suppressed`)
+The inlined helpers (`_classify_identifier`, `_load_config`,
+`_thresholds_for_member`, `_commitment_id`, `_emit_suppressed`)
 are duplicated from ``commitment_extraction/handler.py`` rather than
 shared. Per `docs/02-split-memo-10b-ii.md` §10b-ii-β the no-shared-
 helper-yet stance holds for two pipelines; a future refactor extracts
@@ -70,8 +70,8 @@ them once a third pipeline needs them.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import secrets
 from pathlib import Path
 from typing import Any
 
@@ -133,8 +133,9 @@ def _classify_identifier(payload: dict[str, Any]) -> tuple[str, str]:
     return kind, value_normalized
 
 
-def _new_commitment_id() -> str:
-    return f"cmt_{secrets.token_hex(11)}"
+def _commitment_id(source_event_id: str) -> str:
+    digest = hashlib.sha256(source_event_id.encode()).hexdigest()[:22]
+    return f"cmt_{digest}"
 
 
 def _load_config(pack_root: Path) -> dict[str, Any]:
@@ -149,8 +150,7 @@ def _load_config(pack_root: Path) -> dict[str, Any]:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"thank_you_detection config at {config_path} did not parse "
-            f"to a mapping"
+            f"thank_you_detection config at {config_path} did not parse to a mapping"
         )
     return data
 
@@ -199,6 +199,13 @@ class ThankYouDetectionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        prior_by_causation = getattr(ctx.event_log, "get_by_causation", None)
+        if prior_by_causation is not None:
+            prior = await prior_by_causation(source_event_id)
+            if any(
+                item.get("source_adapter") == "thank_you_detection" for item in prior
+            ):
+                return
         if event.get("sensitivity") == "privileged":
             await self._emit_suppressed(
                 event=event,
@@ -320,8 +327,7 @@ class ThankYouDetectionPipeline:
             )
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
-                "thank_you_detection classify failure (%s); emitting "
-                "defensive default",
+                "thank_you_detection classify failure (%s); emitting defensive default",
                 type(exc).__name__,
             )
             await self._emit_suppressed(
@@ -378,8 +384,7 @@ class ThankYouDetectionPipeline:
             )
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
-                "thank_you_detection extract failure (%s); emitting "
-                "defensive default",
+                "thank_you_detection extract failure (%s); emitting defensive default",
                 type(exc).__name__,
             )
             await self._emit_suppressed(
@@ -404,7 +409,7 @@ class ThankYouDetectionPipeline:
         suggested_text = str(extract_output.get("suggested_text", ""))[:500]
 
         proposed_payload: dict[str, Any] = {
-            "commitment_id": _new_commitment_id(),
+            "commitment_id": _commitment_id(source_event_id),
             "kind": "other",
             "owed_by_member_id": receiving_member_id,
             "owed_to_party_id": str(
@@ -419,11 +424,8 @@ class ThankYouDetectionPipeline:
             "classify_reasons": classify_reasons,
         }
 
-        # TODO(prompt-XX): dedupe against open thank-you commitments
-        # referencing this thread within dedupe_window_hours; currently
-        # always emits. Requires reading the `commitments` projection,
-        # which has its own seam considerations beyond this prompt's
-        # scope per docs/02-split-memo-10b-ii.md §10b-ii-β.
+        # Redelivery is idempotent by source event. Cross-message thread
+        # similarity is intentionally not guessed into a duplicate fact.
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],

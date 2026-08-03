@@ -8,7 +8,11 @@ from pathlib import Path
 import pytest
 
 from adminme.lib.skill_runner import pack_loader
-from adminme.lib.skill_runner.pack_loader import PackLoadError, invalidate_cache, load_pack
+from adminme.lib.skill_runner.pack_loader import (
+    PackLoadError,
+    invalidate_cache,
+    load_pack,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CLASSIFY_TEST_PACK = REPO_ROOT / "packs" / "skills" / "classify_test"
@@ -73,7 +77,9 @@ def test_invalidate_cache_forces_reload() -> None:
 def test_malformed_pack_yaml_raises_pack_load_error(tmp_path: Path) -> None:
     bad = tmp_path / "bad_pack"
     (bad / "schemas").mkdir(parents=True)
-    (bad / "pack.yaml").write_text(": this : is : not : valid : yaml :", encoding="utf-8")
+    (bad / "pack.yaml").write_text(
+        ": this : is : not : valid : yaml :", encoding="utf-8"
+    )
     (bad / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
     (bad / "schemas" / "input.schema.json").write_text(
         json.dumps({"type": "object"}), encoding="utf-8"

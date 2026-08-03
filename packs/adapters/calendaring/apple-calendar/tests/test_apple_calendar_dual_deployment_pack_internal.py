@@ -99,7 +99,9 @@ def test_pack_manifest_declares_subkind_state_mirror_and_deployment_targets() ->
     assert capabilities[0]["runtime"] == "central"
 
 
-def test_config_schema_accepts_deployment_target_central_and_bridge_with_central_default() -> None:
+def test_config_schema_accepts_deployment_target_central_and_bridge_with_central_default() -> (
+    None
+):
     """Config schema pin (§7 c1 deliverable 2 + §1 item 2 + F-2).
 
     ``deployment_target`` is an OPTIONAL string enum
@@ -162,9 +164,9 @@ def test_pack_validator_accepts_dual_deployment_pack() -> None:
     # the literal phrase ``advisory_pending_retrofit`` in its message
     # (see adminme/lib/pack_registry/validator/base_class_conformance.py).
     retrofit_advisories = [
-        f for f in result.findings
-        if f.severity == "advisory"
-        and "advisory_pending_retrofit" in f.message
+        f
+        for f in result.findings
+        if f.severity == "advisory" and "advisory_pending_retrofit" in f.message
     ]
     assert retrofit_advisories == [], (
         "advisory_pending_retrofit must stay closed on β-β (β-α is "

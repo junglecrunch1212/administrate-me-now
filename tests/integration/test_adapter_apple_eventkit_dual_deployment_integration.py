@@ -394,7 +394,9 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     log: EventLog = central_rig["log"]
     ingest: IngestClient = central_rig["ingest"]
 
-    wrapper = AppleEventKitBridgeAdapter()
+    wrapper = AppleEventKitBridgeAdapter(
+        internal_config={"target_list_identifier": "test-list"}
+    )
     supervisor = BridgeSupervisor(
         config=_bridge_config(),
         ingest_client=ingest,

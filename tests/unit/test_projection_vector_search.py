@@ -44,7 +44,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -152,8 +151,7 @@ async def test_normal_embedding_lands_in_both_tables(rig: dict[str, Any]) -> Non
     await _wait_for_checkpoint(bus, "projection:vector_search", eid)
 
     conn = runner.connection("vector_search")
-    meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-hello world"
-    )
+    meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-hello world")
     assert meta is not None
     assert meta["linked_kind"] == "interaction"
     assert meta["embedding_dimensions"] == 1536
@@ -187,10 +185,8 @@ async def test_envelope_privileged_skipped(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", last)
 
     conn = runner.connection("vector_search")
-    priv = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-privileged text"
-    )
-    normal = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-normal text"
-    )
+    priv = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-privileged text")
+    normal = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-normal text")
     assert priv is None
     assert normal is not None
 
@@ -215,7 +211,8 @@ async def test_payload_privileged_skipped(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", last)
 
     conn = runner.connection("vector_search")
-    priv = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-payload privileged"
+    priv = get_embedding_meta(
+        conn, _S("tenant-a"), embedding_id="emb-payload privileged"
     )
     ok = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-follow up")
     assert priv is None
@@ -256,9 +253,7 @@ async def test_nearest_returns_matching_first(rig: dict[str, Any]) -> None:
 
     texts = ["alpha", "bravo", "charlie", "delta", "echo"]
     for t in texts:
-        await log.append(
-            _envelope("embedding.generated", _embedding_payload(t))
-        )
+        await log.append(_envelope("embedding.generated", _embedding_payload(t)))
     last = await log.latest_event_id()
     assert last is not None
     await bus.notify(last)
@@ -266,7 +261,10 @@ async def test_nearest_returns_matching_first(rig: dict[str, Any]) -> None:
 
     conn = runner.connection("vector_search")
     # Query with the "charlie" embedding — rank 1 must be emb-charlie.
-    rows = nearest(conn, _S("tenant-a"), query_vector=_fake_embedding("charlie"),
+    rows = nearest(
+        conn,
+        _S("tenant-a"),
+        query_vector=_fake_embedding("charlie"),
         k=5,
     )
     assert len(rows) == 5
@@ -280,9 +278,7 @@ async def test_nearest_excludes_privileged(rig: dict[str, Any]) -> None:
 
     # Add non-privileged rows.
     for t in ["a1", "a2", "a3"]:
-        await log.append(
-            _envelope("embedding.generated", _embedding_payload(t))
-        )
+        await log.append(_envelope("embedding.generated", _embedding_payload(t)))
     # Privileged (skipped at handler time — for this test we want to
     # confirm the nearest() query filter is still there as belt-and-
     # braces for any future path that bypasses the handler filter).
@@ -295,7 +291,10 @@ async def test_nearest_excludes_privileged(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", last)
 
     conn = runner.connection("vector_search")
-    rows = nearest(conn, _S("tenant-a"), query_vector=_fake_embedding("a1"),
+    rows = nearest(
+        conn,
+        _S("tenant-a"),
+        query_vector=_fake_embedding("a1"),
         k=3,
     )
     # All 3 land since none are privileged.
@@ -325,7 +324,8 @@ async def test_embeddings_for_link(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", eid)
 
     conn = runner.connection("vector_search")
-    meta = embeddings_for_link(conn, _S("tenant-a"), linked_kind="interaction", linked_id="int-1"
+    meta = embeddings_for_link(
+        conn, _S("tenant-a"), linked_kind="interaction", linked_id="int-1"
     )
     assert meta is not None
     assert meta["embedding_id"] == "e1"
@@ -341,9 +341,7 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
 
     # 20 normal embeddings + 3 privileged (skipped).
     for i in range(20):
-        await log.append(
-            _envelope("embedding.generated", _embedding_payload(f"n{i}"))
-        )
+        await log.append(_envelope("embedding.generated", _embedding_payload(f"n{i}")))
     for i in range(3):
         await log.append(
             _envelope(
@@ -360,13 +358,9 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     conn = runner.connection("vector_search")
     pre_meta = [
         tuple(r)
-        for r in conn.execute(
-            "SELECT * FROM embeddings_meta ORDER BY embedding_id"
-        )
+        for r in conn.execute("SELECT * FROM embeddings_meta ORDER BY embedding_id")
     ]
-    pre_idx_count = conn.execute(
-        "SELECT count(*) FROM vector_index"
-    ).fetchone()[0]
+    pre_idx_count = conn.execute("SELECT count(*) FROM vector_index").fetchone()[0]
     assert pre_idx_count == 20
     assert len(pre_meta) == 20
 
@@ -375,13 +369,9 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     conn = runner.connection("vector_search")
     post_meta = [
         tuple(r)
-        for r in conn.execute(
-            "SELECT * FROM embeddings_meta ORDER BY embedding_id"
-        )
+        for r in conn.execute("SELECT * FROM embeddings_meta ORDER BY embedding_id")
     ]
-    post_idx_count = conn.execute(
-        "SELECT count(*) FROM vector_index"
-    ).fetchone()[0]
+    post_idx_count = conn.execute("SELECT count(*) FROM vector_index").fetchone()[0]
     assert pre_meta == post_meta
     assert post_idx_count == 20
 
@@ -440,9 +430,7 @@ async def test_embedding_dimension_mismatch_drops(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", last)
 
     conn = runner.connection("vector_search")
-    bad_meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-bad"
-    )
-    good_meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-good"
-    )
+    bad_meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-bad")
+    good_meta = get_embedding_meta(conn, _S("tenant-a"), embedding_id="emb-good")
     assert bad_meta is None
     assert good_meta is not None

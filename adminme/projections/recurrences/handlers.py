@@ -25,16 +25,18 @@ from dateutil.rrule import rrulestr
 
 _log = logging.getLogger(__name__)
 
-_UPDATABLE_COLUMNS = frozenset({
-    "linked_kind",
-    "linked_id",
-    "kind",
-    "rrule",
-    "next_occurrence",
-    "lead_time_days",
-    "trackable",
-    "notes",
-})
+_UPDATABLE_COLUMNS = frozenset(
+    {
+        "linked_kind",
+        "linked_id",
+        "kind",
+        "rrule",
+        "next_occurrence",
+        "lead_time_days",
+        "trackable",
+        "notes",
+    }
+)
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:

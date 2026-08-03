@@ -38,6 +38,7 @@ PROJECTIONS = {
 REACTIVE_PIPELINES = {
     "pipeline:commitment_extraction",
     "pipeline:identity_resolution",
+    "pipeline:member_knowledge_indexing",
     "pipeline:noise_filtering",
     "pipeline:reward_dispatch",
     "pipeline:thank_you_detection",
@@ -58,7 +59,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
 def _bridge_envelope() -> dict[str, object]:
     return EventEnvelope(
         event_at_ms=1_780_000_000_000,
-        tenant_id="default",
+        tenant_id="tenant-instance",
         type="bridge.enrolled",
         schema_version=1,
         occurred_at="2026-05-28T12:00:00Z",

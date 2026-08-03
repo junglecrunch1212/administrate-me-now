@@ -156,9 +156,9 @@ def _assert_matches_expected(output: dict[str, Any], fixture: dict[str, Any]) ->
         assert output["suggested_medium"] == expected["suggested_medium"]
     must_include = [s.lower() for s in expected["reasons_must_include_any_of"]]
     rendered = " | ".join(str(r).lower() for r in output["reasons"])
-    assert any(
-        needle in rendered for needle in must_include
-    ), f"none of {must_include!r} in reasons {output['reasons']!r}"
+    assert any(needle in rendered for needle in must_include), (
+        f"none of {must_include!r} in reasons {output['reasons']!r}"
+    )
 
 
 async def _run_fixture(

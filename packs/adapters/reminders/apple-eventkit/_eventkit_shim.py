@@ -108,14 +108,10 @@ class NoopEKEventStore:
         )
 
     def save(self, reminder: EKReminderLike, *, commit: bool) -> None:
-        raise RuntimeError(
-            "NoopEKEventStore.save called without a real factory"
-        )
+        raise RuntimeError("NoopEKEventStore.save called without a real factory")
 
     def remove(self, reminder: EKReminderLike, *, commit: bool) -> None:
-        raise RuntimeError(
-            "NoopEKEventStore.remove called without a real factory"
-        )
+        raise RuntimeError("NoopEKEventStore.remove called without a real factory")
 
     def fetch_reminders(
         self, *, list_identifier: str | None = None
@@ -126,8 +122,7 @@ class NoopEKEventStore:
 
     def list_name_for_identifier(self, list_identifier: str) -> str:
         raise RuntimeError(
-            "NoopEKEventStore.list_name_for_identifier called without a "
-            "real factory"
+            "NoopEKEventStore.list_name_for_identifier called without a real factory"
         )
 
 

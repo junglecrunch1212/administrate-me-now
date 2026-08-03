@@ -877,8 +877,8 @@ def _max_sensitivity(values: Any) -> str:
 def _derive_session_key(ctx: SkillContext) -> str:
     """OpenClaw `sessionKey` derived from the AdministrateMe Session.
 
-    For 09a we mint a stable per-session key from auth_member + dm_scope.
-    The wizard prompt 16 will replace this with the configured main key.
+    The tenant, authenticated member, and DM scope form a stable isolation key;
+    no tenant identity or provider credential is embedded in platform code.
     """
     sess = ctx.session
     return f"adminme:{sess.tenant_id}:{sess.auth_member_id}:{sess.dm_scope}"

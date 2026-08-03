@@ -1,0 +1,17 @@
+{
+  "id": "ambient_entity",
+  "kind": "profile",
+  "version": "1.0.0",
+  "label": "Ambient entity",
+  "profile_format": "ambient",
+  "behavior": {
+    "available_minutes": 5,
+    "current_energy": "low",
+    "preferred_contexts": ["home"],
+    "quiet_hours": {"start": 0, "end": 24},
+    "nudge_penalty": 1000,
+    "recent_outcome_bias": 0
+  },
+  "reward_distribution": {"done": 1.0, "warm": 0.0, "delight": 0.0, "jackpot": 0.0},
+  "delivery_channel": "none"
+}

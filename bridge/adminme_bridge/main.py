@@ -1,8 +1,4 @@
-"""Bridge daemon entrypoint — async lifecycle for knowledge-source adapters.
-
-Mirrors ``adminme/daemons/adapter_supervisor.py`` but Cat-D-only and
-HTTP-emit. 11c-i ships the shell; the instantiate-from-PackHandle hook
-lands in 11c-ii."""
+"""Bridge daemon lifecycle for opt-in Cat-B and Cat-D connector packs."""
 
 from __future__ import annotations
 
@@ -16,12 +12,36 @@ from pathlib import Path
 from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
 from adminme_bridge.ingest_client import IngestClient
-from adminme_bridge.packs import PackHandle, discover_packs
+from adminme_bridge.packs import (
+    PackHandle,
+    PackLoadError,
+    discover_packs,
+    instantiate_pack,
+)
 
 
 DEFAULT_CONFIG_PATH = Path("~/.adminme-bridge/config.yaml").expanduser()
 
 logger = logging.getLogger(__name__)
+
+
+def configured_packs(config: BridgeConfig) -> list[PackHandle]:
+    """Combine installed packs with explicitly enabled built-in packs."""
+
+    installed = {
+        handle.name: handle for handle in discover_packs(config.resolved_packs_dir())
+    }
+    built_in_root = Path(__file__).parent / "connector_packs"
+    built_ins = {handle.name: handle for handle in discover_packs(built_in_root)}
+    enabled = set(config.enabled_packs) | set(config.pack_config)
+    unknown = enabled - (set(installed) | set(built_ins))
+    if unknown:
+        raise PackLoadError(f"configured bridge packs not found: {sorted(unknown)}")
+    selected = dict(installed)
+    for name in enabled:
+        if name in built_ins:
+            selected[name] = built_ins[name]
+    return [selected[name] for name in sorted(selected)]
 
 
 class BridgeSupervisor:
@@ -37,8 +57,28 @@ class BridgeSupervisor:
     ) -> None:
         self._config = config
         self._ingest_client = ingest_client
-        self._packs = packs or []
-        self._adapters: list[BridgeAdapter] = adapters or []
+        self._packs = list(packs or [])
+        if adapters is None:
+            self._adapters = [
+                instantiate_pack(
+                    handle,
+                    config_override={
+                        **self._config.pack_config.get(handle.name, {}),
+                        **(
+                            {
+                                "cursor_db_path": str(
+                                    self._config.resolved_cursor_db_path()
+                                )
+                            }
+                            if handle.subkind == "knowledge-source"
+                            else {}
+                        ),
+                    },
+                )
+                for handle in self._packs
+            ]
+        else:
+            self._adapters = list(adapters)
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
 
@@ -52,6 +92,7 @@ class BridgeSupervisor:
             ingest_client=self._ingest_client,
             correlation_id_factory=lambda: str(uuid.uuid4()),
             now_factory=lambda: datetime.now(timezone.utc),
+            tenant_id=self._config.tenant_id,
         )
 
     async def start(self) -> None:
@@ -127,7 +168,7 @@ async def _run_until_signal(supervisor: BridgeSupervisor) -> None:
 
 async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
     config = load_config(config_path)
-    packs = list(discover_packs(config.resolved_packs_dir()))
+    packs = configured_packs(config)
     ingest_client = IngestClient(
         central_endpoint_url=config.central_endpoint,
         tailscale_identity_header=config.tailscale_identity,
@@ -146,4 +187,10 @@ def run() -> None:  # pragma: no cover — script entrypoint shape only
     asyncio.run(main_async())
 
 
-__all__ = ["DEFAULT_CONFIG_PATH", "BridgeSupervisor", "main_async", "run"]
+__all__ = [
+    "DEFAULT_CONFIG_PATH",
+    "BridgeSupervisor",
+    "configured_packs",
+    "main_async",
+    "run",
+]

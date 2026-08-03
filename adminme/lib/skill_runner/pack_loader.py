@@ -141,7 +141,13 @@ def load_pack(pack_root: Path) -> LoadedPack:
     prompt_path = pack_root / "prompt.jinja2"
     handler_path = pack_root / "handler.py"
 
-    for required in (pack_yaml, skill_md, input_schema_path, output_schema_path, prompt_path):
+    for required in (
+        pack_yaml,
+        skill_md,
+        input_schema_path,
+        output_schema_path,
+        prompt_path,
+    ):
         if not required.exists():
             raise PackLoadError(f"missing required pack file: {required}")
 

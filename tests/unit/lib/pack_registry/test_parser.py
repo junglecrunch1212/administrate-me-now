@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # ---------- Backward-compat: existing pack.yaml files parse cleanly ----------
 
+
 def test_parse_existing_gmail_pack_yaml_yields_cat_a_capability() -> None:
     """Gmail pack.yaml was retrofitted in prompt 11r-a: the manifest now
     declares one Cat-A capability with ``messaging.received`` in
@@ -81,6 +82,7 @@ def test_parse_existing_reminders_pack_yaml_yields_cat_b_capability() -> None:
 
 # ---------- Forward-compat: new manifests populate capabilities ----------
 
+
 def test_parse_new_manifest_with_capabilities(tmp_path: Path) -> None:
     pack_yaml = tmp_path / "pack.yaml"
     pack_yaml.write_text(
@@ -138,6 +140,7 @@ owner_scope_overridability_at_install: false
 
 # ---------- Error reporting ----------
 
+
 def test_missing_pack_yaml_raises(tmp_path: Path) -> None:
     with pytest.raises(ManifestParseError, match="not found"):
         parse_adapter_manifest(tmp_path)
@@ -152,9 +155,7 @@ def test_malformed_yaml_raises(tmp_path: Path) -> None:
 
 
 def test_non_mapping_yaml_raises(tmp_path: Path) -> None:
-    (tmp_path / "pack.yaml").write_text(
-        "- just\n- a\n- list\n", encoding="utf-8"
-    )
+    (tmp_path / "pack.yaml").write_text("- just\n- a\n- list\n", encoding="utf-8")
     with pytest.raises(ManifestParseError, match="did not parse to a mapping"):
         parse_adapter_manifest(tmp_path)
 

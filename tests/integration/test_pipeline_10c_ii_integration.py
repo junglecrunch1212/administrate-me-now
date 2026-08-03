@@ -89,8 +89,7 @@ def _seed_morning_digest_pack(
 
 
 async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
-    """Validation passes → outbound() called → digest.composed emitted
-    with delivered=true; external.sent lands."""
+    """Validation raises typed notification intent; OpenClaw owns delivery."""
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
@@ -99,7 +98,7 @@ async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
     events = EventWriter(log, bus)
     runtime_path = tmp_path / "config" / "runtime.yaml"
     obs_mgr = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
-    # Force observation OFF so external.sent lands.
+    # Force observation OFF so policy can route the notification to OpenClaw.
     await obs_mgr.disable(actor="test", reason="test_setup_off")
 
     pack = load_pipeline_pack(MORNING_DIGEST_PACK_ROOT)
@@ -141,11 +140,15 @@ async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
         assert len(digest_events) == 1
         e = digest_events[0]
         assert e["payload"]["validation_failed"] is False
-        assert e["payload"]["delivered"] is True
+        assert e["payload"]["delivered"] is False
         assert e["payload"]["body_text"].startswith("Today:")
-        # external.sent lands because observation is off and outbound() ran.
+        signals = [e for e in all_events if e["type"] == "notification.signal.raised"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
+        assert len(signals) == len(decisions) == 1
+        assert signals[0]["payload"]["category"] == "digest"
+        # Domain code never fabricates an external-send result.
         sent_events = [e for e in all_events if e["type"] == "external.sent"]
-        assert len(sent_events) == 1
+        assert sent_events == []
     finally:
         await bus.stop()
         await log.close()

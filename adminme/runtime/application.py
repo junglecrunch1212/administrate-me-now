@@ -31,6 +31,7 @@ from adminme.lib.governance import (
     GuardedWrite,
     RateLimiter,
 )
+from adminme.extensions import ExtensionCatalog
 from adminme.lib.instance_config import (
     InstanceConfig,
     load_instance_config,
@@ -135,8 +136,7 @@ class RuntimeSettings:
                 "ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON must be a string map"
             )
         if not isinstance(roles, dict) or not all(
-            isinstance(key, str)
-            and value in {"principal", "child", "device"}
+            isinstance(key, str) and value in {"principal", "child", "device"}
             for key, value in roles.items()
         ):
             raise RuntimeError(
@@ -167,7 +167,7 @@ class RuntimeSettings:
         openclaw_shared_secret: str | None = None,
         openclaw_actor_identities: dict[str, str] | None = None,
     ) -> "RuntimeSettings":
-        """Build a no-network Phase-A configuration with generated test keys."""
+        """Build a no-network credential-free configuration with test keys."""
 
         return cls(
             instance=load_instance_config(instance_dir),
@@ -198,7 +198,7 @@ class CapabilityRecord:
 class AdministrateMeRuntime:
     """Own all central resources and their ordered startup/shutdown."""
 
-    PRODUCT_NAMES = ("core", "comms", "capture", "automation", "bridge")
+    PRODUCT_NAMES = ("core", "comms", "capture", "automation", "bridge", "system")
 
     def __init__(self, settings: RuntimeSettings) -> None:
         self.settings = settings
@@ -215,6 +215,9 @@ class AdministrateMeRuntime:
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
         self.member_id_resolver = DictMemberIdResolver(settings.member_identities)
+        self.extensions = ExtensionCatalog(
+            settings.repository_root, settings.instance.instance_dir
+        )
         self.capabilities: dict[str, CapabilityRecord] = {}
         self.standing_orders: dict[str, dict[str, Any]] = {}
         self.started = False
@@ -323,6 +326,8 @@ class AdministrateMeRuntime:
                 guarded_write=self.guarded_write,
                 parties_conn_factory=self._parties_connection_factory,
                 run_skill_fn=self.run_skill_fn,
+                profile_loader=self.extensions.profile_for,
+                persona_loader=self.extensions.active_persona,
             )
             await self.pipelines.discover(
                 builtin_root=self.settings.repository_root / "packs" / "pipelines",
@@ -330,6 +335,7 @@ class AdministrateMeRuntime:
             )
             self._load_standing_orders()
             self._inventory_optional_adapters()
+            self._inventory_data_extensions()
 
             # All subscriptions are explicit before the one bus owner starts.
             await self.projections.start(start_bus=False)
@@ -339,7 +345,7 @@ class AdministrateMeRuntime:
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
                 config_data=self.settings.adapter_config,
-                adapter_loader=lambda _config: [],
+                adapter_loader=lambda _config: [],  # optional providers are disabled
                 ctx_factory=lambda: AdapterContext(
                     event_sink=self._require_events(),
                     config={},
@@ -496,17 +502,70 @@ class AdministrateMeRuntime:
             if isinstance(pack_block, dict):
                 pack_id = pack_block.get("id") or pack_block.get("name")
             pack_id = str(pack_id or manifest_path.parent.name)
-            enabled = pack_id in configured
-            self.capabilities[f"adapter:{pack_id}"] = CapabilityRecord(
-                name=pack_id,
+            capability_id = pack_id.removeprefix("adapter:")
+            configured_aliases = {pack_id, capability_id}
+            enabled = bool(configured_aliases & configured)
+            capability_blocks = manifest.get("capabilities") or []
+            categories = sorted(
+                {
+                    str(item.get("kind"))
+                    for item in capability_blocks
+                    if isinstance(item, dict) and item.get("kind")
+                }
+            )
+            runtimes = sorted(
+                {
+                    str(item.get("runtime"))
+                    for item in capability_blocks
+                    if isinstance(item, dict) and item.get("runtime")
+                }
+            )
+            self.capabilities[f"adapter:{capability_id}"] = CapabilityRecord(
+                name=capability_id,
                 kind="adapter",
-                state="degraded" if enabled else "disabled",
+                state="blocked" if enabled else "disabled",
                 reason=(
-                    "configured adapter loader is not enabled in Phase-A composition"
+                    "provider activation is deferred; remove this configured entry "
+                    "until a production loader is installed"
                     if enabled
                     else "optional provider not configured; no credential loaded"
                 ),
-                details={"manifest": str(manifest_path.relative_to(root))},
+                details={
+                    "manifest": str(manifest_path.relative_to(root)),
+                    "categories": categories,
+                    "runtimes": runtimes,
+                    "provider_health": "not_configured" if not enabled else "blocked",
+                    "deterministic_fixture_coverage": True,
+                },
+            )
+
+        if self.fixture_adapter is not None:
+            self.capabilities["adapter:fixture-messaging"] = CapabilityRecord(
+                name="fixture-messaging",
+                kind="adapter",
+                state="healthy",
+                details={
+                    "category": "Cat-A",
+                    "provider": "deterministic-fixture",
+                    "event_sink": "runtime-event-writer",
+                },
+            )
+
+    def _inventory_data_extensions(self) -> None:
+        active_persona = self.extensions.active_persona()["id"]
+        for pack in self.extensions.packs():
+            details: dict[str, Any] = {
+                "version": pack.version,
+                "sha256": pack.sha256,
+                "active": pack.kind == "persona" and pack.pack_id == active_persona,
+                "authority_changes": False,
+                "model_routing_changes": False,
+            }
+            self.capabilities[f"{pack.kind}:{pack.pack_id}"] = CapabilityRecord(
+                name=pack.pack_id,
+                kind=f"{pack.kind}_extension",
+                state="healthy",
+                details=details,
             )
 
     async def _hydrate_openclaw_state(self) -> None:
@@ -558,8 +617,7 @@ class AdministrateMeRuntime:
             else (
                 f"OpenClaw integration state: {self.openclaw_state}"
                 if self.settings.openclaw_enabled
-                else
-                "required OpenClaw gateway intentionally absent in credential-free mode"
+                else "required OpenClaw gateway intentionally absent in credential-free mode"
             )
         )
         for program_id in sorted(self.standing_orders):
@@ -573,6 +631,29 @@ class AdministrateMeRuntime:
             self.capabilities[f"product:{product}"] = CapabilityRecord(
                 name=product, kind="product_namespace", state="healthy"
             )
+        self.capabilities["read_model:activity-feed"] = CapabilityRecord(
+            name="activity-feed",
+            kind="read_model",
+            state="healthy",
+            details={
+                "source": "encrypted-event-log",
+                "scope_filtered": True,
+                "raw_payload_exposed": False,
+            },
+        )
+        self.capabilities["policy:notifications"] = CapabilityRecord(
+            name="notifications",
+            kind="domain_policy",
+            state="healthy",
+            details={
+                "event_chain": [
+                    "notification.signal.raised",
+                    "notification.decision.made",
+                    "notification.delivery.result",
+                ],
+                "delivery_owner": "openclaw",
+            },
+        )
 
     def overall_state(
         self,

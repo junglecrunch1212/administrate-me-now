@@ -93,7 +93,9 @@ class SchemaRegistry:
         versions = [v for (t, v) in self._by_key if t == event_type]
         return max(versions) if versions else None
 
-    def validate(self, event_type: str, version: int, payload: dict[str, Any]) -> BaseModel:
+    def validate(
+        self, event_type: str, version: int, payload: dict[str, Any]
+    ) -> BaseModel:
         model = self.get(event_type, version)
         if model is None:
             raise SchemaNotFound(event_type, version)

@@ -20,19 +20,9 @@ Sheets built in this prompt:
 - adminme-ops.xlsx: Tasks, Recurrences, Commitments, People, Metadata.
 - adminme-finance.xlsx: Raw Data, Accounts, Metadata (prompt 07b-3).
 
-Sheets deferred to future prompts (await unregistered event types or
-derived math):
-- Lists, Members, Assumptions, Dashboard, Balance Sheet, 5-Year Pro
-  Forma, Budget vs Actual.
-
-Trigger events are limited to the 40 types registered as of phase 07a.
-TODO(future-prompt): extend subscription when these event types register:
-  list_item.added, list_item.completed, list_item.removed,
-  member.created, member.profile_changed, member.role_changed,
-  party.tag.added, party.tag.removed, party.tier.computed,
-  assumption.added, assumption.updated, assumption.removed,
-  plaid.sync.completed, plaid.go_live,
-  institution.added, institution.updated.
+The retained Gate 6 workbook contract is these two files and seven sheets.
+Additional finance dashboards are not advertised product surfaces. Trigger
+subscriptions below cover the registered facts used by the retained sheets.
 
 Construction is different from other projections because xlsx reads
 across seven projection databases. The runner's register() still works
@@ -139,7 +129,9 @@ class XlsxWorkbooksProjection(Projection):
 
     name = "xlsx_workbooks"
     version = 1
-    subscribes_to: list[str] = list(_OPS_TRIGGERS) + list(_FINANCE_TRIGGERS)
+    subscribes_to: list[str] | str = [
+        str(event_type) for event_type in (*_OPS_TRIGGERS, *_FINANCE_TRIGGERS)
+    ]
     schema_path: Path = Path(__file__).parent / "schema.sql"
 
     def __init__(
@@ -228,7 +220,7 @@ class XlsxWorkbooksProjection(Projection):
     async def regenerate_now(self, workbook: str) -> None:
         """Bypass the debounce: regenerate ``workbook`` immediately and
         emit ``xlsx.regenerated``. Used by tests and by ``adminme
-        projection rebuild xlsx_workbooks`` (future prompt)."""
+        projection rebuild xlsx_workbooks``."""
         if workbook not in (OPS_WORKBOOK_NAME, FINANCE_WORKBOOK_NAME):
             raise ValueError(f"unknown workbook: {workbook!r}")
 

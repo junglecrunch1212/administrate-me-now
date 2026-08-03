@@ -99,7 +99,7 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
             "project_id": "test-project",
             "client_email": "test@test.iam.gserviceaccount.com",
             "private_key": (
-                "-----BEGIN PRIVATE KEY-----\nTESTKEY\n" "-----END PRIVATE KEY-----\n"
+                "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----\n"
             ),
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -256,8 +256,7 @@ class GmailAdapter(CommunicationAdapter):
         cfg_value = self._config.get("sensitivity_floor", self.HARDCODED_FLOOR)
         if cfg_value not in _FLOOR_RANK:
             raise ValueError(
-                "sensitivity_floor must be 'normal' or 'privileged', "
-                f"got {cfg_value!r}"
+                f"sensitivity_floor must be 'normal' or 'privileged', got {cfg_value!r}"
             )
         if _FLOOR_RANK[cfg_value] < _FLOOR_RANK[self.HARDCODED_FLOOR]:
             raise ValueError(

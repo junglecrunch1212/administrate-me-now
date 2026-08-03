@@ -199,7 +199,10 @@ async def test_emit_on_opt_in_member_with_stale_parties() -> None:
     assert env.payload["surfaced_party_ids"] == ["party-1", "party-2"]
     assert env.payload["gap_kind"] == "stale_contact"
     assert env.payload["validation_failed"] is False
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
+    assert signals[0].envelope.payload["category"] == "relationship"
 
 
 @pytest.mark.asyncio
@@ -261,7 +264,7 @@ async def test_clamp_at_max_surfaced_per_week() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound() -> None:
+async def test_observation_mode_active_suppresses_notification() -> None:
     log = _FakeEventLog()
     pipeline = _seeded_pipeline()
     ctx = _make_ctx(
@@ -278,8 +281,11 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
     surfaced = [c for c in log.calls if c.envelope.type == "crm.surfaced"]
     assert len(surfaced) == 1
     assert surfaced[0].envelope.payload["delivered"] is False
-    suppressed = [c for c in log.calls if c.envelope.type == "observation.suppressed"]
-    assert len(suppressed) == 1
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
 
 
 @pytest.mark.asyncio
@@ -317,7 +323,9 @@ async def test_per_row_skill_failure_does_not_abort_tick() -> None:
     assert by_member["member-a"].envelope.payload["validation_failed"] is True
     assert by_member["member-a"].envelope.payload["delivered"] is False
     assert by_member["member-b"].envelope.payload["validation_failed"] is False
-    assert by_member["member-b"].envelope.payload["delivered"] is True
+    assert by_member["member-b"].envelope.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
 
 
 @pytest.mark.asyncio

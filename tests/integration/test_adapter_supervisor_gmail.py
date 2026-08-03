@@ -734,12 +734,12 @@ async def test_retrofit_validator_clean_after_supervisor_lifecycle(
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert (
-        pending == []
-    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
-    assert (
-        not result.has_errors()
-    ), f"validator reports errors post-retrofit: {result.errors()}"
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    )
+    assert not result.has_errors(), (
+        f"validator reports errors post-retrofit: {result.errors()}"
+    )
 
 
 # ---------------------------------------------------------------------------

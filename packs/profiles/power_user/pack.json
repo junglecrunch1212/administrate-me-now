@@ -1,0 +1,17 @@
+{
+  "id": "power_user",
+  "kind": "profile",
+  "version": "1.0.0",
+  "label": "Power user",
+  "profile_format": "dense",
+  "behavior": {
+    "available_minutes": 45,
+    "current_energy": "high",
+    "preferred_contexts": ["admin", "work", "finance"],
+    "quiet_hours": {"start": 23, "end": 6},
+    "nudge_penalty": 0,
+    "recent_outcome_bias": 0
+  },
+  "reward_distribution": {"done": 0.95, "warm": 0.05, "delight": 0.0, "jackpot": 0.0},
+  "delivery_channel": "openclaw"
+}

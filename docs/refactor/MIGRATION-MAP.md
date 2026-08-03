@@ -1,5 +1,24 @@
 # Migration map
 
+Gate 6 update (2026-08-03): the remaining retained domain code is converged on
+the Gate 2–5 runtime. All six products and thirteen projections are composed;
+member knowledge and scoped vector search are distinct; workbooks, profiles,
+personas, packs, bridge sources, durable cursors, notification policy,
+capability registry, contextual what-now, and activity feed have executable
+paths. Rows below retain baseline history; this Gate 6 delta is current truth.
+
+| Gate 6 subsystem | Final class | Executable result |
+|---|---|---|
+| Event runtime and projections | KEEP/HARDEN COMPLETE | One EventSink/log/bus root; exactly 13 registered projection capabilities; replay, migration, scope, checkpoint, and encrypted reopen tests pass. |
+| Domain APIs | KEEP/REWRITE COMPLETE | Core, Comms, Capture, Automation, Bridge, and System are real namespaces; activity/capability status derives from runtime wiring and authorization. |
+| Knowledge/search | KEEP/HARDEN COMPLETE | Private explicit-source `member_knowledge`; scope-filtered domain `vector_search`; privileged embedding forbidden. |
+| Workbooks | KEEP/HARDEN COMPLETE | `adminme-ops.xlsx` and `adminme-finance.xlsx` retain forward/reverse/sidecar/lock/conflict/Plaid/rebuild behavior. |
+| Adapters/bridge | KEEP/HARDEN COMPLETE | Cat-A–E contracts, deterministic fixtures, durable cursor state, real Cat-D filesystem watchers, central ingest, and fail-closed mirror configuration. |
+| Pipelines/OpenClaw | KEEP/CONVERGE COMPLETE | Six reactive packs stay in-process; five proactive programs are scheduled by OpenClaw; notification delivery belongs to OpenClaw and is confirmed only by a typed result. |
+| Profiles/personas/packs | KEEP/REWRITE COMPLETE | Five profiles and four personas are data/versioned extensions with stage/test/activate/rollback; all six pack kinds remain. |
+| Duplicate platform code | DELETE COMPLETE | Empty console package, prose daemons/helpers, local scheduler dependency/config, fake send receipts, and unused platform dependencies removed. |
+| Optional providers and browser UX | DEFER TRUTHFULLY | Missing provider config is disabled/blocked; live providers and full browser household surfaces require later configured/live evidence. |
+
 Gate 5 update (2026-08-03): Gates 1–4 remain intact. The encrypted ten-section bootstrap, fixed operations scripts, user launchd, safe diagnostics, backup/restore replay, bridge enrollment packages, and upgrade compatibility gate are implemented at credential-free process level. The member bridge knowledge product slice is the unambiguous Phase 6 boundary.
 
 Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** retains semantics/code with compatibility coverage; **HARDEN** retains the core but closes a proven seam; **REWRITE** replaces scaffolding or incompatible implementation behind tests; **DEFER** is allowed only for an optional provider; **DELETE** occurs only after its replacement passes.

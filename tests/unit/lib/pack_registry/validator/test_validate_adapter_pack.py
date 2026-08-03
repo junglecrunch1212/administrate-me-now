@@ -177,10 +177,7 @@ def test_aggregator_preserves_mixed_severity_findings(
             "      - member_knowledge.note_added\n"
             "owner_scope_overridability_at_install: false\n"
         ),
-        adapter_py=(
-            "class NoAbcAdapter:\n"
-            "    pass\n"
-        ),
+        adapter_py=("class NoAbcAdapter:\n    pass\n"),
     )
 
     result = validate_adapter_pack(
@@ -194,8 +191,7 @@ def test_aggregator_preserves_mixed_severity_findings(
     assert "advisory" in severities
     assert result.has_errors() is True
     assert any(
-        f.check == "projection_subscription_compatibility"
-        and f.severity == "advisory"
+        f.check == "projection_subscription_compatibility" and f.severity == "advisory"
         for f in result.findings
     )
     assert any(
@@ -252,9 +248,7 @@ def test_aggregator_forwards_injected_registry(tmp_path: Path) -> None:
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
-    _write_projection(
-        projections_dir, "fakes", subscribes_to=["totally_fake.family"]
-    )
+    _write_projection(projections_dir, "fakes", subscribes_to=["totally_fake.family"])
     pack_dir = _write_pack(
         tmp_path,
         pack_yaml=(
@@ -280,9 +274,7 @@ def test_aggregator_forwards_injected_registry(tmp_path: Path) -> None:
         projections_dir=projections_dir,
     )
 
-    assert not any(
-        f.check == "event_schema_registration" for f in result.findings
-    )
+    assert not any(f.check == "event_schema_registration" for f in result.findings)
 
 
 def test_aggregator_forwards_injected_projections_dir(tmp_path: Path) -> None:
@@ -297,9 +289,7 @@ def test_aggregator_forwards_injected_projections_dir(tmp_path: Path) -> None:
     """
     projections_dir = tmp_path / "alternative_projections"
     projections_dir.mkdir()
-    _write_projection(
-        projections_dir, "exotic", subscribes_to=["exotic.event"]
-    )
+    _write_projection(projections_dir, "exotic", subscribes_to=["exotic.event"])
     pack_dir = _write_pack(
         tmp_path,
         pack_yaml=(
@@ -326,8 +316,7 @@ def test_aggregator_forwards_injected_projections_dir(tmp_path: Path) -> None:
     )
 
     assert not any(
-        f.check == "projection_subscription_compatibility"
-        for f in result.findings
+        f.check == "projection_subscription_compatibility" for f in result.findings
     )
 
 
@@ -387,10 +376,6 @@ def test_aggregator_default_registry_path_is_used_when_not_injected(
         ),
     )
 
-    result = validate_adapter_pack(
-        pack_dir, projections_dir=projections_dir
-    )
+    result = validate_adapter_pack(pack_dir, projections_dir=projections_dir)
 
-    assert not any(
-        f.check == "event_schema_registration" for f in result.findings
-    )
+    assert not any(f.check == "event_schema_registration" for f in result.findings)

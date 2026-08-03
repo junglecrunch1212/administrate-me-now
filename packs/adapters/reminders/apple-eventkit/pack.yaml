@@ -36,19 +36,15 @@ pack:
 # before the loader runs.
 sensitivity_floor: normal
 
-# Trigger model. The supervisor's APScheduler entry fires at this cron
-# cadence, but the active polling is enforced INSIDE the adapter via two
-# 30s loops (inbound poll + outbound write) per BUILD.md APPLE REMINDERS
-# BIDIRECTIONAL §"Polling cadence" + §"Outbound write cadence". The cron
-# is a heartbeat the supervisor can use to detect a wedged adapter; the
-# adapter's in-process cadence is the real cadence.
+# Trigger model. The adapter owns provider synchronization through two
+# 30-second watcher loops (inbound poll and outbound mirror write). This is
+# not an AdministrateMe product scheduler.
 triggers:
   kind: external_poll
-  schedule: "*/1 * * * *"
+  poll_interval_seconds: 30
   description: |
-    1-minute cron heartbeat; the adapter enforces 30s in-process polls
-    (inbound) and 30s in-process write batches (outbound) internally per
-    BUILD.md APPLE REMINDERS BIDIRECTIONAL.
+    The adapter enforces 30-second inbound polls and outbound mirror-write
+    batches internally.
 
 # Event types the adapter emits or consumes. The three cross-cutting
 # `adapter.*` schemas come from prompt 11a c1

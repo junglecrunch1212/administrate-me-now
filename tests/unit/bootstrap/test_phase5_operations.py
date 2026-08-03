@@ -83,7 +83,9 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
 
 
 def test_lock_contains_pinned_apple_silicon_sqlcipher_wheel() -> None:
-    versions = json.loads((REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8"))
+    versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )
     assert versions["sqlcipher"]["python_distribution"] == "sqlcipher3"
     assert versions["sqlcipher"]["python_version"] == "0.6.2"
     lock = (REPO_ROOT / "poetry.lock").read_text("utf-8")

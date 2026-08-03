@@ -119,7 +119,11 @@ def test_coach_session_cannot_view_as() -> None:
     """Coach sessions are LLM/external context builders; view-as is a UI
     concept that does not apply [DIAGRAMS.md §5]."""
     req = _FakeReq(
-        identity={"member_id": "coach_a", "role": "coach_session", "tailscale_login": "n/a"},
+        identity={
+            "member_id": "coach_a",
+            "role": "coach_session",
+            "tailscale_login": "n/a",
+        },
         view_as={"member_id": "p_b", "role": "principal"},
     )
     with pytest.raises(AuthError, match="only_principals_can_view_as"):

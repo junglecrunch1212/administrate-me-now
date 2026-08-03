@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from collections import deque
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from adminme.events.envelope import EventEnvelope
+from adminme.lib.scope import allowed_read
 from adminme.lib.session import Session
 from adminme.products.auth import session_from_request
 from adminme.products.commitment_service import (
@@ -18,6 +21,7 @@ from adminme.products.commitment_service import (
 )
 from adminme.projections.commitments.queries import active_for_member, pending_approval
 from adminme.projections.tasks.queries import open_for_member as open_tasks
+from adminme.what_now import rank_what_now
 
 router = APIRouter(prefix="/api/core", tags=["core"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
@@ -50,58 +54,14 @@ def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
         session,
         member_party_id=session.view_member_id,
     )
-    candidates: list[dict[str, Any]] = []
-    for row in commitments:
-        if row["status"] != "pending":
-            continue
-        candidates.append(
-            {
-                "id": row["commitment_id"],
-                "kind": "commitment",
-                "title": row["description"],
-                "due": row["due_at"],
-                "score": 1000,
-                "explanation": {
-                    "obligation": "confirmed promise to another party",
-                    "urgency": "due date is near",
-                    "owner": row["owed_by_party"],
-                    "dependency": "none",
-                    "energy": "unknown",
-                    "effort": "reply",
-                },
-            }
-        )
-    for row in tasks:
-        candidates.append(
-            {
-                "id": row["task_id"],
-                "kind": "task",
-                "title": row["title"],
-                "due": row["due_date"],
-                "score": 500,
-                "explanation": {
-                    "obligation": "household task",
-                    "urgency": "scheduled fallback",
-                    "owner": row["assignee_party"],
-                    "dependency": "none",
-                    "energy": row["energy"] or "unknown",
-                    "effort": row["effort"] or "small",
-                },
-            }
-        )
-    candidates.sort(
-        key=lambda item: (-item["score"], item["due"] or "9999", item["id"])
+    profile = runtime.extensions.profile_for(session.view_member_id)
+    return rank_what_now(
+        tasks,
+        commitments,
+        member_id=session.view_member_id,
+        profile=profile,
+        as_of=datetime.now(timezone.utc).replace(second=0, microsecond=0),
     )
-    ordered = [{k: v for k, v in item.items() if k != "score"} for item in candidates]
-    horizons = ["right_now", "next", "today", "this_week", "this_month", "someday"]
-    return {
-        "member_id": session.view_member_id,
-        "generated_by": "deterministic-ranker-v1",
-        "horizons": {
-            horizon: (ordered[index] if index < len(ordered) else None)
-            for index, horizon in enumerate(horizons)
-        },
-    }
 
 
 @router.get("/v1/what-now")
@@ -149,6 +109,80 @@ async def inbox(request: Request, session: SessionDep) -> dict[str, Any]:
     return {
         "member_id": session.view_member_id,
         "items": sorted(proposals + tasks, key=lambda item: (item["kind"], item["id"])),
+    }
+
+
+@router.get("/v1/activity")
+async def activity(
+    request: Request,
+    session: SessionDep,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Evidence-rich, scope-filtered activity without exposing event bodies."""
+
+    if limit < 1 or limit > 200:
+        raise HTTPException(422, "limit must be between 1 and 200")
+    runtime = request.app.state.runtime
+    if runtime.event_log is None:
+        raise HTTPException(503, "event log unavailable")
+    visible: deque[dict[str, Any]] = deque(maxlen=limit)
+    safe_payload_fields = (
+        "commitment_id",
+        "task_id",
+        "knowledge_id",
+        "related_kind",
+        "related_id",
+        "title",
+        "text_summary",
+        "decision",
+        "outcome",
+        "state",
+        "reason",
+    )
+    async for event in runtime.event_log.read_since():
+        visibility = str(event.get("visibility_scope") or "shared:household")
+        if not (
+            visibility in session.allowed_scopes
+            or (visibility.startswith("org:") and "org:*" in session.allowed_scopes)
+        ):
+            continue
+        if not allowed_read(
+            session,
+            str(event.get("sensitivity") or "normal"),
+            str(event.get("owner_scope") or "shared:household"),
+        ):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        visible.append(
+            {
+                "event_id": event["event_id"],
+                "type": event["type"],
+                "occurred_at": event["occurred_at"],
+                "recorded_at": event["recorded_at"],
+                "source": {
+                    "adapter": event["source_adapter"],
+                    "account_id": event["source_account_id"],
+                },
+                "scope": {
+                    "owner": event["owner_scope"],
+                    "visibility": event["visibility_scope"],
+                    "sensitivity": event["sensitivity"],
+                },
+                "provenance": {
+                    "correlation_id": event.get("correlation_id"),
+                    "causation_id": event.get("causation_id"),
+                },
+                "subject": {
+                    field: payload[field]
+                    for field in safe_payload_fields
+                    if field in payload
+                },
+            }
+        )
+    return {
+        "member_id": session.view_member_id,
+        "items": list(reversed(visible)),
+        "payload_policy": "identifier-and-state-fields-only",
     }
 
 
@@ -213,6 +247,7 @@ async def lifecycle(
     row = owned_commitment(runtime, session, commitment_id)
     if row["confirmed_at"] is None:
         raise HTTPException(409, "commitment must be approved first")
+    payload: dict[str, Any]
     if action == "complete":
         if row["status"] in {"done", "cancelled", "delegated"}:
             raise HTTPException(409, "commitment is terminal")
@@ -263,6 +298,8 @@ async def lifecycle(
             "deferred_by_party_id": actor,
             "reason": body.reason,
         }
+    else:  # event_type validation above keeps this unreachable at runtime.
+        raise AssertionError(f"unhandled lifecycle action: {action}")
     event_id, updated, duplicate = await emit_command(
         runtime,
         session,

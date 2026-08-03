@@ -223,11 +223,15 @@ async def test_rebuild_produces_identical_state(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:lists")
 
     pre = _snapshot(runner.connection("lists"))
-    pre_last_event_id = runner.connection("lists").execute(
-        "SELECT last_event_id FROM list_items "
-        "WHERE list_external_id = ? AND item_external_id = ?",
-        ("list-A", "i1"),
-    ).fetchone()["last_event_id"]
+    pre_last_event_id = (
+        runner.connection("lists")
+        .execute(
+            "SELECT last_event_id FROM list_items "
+            "WHERE list_external_id = ? AND item_external_id = ?",
+            ("list-A", "i1"),
+        )
+        .fetchone()["last_event_id"]
+    )
     assert pre_last_event_id == eid_last
     # 3 distinct composite-PK rows survive the duplicate-id replay.
     assert len(pre) == 3
@@ -235,10 +239,14 @@ async def test_rebuild_produces_identical_state(rig: dict[str, Any]) -> None:
     await runner.rebuild("lists")
 
     post = _snapshot(runner.connection("lists"))
-    post_last_event_id = runner.connection("lists").execute(
-        "SELECT last_event_id FROM list_items "
-        "WHERE list_external_id = ? AND item_external_id = ?",
-        ("list-A", "i1"),
-    ).fetchone()["last_event_id"]
+    post_last_event_id = (
+        runner.connection("lists")
+        .execute(
+            "SELECT last_event_id FROM list_items "
+            "WHERE list_external_id = ? AND item_external_id = ?",
+            ("list-A", "i1"),
+        )
+        .fetchone()["last_event_id"]
+    )
     assert pre == post
     assert post_last_event_id == eid_last

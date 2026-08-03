@@ -3,18 +3,13 @@ Crypto utilities — SQLCipher key derivation and secret handling.
 
 Per ADMINISTRATEME_BUILD.md §L2 and SYSTEM_INVARIANTS.md §1.
 
-Prompt 03 scope:
+Retained scope:
 - `derive_event_log_key(op_ref)`: resolve an `op://` 1Password service-account
   reference to raw SQLCipher key bytes. The 1Password CLI is not yet wired up
   in this sandbox phase; when the CLI is unavailable or the reference is a
   test stub (`op://test/...`), we derive a deterministic 32-byte key from the
-  reference string via HKDF so tests remain hermetic.
-
-Future prompts will extend this module with:
-- Fernet key derivation for at-rest artifact encryption of oversized payloads
-  (§1 invariant 7), keyed from the SQLCipher master key.
-- Path resolution for artifact and raw-event sidecar directories via
-  `adminme.lib.instance_config` (§15/D15).
+  reference string via HKDF so tests remain hermetic. Artifact and raw-event
+  path ownership stays in ``InstanceConfig``.
 """
 
 from __future__ import annotations
@@ -40,14 +35,12 @@ def derive_event_log_key(op_ref: str) -> bytes:
     Resolve `op_ref` (an `op://vault/item/field` 1Password reference) into a
     32-byte SQLCipher key.
 
-    In the sandbox phase (prompt 03), the 1Password CLI may be absent. If so,
-    or if `op_ref` starts with `op://test/`, we derive a deterministic key by
-    HKDF-expanding the reference string. This keeps tests hermetic and
-    self-contained while preserving the real shape of the API.
+    Test references derive a deterministic HKDF key. A non-test reference
+    requires the 1Password CLI unless the explicit local-development guard is
+    set; production bootstrap never enables that guard.
 
     Callers in production pass a real `op://...` reference and require the
-    1Password CLI to be installed and signed in; a later prompt will harden
-    this to refuse non-test refs without `op` on PATH.
+    1Password CLI to be installed and signed in.
     """
     if not op_ref:
         raise SecretResolutionError("empty secret reference")

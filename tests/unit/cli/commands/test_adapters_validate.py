@@ -131,19 +131,16 @@ def test_format_finding_omits_field_path_suffix_when_none() -> None:
 # ---------- Exit-code contract ----------
 
 
-def _patch_validator(
-    monkeypatch: pytest.MonkeyPatch, result: ValidationResult
-) -> None:
+def _patch_validator(monkeypatch: pytest.MonkeyPatch, result: ValidationResult) -> None:
     def _fake_validate(_pack_dir: Path, **_kwargs: Any) -> ValidationResult:
         return result
 
-    monkeypatch.setattr(
-        adapters_module, "validate_adapter_pack", _fake_validate
-    )
+    monkeypatch.setattr(adapters_module, "validate_adapter_pack", _fake_validate)
 
 
 def test_validate_exits_zero_for_empty_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     _patch_validator(
         monkeypatch,
@@ -155,7 +152,8 @@ def test_validate_exits_zero_for_empty_findings(
 
 
 def test_validate_exits_one_when_error_finding_present(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     findings = (
         ValidationFinding(
@@ -177,7 +175,8 @@ def test_validate_exits_one_when_error_finding_present(
 
 
 def test_validate_exits_zero_for_advisory_only_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Advisories alone do not fail the validate run per memo 05 §3.4."""
     findings = (
@@ -197,7 +196,8 @@ def test_validate_exits_zero_for_advisory_only_findings(
 
 
 def test_validate_exits_zero_for_warning_only_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Warnings alone do not fail the validate run."""
     findings = (
@@ -216,7 +216,8 @@ def test_validate_exits_zero_for_warning_only_findings(
 
 
 def test_validate_exits_two_on_manifest_parse_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Missing/malformed pack.yaml surfaces with the dedicated exit code."""
 
@@ -227,7 +228,10 @@ def test_validate_exits_two_on_manifest_parse_error(
 
     result = runner.invoke(adapters_app, ["validate", str(tmp_path / "nope")])
     assert result.exit_code == 2, result.stdout
-    assert "cannot parse manifest" in result.stderr or "cannot parse manifest" in result.stdout
+    assert (
+        "cannot parse manifest" in result.stderr
+        or "cannot parse manifest" in result.stdout
+    )
 
 
 def test_validate_exits_two_on_real_missing_pack_yaml(tmp_path: Path) -> None:
@@ -257,9 +261,7 @@ def test_validate_against_on_main_gmail_pack_exits_zero_with_no_advisory() -> No
     11r-b / 11r-c).
     """
     if not ONMAIN_GMAIL_PACK.is_dir():
-        raise AssertionError(
-            f"{ONMAIN_GMAIL_PACK} missing — repo layout drifted?"
-        )
+        raise AssertionError(f"{ONMAIN_GMAIL_PACK} missing — repo layout drifted?")
 
     result = runner.invoke(adapters_app, ["validate", str(ONMAIN_GMAIL_PACK)])
     assert result.exit_code == 0, result.stdout

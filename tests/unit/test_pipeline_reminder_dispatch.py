@@ -186,8 +186,21 @@ async def test_emit_on_due_commitment() -> None:
     assert env.payload["recipient_party_id"] == "party-c"
     assert env.payload["composed_text"].startswith("Reminder")
     assert env.payload["validation_failed"] is False
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
     assert env.payload["channel"] == "imessage"
+    chain = [
+        call.envelope.type
+        for call in log.calls
+        if call.envelope.type.startswith("notification.")
+    ]
+    assert chain == ["notification.signal.raised", "notification.decision.made"]
+    decision = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "notification.decision.made"
+    )
+    assert decision.payload["decision"] == "route"
+    assert decision.payload["route"] == "openclaw"
 
 
 @pytest.mark.asyncio
@@ -253,10 +266,8 @@ async def test_skill_failure_emits_sentinel_no_outbound() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound() -> None:
-    """Observation mode active → outbound() suppressed → reminder
-    emits with delivered=False; observation.suppressed lands in the
-    log."""
+async def test_observation_mode_active_suppresses_notification() -> None:
+    """Observation mode persists a suppress decision and never delivers."""
     log = _FakeEventLog()
     pipeline = _seeded_pipeline()
     ctx = _make_ctx(
@@ -274,8 +285,13 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
     assert len(dispatched) == 1
     assert dispatched[0].envelope.payload["delivered"] is False
     assert dispatched[0].envelope.payload["validation_failed"] is False
-    suppressed = [c for c in log.calls if c.envelope.type == "observation.suppressed"]
-    assert len(suppressed) == 1
+    decision = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "notification.decision.made"
+    )
+    assert decision.payload["decision"] == "suppress"
+    assert decision.payload["reasons"] == ["observation_mode_active"]
 
 
 @pytest.mark.asyncio

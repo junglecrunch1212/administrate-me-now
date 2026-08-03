@@ -252,6 +252,6 @@ async def test_skipped_does_not_emit_reverse_projected(
     await reverse.run_cycle_now(OPS_WORKBOOK_NAME)
 
     projected = await _events_of_type(log, "xlsx.reverse_projected", cursor)
-    assert (
-        projected == []
-    ), "skip cycle MUST NOT emit xlsx.reverse_projected; spec §3.11"
+    assert projected == [], (
+        "skip cycle MUST NOT emit xlsx.reverse_projected; spec §3.11"
+    )

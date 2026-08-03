@@ -194,8 +194,7 @@ def _make_ctx(
 async def test_reminder_dispatch_observation_off_round_trip(
     tmp_path: Path,
 ) -> None:
-    """Obs OFF → outbound() lands external.sent; reminder.dispatched
-    payload carries delivered=true, validation_failed=false."""
+    """Observation off routes a typed notification intent to OpenClaw."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
@@ -230,13 +229,15 @@ async def test_reminder_dispatch_observation_off_round_trip(
         assert payload["owner_member_id"] == "member-a"
         assert payload["recipient_party_id"] == "party-c"
         assert payload["validation_failed"] is False
-        assert payload["delivered"] is True
+        assert payload["delivered"] is False
         assert payload["channel"] == "imessage"
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
-        assert len(sent) == 1
-        assert suppressed == []
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
+        assert sent == []
+        assert len(decisions) == 1
+        assert decisions[0]["payload"]["decision"] == "route"
+        assert decisions[0]["payload"]["route"] == "openclaw"
     finally:
         await bus.stop()
         await log.close()
@@ -245,8 +246,7 @@ async def test_reminder_dispatch_observation_off_round_trip(
 async def test_reminder_dispatch_observation_on_suppresses(
     tmp_path: Path,
 ) -> None:
-    """Obs ON → outbound() suppresses; reminder.dispatched still emits
-    with delivered=false; observation.suppressed lands."""
+    """Observation on creates a suppress decision and no delivery claim."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
@@ -281,9 +281,10 @@ async def test_reminder_dispatch_observation_on_suppresses(
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
         assert sent == []
-        assert len(suppressed) == 1
+        assert len(decisions) == 1
+        assert decisions[0]["payload"]["decision"] == "suppress"
     finally:
         await bus.stop()
         await log.close()
@@ -295,9 +296,7 @@ async def test_reminder_dispatch_observation_on_suppresses(
 async def test_crm_surface_observation_off_round_trip(
     tmp_path: Path,
 ) -> None:
-    """Obs OFF → external.sent lands; crm.surfaced payload carries
-    delivered=true, gap_kind discriminator and the loader-anchored
-    surfaced_party_ids."""
+    """Obs OFF routes notification intent; delivery awaits OpenClaw result."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
@@ -332,12 +331,13 @@ async def test_crm_surface_observation_off_round_trip(
         assert payload["gap_kind"] == "stale_contact"
         assert payload["week_of_date"] == "2026-05-10"
         assert payload["validation_failed"] is False
-        assert payload["delivered"] is True
+        assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
-        assert len(sent) == 1
-        assert suppressed == []
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
+        assert sent == []
+        assert len(decisions) == 1
+        assert decisions[0]["payload"]["decision"] == "route"
     finally:
         await bus.stop()
         await log.close()
@@ -346,8 +346,7 @@ async def test_crm_surface_observation_off_round_trip(
 async def test_crm_surface_observation_on_suppresses(
     tmp_path: Path,
 ) -> None:
-    """Obs ON → crm.surfaced emits with delivered=false;
-    observation.suppressed lands."""
+    """Obs ON produces a typed suppress decision and no fake send."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
@@ -381,9 +380,10 @@ async def test_crm_surface_observation_on_suppresses(
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
         assert sent == []
-        assert len(suppressed) == 1
+        assert len(decisions) == 1
+        assert decisions[0]["payload"]["decision"] == "suppress"
     finally:
         await bus.stop()
         await log.close()
@@ -395,9 +395,7 @@ async def test_crm_surface_observation_on_suppresses(
 async def test_custody_brief_observation_off_round_trip(
     tmp_path: Path,
 ) -> None:
-    """Obs OFF → external.sent lands; custody_brief.composed payload
-    carries delivered=true and the loader-anchored coparent + child
-    ids."""
+    """Obs OFF routes a private notification; delivery awaits OpenClaw."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=False
     )
@@ -432,12 +430,15 @@ async def test_custody_brief_observation_off_round_trip(
         assert payload["child_member_ids"] == ["child-1"]
         assert payload["brief_date"] == "2026-05-16"
         assert payload["validation_failed"] is False
-        assert payload["delivered"] is True
+        assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
-        assert len(sent) == 1
-        assert suppressed == []
+        signals = [e for e in all_events if e["type"] == "notification.signal.raised"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
+        assert sent == []
+        assert len(signals) == len(decisions) == 1
+        assert signals[0]["sensitivity"] == "sensitive"
+        assert decisions[0]["payload"]["decision"] == "route"
     finally:
         await bus.stop()
         await log.close()
@@ -446,8 +447,7 @@ async def test_custody_brief_observation_off_round_trip(
 async def test_custody_brief_observation_on_suppresses(
     tmp_path: Path,
 ) -> None:
-    """Obs ON → custody_brief.composed emits with delivered=false;
-    observation.suppressed lands."""
+    """Obs ON produces a typed suppress decision and no fake send."""
     _config, log, bus, obs_mgr, session, events = await _build_runtime(
         tmp_path, observation_active=True
     )
@@ -481,9 +481,10 @@ async def test_custody_brief_observation_on_suppresses(
         assert payload["delivered"] is False
 
         sent = [e for e in all_events if e["type"] == "external.sent"]
-        suppressed = [e for e in all_events if e["type"] == "observation.suppressed"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
         assert sent == []
-        assert len(suppressed) == 1
+        assert len(decisions) == 1
+        assert decisions[0]["payload"]["decision"] == "suppress"
     finally:
         await bus.stop()
         await log.close()

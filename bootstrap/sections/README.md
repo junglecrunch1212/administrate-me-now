@@ -16,6 +16,7 @@ when its version and input digest have not changed.
 9. Observation briefing, trust-period contract, and canonical proof
 10. Per-member Apple bridge enrollment, or an explicit non-Apple skip
 
-The credential-free `two-adult-one-child` fixture is only Phase-A evidence.
+The credential-free `two-adult-one-child` fixture is reproducible process
+evidence; it is not a claim that any live provider or family Mac was mutated.
 Interactive use never asks for a secret: OAuth and macOS grants happen in
 their own provider/system windows, and the wizard stores references only.

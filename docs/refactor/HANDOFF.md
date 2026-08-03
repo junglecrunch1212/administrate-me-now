@@ -1,8 +1,8 @@
 ---
 schema_version: 1
-current_phase: 5
-phase_name: mac_mini_bootstrap_and_operations
-gate: 5
+current_phase: 6
+phase_name: domain_convergence_and_platform_deduplication
+gate: 6
 gate_result: PASS
 verified_local_date: 2026-08-03
 branch: codex/administrateme-v2-runtime
@@ -10,108 +10,79 @@ branch_tip_resolution: git rev-parse HEAD
 draft_pr_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
-evidence_level: credential_free_process_and_reproducible_macos_contract
-next_phase: 6
-next_phase_name: member_bridge_private_searchable_knowledge
+evidence_level: credential_free_domain_runtime_and_deterministic_provider_boundaries
+next_phase: 7
+next_phase_name: household_surfaces_and_release_rehearsal
 ---
 
 # Handoff
 
 ## State
 
-Gate 5 passes at installer-readiness level. Gates 1–4 remain committed and
-unchanged. The branch now contains the Mac mini package that can preflight,
-install, configure, start, stop, diagnose, back up, restore, and guard updates
-for the exactly pinned OpenClaw plus one AdministrateMe process. It has not
-been installed on the future family Mac.
+Gate 6 passes. Gates 1–5 remain intact. AdministrateMe is one truthful domain
+runtime with six product namespaces, thirteen projection capabilities, two
+bidirectional workbooks, six reactive pipelines, five OpenClaw proactive
+programs, ten skills, five data-driven profiles, four data-driven personas,
+Cat-A–E contracts, member bridges, scoped search, contextual what-now,
+capability status, activity evidence, and typed notification feedback.
 
-The stable operator names are `bootstrap/bootstrap-macos.sh`, `install.sh`,
-`doctor.sh`, `start.sh`, `stop.sh`, `status.sh`, `backup.sh`, and `restore.sh`.
-All are Bash-syntax and ShellCheck clean; `install.sh` delegates to the
-constitutional compatibility entrypoint.
+OpenClaw alone owns assistant scheduling, channel delivery, sessions, and model
+routing. AdministrateMe owns domain facts, policy, authorization, proposals,
+reconciliation, read models, workbooks, and evidence. No generic conversation
+memory, local scheduler, duplicate gateway, provider-routing loop, or fake
+delivery receipt remains advertised.
 
-## Gate 5 implementation
+## Gate 6 implementation
 
-- `bootstrap/versions.json` pins the supported macOS majors, Apple-silicon
-  architecture, Python, Node/npm, SQLCipher binding/runtime, Homebrew, Poetry,
-  exact OpenClaw version/commit/API, ports, and the fact that Bun is unused.
-- Shell preflight rejects root, Rosetta/x86_64, unsupported macOS, FileVault
-  off, missing Command Line Tools/Homebrew, unsafe roots, and low disk before
-  instance mutation. Required formulas and a release-specific Python
-  environment are installed only after preflight and from exact lockfiles.
-- `bootstrap/wizard.py` implements all ten constitutional sections with
-  version/input-digest idempotency and independent encrypted status. A failed
-  section records failure and resumes; Section 1 failure creates no instance.
-  The operator may use the fake fixture, a local non-secret answer document,
-  or the terminal questionnaire.
-- macOS Keychain stores bootstrap/event/backup/OpenClaw/bridge material. The
-  journal is AES-GCM encrypted. Plists, config, reports, arguments, logs, and
-  diagnostic exports contain references only. The test-file provider is
-  guarded by `ADMINME_TEST_MODE=1` and never used in production.
-- Two user LaunchAgents call Python launchers; neither service runs as root.
-  The runtime is one Python process at loopback `:3330`; OpenClaw is exact-pinned
-  at loopback `:18789`. Start/stop/status are idempotent and distinguish
-  healthy/degraded/stopped/failed plus per-process state. The runtime resolves
-  the shared transport credential from Keychain and authorizes only explicit
-  OpenClaw channel/account/actor-to-member mappings.
-- Section 10 creates one encrypted package per member with Tailscale identity,
-  owner scope, central stamping, and explicit cross-owner denial. Child
-  packages prohibit Obsidian and retain kid restrictions. A non-Apple
-  household explicitly skips the section.
-- Doctor validates platform, configuration, secure references, SQLCipher and
-  migrations, all 13 projection stores/checkpoints, five adapter categories,
-  plugin compatibility, launchd/process state, loopback ports, member/bridge
-  mapping, observation workflow, disk/backup, and the real isolated canonical
-  message/review/dashboard/workbook/completion/what-now/rebuild round trip.
-  The export is machine-readable and secret-scanned.
-- Backup quiesces services, hashes an allowlisted state tree, and encrypts the
-  versioned archive. Restore authenticates in staging, rejects unsafe paths,
-  verifies all hashes, opens the event log, rebuilds all 13 projections and
-  workbooks, preserves a rollback copy, then replaces active state. A failed
-  post-restore Doctor automatically restores the prior state.
-- Upgrade validation compares the candidate's OpenClaw version, commit, API,
-  plugin package, and lockfile before backup or service replacement. A
-  compatible switch builds its isolated environment first, then uses a backup,
-  rollback pointer, and transactional launchd reconciliation; floating
-  OpenClaw is prohibited.
+- Cat-D Apple Notes, Voice Memos, and optional adult Obsidian sources use real
+  bridge filesystem watchers, durable cursor/lease/dedupe/circuit state, central
+  authenticated ingest, private member knowledge, correction history, replay,
+  and non-privileged scoped vector indexing.
+- Runtime capabilities derive from actual projection/pipeline/product/plugin/
+  extension wiring and optional provider configuration. Missing credentials are
+  disabled or blocked; deterministic fixture coverage remains visible.
+- Notification-producing standing orders persist signal and decision events.
+  OpenClaw sends only route decisions and returns the typed delivery outcome.
+- What-now ranks authorized tasks and commitments across now/hour/daypart/day/
+  week using time, urgency, energy, effort, context, dependency/waiting,
+  relationship consequence, profile behavior, quiet/nudge state, and outcomes.
+- Profiles/personas are versioned tenant-neutral data packs with journaled
+  stage/test/activate/rollback. Persona identity compiles into OpenClaw and
+  profile behavior into member views without changing authority/model routing.
+- The comment-only console package, duplicate prose daemons/helpers, local
+  scheduler dependency/config, fake bridge IDs, stale promises, and unused
+  dependencies are removed. Household APIs, workbooks, OpenClaw dashboard, and
+  UX reference evidence remain.
 
 ## Evidence and limits
 
-The local process evidence is recorded in
-`docs/refactor/evidence/gate-5-mac-mini-operations.md`. The macOS contract is
-`.github/workflows/macos-bootstrap.yml`, with reproducible scripts under
-`scripts/acceptance/`. The live disposable-Mac checklist is in
-`MAC-MINI-OPERATIONS.md`.
+The canonical record is
+`docs/refactor/evidence/gate-6-domain-convergence.md`. The full Python suite
+passes 1,270 tests with 3 expected platform/live guards; bridge passes 60;
+acceptance passes 12; OpenClaw passes TypeScript checks/build plus 11 tests;
+Ruff, mypy, Pyright, Poetry builds, npm audit/package dry-run, and repository
+invariants pass.
 
-No Gmail, Apple, Plaid, Home Assistant, member bridge, OAuth, Tailscale grant,
-or other live-provider success is claimed. The fake Plaid state is sandbox;
-the canonical action is observation-suppressed and performs zero external
-side effects. The Windows host cannot prove FileVault, real Keychain UI,
-actual user launchd recovery, Apple permissions, or a live pinned Gateway.
+No live Gmail, Apple, Plaid, Home Assistant, OAuth, Tailscale, provider
+credential, real OpenClaw Gateway, or family-Mac success is claimed. The
+browser household UX remains Phase 7; the deleted Node scaffold implemented
+none of those surfaces.
 
-Before any family-Mac deployment, a maintainer must review the draft PR and
-run the documented checklist on a disposable supported Apple-silicon Mac,
-including `npm --prefix openclaw/administrateme run test:live:mac` with the
-exact source checkout and explicit lab guard. That is a genuine required human
-action, not a hidden Gate 5 fixture claim.
+## Required human action
 
-## Exact credential-free command
-
-```bash
-./bootstrap/install.sh --dry-run --fixture two-adult-one-child --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
-```
+Review and merge the draft PR, then complete the disposable supported
+Apple-silicon rehearsal in `MAC-MINI-OPERATIONS.md`: FileVault, Keychain,
+launchd/login recovery, Apple grants, Tailscale identity, exact-pinned OpenClaw
+live test, and only intentionally configured providers. Do not activate a
+family deployment from Windows-only fixture evidence.
 
 ## Exact next phase
 
-**Phase 6 is only the member-owned bridge-to-private-searchable-knowledge
-slice.**
-
-Make `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` pass
-without weakening it: enrolled member identity, central owner stamping,
-private `member_knowledge`, permitted non-privileged vector representation,
-member/child/ambient/cross-owner denial, correction history, replay
-equivalence, and two-instance isolation.
-
-Do not reopen Gate 5 paths, replace fixed script names, add a central process,
-activate live providers, redesign the console, or broaden OpenClaw conversation
-mirroring unless Phase 6 exposes a concrete prerequisite defect.
+**Phase 7 is household surfaces and release rehearsal only.** Build the real
+authorized Today, Inbox, CRM, Knowledge, Finance, Calendar, Scoreboard, and
+Settings browser experience on the existing six APIs; preserve the two
+workbooks and OpenClaw dashboard; prove child/privacy/accessibility/responsive
+behavior and a disposable live-Mac release rehearsal. Do not reintroduce a Node
+application server, scheduler, gateway, generic chat memory, model routing, or
+duplicate domain store, and do not reopen Gate 6 semantics without a failing
+acceptance contract.

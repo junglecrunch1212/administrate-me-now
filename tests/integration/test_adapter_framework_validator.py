@@ -134,9 +134,7 @@ def test_multi_capability_pack_validates_cleanly_end_to_end(
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
-    _write_projection(
-        projections_dir, "notes", subscribes_to=["note.added"]
-    )
+    _write_projection(projections_dir, "notes", subscribes_to=["note.added"])
     _write_projection(
         projections_dir, "list_items", subscribes_to=["list_item.toggled"]
     )
@@ -149,9 +147,7 @@ def test_multi_capability_pack_validates_cleanly_end_to_end(
 
     result = validate_adapter_pack(
         pack_dir,
-        registry=_FakeRegistry(
-            _names=["note.added", "list_item.toggled"]
-        ),
+        registry=_FakeRegistry(_names=["note.added", "list_item.toggled"]),
         projections_dir=projections_dir,
     )
 
@@ -170,9 +166,7 @@ def test_existing_v1_gmail_pack_validates_without_errors() -> None:
     pack_dir = Path("packs/adapters/messaging/gmail")
     result = validate_adapter_pack(pack_dir)
 
-    assert not result.has_errors(), [
-        (f.check, f.message) for f in result.errors()
-    ]
+    assert not result.has_errors(), [(f.check, f.message) for f in result.errors()]
     pending = [
         f
         for f in result.advisories()
@@ -194,9 +188,7 @@ def test_existing_v1_plaid_pack_validates_without_errors() -> None:
     pack_dir = Path("packs/adapters/financial/plaid")
     result = validate_adapter_pack(pack_dir)
 
-    assert not result.has_errors(), [
-        (f.check, f.message) for f in result.errors()
-    ]
+    assert not result.has_errors(), [(f.check, f.message) for f in result.errors()]
     pending = [
         f
         for f in result.advisories()
@@ -220,9 +212,7 @@ def test_existing_v1_apple_reminders_pack_validates_without_errors() -> None:
     pack_dir = Path("packs/adapters/reminders/apple-eventkit")
     result = validate_adapter_pack(pack_dir)
 
-    assert not result.has_errors(), [
-        (f.check, f.message) for f in result.errors()
-    ]
+    assert not result.has_errors(), [(f.check, f.message) for f in result.errors()]
     pending = [
         f
         for f in result.advisories()
@@ -247,9 +237,7 @@ def test_cat_d_pack_with_wrong_runtime_yields_capability_runtime_error(
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
-    _write_projection(
-        projections_dir, "knowledge", subscribes_to=["knowledge.added"]
-    )
+    _write_projection(projections_dir, "knowledge", subscribes_to=["knowledge.added"])
     pack_dir = _write_pack(
         tmp_path,
         pack_yaml=(
@@ -350,9 +338,7 @@ def test_cat_b_pack_missing_write_handler_yields_write_capabilities_error(
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
-    _write_projection(
-        projections_dir, "tasks", subscribes_to=["task.created"]
-    )
+    _write_projection(projections_dir, "tasks", subscribes_to=["task.created"])
     pack_dir = _write_pack(
         tmp_path,
         pack_yaml=(
@@ -383,8 +369,7 @@ def test_cat_b_pack_missing_write_handler_yields_write_capabilities_error(
     handler_errors = [
         f
         for f in result.errors()
-        if f.check == "write_capabilities"
-        and f.field_path == "write_capabilities[0]"
+        if f.check == "write_capabilities" and f.field_path == "write_capabilities[0]"
     ]
     assert len(handler_errors) == 1
     assert "toggle_completion" in handler_errors[0].message

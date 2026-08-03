@@ -78,7 +78,12 @@ def nearest(
             vi.distance        AS distance,
             vi.sensitivity     AS sensitivity,
             vi.owner_scope     AS owner_scope,
-            'shared:household' AS visibility_scope
+            em.visibility_scope AS visibility_scope,
+            em.source_event_id AS source_event_id,
+            em.source_adapter AS source_adapter,
+            em.source_account_id AS source_account_id,
+            em.correlation_id AS correlation_id,
+            em.causation_id AS causation_id
           FROM vector_index AS vi
           JOIN embeddings_meta AS em
             ON em.embedding_id = vi.embedding_id

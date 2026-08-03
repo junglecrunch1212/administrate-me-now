@@ -20,6 +20,8 @@ def apply_event(envelope: dict[str, Any], conn: Any) -> None:
     expected_owner = f"private:{member_id}"
     if envelope["owner_scope"] != expected_owner:
         raise ValueError("member knowledge owner_scope must match payload member_id")
+    if envelope["visibility_scope"] != expected_owner:
+        raise ValueError("member knowledge visibility_scope must remain member-private")
     conn.execute(
         """
         INSERT INTO member_knowledge (

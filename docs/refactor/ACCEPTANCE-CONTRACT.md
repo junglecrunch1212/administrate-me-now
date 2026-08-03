@@ -1,5 +1,14 @@
 # Release acceptance contract
 
+Gate 6 status (2026-08-03): **domain convergence PASS at the credential-free
+production-composition boundary.** AC-04's bridge/private-knowledge slice now
+passes, and the full suite supplies executable Gate 6 coverage for all 13
+projections, Cat-A–E, both workbooks, contextual ranking, pack/profile/persona
+lifecycle, cursor/circuit recovery, notification policy/result ingestion,
+capability truth, activity evidence, schema history, lint/types/builds, and
+negative architecture checks. Live provider grants and the full browser UX
+remain separate release evidence, not fixture claims.
+
 Gate 5 status (2026-08-03): **AC-01 and AC-15 credential-free process portions PASS**. The ten-section installer, fixed operations surface, synthetic Doctor round trip, encrypted backup, validated restore, launchd contracts, secret redaction, bridge restrictions, and upgrade compatibility refusal pass locally. `macos-bootstrap.yml` and the live-Mac checklist cover what the Windows host cannot prove. Live OpenClaw, macOS grants, OAuth, and family activation remain unclaimed. AC-04 is now the Phase 6 product slice.
 
 ## Rules
@@ -16,7 +25,7 @@ Standard environment: supported macOS lab, Python 3.11, a Node version satisfyin
 | AC-01 | `./scripts/acceptance/clean-install.sh` | **Gate 5 process PASS:** encrypted ten-section fixture install, observation on, secret-reference scan clean, repeat run no-op, Doctor healthy. Disposable-live-mac grants remain AC-21 evidence. |
 | AC-02 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_runtime_spine.py -q` | One Python process composes the encrypted log, durable bus, exact 13 projections, pipelines, adapters/xlsx, product namespaces, and bridge ingest; append commits before waking consumers; readiness, shutdown, and encrypted reopen are truthful. |
 | AC-03 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py -q` | **Gate 3 PASS:** credential-free inbound communication -> encrypted durable event -> bus -> Parties/Interactions -> schema-bound OpenClaw fixture provenance -> proposal-only review -> independent principal approval and observation-gated delivery intent -> API/xlsx -> complete/defer/snooze/block/unblock outcomes -> changed deterministic what-now. Duplicate requests, stale writes, wrong owners/roles, bad remote responses, replay, projection rebuild, crash-after-append, and restart preserve semantics. |
-| AC-04 | `python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q` | Enrolled member bridge -> owner-stamped knowledge event -> `member_knowledge` and allowed `vector_search`; another member/child/ambient/OpenClaw generic memory cannot read it; correction/replay proven. |
+| AC-04 | `python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py -q` | **Gate 6 PASS:** enrolled member bridge -> owner-stamped knowledge event -> `member_knowledge` and allowed `vector_search`; another member/child/ambient/OpenClaw generic memory cannot read it; correction/replay proven. |
 | AC-05 | `python -m pytest tests/acceptance/test_semantic_separation_and_feedback.py --runxfail -q` | Calendar/task/commitment/list/recurrence/scheduler schemas and stores remain distinct; Cat-B external edit round-trips; completion/defer/snooze/block/correction updates linked projections without type collapse. |
 | AC-06 | `python -m pytest tests/acceptance/test_contextual_whatnow.py --runxfail -q` | Controlled clock/context fixtures prove different explainable results for now/hour/daypart/day/week/longer, energy/effort, availability, blockers, profile, scope, freshness, and lifecycle feedback. |
 | AC-07 | `python -m pytest tests/acceptance/test_encryption_and_all_projections.py --runxfail -q` | Raw DB lacks plaintext sentinel and rejects wrong key; exact 13-name registry; each projection consumes a canonical event; full replay is semantically/byte equivalent as defined; no privileged vector row. |

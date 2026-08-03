@@ -1,16 +1,24 @@
 # adminme-bridge
 
-L1-bridge daemon — sibling Poetry package to the root `adminme` package.
+`adminme-bridge` is the per-member edge daemon. It is a separate Poetry
+package and process from the one central AdministrateMe runtime. It sends
+canonical, typed events to the central `/api/bridge/ingest` namespace over the
+member's authenticated Tailscale route.
 
-Per `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md`
-§2 / `docs/DECISIONS.md` D17 / [PM-29], the bridge runs on per-member Mac
-Minis and emits canonical events via HTTP to the central `:3337` ingest
-service. It is NOT installed alongside `adminme` on the central host — it
-is a separate distributable with its own process lifecycle.
+Gate 6 ships three opt-in Cat-D sources:
 
-11c-i ships the daemon shell only (this package + `bridge.enrolled@v1`
-schema + the central `:3337` ingest service). Concrete knowledge-source
-adapters (Apple Notes, Voice Notes, Obsidian) land in 11c-ii.
+- `knowledge-apple-notes`
+- `knowledge-apple-voice-memos`
+- `knowledge-obsidian` (adult members only; central authorization denies child
+  use even if a local config is tampered with)
 
-See `prompts/_active/11c-i-bridge-daemon-and-ingest.md` for the build
-contract; `docs/build_log.md` Prompt 11c-i for the as-shipped record.
+Set a source name in `enabled_packs` (or provide its `pack_config`) and provide
+its export/transcript/vault `root`. Unconfigured sources remain disabled. Each
+watcher uses the durable metadata-only cursor database for lease renewal,
+provider watermark, external-id/content-hash deduplication, error count, and
+circuit recovery. Content and credentials are never stored in that database.
+
+Every accepted knowledge event is private to the enrolled member, keeps source
+and correction provenance, and enters the `member_knowledge` read model. Only
+non-privileged content may enter the scope-filtered domain `vector_search`
+projection. The bridge does not copy OpenClaw conversations or generic memory.

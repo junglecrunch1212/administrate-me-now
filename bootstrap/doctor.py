@@ -75,7 +75,7 @@ def _event_log_check(path: Path, key: bytes) -> tuple[bool, dict[str, Any]]:
     try:
         connection = sqlcipher3.connect(str(path))
         connection.row_factory = sqlcipher3.Row
-        connection.execute(f'PRAGMA key = "x\'{key.hex()}\'"')
+        connection.execute(f"PRAGMA key = \"x'{key.hex()}'\"")
         cipher_version = connection.execute("PRAGMA cipher_version").fetchone()[0]
         event_count = connection.execute("SELECT count(*) FROM events").fetchone()[0]
         migrations = connection.execute(
@@ -133,7 +133,9 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             pending = client.get(
                 "/api/comms/v1/commitments/pending", headers=headers
             ).json()["items"]
-            proposal = next(row for row in pending if row["commitment_id"] == commitment_id)
+            proposal = next(
+                row for row in pending if row["commitment_id"] == commitment_id
+            )
             dashboard = client.get("/api/core/v1/inbox", headers=headers).json()
             dashboard_visible = any(
                 item.get("id") == commitment_id for item in dashboard["items"]
@@ -152,9 +154,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             if approved_response.status_code != 200:
                 raise RuntimeError("canonical review fixture failed")
             approved = approved_response.json()
-            after_approval = client.get(
-                "/api/core/v1/what-now", headers=headers
-            ).json()
+            after_approval = client.get("/api/core/v1/what-now", headers=headers).json()
             completion_response = client.post(
                 f"/api/core/v1/commitments/{commitment_id}/complete",
                 headers=headers,
@@ -262,8 +262,7 @@ class Doctor:
             and npm_version[0] == 10
             and npm_version >= (10, 9, 0)
             and 4 <= brew_version[0] < 6
-            and versions["openclaw"]["version"]
-            in str(observed_versions["openclaw"])
+            and versions["openclaw"]["version"] in str(observed_versions["openclaw"])
         )
         checks.append(
             DoctorCheck(
@@ -281,11 +280,15 @@ class Doctor:
             DoctorCheck(
                 "validated_configuration",
                 config_path.is_file(),
-                "instance configuration present" if config_path.is_file() else "missing",
+                "instance configuration present"
+                if config_path.is_file()
+                else "missing",
             )
         )
         report_path = self.paths.public_config_path
-        report = json.loads(report_path.read_text("utf-8")) if report_path.exists() else {}
+        report = (
+            json.loads(report_path.read_text("utf-8")) if report_path.exists() else {}
+        )
         sections = report.get("sections", {})
         checks.append(
             DoctorCheck(
@@ -372,12 +375,9 @@ class Doctor:
             len(list(sidecar_dir.rglob("*.json"))) if sidecar_dir.is_dir() else 0
         )
         has_workbooks = any(workbook_files.values())
-        workbook_ok = (
-            projection_files["xlsx_workbooks"]
-            and (
-                (not has_workbooks and sidecar_count == 0)
-                or (has_workbooks and sidecar_count > 0)
-            )
+        workbook_ok = projection_files["xlsx_workbooks"] and (
+            (not has_workbooks and sidecar_count == 0)
+            or (has_workbooks and sidecar_count > 0)
         )
         workbook_state = (
             "not_generated_no_domain_rows"
@@ -408,7 +408,9 @@ class Doctor:
                 {"states": adapter_categories},
             )
         )
-        plugin_manifest = self.root / "openclaw" / "administrateme" / "openclaw.plugin.json"
+        plugin_manifest = (
+            self.root / "openclaw" / "administrateme" / "openclaw.plugin.json"
+        )
         package_path = self.root / "openclaw" / "administrateme" / "package.json"
         plugin_ok = False
         plugin_evidence: dict[str, Any] = {}
@@ -462,9 +464,9 @@ class Doctor:
                 launchd[label] = data.get("Label") == label
             except Exception:
                 launchd[label] = False
-        service_status = ServiceManager(
-            self.paths, test_mode=self.test_mode
-        ).status().public()
+        service_status = (
+            ServiceManager(self.paths, test_mode=self.test_mode).status().public()
+        )
         checks.append(
             DoctorCheck(
                 "launchd_and_process_state",
@@ -496,9 +498,7 @@ class Doctor:
         checks.append(
             DoctorCheck(
                 "ports_and_loopback_binding",
-                host == "127.0.0.1"
-                and len(set(ports.values())) == 2
-                and listeners_ok,
+                host == "127.0.0.1" and len(set(ports.values())) == 2 and listeners_ok,
                 f"configured loopback ports: {ports}",
                 "Correct configuration before starting either service.",
                 {"host": host, "ports": ports, "listeners": listener_evidence},
@@ -509,7 +509,11 @@ class Doctor:
         if mapping_path.exists():
             member_count = len(json.loads(mapping_path.read_text("utf-8"))["members"])
         bridge_path = self.paths.instance_dir / "bridges" / "member-mapping.json"
-        bridge_count = len(json.loads(bridge_path.read_text("utf-8"))) if bridge_path.exists() else 0
+        bridge_count = (
+            len(json.loads(bridge_path.read_text("utf-8")))
+            if bridge_path.exists()
+            else 0
+        )
         checks.append(
             DoctorCheck(
                 "member_mapping_and_bridge_status",
@@ -519,7 +523,11 @@ class Doctor:
             )
         )
         observation_path = self.paths.instance_dir / "config" / "observation.json"
-        observation = json.loads(observation_path.read_text("utf-8")) if observation_path.exists() else {}
+        observation = (
+            json.loads(observation_path.read_text("utf-8"))
+            if observation_path.exists()
+            else {}
+        )
         observation_ok = (
             observation.get("active") is True
             and observation.get("briefing_complete") is True
@@ -536,7 +544,9 @@ class Doctor:
                 "Repeat the observation briefing; do not disable observation manually.",
             )
         )
-        free = shutil.disk_usage(self.paths.root).free if self.paths.root.exists() else 0
+        free = (
+            shutil.disk_usage(self.paths.root).free if self.paths.root.exists() else 0
+        )
         backup_writable = self.paths.backup_dir.is_dir() and os.access(
             self.paths.backup_dir, os.W_OK
         )
@@ -588,7 +598,9 @@ class Doctor:
         self._assert_secret_free(result, references)
         return result
 
-    def export(self, path: Path, *, include_synthetic_proof: bool = True) -> dict[str, Any]:
+    def export(
+        self, path: Path, *, include_synthetic_proof: bool = True
+    ) -> dict[str, Any]:
         result = self.run(include_synthetic_proof=include_synthetic_proof)
         safe = _redact_paths(result, self.paths.root)
         atomic_write(path, json.dumps(safe, indent=2, sort_keys=True).encode("utf-8"))

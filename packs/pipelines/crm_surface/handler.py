@@ -24,9 +24,9 @@ with two intentional differences flagged in §7:
 list inline before the skill call — the clamp is load-bearing, not
 advisory.
 
-Constructor-injection loaders per PM-27: real loader modules don't
-exist on main yet, so the pack ships with no-op defaults that
-exercise the defensive-default sentinel paths. Tests inject fakes.
+Successful composition raises a typed notification signal and policy decision;
+OpenClaw owns delivery and reports its result separately. Constructor-injection
+keeps projection/provider boundaries deterministic in tests.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from adminme.lib.skill_runner import (
     SkillSensitivityRefused,
 )
 from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.notifications import notification_time, raise_and_decide
 
 _log = logging.getLogger(__name__)
 
@@ -160,8 +161,7 @@ class CrmSurfacePipeline:
             result = await ctx.run_skill_fn("compose_crm_surface", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
-                "crm_surface: compose skill failed (%s); emitting "
-                "sentinel per [§7.7]",
+                "crm_surface: compose skill failed (%s); emitting sentinel per [§7.7]",
                 type(exc).__name__,
             )
             return None
@@ -183,37 +183,49 @@ class CrmSurfacePipeline:
             return suggested
         return DEFAULT_DELIVERY_CHANNEL
 
-    async def deliver(
+    async def route_notification(
         self,
         ctx: PipelineContext,
         member_id: str,
         body_text: str,
-        channel: str,
-    ) -> bool:
-        """Single `outbound()` call site per [§6.14]."""
-        if ctx.observation_manager is None:
-            _log.info(
-                "crm_surface: no observation_manager wired; treating "
-                "as observation-mode-active per [D22]"
-            )
-            return False
+        week_of_date: str,
+        profile: dict[str, Any] | None,
+        triggering_event: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist notification intent and policy; never send externally."""
 
-        async def _no_op_send() -> None:
-            return None
-
-        from adminme.lib.observation import outbound
-
-        result = await outbound(
-            ctx.session,
-            "crm_surface_send",
-            {"member_id": member_id, "body_text": body_text},
-            _no_op_send,
-            manager=ctx.observation_manager,
-            event_sink=ctx.event_sink,
-            target_channel=channel,
-            target_identifier=member_id,
+        observation_active = True
+        if ctx.observation_manager is not None:
+            observation_active = await ctx.observation_manager.is_active()
+        now = notification_time(triggering_event)
+        signal = {
+            "signal_id": f"crm-surface:{member_id}:{week_of_date}",
+            "member_id": member_id,
+            "category": "relationship",
+            "urgency": "normal",
+            "title": "Relationship follow-up",
+            "body": body_text,
+            "preferred_channels": ["openclaw"],
+            "requires_approval": False,
+            "not_before": None,
+            "expires_at": None,
+            "related_kind": "crm_surface",
+            "related_id": week_of_date,
+        }
+        _signal_id, _decision_id, decision = await raise_and_decide(
+            ctx.event_sink,
+            signal,
+            tenant_id=ctx.session.tenant_id,
+            owner_scope=f"private:{member_id}",
+            visibility_scope=f"private:{member_id}",
+            sensitivity="normal",
+            profile=profile,
+            now=now,
+            observation_active=observation_active,
+            approval_granted=False,
+            correlation_id=ctx.correlation_id,
         )
-        return not result.suppressed
+        return decision
 
     async def _emit_crm_surfaced(
         self,
@@ -320,7 +332,14 @@ class CrmSurfacePipeline:
         channel = self._resolve_delivery_channel(
             profile, composed.get("suggested_channel")
         )
-        delivered = await self.deliver(ctx, member_id, composed_text, channel)
+        await self.route_notification(
+            ctx,
+            member_id,
+            composed_text,
+            week_of_date,
+            profile,
+            triggering_event,
+        )
         await self._emit_crm_surfaced(
             ctx,
             member_id=member_id,
@@ -330,7 +349,7 @@ class CrmSurfacePipeline:
             channel=channel,
             week_of_date=week_of_date,
             validation_failed=False,
-            delivered=delivered,
+            delivered=False,
             triggering_event=triggering_event,
         )
 

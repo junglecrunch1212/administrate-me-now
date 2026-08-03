@@ -28,18 +28,20 @@ import sqlcipher3
 
 _log = logging.getLogger(__name__)
 
-_UPDATABLE_COLUMNS = frozenset({
-    "owner_party",
-    "summary",
-    "description",
-    "location",
-    "start_at",
-    "end_at",
-    "all_day",
-    "attendees_json",
-    "privacy",
-    "title_redacted",
-})
+_UPDATABLE_COLUMNS = frozenset(
+    {
+        "owner_party",
+        "summary",
+        "description",
+        "location",
+        "start_at",
+        "end_at",
+        "all_day",
+        "attendees_json",
+        "privacy",
+        "title_redacted",
+    }
+)
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
@@ -61,9 +63,7 @@ def apply_calendar_event_added(
     # both that legacy form and the richer post-prompt-04 form.
     calendar_source = p.get("calendar_source") or p.get("source")
     external_uid = p.get("external_uid") or p.get("external_event_id")
-    calendar_event_id = p.get("calendar_event_id") or (
-        f"cal_{envelope['event_id']}"
-    )
+    calendar_event_id = p.get("calendar_event_id") or (f"cal_{envelope['event_id']}")
     start_at = p.get("start_at") or p.get("start")
     end_at = p.get("end_at") or p.get("end") or start_at
     summary = p.get("summary")
@@ -139,9 +139,7 @@ def apply_calendar_event_updated(
         return
     assignments = ", ".join(f"{c} = ?" for c in columns) + ", last_event_id = ?"
     params.append(envelope["event_id"])
-    params.extend(
-        [envelope["tenant_id"], p["calendar_source"], p["external_uid"]]
-    )
+    params.extend([envelope["tenant_id"], p["calendar_source"], p["external_uid"]])
     conn.execute(
         f"UPDATE calendar_events SET {assignments} "
         "WHERE tenant_id = ? AND calendar_source = ? AND external_uid = ?",

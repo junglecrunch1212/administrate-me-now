@@ -21,10 +21,11 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 - `adminme/projections/`: deterministic read models and runner.
 - `adminme/pipelines/`, `packs/pipelines/`, `packs/skills/`: reactive domain logic and typed OpenClaw skill calls.
 - `adminme/adapters/`, `adminme/lib/adapters/`, `packs/adapters/`: adapter protocol, five-category contracts, implementations.
-- `adminme/products/`: product router namespaces; several are baseline stubs.
+- `adminme/products/`: product router namespaces served by the one Python runtime.
 - `adminme/lib/`: session/scope, governance, observation, pack registry, OpenClaw skill seam.
 - `bridge/`: per-member bridge package and tests.
-- `console/`: baseline Node console scaffold. Its behavior contract is `docs/refactor/UX-BEHAVIOR-CONTRACT.md`.
+- Browser behavior remains governed by `docs/refactor/UX-BEHAVIOR-CONTRACT.md`;
+  the false Node application scaffold was removed at Gate 6.
 - `bootstrap/`: baseline prose/config scaffolding. Its target is `docs/refactor/BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md`.
 - `tests/acceptance/`: golden process gates. Run with `--runxfail` for release gating.
 
@@ -39,7 +40,9 @@ PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q
 poetry run ruff check adminme bridge/adminme_bridge
 poetry run mypy adminme bridge/adminme_bridge
 bash scripts/verify_invariants.sh
-cd console && npm ci && npm test
+npm --prefix openclaw/administrateme ci
+npm --prefix openclaw/administrateme run check
+npm --prefix openclaw/administrateme test
 ```
 
 Before a release, also run the full unscoped lint suite, all pack/package validators, identity and instance-path scans, replay/isolation/backup tests, and the clean macOS lab rehearsal in `docs/refactor/ACCEPTANCE-CONTRACT.md`. Record environment-specific skips and failures verbatim.

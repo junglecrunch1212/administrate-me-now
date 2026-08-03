@@ -136,13 +136,9 @@ def validate_adapter_pack(
 
     findings: list[ValidationFinding] = []
     findings.extend(
-        check_capability_runtime_coherence(
-            manifest, pack_family=pack_family
-        )
+        check_capability_runtime_coherence(manifest, pack_family=pack_family)
     )
-    findings.extend(
-        check_event_schema_registration(manifest, registry=registry)
-    )
+    findings.extend(check_event_schema_registration(manifest, registry=registry))
     findings.extend(
         check_projection_subscription_compatibility(
             manifest, projections_dir=projections_dir

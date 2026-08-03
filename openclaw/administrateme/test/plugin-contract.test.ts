@@ -116,7 +116,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(8);
+    expect([...runtime.tools]).toHaveLength(9);
     expect([...runtime.commands]).toHaveLength(7);
     expect([...runtime.gateways]).toHaveLength(5);
     expect(runtime.services).toHaveLength(1);
@@ -162,6 +162,28 @@ describe("native OpenClaw contract fixture", () => {
     expect(read).toBeUndefined();
     expect(write.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(write.requireApproval?.pluginId).toBe("administrateme");
+  });
+
+  it("reports notification delivery through the typed result seam", async () => {
+    const runtime = fakeApi();
+    const factory = runtime.tools.get("administrateme_notification_result");
+    const tool = factory?.(toolContext()) as AnyAgentTool;
+    await tool.execute("attempt-a", {
+      attempt_id: "attempt-a",
+      decision_id: "decision-a",
+      signal_id: "signal-a",
+      outcome: "delivered",
+      attempted_at: "2026-08-03T12:00:00Z",
+      provider_receipt_id: "fixture-receipt",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3330/api/openclaw/v1/notifications/result",
+    );
+    expect(requestBody(fetchMock)).toMatchObject({
+      attempt_id: "attempt-a",
+      outcome: "delivered",
+      provenance: { call_kind: "tool" },
+    });
   });
 
   it("derives outbound approval from the resolved tool gate rather than model input", async () => {

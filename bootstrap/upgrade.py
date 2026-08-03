@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.backup_restore import BackupManager
-from bootstrap.contracts import DeploymentPaths, atomic_write, ensure_within, load_versions
+from bootstrap.contracts import (
+    DeploymentPaths,
+    atomic_write,
+    ensure_within,
+    load_versions,
+)
 from bootstrap.doctor import Doctor
 from bootstrap.services import ServiceManager
 from bootstrap.wizard import install_launch_agents
@@ -42,9 +47,7 @@ def validate_candidate(candidate: Path) -> dict[str, Any]:
                 f"candidate OpenClaw {key} is incompatible; service replacement refused"
             )
     package = json.loads(
-        (candidate / "openclaw" / "administrateme" / "package.json").read_text(
-            "utf-8"
-        )
+        (candidate / "openclaw" / "administrateme" / "package.json").read_text("utf-8")
     )
     build = package.get("openclaw", {}).get("build", {})
     compat = package.get("openclaw", {}).get("compat", {})
@@ -52,7 +55,9 @@ def validate_candidate(candidate: Path) -> dict[str, Any]:
         build.get("openclawCommit") != active_claw["commit"]
         or compat.get("pluginApi") != active_claw["plugin_api"]
     ):
-        raise UpgradeError("candidate plugin package contradicts its compatibility manifest")
+        raise UpgradeError(
+            "candidate plugin package contradicts its compatibility manifest"
+        )
     return {
         "compatible": True,
         "openclaw_version": active_claw["version"],
@@ -182,9 +187,7 @@ class UpgradeManager:
             atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
             install_launch_agents(
                 self.paths,
-                ensure_within(
-                    Path(current["path"]), self.paths.app_dir / "releases"
-                ),
+                ensure_within(Path(current["path"]), self.paths.app_dir / "releases"),
                 test_mode=self.test_mode,
             )
             if not stopped:
@@ -232,9 +235,10 @@ class UpgradeManager:
             text=True,
         )
         if completed.returncode:
-            return "release-" + __import__("hashlib").sha256(
-                str(candidate).encode()
-            ).hexdigest()[:12]
+            return (
+                "release-"
+                + __import__("hashlib").sha256(str(candidate).encode()).hexdigest()[:12]
+            )
         return completed.stdout.strip()
 
 

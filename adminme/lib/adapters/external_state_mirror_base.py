@@ -169,9 +169,7 @@ class ExternalStateMirrorAdapter(ABC):
         return await self._apply_write_impl(operation)
 
     @abstractmethod
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """Per-operation write implementation. Invoked by
         :meth:`apply_write` only after the per-operation capability gate
         passes. Subclasses MUST route the actual external API call

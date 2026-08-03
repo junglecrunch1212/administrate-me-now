@@ -327,8 +327,7 @@ class EventLog:
         except SchemaNotFound:
             if os.environ.get(_ALLOW_UNKNOWN_ENV) == "1":
                 _log.warning(
-                    "append: no schema registered for %s v%d; proceeding because "
-                    "%s=1",
+                    "append: no schema registered for %s v%d; proceeding because %s=1",
                     envelope.type,
                     envelope.schema_version,
                     _ALLOW_UNKNOWN_ENV,

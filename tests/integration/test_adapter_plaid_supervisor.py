@@ -159,7 +159,7 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
     fake_plaid = _FakePlaidClient(sync_response)
     adapter = PlaidAdapter(
         plaid_client_factory=lambda *_a: fake_plaid,
-        webhook_verifier_factory=lambda _route: (lambda _p: True),
+        webhook_verifier_factory=lambda _route: lambda _p: True,
     )
 
     def _ctx_factory() -> AdapterContext:
@@ -228,7 +228,7 @@ async def test_supervisor_plaid_item_login_required_emits_fatal(
     )
     adapter = PlaidAdapter(
         plaid_client_factory=lambda *_a: fake_plaid,
-        webhook_verifier_factory=lambda _route: (lambda _p: True),
+        webhook_verifier_factory=lambda _route: lambda _p: True,
     )
 
     def _ctx_factory() -> AdapterContext:

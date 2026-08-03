@@ -9,7 +9,7 @@
   "runtime": {
     "node": "v24.14.1",
     "browser": "Microsoft Edge",
-    "browser_version": "150.0.4078.99",
+    "browser_version": "150.0.4078.105",
     "playwright_core": "1.62.0"
   },
   "determinism": {

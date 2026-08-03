@@ -11,13 +11,18 @@ FIXTURE_MEMBER_EMAIL = "principal@fixture.invalid"
 FIXTURE_NOW = "2026-07-30T12:00:00Z"
 
 
-def _event(
-    event_type: str, payload: dict, key: str, *, private: bool = False
+def _fixture_event(
+    tenant_id: str,
+    event_type: str,
+    payload: dict,
+    key: str,
+    *,
+    private: bool = False,
 ) -> EventEnvelope:
     scope = f"private:{FIXTURE_MEMBER_ID}" if private else "shared:household"
     return EventEnvelope(
         event_at_ms=1_775_131_200_000,
-        tenant_id="placeholder",
+        tenant_id=tenant_id,
         type=event_type,
         schema_version=1,
         occurred_at=FIXTURE_NOW,
@@ -33,6 +38,11 @@ def _event(
 
 
 def canonical_seed_events(tenant_id: str) -> list[EventEnvelope]:
+    def _event(
+        event_type: str, payload: dict, key: str, *, private: bool = False
+    ) -> EventEnvelope:
+        return _fixture_event(tenant_id, event_type, payload, key, private=private)
+
     events = [
         _event(
             "party.created",
@@ -121,8 +131,6 @@ def canonical_seed_events(tenant_id: str) -> list[EventEnvelope]:
             private=True,
         ),
     ]
-    for envelope in events:
-        envelope.tenant_id = tenant_id
     return events
 
 

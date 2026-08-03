@@ -47,9 +47,7 @@ class Provenance(BaseModel):
     message_id: str | None = Field(default=None, max_length=300)
     thread_id: str | None = Field(default=None, max_length=300)
     correlation_id: str = Field(min_length=1, max_length=300)
-    call_kind: Literal[
-        "tool", "dashboard", "slash_command", "standing_order", "bridge"
-    ]
+    call_kind: Literal["tool", "dashboard", "slash_command", "standing_order", "bridge"]
     openclaw_version: Literal["2026.7.2"]
     openclaw_commit: Literal["944cf08f94c334cff2b0fdf7e01187a9efa42715"]
 
@@ -126,9 +124,7 @@ class SkillRequest(ContextRequest):
 
 
 class BridgeRequest(ContextRequest):
-    event_kind: Literal[
-        "commitment_candidate", "household_action", "delivery_outcome"
-    ]
+    event_kind: Literal["commitment_candidate", "household_action", "delivery_outcome"]
     content: str = Field(min_length=1, max_length=2000)
     consent: Literal[True]
     sensitivity: Literal["normal", "sensitive"] = "normal"
@@ -145,6 +141,17 @@ class ModelCallRequest(ContextRequest):
     run_id: str = Field(min_length=1, max_length=300)
     provider: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=300)
+
+
+class NotificationResultRequest(ContextRequest):
+    attempt_id: str = Field(min_length=1, max_length=240)
+    decision_id: str = Field(min_length=1, max_length=240)
+    signal_id: str = Field(min_length=1, max_length=240)
+    outcome: Literal["delivered", "failed", "retrying"]
+    attempted_at: str = Field(min_length=1)
+    provider_receipt_id: str | None = Field(default=None, max_length=500)
+    error_code: str | None = Field(default=None, max_length=120)
+    next_retry_at: str | None = None
 
 
 class HealthReport(BaseModel):
@@ -182,7 +189,9 @@ def _session(request: Request, provenance: Provenance) -> Session:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
     role = runtime.settings.member_roles.get(member_id)
     if role not in {"principal", "child", "device"}:
-        raise HTTPException(403, "mapped OpenClaw actor has no interactive household role")
+        raise HTTPException(
+            403, "mapped OpenClaw actor has no interactive household role"
+        )
     source: Source
     if provenance.call_kind == "slash_command":
         source = "openclaw_slash_command"
@@ -316,7 +325,9 @@ async def _guard(runtime: Any, session: Session, action: str, payload: dict) -> 
         raise HTTPException(503, "write authorization unavailable")
     decision = await runtime.guarded_write.check(session, action, payload)
     if not decision.pass_:
-        raise HTTPException(403, {"code": "write_denied", "layer": decision.layer_failed})
+        raise HTTPException(
+            403, {"code": "write_denied", "layer": decision.layer_failed}
+        )
 
 
 @router.get("/health")
@@ -369,7 +380,9 @@ async def report_health(body: HealthReport, request: Request) -> dict[str, Any]:
     runtime.openclaw_state = state
     await runtime._refresh_capability_registry()
     if not compatible:
-        raise HTTPException(409, {"code": "incompatible_openclaw", "event_id": event_id})
+        raise HTTPException(
+            409, {"code": "incompatible_openclaw", "event_id": event_id}
+        )
     return {"event_id": event_id, "state": state}
 
 
@@ -382,9 +395,7 @@ async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any
         "inbox": await core.inbox(request, session),
         "commitments": await core.active_commitments(request, session),
     }
-    await _record_tool_call(
-        request, session, body.provenance, operation="tools.state"
-    )
+    await _record_tool_call(request, session, body.provenance, operation="tools.state")
     return result
 
 
@@ -519,7 +530,9 @@ async def review(body: ReviewRequest, request: Request) -> dict[str, Any]:
         )
         return result
     if not body.commitment_id or not body.expected_last_event_id:
-        raise HTTPException(422, "commitment_id and expected_last_event_id are required")
+        raise HTTPException(
+            422, "commitment_id and expected_last_event_id are required"
+        )
     if body.action == "approve":
         result = await comms.approve_commitment(
             body.commitment_id,
@@ -597,7 +610,9 @@ async def _task_lifecycle(
             "what_now": core._what_now(runtime, session),
         }
     if row["last_event_id"] != body.expected_last_event_id:
-        raise HTTPException(409, {"code": "stale_write", "current": row["last_event_id"]})
+        raise HTTPException(
+            409, {"code": "stale_write", "current": row["last_event_id"]}
+        )
     now = EventEnvelope.now_utc_iso()
     payload: dict[str, Any]
     if body.action == "complete":
@@ -694,7 +709,9 @@ async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
     if body.item_kind == "commitment":
         unsupported = set(body.fields) - {"description", "due_at"}
         if unsupported:
-            raise HTTPException(422, f"unsupported commitment fields: {sorted(unsupported)}")
+            raise HTTPException(
+                422, f"unsupported commitment fields: {sorted(unsupported)}"
+            )
         result = await comms.edit_commitment(
             body.item_id,
             comms.EditRequest(
@@ -729,7 +746,9 @@ async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
         request_id=append_request_id,
         request_fingerprint=request_fingerprint,
     )
-    row = get_task(runtime.projections.connection("tasks"), session, task_id=body.item_id)
+    row = get_task(
+        runtime.projections.connection("tasks"), session, task_id=body.item_id
+    )
     if row is None or row["assignee_party"] != session.auth_member_id:
         raise HTTPException(404, "task not found")
     if prior_event_id is not None:
@@ -743,7 +762,9 @@ async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
         )
         return result
     if row["last_event_id"] != body.expected_last_event_id:
-        raise HTTPException(409, {"code": "stale_write", "current": row["last_event_id"]})
+        raise HTTPException(
+            409, {"code": "stale_write", "current": row["last_event_id"]}
+        )
     payload = {
         "task_id": body.item_id,
         "updated_at": EventEnvelope.now_utc_iso(),
@@ -770,7 +791,9 @@ async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
     result = {
         "event_id": event_id,
         "duplicate": duplicate,
-        "task": get_task(runtime.projections.connection("tasks"), session, task_id=body.item_id),
+        "task": get_task(
+            runtime.projections.connection("tasks"), session, task_id=body.item_id
+        ),
     }
     await _record_tool_call(
         request,
@@ -858,6 +881,64 @@ async def bridge_event(body: BridgeRequest, request: Request) -> dict[str, Any]:
     return {"accepted": True, "event_id": event_id}
 
 
+@router.post("/notifications/result")
+async def notification_result(
+    body: NotificationResultRequest, request: Request
+) -> dict[str, Any]:
+    """Accept a delivery receipt only for this member's routed decision."""
+
+    session = _session(request, body.provenance)
+    runtime = _runtime(request)
+    matched: dict[str, Any] | None = None
+    async for event in runtime.event_log.read_since(
+        types=["notification.decision.made"]
+    ):
+        payload = event["payload"]
+        if (
+            payload.get("decision_id") == body.decision_id
+            and payload.get("signal_id") == body.signal_id
+        ):
+            matched = event
+    if matched is None or matched["owner_scope"] != f"private:{session.auth_member_id}":
+        raise HTTPException(404, "notification decision not found")
+    if matched["payload"].get("decision") != "route":
+        raise HTTPException(409, "notification decision was not routed")
+    payload = {
+        "attempt_id": body.attempt_id,
+        "decision_id": body.decision_id,
+        "signal_id": body.signal_id,
+        "outcome": body.outcome,
+        "route": "openclaw",
+        "attempted_at": body.attempted_at,
+        "provider_receipt_id": body.provider_receipt_id,
+        "error_code": body.error_code,
+        "next_retry_at": body.next_retry_at,
+    }
+    event_id, duplicate = await _append(
+        runtime,
+        session,
+        event_type="notification.delivery.result",
+        source_account_id=body.provenance.account_id or body.provenance.channel_id,
+        owner_scope=matched["owner_scope"],
+        visibility_scope=matched["visibility_scope"],
+        sensitivity=matched["sensitivity"],
+        payload=payload,
+        request_id=body.attempt_id,
+        causation_id=matched["event_id"],
+        request_fingerprint=_fingerprint(
+            body.model_dump(mode="json", exclude={"provenance"})
+        ),
+    )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="notifications.delivery-result",
+        result_event_ids=[event_id],
+    )
+    return {"accepted": True, "event_id": event_id, "duplicate": duplicate}
+
+
 @router.post("/model-calls")
 async def model_call(body: ModelCallRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
@@ -885,7 +966,9 @@ async def model_call(body: ModelCallRequest, request: Request) -> dict[str, Any]
 
 
 @router.post("/standing-orders/trigger")
-async def standing_order(body: StandingOrderRequest, request: Request) -> dict[str, Any]:
+async def standing_order(
+    body: StandingOrderRequest, request: Request
+) -> dict[str, Any]:
     session = _session(request, body.provenance)
     runtime = _runtime(request)
     if body.provenance.call_kind != "standing_order":

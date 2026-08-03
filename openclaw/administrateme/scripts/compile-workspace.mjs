@@ -4,8 +4,18 @@ import path from "node:path";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(pluginRoot, "..", "..");
-const workspace = path.join(pluginRoot, "workspace");
-const persona = await readFile(path.join(pluginRoot, "persona", "quiet-assistant.md"), "utf8");
+const workspace = process.env.ADMINME_WORKSPACE_OUTPUT
+  ? path.resolve(process.env.ADMINME_WORKSPACE_OUTPUT)
+  : path.join(pluginRoot, "workspace");
+const personaId = process.env.ADMINME_PERSONA_ID || "quiet_assistant";
+if (!/^[a-z][a-z0-9_]*$/.test(personaId)) {
+  throw new Error(`Invalid ADMINME_PERSONA_ID: ${personaId}`);
+}
+const personaPath = path.join(repoRoot, "packs", "personas", personaId, "pack.json");
+const personaPack = JSON.parse(await readFile(personaPath, "utf8"));
+if (personaPack.kind !== "persona" || personaPack.id !== personaId || typeof personaPack.soul !== "string") {
+  throw new Error(`Invalid persona extension: ${personaPath}`);
+}
 const programRoot = path.join(repoRoot, "bootstrap", "openclaw", "programs");
 const programNames = (await readdir(programRoot)).filter((name) => name.endsWith(".md")).sort();
 const programs = await Promise.all(
@@ -16,7 +26,7 @@ const compiledPrograms = programs.join("\n").trimEnd();
 await mkdir(workspace, { recursive: true });
 await writeFile(
   path.join(workspace, "SOUL.md"),
-  `<!-- GENERATED from persona/quiet-assistant.md; do not add member data here. -->\n${persona.trim()}\n`,
+  `<!-- GENERATED from packs/personas/${personaId}/pack.json; do not add member data here. -->\n${personaPack.soul.trim()}\n\nYou do not become a household member, parent, guardian, clinician, lawyer, or financial decision-maker. Never impersonate a principal, reveal one member's private record to another, or turn generic conversation into household truth. OpenClaw approval and AdministrateMe domain approval are separate gates.\n`,
 );
 await writeFile(
   path.join(workspace, "IDENTITY.md"),
@@ -35,4 +45,4 @@ await writeFile(
   "# Standing-order boundary\n\nThe authoritative schedules are in ../automations.json. Each trigger invokes only `administrateme_standing_order`; AdministrateMe records the typed trigger and retains domain truth while OpenClaw owns scheduling and execution.\n",
 );
 
-console.log(`Compiled ${programNames.length} standing-order programs and one instance persona.`);
+console.log(`Compiled ${programNames.length} standing-order programs and persona ${personaId}.`);

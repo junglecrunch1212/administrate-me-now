@@ -1,5 +1,16 @@
 # Constitutional crosswalk
 
+Gate 6 implementation evidence (2026-08-03): the baseline columns below are
+historical observations. Current executable evidence preserves C001–C090 while
+converging implementation ownership: six product namespaces; thirteen
+projections; Cat-A–E; two bidirectional workbooks; eleven domain pipeline packs
+split into six reactive runtime subscriptions and five OpenClaw standing
+orders; ten skills; five profiles; four personas; scoped member knowledge and
+domain search; typed notification/result feedback; contextual what-now; and a
+scoped activity feed. Generic conversation memory, model routing, channel
+delivery, and scheduling remain OpenClaw responsibilities. Evidence:
+`docs/refactor/evidence/gate-6-domain-convergence.md`.
+
 Gate 5 implementation evidence (2026-08-03): AC-03 and AC-12 remain intact. AC-01/15 now prove the encrypted ten-section bootstrap, fixed scripts, Doctor canonical loop, user launchd, secure references, backup/restore replay, and bridge enrollment restrictions. The authoritative new process test is `tests/acceptance/test_macos_bootstrap_operations.py`; AC-04 member-private knowledge is Phase 6.
 
 No row may be removed merely because its current implementation is absent. A future semantic change updates the row, governing ADR, evidence, and executable gate in the same PR.

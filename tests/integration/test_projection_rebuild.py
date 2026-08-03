@@ -133,52 +133,67 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
     # 150 messaging; 30 telephony; 20 artifacts.
     for i in range(100):
         await log.append(
-            _envelope("party.created", {
-                "party_id": f"p{i:03d}",
-                "kind": "person",
-                "display_name": f"Name{i}",
-                "sort_name": f"Name{i:03d}",
-            })
+            _envelope(
+                "party.created",
+                {
+                    "party_id": f"p{i:03d}",
+                    "kind": "person",
+                    "display_name": f"Name{i}",
+                    "sort_name": f"Name{i:03d}",
+                },
+            )
         )
     for i in range(100):
         await log.append(
-            _envelope("identifier.added", {
-                "identifier_id": f"id{i:03d}",
-                "party_id": f"p{i:03d}",
-                "kind": "email",
-                "value": f"p{i}@example.com",
-                "value_normalized": f"p{i}@example.com",
-                "verified": False,
-                "primary_for_kind": True,
-            })
+            _envelope(
+                "identifier.added",
+                {
+                    "identifier_id": f"id{i:03d}",
+                    "party_id": f"p{i:03d}",
+                    "kind": "email",
+                    "value": f"p{i}@example.com",
+                    "value_normalized": f"p{i}@example.com",
+                    "verified": False,
+                    "primary_for_kind": True,
+                },
+            )
         )
     # household + 50 memberships
     await log.append(
-        _envelope("party.created", {
-            "party_id": "hh",
-            "kind": "household",
-            "display_name": "HH",
-            "sort_name": "HH",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "hh",
+                "kind": "household",
+                "display_name": "HH",
+                "sort_name": "HH",
+            },
+        )
     )
     for i in range(50):
         await log.append(
-            _envelope("membership.added", {
-                "membership_id": f"mem{i:03d}",
-                "party_id": f"p{i:03d}",
-                "parent_party_id": "hh",
-                "role": "principal",
-            })
+            _envelope(
+                "membership.added",
+                {
+                    "membership_id": f"mem{i:03d}",
+                    "party_id": f"p{i:03d}",
+                    "parent_party_id": "hh",
+                    "role": "principal",
+                },
+            )
         )
     for i in range(50):
         await log.append(
-            _envelope("relationship.added", {
-                "relationship_id": f"rel{i:03d}",
-                "party_a": f"p{i:03d}",
-                "party_b": f"p{(i + 1) % 100:03d}",
-                "label": "sibling",
-                "direction": "mutual",
-            })
+            _envelope(
+                "relationship.added",
+                {
+                    "relationship_id": f"rel{i:03d}",
+                    "party_a": f"p{i:03d}",
+                    "party_b": f"p{(i + 1) % 100:03d}",
+                    "label": "sibling",
+                    "direction": "mutual",
+                },
+            )
         )
     for i in range(150):
         if i % 2 == 0:
@@ -545,9 +560,7 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
                     "kind": ("utility", "subscription", "insurance", "bank")[i % 4],
                     "status": "active",
                     "next_renewal": f"2026-05-{1 + i % 28:02d}",
-                    "login_vault_ref": (
-                        f"op://Vault/acc-{i}" if i % 3 == 0 else None
-                    ),
+                    "login_vault_ref": (f"op://Vault/acc-{i}" if i % 3 == 0 else None),
                 },
             )
         )
@@ -630,9 +643,7 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
                     "embedding": _fake_embedding(text),
                     "model_name": "text-embedding-3-small",
                     "sensitivity": "normal",
-                    "source_text_sha256": hashlib.sha256(
-                        text.encode()
-                    ).hexdigest(),
+                    "source_text_sha256": hashlib.sha256(text.encode()).hexdigest(),
                 },
             )
         )
@@ -649,9 +660,7 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
                     "embedding": _fake_embedding(text),
                     "model_name": "text-embedding-3-small",
                     "sensitivity": "privileged",
-                    "source_text_sha256": hashlib.sha256(
-                        text.encode()
-                    ).hexdigest(),
+                    "source_text_sha256": hashlib.sha256(text.encode()).hexdigest(),
                 },
                 sensitivity="privileged",
             )
@@ -695,9 +704,7 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
     vector_tables = ["embeddings_meta"]
 
     pre_parties = _snapshot(runner.connection("parties"), parties_tables)
-    pre_interactions = _snapshot(
-        runner.connection("interactions"), interactions_tables
-    )
+    pre_interactions = _snapshot(runner.connection("interactions"), interactions_tables)
     pre_artifacts = _snapshot(runner.connection("artifacts"), artifacts_tables)
     pre_commitments = _snapshot(runner.connection("commitments"), commitments_tables)
     pre_tasks = _snapshot(runner.connection("tasks"), tasks_tables)
@@ -706,9 +713,11 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
     pre_paa = _snapshot(runner.connection("places_assets_accounts"), paa_tables)
     pre_money = _snapshot(runner.connection("money"), money_tables)
     pre_vector = _snapshot(runner.connection("vector_search"), vector_tables)
-    pre_vector_idx_count = runner.connection("vector_search").execute(
-        "SELECT count(*) FROM vector_index"
-    ).fetchone()[0]
+    pre_vector_idx_count = (
+        runner.connection("vector_search")
+        .execute("SELECT count(*) FROM vector_index")
+        .fetchone()[0]
+    )
 
     await runner.rebuild("parties")
     await runner.rebuild("interactions")
@@ -733,9 +742,11 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
     post_paa = _snapshot(runner.connection("places_assets_accounts"), paa_tables)
     post_money = _snapshot(runner.connection("money"), money_tables)
     post_vector = _snapshot(runner.connection("vector_search"), vector_tables)
-    post_vector_idx_count = runner.connection("vector_search").execute(
-        "SELECT count(*) FROM vector_index"
-    ).fetchone()[0]
+    post_vector_idx_count = (
+        runner.connection("vector_search")
+        .execute("SELECT count(*) FROM vector_index")
+        .fetchone()[0]
+    )
 
     assert pre_parties == post_parties
     assert pre_interactions == post_interactions
@@ -766,9 +777,11 @@ async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> Non
     # 100 recorded + 30 manually_added; manually_deleted is soft-delete
     # so rows persist.
     assert len(post_money["money_flows"]) == 130
-    deleted_count = runner.connection("money").execute(
-        "SELECT count(*) FROM money_flows WHERE deleted_at IS NOT NULL"
-    ).fetchone()[0]
+    deleted_count = (
+        runner.connection("money")
+        .execute("SELECT count(*) FROM money_flows WHERE deleted_at IS NOT NULL")
+        .fetchone()[0]
+    )
     assert deleted_count == 20
     # 35 normal + 5 privileged skipped.
     assert len(post_vector["embeddings_meta"]) == 35

@@ -165,10 +165,17 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
         )
         assert proposal["state"] == "proposal_only"
         assert proposal["observation_active"] is True
-        created = app.state.runtime.projections.connection("tasks").execute(
-            "SELECT COUNT(*) FROM tasks WHERE tenant_id=? AND task_id=?",
-            (app.state.runtime.settings.instance.tenant_id, "oct_observation-action"),
-        ).fetchone()[0]
+        created = (
+            app.state.runtime.projections.connection("tasks")
+            .execute(
+                "SELECT COUNT(*) FROM tasks WHERE tenant_id=? AND task_id=?",
+                (
+                    app.state.runtime.settings.instance.tenant_id,
+                    "oct_observation-action",
+                ),
+            )
+            .fetchone()[0]
+        )
         assert created == 0
 
         skill = _post(
@@ -205,9 +212,7 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
             client,
             "/api/openclaw/v1/standing-orders/trigger",
             {
-                "provenance": _provenance(
-                    "standing-retry", call_kind="standing_order"
-                ),
+                "provenance": _provenance("standing-retry", call_kind="standing_order"),
                 "program_id": "morning_digest",
                 "automation_id": "fixture-automation-1",
                 "trigger_id": "fixture-trigger-1",
@@ -300,7 +305,9 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
         correlated = client.portal.call(
             app.state.runtime.event_log.get_by_correlation, "observation-action"
         )
-        audit = next(row for row in correlated if row["type"] == "openclaw.tool_call.recorded")
+        audit = next(
+            row for row in correlated if row["type"] == "openclaw.tool_call.recorded"
+        )
         assert audit["payload"] == {
             "operation": "tools.action",
             "result_event_ids": [proposal["event_id"]],
@@ -331,10 +338,14 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
     with TestClient(app) as client:
         output = _seed_slice(client, "gate4-outcomes")
         runtime = app.state.runtime
-        task_row = runtime.projections.connection("tasks").execute(
-            "SELECT * FROM tasks WHERE tenant_id=? AND task_id=?",
-            (runtime.settings.instance.tenant_id, "task_fixture_secondary"),
-        ).fetchone()
+        task_row = (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT * FROM tasks WHERE tenant_id=? AND task_id=?",
+                (runtime.settings.instance.tenant_id, "task_fixture_secondary"),
+            )
+            .fetchone()
+        )
         assert task_row is not None
 
         from adminme.products.openclaw import main as openclaw_main
@@ -372,10 +383,14 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
         assert completed_retry["duplicate"] is True
         assert rerank_calls == 1
 
-        commitment_row = runtime.projections.connection("commitments").execute(
-            "SELECT * FROM commitments WHERE tenant_id=? AND commitment_id=?",
-            (runtime.settings.instance.tenant_id, output["commitment_id"]),
-        ).fetchone()
+        commitment_row = (
+            runtime.projections.connection("commitments")
+            .execute(
+                "SELECT * FROM commitments WHERE tenant_id=? AND commitment_id=?",
+                (runtime.settings.instance.tenant_id, output["commitment_id"]),
+            )
+            .fetchone()
+        )
         review_body = {
             "provenance": _provenance("approval-once"),
             "request_id": "approve-through-openclaw",
@@ -458,15 +473,20 @@ def test_openclaw_outage_restart_and_incompatible_upgrade_preserve_truth(
         )
         assert unavailable["state"] == "unavailable"
         diagnostics = client.get("/api/system/ready").json()
-        assert diagnostics["capabilities"]["standing_order:morning_digest"][
-            "state"
-        ] == "degraded"
-        assert client.get("/api/core/v1/what-now", headers=DEMO_HEADERS).status_code == 200
+        assert (
+            diagnostics["capabilities"]["standing_order:morning_digest"]["state"]
+            == "degraded"
+        )
+        assert (
+            client.get("/api/core/v1/what-now", headers=DEMO_HEADERS).status_code == 200
+        )
 
     restarted = create_application(settings)
     with TestClient(restarted) as client:
         assert restarted.state.runtime.openclaw_state == "unavailable"
-        stored = client.portal.call(restarted.state.runtime.event_log.get, source_event_id)
+        stored = client.portal.call(
+            restarted.state.runtime.event_log.get, source_event_id
+        )
         assert stored is not None
         incompatible = _post(
             client,
@@ -482,10 +502,13 @@ def test_openclaw_outage_restart_and_incompatible_upgrade_preserve_truth(
         assert incompatible["detail"]["code"] == "incompatible_openclaw"
         assert restarted.state.runtime.openclaw_state == "incompatible"
         diagnostics = client.get("/api/system/ready").json()
-        assert diagnostics["capabilities"]["standing_order:morning_digest"][
-            "state"
-        ] == "blocked"
-        assert client.get("/api/core/v1/what-now", headers=DEMO_HEADERS).status_code == 200
+        assert (
+            diagnostics["capabilities"]["standing_order:morning_digest"]["state"]
+            == "blocked"
+        )
+        assert (
+            client.get("/api/core/v1/what-now", headers=DEMO_HEADERS).status_code == 200
+        )
         states = client.portal.call(
             _events, restarted.state.runtime, "openclaw.integration.state_changed"
         )

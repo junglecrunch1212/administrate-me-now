@@ -37,7 +37,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -272,24 +271,18 @@ async def test_rebuild_equivalence(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:interactions")
 
     conn = runner.connection("interactions")
-    pre = conn.execute(
-        "SELECT * FROM interactions ORDER BY interaction_id"
-    ).fetchall()
+    pre = conn.execute("SELECT * FROM interactions ORDER BY interaction_id").fetchall()
     pre_parts = conn.execute(
-        "SELECT * FROM interaction_participants "
-        "ORDER BY interaction_id, party_id, role"
+        "SELECT * FROM interaction_participants ORDER BY interaction_id, party_id, role"
     ).fetchall()
     pre_dump = ([tuple(r) for r in pre], [tuple(r) for r in pre_parts])
 
     await runner.rebuild("interactions")
 
     conn = runner.connection("interactions")
-    post = conn.execute(
-        "SELECT * FROM interactions ORDER BY interaction_id"
-    ).fetchall()
+    post = conn.execute("SELECT * FROM interactions ORDER BY interaction_id").fetchall()
     post_parts = conn.execute(
-        "SELECT * FROM interaction_participants "
-        "ORDER BY interaction_id, party_id, role"
+        "SELECT * FROM interaction_participants ORDER BY interaction_id, party_id, role"
     ).fetchall()
     post_dump = ([tuple(r) for r in post], [tuple(r) for r in post_parts])
     assert pre_dump == post_dump
@@ -371,7 +364,10 @@ async def test_closeness_signals_counts(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:interactions")
 
     conn = runner.connection("interactions")
-    signals = closeness_signals(conn, _S("tenant-a"), party_id="a@example.com",
+    signals = closeness_signals(
+        conn,
+        _S("tenant-a"),
+        party_id="a@example.com",
         since_iso="2026-01-01T00:00:00Z",
     )
     assert signals["inbound_count"] == 1

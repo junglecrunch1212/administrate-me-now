@@ -1,0 +1,17 @@
+kind: adapter
+subkind: knowledge-source
+entrypoint: adminme_bridge.connector_packs.apple_notes:AppleNotesAdapter
+pack:
+  name: knowledge-apple-notes
+  version: 1.0.0
+  author: built-in
+capabilities:
+  - kind: Cat-D
+    runtime: bridge
+    event_families: [member_knowledge]
+    sensitivity_default: normal
+owner_scope_overridability_at_install: false
+sharing_model_discriminator: member-private
+dedup_strategy:
+  kind: external_id_and_content_sha256
+config: {}

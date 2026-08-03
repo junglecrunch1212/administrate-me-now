@@ -143,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "restore":
             _print(
-                BackupManager(paths, root=root, test_mode=test_mode).restore(args.backup)
+                BackupManager(paths, root=root, test_mode=test_mode).restore(
+                    args.backup
+                )
             )
             return 0
         upgrades = UpgradeManager(paths, root=root, test_mode=test_mode)
@@ -189,7 +191,9 @@ def _interactive_answers() -> dict[str, Any]:
     members = []
     profiles: dict[str, str] = {}
     for index in range(1, count + 1):
-        label = input(f"Member {index} label (stored only in encrypted state): ").strip()
+        label = input(
+            f"Member {index} label (stored only in encrypted state): "
+        ).strip()
         label = label or f"Member {index}"
         role = input("Role: principal, child, helper, or ambient? ").strip().lower()
         if role not in {"principal", "child", "helper", "ambient"}:
@@ -201,7 +205,9 @@ def _interactive_answers() -> dict[str, Any]:
                 "Verified Tailscale login for this member (for example member@domain): "
             ).strip()
             if not identity:
-                raise RuntimeError("Apple bridge enrollment requires a Tailscale identity")
+                raise RuntimeError(
+                    "Apple bridge enrollment requires a Tailscale identity"
+                )
             member["tailscale_identity"] = identity
         members.append(member)
         profiles[member_id] = (
@@ -269,7 +275,9 @@ def _interactive_answers() -> dict[str, Any]:
         "household": {
             "kind": "apple" if apple else "non_apple",
             "members": members,
-            "ambient_members": [m["member_id"] for m in members if m["role"] == "ambient"],
+            "ambient_members": [
+                m["member_id"] for m in members if m["role"] == "ambient"
+            ],
             "coparents": coparents,
             "helpers": [m["member_id"] for m in members if m["role"] == "helper"],
         },
@@ -280,7 +288,9 @@ def _interactive_answers() -> dict[str, Any]:
             "environment": "sandbox",
             "fake_link": False,
         },
-        "seed": {name: _yes_no(f"Seed {name.replace('_', ' ')} now?") for name in seed_names},
+        "seed": {
+            name: _yes_no(f"Seed {name.replace('_', ' ')} now?") for name in seed_names
+        },
         "integrations": {
             **{
                 name: _yes_no(f"Prepare {name.replace('_', ' ')} pairing?")

@@ -21,8 +21,8 @@ import re
 from pathlib import Path
 
 FORBIDDEN_PATTERNS = [
-    re.compile(r"""['"]~/\.adminme"""),      # e.g. "~/.adminme/projections"
-    re.compile(r"""['"]/\.adminme/"""),      # e.g. "/.adminme/"
+    re.compile(r"""['"]~/\.adminme"""),  # e.g. "~/.adminme/projections"
+    re.compile(r"""['"]/\.adminme/"""),  # e.g. "/.adminme/"
     re.compile(r"os\.path\.expanduser\([^)]*\.adminme"),
 ]
 

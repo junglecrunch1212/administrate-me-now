@@ -1,0 +1,17 @@
+{
+  "id": "adhd_executive",
+  "kind": "profile",
+  "version": "1.0.0",
+  "label": "ADHD executive support",
+  "profile_format": "fog_aware",
+  "behavior": {
+    "available_minutes": 15,
+    "current_energy": "low",
+    "preferred_contexts": ["home", "admin"],
+    "quiet_hours": {"start": 21, "end": 7},
+    "nudge_penalty": 25,
+    "recent_outcome_bias": 10
+  },
+  "reward_distribution": {"done": 0.65, "warm": 0.25, "delight": 0.09, "jackpot": 0.01},
+  "delivery_channel": "openclaw"
+}

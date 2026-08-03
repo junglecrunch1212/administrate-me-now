@@ -50,9 +50,11 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     manifest_entry = manifest.capabilities[0]
     assert cls_entry["kind"] == manifest_entry.kind == "Cat-C"
     assert cls_entry["runtime"] == manifest_entry.runtime == "central"
-    assert cls_entry["event_families"] == manifest_entry.event_families == [
-        "money_flow.plaid_synced"
-    ]
+    assert (
+        cls_entry["event_families"]
+        == manifest_entry.event_families
+        == ["money_flow.plaid_synced"]
+    )
 
 
 def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:

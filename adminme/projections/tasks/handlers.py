@@ -25,26 +25,28 @@ import sqlcipher3
 
 _log = logging.getLogger(__name__)
 
-_UPDATABLE_COLUMNS = frozenset({
-    "title",
-    "assignee_party",
-    "domain",
-    "energy",
-    "effort",
-    "item_type",
-    "due_date",
-    "micro_script",
-    "linked_item_id",
-    "linked_item_kind",
-    "recurring_id",
-    "depends_on_json",
-    "goal_ref",
-    "life_event",
-    "auto_research",
-    "waiting_on",
-    "waiting_since",
-    "notes",
-})
+_UPDATABLE_COLUMNS = frozenset(
+    {
+        "title",
+        "assignee_party",
+        "domain",
+        "energy",
+        "effort",
+        "item_type",
+        "due_date",
+        "micro_script",
+        "linked_item_id",
+        "linked_item_kind",
+        "recurring_id",
+        "depends_on_json",
+        "goal_ref",
+        "life_event",
+        "auto_research",
+        "waiting_on",
+        "waiting_since",
+        "notes",
+    }
+)
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
@@ -61,9 +63,7 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     handler(envelope, conn)
 
 
-def apply_task_created(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     # TaskCreatedV1's payload schema is minimal; fall back to sensible
     # defaults for the richer projection columns so row inserts succeed
@@ -141,9 +141,7 @@ def apply_task_created(
     )
 
 
-def apply_task_completed(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_task_completed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     conn.execute(
         """
@@ -164,9 +162,7 @@ def apply_task_completed(
     )
 
 
-def apply_task_updated(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_task_updated(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     updates: dict[str, Any] = dict(p.get("field_updates") or {})
     # new_status in the envelope is a top-level hint — promote to status.
@@ -191,9 +187,7 @@ def apply_task_updated(
     )
 
 
-def apply_task_deleted(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_task_deleted(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     # Soft-delete: row stays (rebuild correctness depends on it).
     p = envelope["payload"]
     conn.execute(

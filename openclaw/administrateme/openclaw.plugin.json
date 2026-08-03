@@ -33,6 +33,7 @@
       "administrateme_lifecycle",
       "administrateme_correct",
       "administrateme_skill",
+      "administrateme_notification_result",
       "administrateme_standing_order"
     ]
   },
@@ -42,6 +43,7 @@
     "administrateme_lifecycle": { "optional": true },
     "administrateme_correct": { "optional": true },
     "administrateme_skill": { "optional": true },
+    "administrateme_notification_result": { "optional": true },
     "administrateme_standing_order": { "optional": true }
   },
   "dashboard": {

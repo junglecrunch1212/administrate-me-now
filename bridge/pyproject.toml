@@ -26,7 +26,6 @@ adminme = { path = "..", develop = true }
 httpx = "*"
 pydantic = ">=2.6"
 pyyaml = "*"
-structlog = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

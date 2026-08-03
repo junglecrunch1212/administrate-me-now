@@ -79,20 +79,6 @@ def _load_central_adapter_class() -> Any:
     return module.AppleCalendarAdapter
 
 
-# Default config for the internal AppleCalendarAdapter constructor when
-# the bridge supervisor invokes the wrapper with no explicit pack-config.
-# 11c-ii's instantiate-from-PackHandle hook will wire ``PackHandle.config``
-# through; for now the wrapper substitutes minimal-bootstrap defaults so
-# the central adapter's start() validation passes. ``calendar_identifier``
-# is set during the per-member bootstrap §16-§10 enrollment wizard and
-# normally overridden via ``internal_config``; the placeholder satisfies
-# the central adapter's non-empty-string check on start().
-_DEFAULT_BRIDGE_INTERNAL_CONFIG: dict[str, Any] = {
-    "calendar_identifier": "bridge:pending-bootstrap-calendar",
-    "sensitivity_floor": "normal",
-}
-
-
 class AppleCalendarBridgeAdapter:
     """Bridge-runtime wrapper around the central ``AppleCalendarAdapter``.
 
@@ -108,13 +94,12 @@ class AppleCalendarBridgeAdapter:
         *,
         internal_config: dict[str, Any] | None = None,
     ) -> None:
+        if not internal_config or not internal_config.get("calendar_identifier"):
+            raise ValueError("calendar bridge requires pack_config.calendar_identifier")
         # The internal central adapter is constructed lazily on first
         # start() so importing this module never requires the central
-        # pack to be on sys.path at import time (11c-ii will wire
-        # PackHandle.config through; today's default is the placeholder).
-        self._internal_config: dict[str, Any] = dict(
-            internal_config or _DEFAULT_BRIDGE_INTERNAL_CONFIG
-        )
+        # pack to be on sys.path at import time.
+        self._internal_config: dict[str, Any] = dict(internal_config)
         self._internal: Any = None
         self._bridge_status: AdapterStatus = AdapterStatus()
 

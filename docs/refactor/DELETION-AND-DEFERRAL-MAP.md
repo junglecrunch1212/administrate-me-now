@@ -1,5 +1,18 @@
 # Deletion and deferral map
 
+Gate 6 update: deletion prerequisites are now met for the empty `console/`
+Node package, `adminme/daemons/pipeline_supervisor.py`, duplicate xlsx daemon
+facades, and dead correlation/identifier helpers. AdministrateMe-side
+scheduler/platform dependencies and speculative no-op delivery claims are
+removed. The constitutional household surfaces remain in product APIs,
+workbooks, the native OpenClaw dashboard, and reference evidence.
+
+Gate 6 formal deferrals are limited to live optional-provider activation and
+the full browser household UX. Optional provider manifests and deterministic
+fixture paths remain, but unconfigured providers are disabled/blocked and do
+not make readiness claims. Full browser implementation is Phase 7 work; no
+household domain/API/workbook behavior was deleted with the console scaffold.
+
 Gate 5 update: the empty bootstrap-section scaffold is replaced by the encrypted ten-section state machine and stable operator scripts. Backup, restore, Doctor, user launchd, and upgrade compatibility validation are no longer absent. No live provider, console, or member-knowledge product behavior was deleted or falsely declared complete.
 
 Gate 3 update: Core and Comms are no longer docstring-only service stubs. They are versioned router namespaces in the Gate 2 process and now own the first complete commitment review/lifecycle and deterministic what-now surface. Capture/Knowledge and Automation retain their deferred product work; no legacy production path was deleted in this gate.
@@ -11,9 +24,9 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 | Target | Why it must go | Preconditions |
 |---|---|---|
 | Python-plugin claim and four empty files in `adminme/openclaw_plugins/` | **DELETED at Gate 4.** Incompatible with the native current TypeScript plugin contract; no runtime import referenced them. | One TS plugin passes the pinned fixture and process portions of AC-12; history is recoverable from Git. |
-| Comment-only `console/server.js` as application runtime | It starts no server and conflicts with the one-Python-process topology. | Python composition serves tested frontend/API; AC-02/18/19 pass. Node build tooling may remain. |
+| Comment-only `console/server.js` and empty Node package | **DELETED at Gate 6.** It started no server or household surface and conflicted with one-Python-process topology. | Six Python product namespaces, workbooks, OpenClaw dashboard, and reference evidence remain. |
 | Four docstring-only product `main.py` service stubs | They advertise separate processes and stale routes without behavior. | Router namespaces exist with route compatibility tests; ownership remains. |
-| `adminme/daemons/pipeline_supervisor.py` prose stub | A separate supervisor duplicates composition ownership and contains no code. | Composition root owns runner lifecycle and AC-02/09/20 pass. |
+| `adminme/daemons/pipeline_supervisor.py` prose stub | **DELETED at Gate 6.** A separate supervisor duplicated composition ownership and contained no code. | Composition root owns reactive runner lifecycle; OpenClaw owns proactive schedules. |
 | AdministrateMe-side provider-fallback loop in `adminme/lib/skill_runner/wrapper.py` | **DELETED at Gate 4.** OpenClaw owns model routing/fallback. | Wrapper posts once, supplies no provider/model override, validates output, and records actual returned provenance. |
 | Quick-capture prefix, direct voice-ingest, and triage route/UI claims | Superseded by member-owned tools and Cat-D bridge ingestion. | Knowledge/CRM/Lists surfaces and member bridge slice pass AC-04/18. |
 | Product-scheduling references to APScheduler or AdministrateMe cron | Duplicate OpenClaw responsibility. | Gate 4 derives five OpenClaw automation declarations and a typed standing-order trigger; AdministrateMe does not schedule them. Internal debounce/retry timers remain explicitly exempt. |

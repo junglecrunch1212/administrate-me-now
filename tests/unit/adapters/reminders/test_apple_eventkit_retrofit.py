@@ -405,9 +405,9 @@ def test_validator_no_pending_retrofit_advisory() -> None:
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert (
-        pending == []
-    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    )
 
 
 def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
@@ -418,9 +418,9 @@ def test_validator_returns_no_errors_for_retrofitted_pack() -> None:
     05 §3.4."""
     result = validate_adapter_pack(REMINDERS_PACK_DIR)
 
-    assert (
-        not result.has_errors()
-    ), f"validator reports errors post-retrofit: {result.errors()}"
+    assert not result.has_errors(), (
+        f"validator reports errors post-retrofit: {result.errors()}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -60,9 +60,8 @@ from the messaging-family pattern:
   silently retrying.
 
 PM-27: ``plaid_client_factory`` and ``webhook_verifier_factory`` are
-constructor-injected callables with no-op defaults so Phase A tests can
-substitute fakes without a live Plaid sandbox; production wires the real
-factories at supervisor startup.
+constructor-injected provider boundaries. Deterministic fixtures inject fakes;
+configured production activation must supply real factories.
 """
 
 from __future__ import annotations
@@ -85,22 +84,18 @@ logger = logging.getLogger(__name__)
 
 PlaidClientFactory = Callable[[str, str, str], Any]
 """Factory taking ``(client_id, secret, item_access_token)`` and returning
-a Plaid API client. Defaults to a no-op stub for tests per PM-27."""
+a Plaid API client."""
 
 
 _DEFAULT_BACKSTOP_POLL_INTERVAL_S = 24 * 60 * 60
-"""Backstop daily-poll cadence. The ``pack.yaml`` cron (``0 4 * * *``)
-is the production scheduler entry; this in-process fallback keeps the
-adapter healthy when the supervisor's cron isn't wired (Phase A tests,
-manual ``start()`` calls). Tests override via ``backstop_poll_interval_s``
-in config to drive the loop on a sub-second budget."""
+"""Provider-watch recovery cadence for webhook gaps. Tests override the
+interval to drive the watcher on a sub-second budget."""
 
 WebhookVerifierFactory = Callable[[str], Callable[[dict[str, Any]], bool]]
 """Factory taking the configured ``webhook_route`` and returning a
 verifier callable that validates Plaid webhook JWTs per the Plaid
-webhook-verification protocol. Defaults to a no-op pass-through for
-tests; production wires the real verifier that fetches Plaid's
-``/webhook_verification_key/get`` JWKs."""
+webhook-verification protocol. Configured production activation supplies a
+verifier that fetches Plaid's ``/webhook_verification_key/get`` JWKs."""
 
 
 _OP_REF_PATTERN_PREFIX = "op://"
@@ -327,9 +322,8 @@ class PlaidAdapter(InboundDataAdapter):
         # Daily backstop poll covers silent webhook drops (Plaid has
         # documented cases of ``SYNC_UPDATES_AVAILABLE`` getting lost in
         # transit; ``docs/reference/plaid/_index.md`` recommends a 24-hour
-        # fallback poll). The supervisor's APScheduler-driven cron
-        # ``0 4 * * *`` from ``pack.yaml`` is the production trigger;
-        # this in-process loop is the redundant safety net per
+        # fallback poll). This provider-watcher loop is the recovery path;
+        # it is not AdministrateMe product scheduling. The interval follows
         # ``BUILD.md PLAID DETAILED SPEC §"Sync cursor"``.
         interval_s = float(
             ctx.config.get(

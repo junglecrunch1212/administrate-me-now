@@ -188,12 +188,12 @@ def test_retrofit_validator_clean_on_supervisor_loaded_pack() -> None:
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert (
-        pending == []
-    ), f"advisory_pending_retrofit still present post-retrofit: {pending}"
-    assert (
-        not result.has_errors()
-    ), f"validator reports errors post-retrofit: {result.errors()}"
+    assert pending == [], (
+        f"advisory_pending_retrofit still present post-retrofit: {pending}"
+    )
+    assert not result.has_errors(), (
+        f"validator reports errors post-retrofit: {result.errors()}"
+    )
 
 
 # ===========================================================================
@@ -365,8 +365,7 @@ def test_supervisor_loaded_adapter_emits_both_event_families_on_outbound() -> No
     ]
     added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(synced_calls) == 1, (
-        f"expected exactly one reminder.list_item.synced emit, "
-        f"got {len(synced_calls)}"
+        f"expected exactly one reminder.list_item.synced emit, got {len(synced_calls)}"
     )
     assert len(added_calls) == 1, (
         f"expected exactly one list_item.added emit alongside the legacy, "

@@ -19,6 +19,7 @@ const expectedTools = [
   "administrateme_lifecycle",
   "administrateme_correct",
   "administrateme_skill",
+  "administrateme_notification_result",
   "administrateme_standing_order",
 ];
 

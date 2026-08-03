@@ -40,7 +40,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -337,7 +336,8 @@ async def test_today_for_member_filters_correctly(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:tasks", last)
 
     conn = runner.connection("tasks")
-    rows = today_for_member(conn, _S("tenant-a"), member_party_id="m1", today_iso="2026-04-23"
+    rows = today_for_member(
+        conn, _S("tenant-a"), member_party_id="m1", today_iso="2026-04-23"
     )
     ids = {r["task_id"] for r in rows}
     assert ids == {"t1", "t4"}

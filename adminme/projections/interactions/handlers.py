@@ -4,17 +4,10 @@ Interactions projection handlers.
 Per ADMINISTRATEME_BUILD.md §3.2 and SYSTEM_INVARIANTS.md §3 invariant 5.
 
 Handlers derive the interaction_id deterministically from the source
-envelope's event_id so replay produces the same rows. The participants
-table is keyed by the from/to identifiers from the payload; prompt 10a
-(identity_resolution) will later replace identifier strings with resolved
-party_ids. For now we treat the identifier string itself as the party
-stand-in — this keeps the projection functional before identity resolution
-lands and the only thing prompt 10a changes is the value in
-``interaction_participants.party_id``.
-
-# TODO(prompt-10b): noise_filtering pipeline will merge related
-# interactions into one row (one interaction may aggregate multiple raw
-# events via the raw_event_ids JSON column).
+envelope's event_id so replay produces the same rows. Participants preserve
+the normalized source identifiers supplied by the communication adapter;
+identity resolution emits separate Party/Identifier facts rather than
+rewriting historical interaction provenance.
 """
 
 from __future__ import annotations

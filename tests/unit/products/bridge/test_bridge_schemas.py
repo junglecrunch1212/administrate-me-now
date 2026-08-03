@@ -65,7 +65,13 @@ def test_extra_field_rejected() -> None:
 
 @pytest.mark.parametrize(
     "missing_field",
-    ["member_id", "bridge_node_id", "tailscale_identity", "adapters_active", "enrolled_at"],
+    [
+        "member_id",
+        "bridge_node_id",
+        "tailscale_identity",
+        "adapters_active",
+        "enrolled_at",
+    ],
 )
 def test_required_field_missing_rejected(missing_field: str) -> None:
     """All five fields are required per parent draft §1 item 3."""

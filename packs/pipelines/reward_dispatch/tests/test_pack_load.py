@@ -26,6 +26,4 @@ def test_pack_handler_exposes_runtime_class() -> None:
     cls = type(pack.instance)
     assert cls.__name__ == "RewardDispatchPipeline"
     assert cls.pack_id == "pipeline:reward_dispatch"
-    assert cls.triggers == {
-        "events": ["task.completed", "commitment.completed"]
-    }
+    assert cls.triggers == {"events": ["task.completed", "commitment.completed"]}

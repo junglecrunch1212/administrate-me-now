@@ -38,9 +38,7 @@ def sidecar_dir(xlsx_workbooks_dir: Path) -> Path:
     return xlsx_workbooks_dir.parent / ".xlsx-state"
 
 
-def sidecar_path(
-    xlsx_workbooks_dir: Path, workbook_name: str, sheet_name: str
-) -> Path:
+def sidecar_path(xlsx_workbooks_dir: Path, workbook_name: str, sheet_name: str) -> Path:
     """Resolve the per-sheet sidecar JSON path."""
     return sidecar_dir(xlsx_workbooks_dir) / workbook_name / f"{sheet_name}.json"
 
@@ -74,9 +72,9 @@ def write_sheet_state(
 
 def hash_readonly_sheet(rows: list[list[Any]]) -> str:
     """Stable SHA-256 hex of a read-only sheet's raw row matrix."""
-    blob = json.dumps(
-        rows, default=str, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    blob = json.dumps(rows, default=str, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(blob).hexdigest()
 
 

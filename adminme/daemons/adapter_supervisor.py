@@ -2,9 +2,9 @@
 Adapter supervisor — async lifecycle manager for L1 standalone adapters.
 
 Per ADMINISTRATEME_BUILD.md §L1 and SYSTEM_INVARIANTS.md §7 (pipelines /
-daemons), §14 (APScheduler scope). Reads ``config/channels.yaml`` at
+daemons). Reads ``config/channels.yaml`` at
 startup, instantiates each configured adapter via a loader callable
-(PM-27: constructor-injected with a no-op default that returns ``[]``),
+(PM-27: constructor-injected; an empty loader represents no configured providers),
 spawns each as an ``asyncio.Task``, watches for crashes, and restarts
 with exponential backoff (1s, 2s, 4s, ..., capped at 300s; resets to 1s
 after 5+ minutes of uptime).
@@ -54,13 +54,12 @@ last restart, the backoff window resets to ``INITIAL_BACKOFF_S``."""
 
 AdapterLoader = Callable[[dict[str, Any]], list[Adapter]]
 """Callable that converts ``channels.yaml``'s parsed dict into adapter
-instances. PM-27: defaults to a no-op stub returning an empty list so
-the supervisor is constructible in tests without wiring real adapters;
-production injects the real loader at startup."""
+instances. The empty default is the truthful no-provider configuration;
+configured providers require an explicit production loader."""
 
 
-def _noop_loader(_config: dict[str, Any]) -> list[Adapter]:
-    """Default loader. Returns no adapters."""
+def _empty_loader(_config: dict[str, Any]) -> list[Adapter]:
+    """Return the explicit no-configured-provider adapter set."""
     return []
 
 
@@ -94,7 +93,7 @@ class AdapterSupervisor:
         *,
         config_path: Path,
         ctx_factory: Callable[[], AdapterContext],
-        adapter_loader: AdapterLoader = _noop_loader,
+        adapter_loader: AdapterLoader = _empty_loader,
         clock: Callable[[], float] | None = None,
         config_data: dict[str, Any] | None = None,
     ) -> None:

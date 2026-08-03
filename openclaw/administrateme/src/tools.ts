@@ -165,6 +165,28 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/tools/skill",
     },
     {
+      name: "administrateme_notification_result",
+      description: "Record the typed outcome of an OpenClaw-owned notification attempt.",
+      parameters: Type.Object(
+        {
+          attempt_id: Type.String({ minLength: 1, maxLength: 240 }),
+          decision_id: Type.String({ minLength: 1, maxLength: 240 }),
+          signal_id: Type.String({ minLength: 1, maxLength: 240 }),
+          outcome: Type.Union([
+            Type.Literal("delivered"),
+            Type.Literal("failed"),
+            Type.Literal("retrying"),
+          ]),
+          attempted_at: Type.String({ minLength: 1 }),
+          provider_receipt_id: Type.Optional(Type.String({ maxLength: 500 })),
+          error_code: Type.Optional(Type.String({ maxLength: 120 })),
+          next_retry_at: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/notifications/result",
+    },
+    {
       name: "administrateme_standing_order",
       description: "Record one allowlisted standing-order trigger for the authorized direct route.",
       parameters: Type.Object(

@@ -20,15 +20,14 @@ sensitivity_floor: privileged
 # Trigger model. Webhooks are primary: Plaid pushes
 # `SYNC_UPDATES_AVAILABLE` when an Item has new transactions, and the
 # adapter's webhook_handler enqueues a `/transactions/sync` cycle. The
-# cron is a backstop daily-poll in case the webhook stream silently
-# drops; the supervisor's APScheduler entry runs at this cadence per
-# SYSTEM_INVARIANTS.md §14.
+# adapter's watcher performs a 24-hour recovery poll if webhook traffic
+# silently drops. This is provider synchronization, not a product scheduler.
 triggers:
   kind: webhook_driven
-  schedule: "0 4 * * *"
+  recovery_poll_seconds: 86400
   description: |
-    Webhook-driven sync (SYNC_UPDATES_AVAILABLE) is primary; the cron is
-    a daily backstop poll in the absence of webhook traffic.
+    Webhook-driven sync (SYNC_UPDATES_AVAILABLE) is primary; the adapter
+    watcher performs a daily recovery poll in the absence of webhook traffic.
 
 # Event types the adapter emits or consumes. The three cross-cutting
 # `adapter.*` schemas come from prompt 11a c1

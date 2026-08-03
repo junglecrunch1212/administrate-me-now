@@ -170,7 +170,9 @@ def on_membership_added(envelope: dict[str, Any], conn: sqlcipher3.Connection) -
     )
 
 
-def on_relationship_added(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+def on_relationship_added(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
     p = envelope["payload"]
     conn.execute(
         """

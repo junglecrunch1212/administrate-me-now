@@ -44,3 +44,6 @@ class BridgeEnrolledV1(BaseModel):
 
 
 registry.register("bridge.enrolled", 1, BridgeEnrolledV1)
+
+
+__all__ = ["BridgeEnrolledV1"]

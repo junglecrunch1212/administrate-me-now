@@ -12,9 +12,10 @@ in 11b-ii-α-2. Mirrors the shape of ``adminme.lib.pack_registry.parser``.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import yaml
 
@@ -31,6 +32,7 @@ class PackHandle:
     name: str
     entrypoint: str
     config: dict
+    subkind: str
 
 
 class PackLoadError(RuntimeError):
@@ -62,7 +64,10 @@ def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
             raise PackLoadError(
                 f"{manifest} did not parse to a mapping (got {type(data).__name__})"
             )
-        if data.get("kind") != KNOWLEDGE_SOURCE_KIND or data.get("subkind") not in _ALLOWED_SUBKINDS:
+        if (
+            data.get("kind") != KNOWLEDGE_SOURCE_KIND
+            or data.get("subkind") not in _ALLOWED_SUBKINDS
+        ):
             continue
         name = (data.get("pack") or {}).get("name")
         entrypoint = data.get("entrypoint")
@@ -75,7 +80,55 @@ def discover_packs(packs_dir: Path) -> Iterator[PackHandle]:
             name=name,
             entrypoint=entrypoint,
             config=data.get("config") or {},
+            subkind=str(data["subkind"]),
         )
+
+
+def instantiate_pack(
+    handle: PackHandle, *, config_override: dict[str, Any] | None = None
+) -> Any:
+    """Import and construct one discovered bridge adapter entrypoint."""
+
+    module_name, separator, attribute = handle.entrypoint.partition(":")
+    if not separator or not module_name or not attribute:
+        raise PackLoadError(
+            f"{handle.pack_dir / 'pack.yaml'}: entrypoint must be module:attribute"
+        )
+    try:
+        module = importlib.import_module(module_name)
+        adapter_class = getattr(module, attribute)
+    except (ImportError, AttributeError) as exc:
+        raise PackLoadError(
+            f"failed to load bridge entrypoint {handle.entrypoint}: {exc}"
+        ) from exc
+    config = dict(handle.config)
+    config.update(config_override or {})
+    try:
+        if handle.subkind == KNOWLEDGE_SOURCE_SUBKIND:
+            adapter = adapter_class(config=config)
+        elif config:
+            adapter = adapter_class(internal_config=config)
+        else:
+            adapter = adapter_class()
+    except Exception as exc:  # noqa: BLE001 - normalize entrypoint failures
+        raise PackLoadError(
+            f"failed to instantiate bridge entrypoint {handle.entrypoint}: {exc}"
+        ) from exc
+    if not all(
+        callable(getattr(adapter, name, None)) for name in ("start", "stop", "status")
+    ):
+        raise PackLoadError(
+            f"bridge entrypoint {handle.entrypoint} does not implement lifecycle"
+        )
+    if handle.subkind == KNOWLEDGE_SOURCE_SUBKIND and not hasattr(adapter, "subkind"):
+        raise PackLoadError(
+            f"knowledge entrypoint {handle.entrypoint} lacks subkind discriminator"
+        )
+    if handle.subkind == STATE_MIRROR_SUBKIND and not hasattr(adapter, "family"):
+        raise PackLoadError(
+            f"state-mirror entrypoint {handle.entrypoint} lacks family discriminator"
+        )
+    return adapter
 
 
 __all__ = [
@@ -85,4 +138,5 @@ __all__ = [
     "PackHandle",
     "PackLoadError",
     "discover_packs",
+    "instantiate_pack",
 ]

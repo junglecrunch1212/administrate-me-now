@@ -6,9 +6,9 @@ Registered at v1 per DECISIONS.md §D7. These event types feed the
 ``places_assets_accounts``, ``money``, and ``vector_search`` projections
 (prompt 07a).
 
-Per [§8] AdministrateMe does not call embedding models directly; the
-vector carried by ``embedding.generated`` is pre-computed by a separate
-embedding daemon (future prompt) that calls OpenClaw's embedding endpoint.
+Per [§8] AdministrateMe does not call model providers directly. Authorized
+domain indexing supplies ``embedding.generated`` with scope and provenance;
+the credential-free path uses a deterministic local fixture vector.
 """
 
 from __future__ import annotations
@@ -167,14 +167,15 @@ class MoneyFlowManuallyDeletedV1(BaseModel):
 # vector_search
 # ------------------------------------------------------------------
 class EmbeddingGeneratedV1(BaseModel):
-    """Emitted by the embedding daemon (future prompt) after calling out
-    to OpenClaw's embedding endpoint. The vector is pre-computed; the
-    projection only stores, it does not embed. Per [§8], AdministrateMe
-    itself does not import embedding SDKs."""
+    """Authorized domain vector plus source scope and provenance.
 
-    model_config = {"extra": "forbid"}
+    AdministrateMe imports no embedding or model-provider SDK. Production may
+    obtain a vector through OpenClaw; the credential-free path is deterministic.
+    """
+
+    model_config = {"extra": "forbid", "protected_namespaces": ()}
     embedding_id: str = Field(min_length=1)
-    linked_kind: Literal["interaction", "artifact", "party_notes"]
+    linked_kind: Literal["interaction", "artifact", "party_notes", "member_knowledge"]
     linked_id: str = Field(min_length=1)
     embedding_dimensions: int = Field(ge=1)
     embedding: list[float]

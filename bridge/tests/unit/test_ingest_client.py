@@ -21,7 +21,9 @@ from adminme_bridge.ingest_client import (
 class _FakeResponse:
     """Minimal stand-in for ``httpx.Response`` with the bits the client reads."""
 
-    def __init__(self, status_code: int, body: dict | None = None, headers: dict | None = None) -> None:
+    def __init__(
+        self, status_code: int, body: dict | None = None, headers: dict | None = None
+    ) -> None:
         self.status_code = status_code
         self._body = body or {}
         self.headers = headers or {}
@@ -172,7 +174,9 @@ async def test_submit_batch_chunks_at_batch_chunk_size() -> None:
     envelopes = [{"i": i} for i in range(BATCH_CHUNK_SIZE * chunks)]
     client = _ScriptedClient(
         [
-            _FakeResponse(202, {"event_ids": [f"ev_{i}" for i in range(BATCH_CHUNK_SIZE)]})
+            _FakeResponse(
+                202, {"event_ids": [f"ev_{i}" for i in range(BATCH_CHUNK_SIZE)]}
+            )
             for _ in range(chunks)
         ]
     )
@@ -200,8 +204,12 @@ async def test_submit_batch_failure_reports_chunk_offset() -> None:
     envelopes = [{"i": i} for i in range(BATCH_CHUNK_SIZE * 3)]
     client = _ScriptedClient(
         [
-            _FakeResponse(202, {"event_ids": [f"ev_a_{i}" for i in range(BATCH_CHUNK_SIZE)]}),
-            _FakeResponse(400, {"detail": {"error": "batch_envelope_rejected", "offset": 7}}),
+            _FakeResponse(
+                202, {"event_ids": [f"ev_a_{i}" for i in range(BATCH_CHUNK_SIZE)]}
+            ),
+            _FakeResponse(
+                400, {"detail": {"error": "batch_envelope_rejected", "offset": 7}}
+            ),
         ]
     )
     _, sleep = _record_sleeps()

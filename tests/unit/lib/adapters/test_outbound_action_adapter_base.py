@@ -230,6 +230,4 @@ def test_execute_action_is_async() -> None:
     coroutine — the install-time validator (11-β) will check this; the
     canary here catches accidental sync overrides early."""
     assert inspect.iscoroutinefunction(OutboundActionAdapter.execute_action)
-    assert inspect.iscoroutinefunction(
-        _FakeOutboundActionAdapter.execute_action
-    )
+    assert inspect.iscoroutinefunction(_FakeOutboundActionAdapter.execute_action)

@@ -49,8 +49,7 @@ def list_recent(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM artifacts WHERE tenant_id = ? "
-        "ORDER BY captured_at DESC LIMIT ?",
+        "SELECT * FROM artifacts WHERE tenant_id = ? ORDER BY captured_at DESC LIMIT ?",
         (session.tenant_id, limit),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])

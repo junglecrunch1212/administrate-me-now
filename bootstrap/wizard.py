@@ -203,12 +203,20 @@ class BootstrapWizard:
             "bridges",
         }
         if set(answers) != required:
-            raise WizardFailure("bootstrap answers do not match the versioned section schema")
+            raise WizardFailure(
+                "bootstrap answers do not match the versioned section schema"
+            )
         rendered_keys = " ".join(_walk_keys(answers)).lower()
-        if any(word in rendered_keys for word in ("password", "api_key", "token", "secret")):
-            raise WizardFailure("bootstrap answers must contain references, never secret values")
+        if any(
+            word in rendered_keys for word in ("password", "api_key", "token", "secret")
+        ):
+            raise WizardFailure(
+                "bootstrap answers must contain references, never secret values"
+            )
         members = answers["household"].get("members", [])
-        if not members or not any(member.get("role") == "principal" for member in members):
+        if not members or not any(
+            member.get("role") == "principal" for member in members
+        ):
             raise WizardFailure("household requires at least one principal")
         member_ids = [member.get("member_id") for member in members]
         if len(member_ids) != len(set(member_ids)) or not all(member_ids):
@@ -226,7 +234,9 @@ class BootstrapWizard:
             if len(group_ids) != len(set(group_ids)) or any(
                 roles.get(member_id) != expected_role for member_id in group_ids
             ):
-                raise WizardFailure(f"{group} must reference unique {expected_role} members")
+                raise WizardFailure(
+                    f"{group} must reference unique {expected_role} members"
+                )
         if set(answers["profiles"]) != set(member_ids):
             raise WizardFailure("every household member requires exactly one profile")
 
@@ -240,7 +250,9 @@ class BootstrapWizard:
 
     def _initialize(self) -> tuple[dict[str, Any], EncryptedStateStore]:
         existed = self.paths.root.exists()
-        existing_children = {path.name for path in self.paths.root.iterdir()} if existed else set()
+        existing_children = (
+            {path.name for path in self.paths.root.iterdir()} if existed else set()
+        )
         if existing_children - {"app"}:
             raise WizardFailure(
                 "deployment root is non-empty but has no resumable bootstrap state"
@@ -294,7 +306,9 @@ class BootstrapWizard:
         except Exception:
             for reference in reversed(created_references):
                 self.store.delete(reference)
-            for path in sorted(mutable_paths, key=lambda item: len(item.parts), reverse=True):
+            for path in sorted(
+                mutable_paths, key=lambda item: len(item.parts), reverse=True
+            ):
                 if existed_before[path] or not path.exists():
                     continue
                 if path.is_dir():
@@ -310,7 +324,11 @@ class BootstrapWizard:
                         shutil.rmtree(path)
                 else:
                     path.unlink()
-            if not existed and self.paths.root.exists() and not any(self.paths.root.iterdir()):
+            if (
+                not existed
+                and self.paths.root.exists()
+                and not any(self.paths.root.iterdir())
+            ):
                 self.paths.root.rmdir()
             raise
 
@@ -437,26 +455,63 @@ class BootstrapWizard:
         )
 
     def _section_persona(self, state: dict[str, Any]) -> dict[str, Any]:
-        workspace = self.root / "openclaw" / "administrateme" / "workspace"
+        persona_id = self.answers["assistant"]["persona"]
+        persona_path = self.root / "packs" / "personas" / persona_id / "pack.json"
+        if not persona_path.is_file():
+            raise WizardFailure(f"persona pack is missing: {persona_id}")
+        try:
+            persona = json.loads(persona_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise WizardFailure(f"persona pack is invalid: {persona_id}") from exc
+        if (
+            persona.get("kind") != "persona"
+            or persona.get("id") != persona_id
+            or not isinstance(persona.get("soul"), str)
+        ):
+            raise WizardFailure(f"persona pack contract failed: {persona_id}")
+        destination = self.paths.instance_dir / "openclaw" / "workspace"
+        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         required = ("SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md")
-        missing = [name for name in required if not (workspace / name).is_file()]
-        if missing:
-            raise WizardFailure(f"compiled persona workspace is incomplete: {missing}")
         if not self.dry_run:
+            compile_env = os.environ.copy()
+            compile_env["ADMINME_PERSONA_ID"] = persona_id
+            compile_env["ADMINME_WORKSPACE_OUTPUT"] = str(destination)
             subprocess.run(
                 ["npm", "run", "workspace:compile"],
                 cwd=self.root / "openclaw" / "administrateme",
+                env=compile_env,
                 check=True,
             )
-        destination = self.paths.instance_dir / "openclaw" / "workspace"
-        destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+        else:
+            programs = []
+            for path in sorted(
+                (self.root / "bootstrap" / "openclaw" / "programs").glob("*.md")
+            ):
+                programs.append(
+                    f"\n<!-- source: {path.relative_to(self.root).as_posix()} -->\n"
+                    + path.read_text(encoding="utf-8")
+                )
+            compiled = {
+                "SOUL.md": (
+                    f"<!-- GENERATED from packs/personas/{persona_id}/pack.json; "
+                    "do not add member data here. -->\n"
+                    + persona["soul"].strip()
+                    + "\n"
+                ),
+                "IDENTITY.md": "# AdministrateMe identity\n\nInstance persona only; never household authorization.\n",
+                "USER.md": "# Member context boundary\n\nMember preferences belong in per-member profile overlays.\n",
+                "AGENTS.md": "# AdministrateMe standing orders\n" + "\n".join(programs),
+            }
+            for name, content in compiled.items():
+                atomic_write(destination / name, content.encode("utf-8"), mode=0o600)
+        missing = [name for name in required if not (destination / name).is_file()]
+        if missing:
+            raise WizardFailure(f"compiled persona workspace is incomplete: {missing}")
         artifacts = []
         for name in required:
-            target = destination / name
-            atomic_write(target, (workspace / name).read_bytes(), mode=0o600)
-            artifacts.append(str(target.relative_to(self.paths.root)))
+            artifacts.append(str((destination / name).relative_to(self.paths.root)))
         state["sections"]["2"]["artifacts"] = artifacts
-        return {"persona": self.answers["assistant"]["persona"], "files": list(required)}
+        return {"persona": persona_id, "files": list(required)}
 
     def _section_household(self, state: dict[str, Any]) -> dict[str, Any]:
         household = self.answers["household"]
@@ -544,7 +599,10 @@ class BootstrapWizard:
             str(instance_path.relative_to(self.paths.root)),
             str(mapping_path.relative_to(self.paths.root)),
         ]
-        return {"member_count": len(members), "roles": sorted({m["role"] for m in members})}
+        return {
+            "member_count": len(members),
+            "roles": sorted({m["role"] for m in members}),
+        }
 
     def _section_profiles(self, state: dict[str, Any]) -> dict[str, Any]:
         profiles = self.answers["profiles"]
@@ -557,6 +615,13 @@ class BootstrapWizard:
         }
         if not set(profiles.values()) <= allowed:
             raise WizardFailure("profile assignment contains an unsupported profile")
+        missing = [
+            profile
+            for profile in sorted(set(profiles.values()))
+            if not (self.root / "packs" / "profiles" / profile / "pack.json").is_file()
+        ]
+        if missing:
+            raise WizardFailure(f"profile packs are missing: {missing}")
         preview = {
             member: {
                 "profile": profile,
@@ -593,7 +658,10 @@ class BootstrapWizard:
         path = self.paths.instance_dir / "config" / "secret-references.json"
         atomic_write(path, json.dumps(config, indent=2, sort_keys=True).encode("utf-8"))
         state["sections"]["5"]["artifacts"] = [str(path.relative_to(self.paths.root))]
-        return {"provider": self.store.provider_name, "references_tested": len(references)}
+        return {
+            "provider": self.store.provider_name,
+            "references_tested": len(references),
+        }
 
     def _section_plaid(self, state: dict[str, Any]) -> dict[str, Any]:
         plaid = self.answers["plaid"]
@@ -602,12 +670,17 @@ class BootstrapWizard:
         result = {
             "selected": plaid["selected"],
             "environment": "sandbox" if plaid["selected"] else "disabled",
-            "link_state": "fixture-linked" if plaid.get("fake_link") else "pending-human-link",
+            "link_state": "fixture-linked"
+            if plaid.get("fake_link")
+            else "pending-human-link",
             "live_claim": False,
         }
         if not plaid["selected"]:
             state["follow_ups"].append(
-                {"kind": "integration", "action": "Review whether Plaid sandbox is wanted"}
+                {
+                    "kind": "integration",
+                    "action": "Review whether Plaid sandbox is wanted",
+                }
             )
         return result
 
@@ -622,7 +695,9 @@ class BootstrapWizard:
         path = self.paths.instance_dir / "data" / "seed-manifest.json"
         atomic_write(
             path,
-            json.dumps({"seeded": seeded, "skipped": skipped}, indent=2).encode("utf-8"),
+            json.dumps({"seeded": seeded, "skipped": skipped}, indent=2).encode(
+                "utf-8"
+            ),
         )
         state["sections"]["7"]["artifacts"] = [str(path.relative_to(self.paths.root))]
         return {"seeded": seeded, "inbox_follow_ups": len(skipped)}
@@ -641,19 +716,22 @@ class BootstrapWizard:
             if set(actor) != required or not all(
                 isinstance(actor[key], str) and actor[key].strip() for key in required
             ):
-                raise WizardFailure("OpenClaw actor mapping fields must be non-empty strings")
+                raise WizardFailure(
+                    "OpenClaw actor mapping fields must be non-empty strings"
+                )
             member_id = actor["member_id"]
             if members.get(member_id) not in {"principal", "child", "device"}:
                 raise WizardFailure(
                     "OpenClaw actors may map only to interactive household members"
                 )
-            key = (
-                f"{actor['channel_id']}|{actor['account_id']}|{actor['actor_id']}"
-            )
+            key = f"{actor['channel_id']}|{actor['account_id']}|{actor['actor_id']}"
             if key in actor_identities:
                 raise WizardFailure("OpenClaw actor mappings must be unique")
             actor_identities[key] = member_id
-        if self.answers["providers"]["assistant"] == "openclaw" and not actor_identities:
+        if (
+            self.answers["providers"]["assistant"] == "openclaw"
+            and not actor_identities
+        ):
             raise WizardFailure("OpenClaw requires at least one explicit actor mapping")
         for name in ("shared_lists", "calendars", "contacts", "home_assistant"):
             if not selected[name]:
@@ -673,9 +751,13 @@ class BootstrapWizard:
             "schema_version": 1,
             "selected": selected,
             "adapter_categories": {
-                "communication": "fixture" if selected["fixture_channel"] else "disabled",
+                "communication": "fixture"
+                if selected["fixture_channel"]
+                else "disabled",
                 "external_state_mirror": "disabled",
-                "inbound_data": "fixture" if self.answers["plaid"]["selected"] else "disabled",
+                "inbound_data": "fixture"
+                if self.answers["plaid"]["selected"]
+                else "disabled",
                 "personal_knowledge": "pending-bridge",
                 "outbound_action": "disabled",
             },
@@ -703,7 +785,9 @@ class BootstrapWizard:
         ]
         return {
             "selected": sorted(
-                key for key, value in selected.items() if isinstance(value, bool) and value
+                key
+                for key, value in selected.items()
+                if isinstance(value, bool) and value
             ),
             "openclaw_actor_mappings": len(actor_identities),
             "live_claims": 0,
@@ -806,6 +890,7 @@ class BootstrapWizard:
                 tailscale_identity = f"{member_id}.fixture.ts.net"
             package = {
                 "schema_version": 1,
+                "tenant_id": state["tenant_id"],
                 "member_id": member_id,
                 "owner_scope": f"private:{member_id}",
                 "tailscale_identity": tailscale_identity,
@@ -855,7 +940,10 @@ class BootstrapWizard:
         )
         artifacts.append(str(index_path.relative_to(self.paths.root)))
         state["sections"]["10"]["artifacts"] = artifacts
-        return {"packages": len(members), "kid_packages": sum(m["role"] == "child" for m in members)}
+        return {
+            "packages": len(members),
+            "kid_packages": sum(m["role"] == "child" for m in members),
+        }
 
     def _install_launch_agents(self) -> None:
         install_launch_agents(self.paths, self.root, test_mode=self.test_mode)
@@ -892,7 +980,11 @@ class BootstrapWizard:
                     capture_output=True,
                     text=True,
                 )
-                commit = completed.stdout.strip() if completed.returncode == 0 else self.root.name
+                commit = (
+                    completed.stdout.strip()
+                    if completed.returncode == 0
+                    else self.root.name
+                )
                 atomic_write(
                     pointer,
                     json.dumps(

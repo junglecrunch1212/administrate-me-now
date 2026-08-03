@@ -249,15 +249,15 @@ def test_six_validator_checks_return_zero_errors_and_no_advisory() -> None:
     exits 0."""
     result = validate_adapter_pack(PACK_ROOT)
 
-    assert (
-        not result.has_errors()
-    ), f"validator reports errors against fresh pack: {result.errors()}"
+    assert not result.has_errors(), (
+        f"validator reports errors against fresh pack: {result.errors()}"
+    )
     pending = [
         f
         for f in result.advisories()
         if f.check == "base_class_conformance"
         and "advisory_pending_retrofit" in f.message
     ]
-    assert (
-        pending == []
-    ), f"unexpected advisory_pending_retrofit on fresh pack: {pending}"
+    assert pending == [], (
+        f"unexpected advisory_pending_retrofit on fresh pack: {pending}"
+    )

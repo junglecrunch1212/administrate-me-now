@@ -47,7 +47,10 @@ def test_sidecar_dir_is_sibling_of_workbooks_dir(tmp_path: Path) -> None:
 def test_sidecar_path_interpolates_workbook_and_sheet(tmp_path: Path) -> None:
     workbooks = tmp_path / "projections" / "xlsx_workbooks"
     p = sidecar_path(workbooks, "adminme-ops.xlsx", "Tasks")
-    assert p == tmp_path / "projections" / ".xlsx-state" / "adminme-ops.xlsx" / "Tasks.json"
+    assert (
+        p
+        == tmp_path / "projections" / ".xlsx-state" / "adminme-ops.xlsx" / "Tasks.json"
+    )
 
 
 def test_write_then_read_sheet_state_roundtrip(tmp_path: Path) -> None:

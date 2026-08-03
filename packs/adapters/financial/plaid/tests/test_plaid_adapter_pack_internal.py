@@ -521,7 +521,7 @@ def test_webhook_handler_drops_unverified_signature() -> None:
     fake = _FakePlaidClient()
     adapter = PlaidAdapter(
         plaid_client_factory=lambda *_a: fake,
-        webhook_verifier_factory=lambda _route: (lambda _p: False),
+        webhook_verifier_factory=lambda _route: lambda _p: False,
     )
     ctx, log = _make_ctx(_valid_config())
 
@@ -620,9 +620,9 @@ def test_sync_transactions_skips_cursor_advanced_below_milestone() -> None:
     asyncio.run(_go())
 
     advances = [e for e in log.appended if e["type"] == "adapter.cursor_advanced"]
-    assert (
-        advances == []
-    ), "fewer than 100 events + <5min elapsed should not emit cursor_advanced"
+    assert advances == [], (
+        "fewer than 100 events + <5min elapsed should not emit cursor_advanced"
+    )
 
 
 # ---------------------------------------------------------------------------

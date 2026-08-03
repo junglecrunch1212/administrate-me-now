@@ -80,6 +80,8 @@ class PipelineRunner:
         guarded_write: GuardedWrite | None = None,
         parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None,
         run_skill_fn: Callable[..., Awaitable[Any]] | None = None,
+        profile_loader: Callable[[str], dict[str, Any] | None] | None = None,
+        persona_loader: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
@@ -89,6 +91,8 @@ class PipelineRunner:
         self._guarded_write = guarded_write
         self._parties_conn_factory = parties_conn_factory
         self._run_skill_fn = run_skill_fn or run_skill
+        self._profile_loader = profile_loader
+        self._persona_loader = persona_loader
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -131,6 +135,7 @@ class PipelineRunner:
             for manifest in sorted(root.rglob("pipeline.yaml")):
                 pack_root = manifest.parent
                 pack = await asyncio.to_thread(load_pipeline_pack, pack_root)
+                self._wire_data_extensions(pack)
                 events = pack.triggers.get("events") if pack.triggers else None
                 if not events:
                     # Proactive (schedule / proactive) pipelines are
@@ -145,6 +150,23 @@ class PipelineRunner:
                     # Idempotent re-discovery is OK; skip duplicates.
                     continue
                 self.register(pack)
+
+    def _wire_data_extensions(self, pack: LoadedPipelinePack) -> None:
+        """Inject data readers into legacy pack constructors at composition time.
+
+        The packs remain independently testable with explicit fakes, while the
+        production runner no longer leaves their default ``None`` loaders in
+        place.
+        """
+
+        if self._profile_loader is not None and hasattr(
+            pack.instance, "_profile_loader"
+        ):
+            setattr(pack.instance, "_profile_loader", self._profile_loader)
+        if self._persona_loader is not None and hasattr(
+            pack.instance, "_persona_loader"
+        ):
+            setattr(pack.instance, "_persona_loader", self._persona_loader)
 
     # ------------------------------------------------------------------
     # lifecycle

@@ -13,10 +13,8 @@ may read these projections' queries via a local connection. The runner
 owns the connections; this context is a plain bundle of references passed
 to the xlsx projection at construction time.
 
-Only the projections whose queries are referenced by a currently-built
-sheet appear here. ``vector_search`` and ``artifacts`` are not referenced
-by any sheet this prompt ships, so they are absent; they will be added in
-future prompts when sheets that need them land.
+Only projections referenced by the two retained workbooks appear here.
+``vector_search`` and ``artifacts`` intentionally are not workbook sources.
 """
 
 from __future__ import annotations

@@ -39,7 +39,9 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     before = Doctor(paths, root=REPO_ROOT, test_mode=True).run()
     assert before["status"] == "healthy"
     proof = next(
-        check for check in before["checks"] if check["name"] == "canonical_synthetic_round_trip"
+        check
+        for check in before["checks"]
+        if check["name"] == "canonical_synthetic_round_trip"
     )["evidence"]
     assert proof["external_side_effects"] == 0
     assert proof["review_suppressed_by_observation"] is True

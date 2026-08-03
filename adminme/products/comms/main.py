@@ -66,9 +66,8 @@ class EditRequest(CommandRequest):
 
 class ApproveRequest(CommandRequest):
     send_acknowledgement: bool = True
-    # Deterministic external-contract fixture for OpenClaw's independent
-    # generic tool approval. Production channel delivery will replace this
-    # assertion with the authenticated plugin callback in its own gate.
+    # Authenticated OpenClaw asserts its independent approval decision; the
+    # AdministrateMe command still applies domain governance separately.
     openclaw_approved: bool = False
 
 

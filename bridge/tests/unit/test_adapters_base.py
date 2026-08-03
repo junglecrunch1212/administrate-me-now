@@ -85,7 +85,9 @@ def test_bridge_context_is_frozen_dataclass_with_required_fields() -> None:
         "correlation_id_factory",
         "now_factory",
         "sink",
+        "tenant_id",
     }
+    assert ctx.tenant_id == "tenant-default"
 
 
 def test_bridge_context_construction_with_optional_sink() -> None:
@@ -140,7 +142,9 @@ def test_bridge_context_field_order_preserves_positional_arg_compatibility() -> 
         "correlation_id_factory",
         "now_factory",
     ]
-    assert field_order[-1] == "sink"
+    # Gate 6 appends tenant_id after sink, preserving the fifth positional
+    # argument for callers that already supplied an explicit sink.
+    assert field_order[4:] == ["sink", "tenant_id"]
     # And constructable via positional args (no `sink` supplied).
     ctx = BridgeContext(
         "m1",

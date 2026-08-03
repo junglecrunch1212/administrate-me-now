@@ -398,7 +398,9 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     log: EventLog = central_rig["log"]
     ingest: IngestClient = central_rig["ingest"]
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     supervisor = BridgeSupervisor(
         config=_bridge_config(),
         ingest_client=ingest,

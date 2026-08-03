@@ -119,8 +119,7 @@ def _load_config(pack_root: Path) -> dict[str, Any]:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"commitment_extraction config at {config_path} did not parse "
-            f"to a mapping"
+            f"commitment_extraction config at {config_path} did not parse to a mapping"
         )
     return data
 
@@ -161,6 +160,13 @@ class CommitmentExtractionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        prior_by_causation = getattr(ctx.event_log, "get_by_causation", None)
+        if prior_by_causation is not None:
+            prior = await prior_by_causation(source_event_id)
+            if any(
+                item.get("source_adapter") == "commitment_extraction" for item in prior
+            ):
+                return
         proposal_key = f"commitment:proposal:{source_event_id}"
         idempotency_lookup = getattr(ctx.event_log, "get_by_idempotency", None)
         if idempotency_lookup is not None and await idempotency_lookup(
@@ -230,10 +236,8 @@ class CommitmentExtractionPipeline:
             return
 
         # 2. Receiving member. The receiving member id rides on the
-        # event's `to_identifier`; v1 of this pipeline treats it as a
-        # member identifier directly. Real routing-owner resolution
-        # lands in a future prompt with a router-table seam — for now,
-        # if `to_identifier` is empty, suppress.
+        # private owner scope is authoritative; legacy shared events fall back
+        # to the normalized `to_identifier`. If neither exists, suppress.
         owner_scope = str(event.get("owner_scope", ""))
         receiving_member_id = (
             owner_scope.removeprefix("private:")
@@ -385,11 +389,8 @@ class CommitmentExtractionPipeline:
             "classify_reasons": classify_reasons,
         }
 
-        # TODO(prompt-XX): dedupe against open commitments referencing
-        # this thread within dedupe_window_hours; currently always
-        # emits. Requires reading the `commitments` projection, which
-        # has its own seam considerations beyond this prompt's scope
-        # per docs/02-split-memo-10b-ii.md §10b-ii-α.
+        # Redelivery is idempotent by source event. Cross-message thread
+        # similarity is intentionally not guessed into a duplicate fact.
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],

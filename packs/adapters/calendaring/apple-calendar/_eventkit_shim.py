@@ -62,7 +62,11 @@ class EKEventStoreLike(Protocol):
     PyObjC binding at startup (prompt 16 bootstrap wizard)."""
 
     def fetch_events(
-        self, *, calendar_identifier: str, start: datetime, end: datetime,
+        self,
+        *,
+        calendar_identifier: str,
+        start: datetime,
+        end: datetime,
     ) -> list[EKEventLike]: ...
 
     def build_event(
@@ -88,7 +92,11 @@ class NoopEKEventStore:
     startup (prompt 16 bootstrap-wizard); tests inject strict fakes."""
 
     def fetch_events(
-        self, *, calendar_identifier: str, start: datetime, end: datetime,
+        self,
+        *,
+        calendar_identifier: str,
+        start: datetime,
+        end: datetime,
     ) -> list[EKEventLike]:
         raise RuntimeError(
             "NoopEKEventStore.fetch_events called without a real factory "
@@ -107,14 +115,10 @@ class NoopEKEventStore:
         notes: str | None,
         attendees: list[Any] | None,
     ) -> EKEventLike:
-        raise RuntimeError(
-            "NoopEKEventStore.build_event called without a real factory"
-        )
+        raise RuntimeError("NoopEKEventStore.build_event called without a real factory")
 
     def save_event(self, event: EKEventLike, *, commit: bool) -> None:
-        raise RuntimeError(
-            "NoopEKEventStore.save_event called without a real factory"
-        )
+        raise RuntimeError("NoopEKEventStore.save_event called without a real factory")
 
 
 __all__ = [

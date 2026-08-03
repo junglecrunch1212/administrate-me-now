@@ -200,7 +200,10 @@ async def test_emit_on_member_with_coparent_relationship() -> None:
     assert env.payload["child_member_ids"] == ["child-1"]
     assert env.payload["brief_date"] == "2026-05-16"
     assert env.payload["validation_failed"] is False
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
+    assert signals[0].envelope.sensitivity == "sensitive"
 
 
 @pytest.mark.asyncio
@@ -271,7 +274,7 @@ async def test_emit_with_empty_calendar_still_composes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound() -> None:
+async def test_observation_mode_active_suppresses_notification() -> None:
     log = _FakeEventLog()
     pipeline = _seeded_pipeline()
     ctx = _make_ctx(
@@ -288,8 +291,11 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
     briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert len(briefs) == 1
     assert briefs[0].envelope.payload["delivered"] is False
-    suppressed = [c for c in log.calls if c.envelope.type == "observation.suppressed"]
-    assert len(suppressed) == 1
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
 
 
 @pytest.mark.asyncio
@@ -319,7 +325,9 @@ async def test_per_row_skill_failure_does_not_abort_tick() -> None:
     assert by_member["member-a"].envelope.payload["validation_failed"] is True
     assert by_member["member-a"].envelope.payload["delivered"] is False
     assert by_member["member-b"].envelope.payload["validation_failed"] is False
-    assert by_member["member-b"].envelope.payload["delivered"] is True
+    assert by_member["member-b"].envelope.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
 
 
 @pytest.mark.asyncio

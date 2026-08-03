@@ -12,20 +12,10 @@ either:
   for human review (NEVER auto-merged per [§1130]); below threshold,
   emit ``party.created`` + ``identifier.added`` to mint a new party.
 
-Connection-management note (carry-forward from 10a): the runner does
-not currently expose per-projection DB access through PipelineContext.
-Per the Commit-2 BUILD_LOG carry-forward, this pipeline ships in
-"degenerate-clean" mode — the candidate loader returns an empty list
-in production, so every miss creates a new party. The merge-threshold
-branch is exercised by unit tests that inject a custom candidate
-loader. A future prompt (10b-ii or its sequel) will thread a
-parties_conn_factory through PipelineContext; the only change required
-here will be replacing the default ``_default_candidate_loader`` with
-one that opens the parties DB and reads its ``identifiers`` table.
-
-Per [§3.2] (CRM identifiers): the source-channel-to-kind mapping below
-is a placeholder until a real adapter ships and richer normalization
-(E.164 phone parsing, IDN-aware email canonicalization) is needed.
+The production runner supplies a read-only Parties connection so exact matches
+and merge suggestions execute against the real projection. Tests may inject a
+candidate loader at the same provider boundary. Source adapters normalize
+phone/email identifiers before this pipeline applies its conservative mapping.
 """
 
 from __future__ import annotations
@@ -45,7 +35,7 @@ def _classify_identifier(
 ) -> tuple[str, str, str]:
     """Derive (from_identifier, kind, value_normalized) for an inbound event.
 
-    Source-channel mapping ([BUILD.md §3.2] placeholder):
+    Source-channel mapping ([BUILD.md §3.2]):
     - ``telephony.sms_received`` → kind ``"phone"`` (from ``from_number``);
       value_normalized strips non-digit characters.
     - messaging events: ``source_channel`` substring "sms" → ``"phone"``;
@@ -156,18 +146,7 @@ def _pick_best_match(
 
 
 def _default_candidate_loader(kind: str) -> list[dict[str, Any]]:
-    """Production-mode loader: returns an empty list because the runner
-    does not yet thread a parties-projection connection through
-    PipelineContext (see module docstring). When that wiring lands, the
-    replacement loader will execute::
-
-        SELECT party_id, value, value_normalized
-          FROM identifiers
-         WHERE tenant_id = ? AND kind = ?
-         ORDER BY rowid DESC
-         LIMIT 100
-
-    against the parties projection."""
+    """Fallback used only when no projection connection was supplied."""
     return []
 
 
@@ -190,8 +169,7 @@ class IdentityResolutionPipeline:
         self,
         candidate_loader: Callable[[str], list[dict[str, Any]]] | None = None,
     ) -> None:
-        # Tests override candidate_loader to exercise the threshold paths;
-        # production uses the empty-list default per the module docstring.
+        # Tests may override the real read-model boundary deterministically.
         self._candidate_loader = candidate_loader or _default_candidate_loader
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:

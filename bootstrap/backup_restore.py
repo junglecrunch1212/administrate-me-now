@@ -212,7 +212,9 @@ class BackupManager:
         if event_entry:
             manifest["event_log_sha256"] = event_entry["sha256"]
         canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-        manifest["manifest_sha256"] = __import__("hashlib").sha256(canonical).hexdigest()
+        manifest["manifest_sha256"] = (
+            __import__("hashlib").sha256(canonical).hexdigest()
+        )
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w") as archive:
             for item in files:
@@ -239,16 +241,23 @@ class BackupManager:
                 if member.issym() or member.islnk() or member.isdev():
                     raise BackupError("backup contains an unsupported link or device")
                 target = (staging_root / Path(*pure.parts)).resolve()
-                if staging_root.resolve() not in target.parents and target != staging_root:
+                if (
+                    staging_root.resolve() not in target.parents
+                    and target != staging_root
+                ):
                     raise BackupError("backup extraction escaped staging root")
-            archive.extractall(staging_root)
+            archive.extractall(staging_root, filter="data")
         manifest_path = staging_root / "manifest.json"
         manifest = json.loads(manifest_path.read_text("utf-8"))
         canonical = dict(manifest)
         expected = canonical.pop("manifest_sha256")
-        digest = __import__("hashlib").sha256(
-            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        digest = (
+            __import__("hashlib")
+            .sha256(
+                json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+            )
+            .hexdigest()
+        )
         if digest != expected:
             raise BackupError("backup manifest was tampered with")
         for item in manifest["files"]:
@@ -282,7 +291,9 @@ class BackupManager:
             for name in PROJECTION_NAMES:
                 await runtime.projections.rebuild(name)
             missing_workbooks = [
-                name for name in existing_workbooks if not (workbook_dir / name).is_file()
+                name
+                for name in existing_workbooks
+                if not (workbook_dir / name).is_file()
             ]
             if missing_workbooks:
                 raise BackupError(

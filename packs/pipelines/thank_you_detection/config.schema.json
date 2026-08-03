@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "thank_you_detection config",
   "type": "object",
-  "required": ["min_confidence", "review_threshold", "dedupe_window_hours"],
+  "required": ["min_confidence", "review_threshold"],
   "additionalProperties": false,
   "properties": {
     "min_confidence": {
@@ -16,11 +16,6 @@
       "minimum": 0.0,
       "maximum": 1.0,
       "description": "At/above this → strength=confident; between min and this → strength=weak."
-    },
-    "dedupe_window_hours": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Future use: window for projection-side dedupe."
     },
     "per_member_overrides": {
       "type": "object",

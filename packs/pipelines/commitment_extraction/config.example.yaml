@@ -14,12 +14,6 @@
 min_confidence: 0.55          # below this → commitment.suppressed
 review_threshold: 0.75        # at/above this → strength=confident
 
-# De-duplication: if a message references a thread that already
-# produced a commitment, don't re-propose. Dedupe is deferred to a
-# future projection-side prompt — this value is read but not yet
-# enforced by the pipeline.
-dedupe_window_hours: 72
-
 # Per-member tuning — values override the global thresholds. Real
 # values are populated post-bootstrap; the placeholders below show the
 # override structure without baking specific tenant identity into the

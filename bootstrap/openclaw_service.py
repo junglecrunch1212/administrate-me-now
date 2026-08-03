@@ -28,7 +28,9 @@ def main() -> None:
         text=True,
     ).stdout
     if expected not in version:
-        raise RuntimeError("OpenClaw version is outside the tested compatibility contract")
+        raise RuntimeError(
+            "OpenClaw version is outside the tested compatibility contract"
+        )
     references = json.loads(
         (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
     )["references"]

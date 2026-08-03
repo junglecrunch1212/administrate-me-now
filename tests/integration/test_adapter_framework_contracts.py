@@ -125,9 +125,7 @@ class _SyntheticNotesChecklistAdapter(ExternalStateMirrorAdapter):
     def status(self) -> AdapterStatus:
         return self._status
 
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         self.applied.append(operation)
         return WriteResult(applied=True, external_id="note-1:item-3")
 
@@ -181,10 +179,7 @@ def test_adapter_class_write_capabilities_align_with_parsed_manifest(
     adapter = _SyntheticNotesChecklistAdapter()
 
     assert adapter.write_capabilities == manifest.write_capabilities
-    assert (
-        adapter.sharing_model_discriminator
-        == manifest.sharing_model_discriminator
-    )
+    assert adapter.sharing_model_discriminator == manifest.sharing_model_discriminator
     manifest_kinds = {cap.kind for cap in manifest.capabilities}
     adapter_kinds = {cap["kind"] for cap in adapter.capabilities}
     assert manifest_kinds == adapter_kinds
@@ -228,9 +223,7 @@ async def test_apply_write_gate_rejects_undeclared_operation_end_to_end(
     )
     adapter = _SyntheticNotesChecklistAdapter()
 
-    forbidden = WriteOperation(
-        kind="delete_note", target_external_id="note-1"
-    )
+    forbidden = WriteOperation(kind="delete_note", target_external_id="note-1")
     assert forbidden.kind not in manifest.write_capabilities
 
     with pytest.raises(WriteCapabilityError) as excinfo:
@@ -311,8 +304,6 @@ def test_capability_block_carries_event_families_per_pm_35(
     manifest = parse_adapter_manifest(
         _write_pack_yaml(tmp_path, _NOTES_CHECKLISTS_YAML)
     )
-    by_kind: dict[str, Capability] = {
-        cap.kind: cap for cap in manifest.capabilities
-    }
+    by_kind: dict[str, Capability] = {cap.kind: cap for cap in manifest.capabilities}
     assert by_kind["Cat-D"].event_families == ["note"]
     assert by_kind["Cat-B"].event_families == ["list_item"]

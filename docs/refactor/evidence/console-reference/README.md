@@ -2,8 +2,6 @@
 
 Status: **PASS**
 
-Gate 2 note: these Gate 1 artifacts remain immutable reference evidence. The runtime-spine refactor adds server namespaces and lifecycle behavior, but makes no frontend implementation claim; AC-18 still requires a production browser suite.
-
 Run from the repository root:
 
 ```powershell
@@ -15,7 +13,7 @@ The harness serves the repository root only on `127.0.0.1:4173`, launches instal
 
 Reference SHA-256: `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`
 
-Browser: Microsoft Edge `150.0.4078.99`
+Browser: Microsoft Edge `150.0.4078.105`
 
 Artifacts:
 

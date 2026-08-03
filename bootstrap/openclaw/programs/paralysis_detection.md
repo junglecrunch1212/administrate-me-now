@@ -11,22 +11,18 @@ hours, `adminme_energy_states.level <= low`, currently within the
 member's fog window. **Deterministic — never invokes LLM** per
 [BUILD.md §1297-1302] and operating rule 20 ([BUILD.md §124]). Picks a
 template from persona's `paralysis_templates.yaml`. Emits
-`paralysis.triggered` with template id + single-action framing.
-Surface in v1 is inbox only (the optional-outbound branch per
-[BUILD.md §1302] is deferred to a future per-profile-config-aware
-prompt).
+`paralysis.triggered` with template id + single-action framing. The event is an
+inbox/activity surface; it is not an external delivery request.
 
 ## Triggers
 
-Scheduled per ADHD-profile member (cron). Default schedule string
-`0 15,17 * * *` is placeholder; bootstrap §8 may override per
-ADHD-profile member configuration at install time.
+Scheduled per ADHD-profile member by OpenClaw. `0 15,17 * * *` is the explicit
+installation fallback; profile fog-window overrides win when configured.
 
 ## Approval gate
 
-None. v1 has no outbound side effect — output is an inbox event and
-the member surfaces it on demand. When the optional-outbound branch
-[BUILD.md §1302] lands later, it will route through `outbound()`.
+None. This program has no outbound side effect; output is a scoped inbox and
+activity event surfaced on demand.
 
 ## Escalation
 
@@ -55,15 +51,14 @@ per [BUILD.md §1297-1302]:
    template for the same member but different members get different
    templates.
 4. Emit `paralysis.triggered` v1 with `member_id`, `template_id`,
-   `template_text`, `triggered_at`. Surface is the inbox view (a
-   future console prompt consumes the event).
+   `template_text`, `triggered_at`. Surface is the scoped inbox and activity
+   feed.
 
 ## What NOT to do
 
 - **Do NOT invoke an LLM.** Template selection is a deterministic
   YAML lookup per [BUILD.md §1297-1302] + operating rule 20. Binding.
-- **Do NOT call `outbound()` in v1.** [BUILD.md §1302]'s optional
-  outbound branch is deferred to a future config-aware prompt.
+- **Do NOT convert the scoped inbox event into an implicit message.**
 - **Do NOT emit when pre-conditions fail.** All defensive-skip cases
   (recent completion, energy not low, outside fog window, missing
   profile, empty persona templates) silently advance the bus.

@@ -3,10 +3,10 @@
   "owner": "openclaw",
   "source": "bootstrap/openclaw/cron.yaml",
   "entries": [
-    { "id": "administrateme-morning-digest", "program_id": "morning_digest", "schedule": "0 7 * * *", "schedule_is_placeholder": true, "message": "Execute morning_digest per standing orders", "tool": "administrateme_standing_order" },
-    { "id": "administrateme-paralysis-detection", "program_id": "paralysis_detection", "schedule": "0 15,17 * * *", "schedule_is_placeholder": true, "message": "Execute paralysis_detection per standing orders", "tool": "administrateme_standing_order" },
-    { "id": "administrateme-reminder-dispatch", "program_id": "reminder_dispatch", "schedule": "*/15 * * * *", "schedule_is_placeholder": false, "message": "Execute reminder_dispatch per standing orders", "tool": "administrateme_standing_order" },
-    { "id": "administrateme-crm-surface", "program_id": "crm_surface", "schedule": "0 19 * * 0", "schedule_is_placeholder": false, "message": "Execute crm_surface per standing orders", "tool": "administrateme_standing_order" },
-    { "id": "administrateme-custody-brief", "program_id": "custody_brief", "schedule": "0 20 * * *", "schedule_is_placeholder": false, "message": "Execute custody_brief per standing orders", "tool": "administrateme_standing_order" }
+    { "id": "administrateme-morning-digest", "program_id": "morning_digest", "schedule": "0 7 * * *", "profile_override_allowed": true, "message": "Execute morning_digest per standing orders", "tool": "administrateme_standing_order" },
+    { "id": "administrateme-paralysis-detection", "program_id": "paralysis_detection", "schedule": "0 15,17 * * *", "profile_override_allowed": true, "message": "Execute paralysis_detection per standing orders", "tool": "administrateme_standing_order" },
+    { "id": "administrateme-reminder-dispatch", "program_id": "reminder_dispatch", "schedule": "*/15 * * * *", "profile_override_allowed": false, "message": "Execute reminder_dispatch per standing orders", "tool": "administrateme_standing_order" },
+    { "id": "administrateme-crm-surface", "program_id": "crm_surface", "schedule": "0 19 * * 0", "profile_override_allowed": false, "message": "Execute crm_surface per standing orders", "tool": "administrateme_standing_order" },
+    { "id": "administrateme-custody-brief", "program_id": "custody_brief", "schedule": "0 20 * * *", "profile_override_allowed": false, "message": "Execute custody_brief per standing orders", "tool": "administrateme_standing_order" }
   ]
 }

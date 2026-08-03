@@ -32,8 +32,7 @@ def get_calendar_event(
     calendar_event_id: str,
 ) -> dict[str, Any] | None:
     row = conn.execute(
-        "SELECT * FROM calendar_events "
-        "WHERE tenant_id = ? AND calendar_event_id = ?",
+        "SELECT * FROM calendar_events WHERE tenant_id = ? AND calendar_event_id = ?",
         (session.tenant_id, calendar_event_id),
     ).fetchone()
     return filter_one(session, dict(row) if row is not None else None)

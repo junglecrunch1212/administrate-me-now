@@ -58,14 +58,10 @@ def build_ops_workbook(
     tasks_sheet.build(tasks_ws, ctx, tenant_id=tenant_id, session=session)
 
     recurrences_ws = wb.create_sheet("Recurrences")
-    recurrences_sheet.build(
-        recurrences_ws, ctx, tenant_id=tenant_id, session=session
-    )
+    recurrences_sheet.build(recurrences_ws, ctx, tenant_id=tenant_id, session=session)
 
     commitments_ws = wb.create_sheet("Commitments")
-    commitments_sheet.build(
-        commitments_ws, ctx, tenant_id=tenant_id, session=session
-    )
+    commitments_sheet.build(commitments_ws, ctx, tenant_id=tenant_id, session=session)
 
     people_ws = wb.create_sheet("People")
     people_sheet.build(people_ws, ctx, tenant_id=tenant_id, session=session)
@@ -100,10 +96,9 @@ def build_finance_workbook(
 ) -> None:
     """Regenerate adminme-finance.xlsx atomically at ``path``.
 
-    Sheets built: Raw Data, Accounts, Metadata. Per the 07b prompt,
-    Assumptions / Dashboard / Balance Sheet / 5-Year Pro Forma / Budget
-    vs Actual are deferred — they depend on unregistered event types or
-    derived-math pipelines landing in prompt 10c+.
+    Sheets built: Raw Data, Accounts, Metadata. These are the retained Gate 6
+    finance surfaces. Transaction rows are bidirectional; account and computed
+    metadata fields remain protected and Plaid-authoritative.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     session = build_internal_session("xlsx_workbooks", "device", tenant_id)

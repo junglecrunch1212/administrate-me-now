@@ -87,9 +87,7 @@ class OpenClawToolCallRecordedV1(BaseModel):
     message_id: str | None = None
     thread_id: str | None = None
     correlation_id: str = Field(min_length=1)
-    call_kind: Literal[
-        "tool", "dashboard", "slash_command", "standing_order", "bridge"
-    ]
+    call_kind: Literal["tool", "dashboard", "slash_command", "standing_order", "bridge"]
     openclaw_version: str = Field(min_length=1)
     openclaw_commit: str = Field(min_length=7)
 

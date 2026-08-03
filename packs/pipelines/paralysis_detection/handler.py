@@ -18,20 +18,11 @@ Pre-conditions per [BUILD.md §1300]: zero completions in prior 2
 hours AND energy level ≤ low AND now within member's fog window.
 Any miss → defensive skip (no event emits, no error raises).
 
-v1 surface is inbox-only per [BUILD.md §1302] ("inbox + optional
-outbound"); the optional-outbound branch is deferred to a future
-per-profile-config-aware prompt. **paralysis_detection does NOT call
-``outbound()`` in v1.** Tests assert this absence.
+The surface is a scoped inbox/activity event, not an external notification.
 
-Constructor-injection loaders per PM-27 (mirroring 10c-i's
-reward_dispatch shape): real loader modules don't exist on main yet,
-so the pack ships with no-op defaults that exercise the
-defensive-skip paths. Tests inject fakes; future bootstrap wiring
-or a runner-side seam injects real loaders. The ``energy_loader``
-returns ``dict | None`` per [BUILD.md §1299]; the
-``adminme_energy_states`` projection is not yet on main, so the
-default loader returns ``None`` and the pre-condition check fails
-defensively.
+Constructor-injection loaders preserve deterministic read-model boundaries.
+The ``energy_loader`` returns ``dict | None`` per [BUILD.md §1299]; absent
+energy evidence fails the pre-condition closed.
 """
 
 from __future__ import annotations

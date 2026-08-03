@@ -96,9 +96,7 @@ class Session:
     correlation_id: str | None = None
     # Used by tests in 08a; 08b populates from authority.yaml. Frozen
     # default avoids mutable-default trap.
-    child_forbidden_tags: frozenset[str] = field(
-        default_factory=frozenset
-    )
+    child_forbidden_tags: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def is_view_as(self) -> bool:
@@ -209,9 +207,7 @@ def build_session_from_node(req: Any, config: Any) -> Session:
         raw_view_role = view.get("role") or auth_role
     else:
         view_member_id = auth_member_id
-        raw_view_role = (
-            "principal" if auth_role == "coach_session" else auth_role
-        )
+        raw_view_role = "principal" if auth_role == "coach_session" else auth_role
 
     if raw_view_role not in _VALID_VIEW_ROLES:
         raise AuthError(f"invalid_view_role:{raw_view_role}")
@@ -341,8 +337,12 @@ def build_internal_session(
     else:
         source = "product_api_internal"
 
-    view_role: ViewRole = "device" if role == "device" else (
-        "principal" if role == "coach_session" else role  # type: ignore[assignment]
+    view_role: ViewRole = (
+        "device"
+        if role == "device"
+        else (
+            "principal" if role == "coach_session" else role  # type: ignore[assignment]
+        )
     )
 
     _validate(
