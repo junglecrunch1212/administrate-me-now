@@ -24,10 +24,10 @@ poetry build
 poetry -C bridge check --lock
 poetry -C bridge build
 
-bash scripts/acceptance/architecture-negative-checks.sh
-bash scripts/acceptance/clean-install.sh
-bash scripts/acceptance/tenant-isolation.sh
-bash scripts/acceptance/backup-restore.sh
+poetry run bash scripts/acceptance/architecture-negative-checks.sh
+poetry run bash scripts/acceptance/clean-install.sh
+poetry run bash scripts/acceptance/tenant-isolation.sh
+poetry run bash scripts/acceptance/backup-restore.sh
 
 (
   cd openclaw/administrateme
