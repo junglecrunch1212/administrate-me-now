@@ -42,7 +42,7 @@ if grep -RIn '3337' adminme bootstrap bridge packs openclaw \
   exit 1
 fi
 
-python - <<'PY'
+poetry run python - <<'PY'
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES
 
 names = {projection.name for projection in DEFAULT_PROJECTION_CLASSES}
