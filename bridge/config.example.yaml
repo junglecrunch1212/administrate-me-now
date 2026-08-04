@@ -1,0 +1,9 @@
+member_id: replace-with-generated-member-id
+tenant_id: replace-with-generated-tenant-id
+central_endpoint: https://replace-with-server-magicdns-name.ts.net
+tailscale_identity: replace-with-verified-member-login
+packs_dir: ~/.adminme-bridge/packs
+cursor_db_path: ~/.adminme-bridge/adapter-cursors.db
+log_level: info
+enabled_packs: []
+pack_config: {}

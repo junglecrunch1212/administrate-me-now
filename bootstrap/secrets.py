@@ -8,6 +8,7 @@ import os
 from typing import Protocol
 
 import keyring
+from keyring.errors import PasswordDeleteError
 
 from bootstrap.contracts import DeploymentPaths, atomic_write
 
@@ -64,7 +65,7 @@ class MacOSKeychainStore:
         name = reference.removeprefix(prefix)
         try:
             keyring.delete_password(self._service(name), self.account)
-        except keyring.errors.PasswordDeleteError:
+        except PasswordDeleteError:
             pass
 
 

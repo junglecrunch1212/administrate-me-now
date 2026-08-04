@@ -198,9 +198,9 @@ def _session(request: Request, provenance: Provenance) -> Session:
         candidate = runtime.resolve_member_chat_actor(provenance.actor_id)
         if candidate is not None:
             expected_actor, expected_session = runtime.member_chat_binding(candidate)
-            if hmac.compare_digest(provenance.actor_id, expected_actor) and hmac.compare_digest(
-                provenance.session_key or "", expected_session
-            ):
+            if hmac.compare_digest(
+                provenance.actor_id, expected_actor
+            ) and hmac.compare_digest(provenance.session_key or "", expected_session):
                 member_id = candidate
     if not member_id:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
@@ -232,7 +232,9 @@ def _session(request: Request, provenance: Provenance) -> Session:
 
 def _require_adult(session: Session) -> None:
     if session.auth_role == "child":
-        raise HTTPException(403, "child chat tool is outside the guardian-safe allowlist")
+        raise HTTPException(
+            403, "child chat tool is outside the guardian-safe allowlist"
+        )
 
 
 def _fingerprint(value: Any) -> str:
@@ -1098,7 +1100,9 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
 
 @router.post("/dashboard/{surface}")
 async def dashboard_surface(
-    surface: Literal["people", "knowledge", "finance", "calendar", "scoreboard", "settings"],
+    surface: Literal[
+        "people", "knowledge", "finance", "calendar", "scoreboard", "settings"
+    ],
     body: ContextRequest,
     request: Request,
 ) -> dict[str, Any]:

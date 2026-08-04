@@ -100,39 +100,51 @@ async def main() -> None:
 
         # 1 household + 3 members + 2 external parties
         await log.append(
-            _env("party.created", {
-                "party_id": "hh",
-                "kind": "household",
-                "display_name": "Demo HH",
-                "sort_name": "Demo HH",
-            })
+            _env(
+                "party.created",
+                {
+                    "party_id": "hh",
+                    "kind": "household",
+                    "display_name": "Demo HH",
+                    "sort_name": "Demo HH",
+                },
+            )
         )
         members = [("m1", "Member A"), ("m2", "Member B"), ("m3", "Child C")]
         for pid, name in members:
             await log.append(
-                _env("party.created", {
-                    "party_id": pid,
-                    "kind": "person",
-                    "display_name": name,
-                    "sort_name": name,
-                })
+                _env(
+                    "party.created",
+                    {
+                        "party_id": pid,
+                        "kind": "person",
+                        "display_name": name,
+                        "sort_name": name,
+                    },
+                )
             )
             await log.append(
-                _env("membership.added", {
-                    "membership_id": f"mem-{pid}",
-                    "party_id": pid,
-                    "parent_party_id": "hh",
-                    "role": "principal" if pid != "m3" else "child",
-                })
+                _env(
+                    "membership.added",
+                    {
+                        "membership_id": f"mem-{pid}",
+                        "party_id": pid,
+                        "parent_party_id": "hh",
+                        "role": "principal" if pid != "m3" else "child",
+                    },
+                )
             )
         for pid, name in [("x1", "Vendor V"), ("x2", "Contact C")]:
             await log.append(
-                _env("party.created", {
-                    "party_id": pid,
-                    "kind": "person" if pid == "x2" else "organization",
-                    "display_name": name,
-                    "sort_name": name,
-                })
+                _env(
+                    "party.created",
+                    {
+                        "party_id": pid,
+                        "kind": "person" if pid == "x2" else "organization",
+                        "display_name": name,
+                        "sort_name": name,
+                    },
+                )
             )
 
         # 5 messaging interactions (3 inbound, 2 outbound)
@@ -468,6 +480,7 @@ async def main() -> None:
 
         # 3 embeddings (for interaction, artifact, party notes)
         import hashlib as _hashlib
+
         def _fake_emb(txt: str, dim: int = 1536) -> list[float]:
             h = _hashlib.sha256(txt.encode()).digest()
             fs = [(h[i % 32] - 127.5) / 127.5 for i in range(dim)]
@@ -490,9 +503,7 @@ async def main() -> None:
                         "embedding": _fake_emb(txt),
                         "model_name": "text-embedding-3-small",
                         "sensitivity": "normal",
-                        "source_text_sha256": _hashlib.sha256(
-                            txt.encode()
-                        ).hexdigest(),
+                        "source_text_sha256": _hashlib.sha256(txt.encode()).hexdigest(),
                     },
                 )
             )
@@ -538,14 +549,16 @@ async def main() -> None:
         for p in parties:
             print(f"  {p['party_id']:<8} {p['kind']:<13} {p['display_name']}")
 
-        members_rows = list_household_members(conn_p, _demo_session(), household_party_id="hh"
+        members_rows = list_household_members(
+            conn_p, _demo_session(), household_party_id="hh"
         )
         print(f"\nHousehold members ({len(members_rows)}):")
         for m in members_rows:
             print(f"  {m['party_id']:<4} role={m['role']:<10} {m['display_name']}")
 
         conn_i = runner.connection("interactions")
-        ix = recent_with(conn_i, _demo_session(), party_id="vendor@example.com", days=60
+        ix = recent_with(
+            conn_i, _demo_session(), party_id="vendor@example.com", days=60
         )
         print(f"\nInteractions with vendor@example.com ({len(ix)}):")
         for row in ix:
@@ -585,7 +598,10 @@ async def main() -> None:
             )
 
         conn_cal = runner.connection("calendars")
-        today_events = calendars_today(conn_cal, _demo_session(), member_party_id="m1",
+        today_events = calendars_today(
+            conn_cal,
+            _demo_session(),
+            member_party_id="m1",
             today_iso="2026-04-23T00:00:00Z",
             tz_name="UTC",
         )
@@ -601,7 +617,8 @@ async def main() -> None:
         print(f"\nPlaces ({len(places)}):")
         for pl in places:
             print(f"  {pl['place_id']:<10} {pl['kind']:<10} {pl['display_name']}")
-        renewing = accounts_renewing_before(conn_paa, _demo_session(), cutoff_iso="2026-05-31"
+        renewing = accounts_renewing_before(
+            conn_paa, _demo_session(), cutoff_iso="2026-05-31"
         )
         print(f"\nAccounts renewing by 2026-05-31 ({len(renewing)}):")
         for ac in renewing:
@@ -611,7 +628,8 @@ async def main() -> None:
             )
 
         conn_m = runner.connection("money")
-        totals = category_totals(conn_m, _demo_session(), since_iso="2026-01-01T00:00:00Z"
+        totals = category_totals(
+            conn_m, _demo_session(), since_iso="2026-01-01T00:00:00Z"
         )
         total_sum = sum(totals.values())
         print(f"\nMoney flow totals since 2026-01-01 (sum={total_sum}):")
@@ -621,7 +639,10 @@ async def main() -> None:
         conn_vs = runner.connection("vector_search")
         n_embeddings = count_embeddings(conn_vs, _demo_session())
         print(f"\nVector index embeddings: {n_embeddings}")
-        near = nearest(conn_vs, _demo_session(), query_vector=_fake_emb("demo interaction summary"),
+        near = nearest(
+            conn_vs,
+            _demo_session(),
+            query_vector=_fake_emb("demo interaction summary"),
             k=3,
         )
         print(f"Nearest to 'demo interaction summary' ({len(near)}):")

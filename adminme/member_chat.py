@@ -67,7 +67,9 @@ class MemberChatTransport(Protocol):
         idempotency_key: str,
     ) -> AsyncIterator[MemberChatChunk]: ...
 
-    async def history(self, *, session_key: str, limit: int) -> list[dict[str, str]]: ...
+    async def history(
+        self, *, session_key: str, limit: int
+    ) -> list[dict[str, str]]: ...
 
     async def abort(self, *, session_key: str) -> bool: ...
 
@@ -98,7 +100,10 @@ def _assistant_text(message: Any) -> str:
         return _safe_visible_text(text) if isinstance(text, str) else ""
     parts: list[str] = []
     for item in content:
-        if not isinstance(item, dict) or item.get("type") not in {"text", "output_text"}:
+        if not isinstance(item, dict) or item.get("type") not in {
+            "text",
+            "output_text",
+        }:
             continue
         text = item.get("text")
         if isinstance(text, str):
@@ -117,7 +122,9 @@ class OpenClawGatewayChatTransport:
         request_timeout_s: float = 30.0,
     ) -> None:
         if url != "ws://127.0.0.1:18789" and url != "ws://[::1]:18789":
-            raise ValueError("member chat Gateway must use the pinned loopback endpoint")
+            raise ValueError(
+                "member chat Gateway must use the pinned loopback endpoint"
+            )
         if not token:
             raise ValueError("member chat Gateway token is required")
         self._url = url
@@ -128,7 +135,9 @@ class OpenClawGatewayChatTransport:
         try:
             from websockets.asyncio.client import connect  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - dependency gate
-            raise MemberChatError("transport_unavailable", "Chat transport is unavailable") from exc
+            raise MemberChatError(
+                "transport_unavailable", "Chat transport is unavailable"
+            ) from exc
         socket: Any | None = None
         try:
             connected = await connect(
@@ -143,11 +152,18 @@ class OpenClawGatewayChatTransport:
             socket = connected
             raw = await asyncio.wait_for(connected.recv(), timeout=5)
             challenge = self._decode(raw)
-            if challenge.get("type") != "event" or challenge.get("event") != "connect.challenge":
-                raise MemberChatError("protocol_error", "Chat transport handshake failed")
+            if (
+                challenge.get("type") != "event"
+                or challenge.get("event") != "connect.challenge"
+            ):
+                raise MemberChatError(
+                    "protocol_error", "Chat transport handshake failed"
+                )
             nonce = (challenge.get("payload") or {}).get("nonce")
             if not isinstance(nonce, str) or not nonce:
-                raise MemberChatError("protocol_error", "Chat transport handshake failed")
+                raise MemberChatError(
+                    "protocol_error", "Chat transport handshake failed"
+                )
             hello = await self._request(
                 connected,
                 "connect",
@@ -168,12 +184,23 @@ class OpenClawGatewayChatTransport:
                 },
             )
             server = hello.get("server") if isinstance(hello, dict) else None
-            methods = ((hello.get("features") or {}).get("methods") if isinstance(hello, dict) else None)
-            if not isinstance(server, dict) or server.get("version") != OPENCLAW_VERSION:
-                raise MemberChatError("incompatible", "Chat transport version is incompatible")
+            methods = (
+                (hello.get("features") or {}).get("methods")
+                if isinstance(hello, dict)
+                else None
+            )
+            if (
+                not isinstance(server, dict)
+                or server.get("version") != OPENCLAW_VERSION
+            ):
+                raise MemberChatError(
+                    "incompatible", "Chat transport version is incompatible"
+                )
             required = {"chat.send", "chat.abort", "chat.history"}
             if not isinstance(methods, list) or not required.issubset(set(methods)):
-                raise MemberChatError("incompatible", "Chat transport methods are incompatible")
+                raise MemberChatError(
+                    "incompatible", "Chat transport methods are incompatible"
+                )
             return connected
         except MemberChatError:
             if socket is not None:
@@ -183,7 +210,9 @@ class OpenClawGatewayChatTransport:
             if socket is not None:
                 await socket.close()
             raise MemberChatError(
-                "transport_unavailable", "Chat is temporarily unavailable", retryable=True
+                "transport_unavailable",
+                "Chat is temporarily unavailable",
+                retryable=True,
             ) from exc
 
     @staticmethod
@@ -191,16 +220,24 @@ class OpenClawGatewayChatTransport:
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="strict")
         if not isinstance(raw, str):
-            raise MemberChatError("protocol_error", "Chat transport returned an invalid frame")
+            raise MemberChatError(
+                "protocol_error", "Chat transport returned an invalid frame"
+            )
         try:
             value = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise MemberChatError("protocol_error", "Chat transport returned an invalid frame") from exc
+            raise MemberChatError(
+                "protocol_error", "Chat transport returned an invalid frame"
+            ) from exc
         if not isinstance(value, dict):
-            raise MemberChatError("protocol_error", "Chat transport returned an invalid frame")
+            raise MemberChatError(
+                "protocol_error", "Chat transport returned an invalid frame"
+            )
         return value
 
-    async def _request(self, socket: Any, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def _request(
+        self, socket: Any, method: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
         await socket.send(
             json.dumps(
@@ -219,8 +256,14 @@ class OpenClawGatewayChatTransport:
                     error_value if isinstance(error_value, dict) else {}
                 )
                 retryable = error.get("retryable") is True
-                code = "rate_limited" if error.get("code") == "RATE_LIMITED" else "gateway_rejected"
-                raise MemberChatError(code, "Chat request was not accepted", retryable=retryable)
+                code = (
+                    "rate_limited"
+                    if error.get("code") == "RATE_LIMITED"
+                    else "gateway_rejected"
+                )
+                raise MemberChatError(
+                    code, "Chat request was not accepted", retryable=retryable
+                )
             payload = frame.get("payload")
             return payload if isinstance(payload, dict) else {}
 
@@ -255,18 +298,25 @@ class OpenClawGatewayChatTransport:
                 )
             )
             while True:
-                raw = await asyncio.wait_for(socket.recv(), timeout=self._request_timeout_s)
+                raw = await asyncio.wait_for(
+                    socket.recv(), timeout=self._request_timeout_s
+                )
                 frame = self._decode(raw)
                 if frame.get("type") == "res" and frame.get("id") == request_id:
                     if frame.get("ok") is not True:
-                        raise MemberChatError("gateway_rejected", "Chat request was not accepted")
+                        raise MemberChatError(
+                            "gateway_rejected", "Chat request was not accepted"
+                        )
                     ack_value = frame.get("payload")
                     ack: dict[str, Any] = (
                         ack_value if isinstance(ack_value, dict) else {}
                     )
                     value = ack.get("runId")
                     if not isinstance(value, str) or not value:
-                        raise MemberChatError("protocol_error", "Chat transport omitted its run identifier")
+                        raise MemberChatError(
+                            "protocol_error",
+                            "Chat transport omitted its run identifier",
+                        )
                     run_id = value
                     yield MemberChatChunk(kind="status", phase="starting_model")
                     continue
@@ -283,7 +333,8 @@ class OpenClawGatewayChatTransport:
                 if state == "status":
                     phase = payload.get("phase")
                     yield MemberChatChunk(
-                        kind="status", phase=phase if isinstance(phase, str) else "preparing_context"
+                        kind="status",
+                        phase=phase if isinstance(phase, str) else "preparing_context",
                     )
                 elif state == "delta":
                     text = payload.get("deltaText")
@@ -292,7 +343,9 @@ class OpenClawGatewayChatTransport:
                         if text:
                             saw_delta = True
                             yield MemberChatChunk(
-                                kind="delta", text=text, replace=payload.get("replace") is True
+                                kind="delta",
+                                text=text,
+                                replace=payload.get("replace") is True,
                             )
                 elif state == "final":
                     if not saw_delta:
@@ -309,7 +362,12 @@ class OpenClawGatewayChatTransport:
                 elif state == "error":
                     terminal = True
                     kind = payload.get("errorKind")
-                    safe_code = kind if kind in {"refusal", "timeout", "rate_limit", "context_length"} else "unavailable"
+                    safe_code = (
+                        kind
+                        if kind
+                        in {"refusal", "timeout", "rate_limit", "context_length"}
+                        else "unavailable"
+                    )
                     yield MemberChatChunk(
                         kind="error",
                         code=safe_code,
@@ -319,14 +377,19 @@ class OpenClawGatewayChatTransport:
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
-            raise MemberChatError("timeout", "Chat response timed out", retryable=True) from exc
+            raise MemberChatError(
+                "timeout", "Chat response timed out", retryable=True
+            ) from exc
         finally:
             if not terminal:
                 try:
                     await self._request(
                         socket,
                         "chat.abort",
-                        {"sessionKey": session_key, **({"runId": run_id} if run_id else {})},
+                        {
+                            "sessionKey": session_key,
+                            **({"runId": run_id} if run_id else {}),
+                        },
                     )
                 except Exception:
                     pass
@@ -338,7 +401,11 @@ class OpenClawGatewayChatTransport:
             payload = await self._request(
                 socket,
                 "chat.history",
-                {"sessionKey": session_key, "limit": min(max(limit, 1), 50), "maxChars": 40_000},
+                {
+                    "sessionKey": session_key,
+                    "limit": min(max(limit, 1), 50),
+                    "maxChars": 40_000,
+                },
             )
         finally:
             await socket.close()

@@ -65,14 +65,6 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
     Gmail / Google Calendar resolvers."""
     if not op_ref or not op_ref.startswith("op://"):
         raise ValueError(f"invalid op-ref: {op_ref!r}")
-    if op_ref.startswith("op://test/"):
-        return {
-            "type": "service_account",
-            "project_id": "test-project",
-            "client_email": "test@test.iam.gserviceaccount.com",
-            "private_key": "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----\n",
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
     op_bin = shutil.which("op")
     if op_bin is None:
         raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")

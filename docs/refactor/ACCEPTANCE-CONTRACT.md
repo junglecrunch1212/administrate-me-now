@@ -1,88 +1,76 @@
 # Release acceptance contract
 
-Gate 7 status (2026-08-04): **household experience PASS at the
-credential-free process and rendered-browser boundaries.** AC-18 now targets
-the Python-served member portal rather than the deleted Node scaffold. The
-Gate 7 acceptance test proves the non-admin adult OpenClaw chat seam, signed
-per-member isolation, no-event ordinary conversation, exactly-once explicit
-domain proposals, role/direct-route denial, all eight surfaces and three
-modes, immediate daily-loop recalculation, and data-only temporary-surface
-isolation/lifecycle while retaining exactly thirteen projections. The pinned
-Edge harness proves responsive, reduced-motion, chat/degraded, and
-private/promoted/archived quest states. Live provider and supported-Mac claims
-remain AC-12/21 work.
-
-Gate 6 status (2026-08-03): **domain convergence PASS at the credential-free
-production-composition boundary.** AC-04's bridge/private-knowledge slice now
-passes, and the full suite supplies executable Gate 6 coverage for all 13
-projections, Cat-A–E, both workbooks, contextual ranking, pack/profile/persona
-lifecycle, cursor/circuit recovery, notification policy/result ingestion,
-capability truth, activity evidence, schema history, lint/types/builds, and
-negative architecture checks. Live provider grants and the full browser UX
-remain separate release evidence, not fixture claims.
-
-Gate 5 status (2026-08-03): **AC-01 and AC-15 credential-free process portions PASS**. The ten-section installer, fixed operations surface, synthetic Doctor round trip, encrypted backup, validated restore, launchd contracts, secret redaction, bridge restrictions, and upgrade compatibility refusal pass locally. `macos-bootstrap.yml` and the live-Mac checklist cover what the Windows host cannot prove. Live OpenClaw, macOS grants, OAuth, and family activation remain unclaimed. AC-04 is now the Phase 6 product slice.
+Gate 8 replaces the earlier aspirational command list with this executable
+contract. The previous list named fourteen test or script files that never
+existed; a dead command is not evidence. Every row below now names a retained
+test, script, build, or CI job. The aggregate interface is
+`scripts/acceptance/release-candidate.sh` on the supported macOS runner.
 
 ## Rules
 
-These are release gates, not aspirational checks. A gate passes only from a clean checkout on the stated supported platform with production composition, credential-free fixtures/fake services, retained machine-readable evidence, and no unexpected skip/xfail. Unit mocks cannot substitute for a process boundary named in a gate. Golden skeletons are marked strict xfail during refactor; the release command uses `--runxfail`, so missing capability fails loudly.
+A row passes only from a clean checkout using production composition and
+credential-free deterministic boundaries. There may be no unexpected skip or
+xfail. Fakes may stand in for provider credentials and household data, but not
+for the event log, bus, projections, authorization, HTTP composition, backup,
+restore, OpenClaw protocol, or browser rendering boundary named by a row.
 
-Standard environment: supported macOS lab, Python 3.11, a Node version satisfying the exact OpenClaw source engine (currently `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`), exact lockfiles, exact pinned OpenClaw commit, loopback-only runtime, temporary encrypted instance directories, no real household account. Every command below must be wrapped by a versioned script/Make target; the current command is the intended interface.
+The release environment is macOS 14 on Apple silicon, Python 3.11 from the
+lockfile, Node 22.23.1 (the preferred bootstrap pin), OpenClaw API
+and Gateway `2026.7.2` at commit
+`944cf08f94c334cff2b0fdf7e01187a9efa42715`, loopback-only services, encrypted
+temporary instances, and no real household account. Live provider grants are a
+post-merge activation boundary and cannot be represented as a fixture pass.
 
-## Gates
+## Executable gates
 
-| ID | Executable release requirement | Required evidence / pass condition |
+| ID | Executable release requirement | Pass condition |
 |---|---|---|
-| AC-00 | `git diff --check && git status --porcelain` after build/test cleanup | Clean tracked tree; generated evidence stored only in declared artifact directory; no secret/unrelated file. |
-| AC-01 | `./scripts/acceptance/clean-install.sh` | **Gate 5 process PASS:** encrypted ten-section fixture install, observation on, secret-reference scan clean, repeat run no-op, Doctor healthy. Disposable-live-mac grants remain AC-21 evidence. |
-| AC-02 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_runtime_spine.py -q` | One Python process composes the encrypted log, durable bus, exact 13 projections, pipelines, adapters/xlsx, product namespaces, and bridge ingest; append commits before waking consumers; readiness, shutdown, and encrypted reopen are truthful. |
-| AC-03 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py -q` | **Gate 3 PASS:** credential-free inbound communication -> encrypted durable event -> bus -> Parties/Interactions -> schema-bound OpenClaw fixture provenance -> proposal-only review -> independent principal approval and observation-gated delivery intent -> API/xlsx -> complete/defer/snooze/block/unblock outcomes -> changed deterministic what-now. Duplicate requests, stale writes, wrong owners/roles, bad remote responses, replay, projection rebuild, crash-after-append, and restart preserve semantics. |
-| AC-04 | `python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py -q` | **Gate 6 PASS:** enrolled member bridge -> owner-stamped knowledge event -> `member_knowledge` and allowed `vector_search`; another member/child/ambient/OpenClaw generic memory cannot read it; correction/replay proven. |
-| AC-05 | `python -m pytest tests/acceptance/test_semantic_separation_and_feedback.py --runxfail -q` | Calendar/task/commitment/list/recurrence/scheduler schemas and stores remain distinct; Cat-B external edit round-trips; completion/defer/snooze/block/correction updates linked projections without type collapse. |
-| AC-06 | `python -m pytest tests/acceptance/test_contextual_whatnow.py --runxfail -q` | Controlled clock/context fixtures prove different explainable results for now/hour/daypart/day/week/longer, energy/effort, availability, blockers, profile, scope, freshness, and lifecycle feedback. |
-| AC-07 | `python -m pytest tests/acceptance/test_encryption_and_all_projections.py --runxfail -q` | Raw DB lacks plaintext sentinel and rejects wrong key; exact 13-name registry; each projection consumes a canonical event; full replay is semantically/byte equivalent as defined; no privileged vector row. |
-| AC-08 | `python -m pytest tests/acceptance/test_member_child_authorization.py --runxfail -q` | `authMember`/`viewMember`, owner/visibility/sensitivity, trusted-proxy identity, privileged audit, calendar busy redaction, child direct-route denial, narrow portal, cross-owner and ambient denial. |
-| AC-09 | `python -m pytest tests/acceptance/test_delivery_replay_restart.py --runxfail -q` | Crash after commit/before publish and before/after callback checkpoint; at-least-once redelivery; idempotency; durable offsets; poison isolation; reset/replay; ambiguous outbound reconciliation; no loss. |
-| AC-10 | `python -m pytest tests/acceptance/test_adapter_categories.py --runxfail -q` | One credential-free example for Cat-A/B/C/D/E; multi-capability, verb allowlists, sensitivity floors, sharing models, central/bridge/dual identity, durable watermarks/circuits, install validation. |
-| AC-11 | `python -m pytest tests/acceptance/test_guarded_write_observation.py --runxfail -q` | Table-driven first-failure proof for allowlist -> governance -> rate limit; independent OpenClaw/domain approvals; send modes; content/persona/privacy guard; every terminal audit; 5–7-day observation; full suppression payload; Cat-B rule. |
-| AC-12 | `npm --prefix openclaw/administrateme run check && npm --prefix openclaw/administrateme test && python -m pytest tests/acceptance/test_openclaw_native_seam.py -q`; then in disposable macOS lab `npm --prefix openclaw/administrateme run test:live:mac` | Package/API/gateway/build pins equal `2026.7.2` and source commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`; native manifest/build/pack; typed tools and dashboard; skill, slash, standing-order, scoped bridge; metadata-only model provenance; actor/member denial; observation; exact-once outcomes; durable unavailable/restart; incompatible fixture rejection. Fixture/process PASS is distinct from the required live link/install/inspect/restart/deep-RPC macOS sub-gate. |
-| AC-13 | `python -m pytest tests/acceptance/test_workbook_roundtrip.py --runxfail -q` | Both named workbooks; forward build, protected/derived rejection, editable reverse events, sidecars/locks, conflict visibility, Plaid columns immutable, concurrent retry, rebuild/replay equivalence, LibreOffice formula check. |
-| AC-14 | `python -m pytest tests/acceptance/test_degraded_operation_and_doctor.py --runxfail -q` | Empty/disabled/stale/degraded distinct; adapter watermarks/circuits; poison consumer; OpenClaw/source/workbook outage; safe reads continue; writes fail closed; Doctor actionable and secret-free. |
-| AC-15 | `./scripts/acceptance/backup-restore.sh` | **Gate 5 process PASS:** quiesced encrypted backup plus manifest; authenticated staging restore; active state untouched until validation; rollback copy; all 13 projections/workbooks rebuilt from the event log. Wrong-key/tamper paths fail closed. |
-| AC-16 | `./scripts/acceptance/tenant-isolation.sh` | Static email/phone/address/name and hardcoded-instance-path scan; start two instances with distinct keys/tenants/ports; concurrent identical ids cannot cross log, offsets, projections, cache, files, HTTP, OpenClaw session, or backup. |
-| AC-17 | `python -m pytest tests/acceptance/test_pack_lifecycle_profiles_personas.py --runxfail -q` | All six pack kinds validate dependencies, stage/test/build, atomic install, event, rollback; five profiles and four personas compile/behave; tenant-neutral scan; profile/persona cannot change authority/model routing. |
-| AC-18 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_gate7_household_experience.py -q && npm --prefix tools/console-reference-harness run test:gate7` | **Gate 7 PASS:** eight Python-served surfaces; carousel/compressed/child modes; independent child/device/direct-route denial; observation/degraded/chat/quest states; deterministic desktop/tablet/narrow captures; named controls, heading/reflow/reduced-motion checks; sanitized DOM rendering; no unexpected browser error/request failure. Calendar privacy, reward dedupe, guarded-write order, and final-outbound behavior retain their lower-layer executable suites. |
-| AC-19 | `python -m pytest tests/acceptance/test_network_boundary.py --runxfail -q` | Only expected loopback listeners; Tailscale Serve is sole edge; spoofed identity headers rejected; legacy ports absent or tested aliases; routes preserve product ownership; member bridge endpoint least-privilege. |
-| AC-20 | `python -m pytest tests/acceptance/test_migrations_shutdown.py --runxfail -q` | Every supported old schema fixture migrates/upcasts or fails before mutation; backup made; SIGTERM under ingest/pipeline/xlsx work drains/checkpoints/closes within bound; restart is consistent; forced-kill recovery proven. |
-| AC-21 | `./scripts/acceptance/macos-bootstrap-rehearsal.sh` | Gate 5 supplies the reproducible credential-free macOS job and live checklist. A disposable Apple-silicon live rehearsal must still record grants, crash/login recovery, real pinned Gateway health, and a signed report; target family Mac remains untouched. |
-| AC-22 | `./scripts/acceptance/architecture-negative-checks.sh` | No direct provider SDK/call, duplicate chat/memory/scheduler/router/gateway/app builder, Vellum runtime, plaintext secret, projection write from adapter/pipeline, or required capability marked deferred. |
-| AC-23 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_gate7_household_experience.py tests/unit/test_member_chat_gate7.py -q && npm --prefix openclaw/administrateme run check && npm --prefix openclaw/administrateme test` | Portal chat is a cancellable/backpressure-bounded exact-protocol OpenClaw relay; two members cannot cross-read transcript/session/tool output; no credential/raw envelope leaves the boundary; child tools are independently allowlisted. Temporary views are atomic presentation config over allowlisted scope-filtered reads, default private, reviewed for promotion/child exposure, and disappear without changing domain facts, history, or the 13-projection registry. |
+| AC-00 | `git diff --check`, clean fresh-worktree status after validation | No tracked build residue, secret, or unrelated file. |
+| AC-01 | `scripts/acceptance/clean-install.sh` and `tests/acceptance/test_macos_bootstrap_operations.py` | Ten-section encrypted fixture install, idempotent rerun, Doctor, redaction, and safe operations pass. |
+| AC-02 | `tests/acceptance/test_runtime_spine.py` and `tests/integration/test_runtime_application.py` | One Python composition owns encrypted log, durable bus, exactly 13 projections, pipelines, six product routers, bridge ingest, readiness, unwind, and shutdown. |
+| AC-03 | `tests/acceptance/test_communication_commitment_vertical_slice.py` | Communication-to-outcome slice, guarded approval, replay, rebuild, stale/duplicate denial, and contextual next action pass. |
+| AC-04 | `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` | Enrolled member knowledge remains owner-stamped, searchable only where allowed, correctable, replayable, and source-spoof resistant. |
+| AC-05 | Full suite projection/schema tests, including calendar, task, commitment, list, recurrence, and interaction modules | Domain types remain separate while linked feedback updates the correct projections. |
+| AC-06 | `tests/unit/test_what_now_gate6.py` plus the communication and Gate 7 acceptance slices | Deterministic time/context/energy/availability/blocker/freshness inputs produce explained next actions and immediate feedback. |
+| AC-07 | `tests/unit/test_event_log.py`, `tests/integration/test_projection_rebuild.py`, and runtime inventory tests | SQLCipher, wrong-key rejection, append-only log, exact 13-name registry, replay, and scope filtering pass. |
+| AC-08 | `tests/integration/test_security_end_to_end.py`, `tests/unit/test_scope.py`, and Gate 7 abuse tests | `authMember`/`viewMember`, owner, role, visibility, sensitivity, child, shared-screen, direct-route, and cross-owner rules fail closed. |
+| AC-09 | `tests/unit/test_event_bus.py`, pipeline runner tests, communication slice, and forced-exit test in `test_release_candidate_hardening.py` | Append-before-publish, checkpoints, redelivery, poison isolation, idempotency, retry bounds, restart, and committed-event recovery pass. |
+| AC-10 | Adapter base, validator, supervisor, cursor, and dual-deployment suites under `tests/unit/adapters`, `tests/unit/lib/adapters`, and `tests/integration/test_adapter_*` | Cat-A/B/C/D/E contracts, capabilities, allowlists, sensitivity, cursors, circuits, identities, and install validation pass. |
+| AC-11 | `tests/integration/test_security_end_to_end.py`, `tests/unit/test_observation.py`, and `tests/unit/test_notifications_gate6.py` | Governance order, independent approval, observation suppression, result ingestion, retries, and terminal audit pass. |
+| AC-12 | OpenClaw `check`, `contract`, `test`, `build`, and `pack --dry-run`; `tests/acceptance/test_openclaw_native_seam.py` | Exact native contract, scoped tools, model provenance, actor denial, exact-once outcomes, outage/restart, and compatibility refusal pass. Live install/inspect/deep-RPC remains an activation step. |
+| AC-13 | All `test_xlsx_*` unit/integration suites | Both named workbooks, protected/derived rejection, reverse events, sidecars, locks, conflicts, retries, and rebuild pass. |
+| AC-14 | Runtime, Gate 6 capability, bootstrap Doctor, adapter supervisor, and OpenClaw outage tests | Disabled, stale, degraded, and blocked states remain distinct; reads survive safe degradations; writes fail closed; diagnostics are actionable and redacted. |
+| AC-15 | `scripts/acceptance/backup-restore.sh` and bootstrap operations tests | Encrypted backup, authenticated staging restore, wrong-key/tamper refusal, rollback copy, and post-restore Doctor pass. |
+| AC-16 | `scripts/acceptance/tenant-isolation.sh` | Two separately keyed instances accept identical IDs without crossing log, projection, member knowledge, HTTP, or OpenClaw session boundaries. |
+| AC-17 | Extension, pack-loader, manifest-validator, skill, profile, and persona suites | Six pack kinds, dependencies, install/rollback behavior, five profiles, and four personas compile without changing authority or model routing. |
+| AC-18 | `tests/acceptance/test_gate7_household_experience.py` and console harness `test:gate7` | Eight surfaces, three modes, named controls, responsive/reduced-motion captures, chat/degraded states, and private/promoted/archived quest states pass without browser errors. |
+| AC-19 | Runtime loopback validation, bridge authorization tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, Tailscale identity is resolved server-side, spoofed/cross-owner requests fail, and legacy listeners are absent. |
+| AC-20 | `tests/acceptance/test_release_candidate_hardening.py`, runtime shutdown tests, and backup/restore tests | A real v1 encrypted file migrates through v3, old facts survive, wrong keys and mutation fail, repeated shutdown is safe, startup unwinds, and a committed append survives forced exit. |
+| AC-21 | `scripts/acceptance/macos-bootstrap-rehearsal.sh` in the `macOS bootstrap contract` PR job | Credential-free Apple-silicon bootstrap, launchd/plist contracts, start/stop/restart, backup/restore, and Doctor pass. Real grants and household providers remain post-merge human activation. |
+| AC-22 | `scripts/acceptance/architecture-negative-checks.sh` | No direct model SDK, manual pipeline/adapter bus publish, hardcoded tenant path/identity, direct projection write, executable/raw-log temporary view, or projection count other than 13. |
+| AC-23 | Gate 7 acceptance, `tests/unit/test_member_chat_gate7.py`, and OpenClaw checks | Adult chat is cancellable and bounded; sessions/transcripts/results cannot cross; ordinary chat emits no domain event; explicit proposals are private and guarded; temporary lenses are data-only, private, review-promoted, expirable, and non-contaminating. |
 
-## Baseline and development commands
+## Aggregate release command
 
-These describe the existing repository, not a release pass:
-
-```bash
-PYTHONPATH=bridge python -m pytest -q
-python -m pytest bridge/tests -q
-ruff check .
-ruff check adminme bridge/adminme_bridge
-mypy adminme bridge/adminme_bridge
-bash scripts/verify_invariants.sh
-cd console && npm ci && npm test
-```
-
-Gate 5 adds the bootstrap/operations process gate. The next end-to-end product slice remains strict Phase 6 work:
+On the supported macOS checkout:
 
 ```bash
-PYTHONPATH=bridge python -m pytest tests/acceptance/test_communication_commitment_vertical_slice.py --runxfail -q
-PYTHONPATH=bridge python -m pytest tests/acceptance/test_member_bridge_knowledge_vertical_slice.py --runxfail -q
+bash scripts/acceptance/release-candidate.sh
 ```
 
-## Gate 5 status
+The script runs strict acceptance, the full Python and bridge suites, Ruff,
+format, mypy, production Pyright, package/lock builds, architecture and tenant
+checks, clean install, backup/restore, OpenClaw contract/test/build/pack/audit,
+shellcheck, Bash syntax, and diff hygiene. Rendered browser evidence is retained
+separately because the pinned deterministic harness uses the installed browser;
+its exact command is `npm --prefix tools/console-reference-harness run
+test:gate7`.
 
-AC-02, AC-03, and AC-12's non-live portion remain implemented. Gate 5 implements AC-01 and AC-15 at the credential-free production-composition boundary through `tests/acceptance/test_macos_bootstrap_operations.py`. The same package provides `scripts/acceptance/macos-bootstrap-rehearsal.sh`, `.github/workflows/macos-bootstrap.yml`, and the human checklist in `MAC-MINI-OPERATIONS.md`. This is installer readiness, not evidence that a live provider or the future family Mac works. AC-04 remains the strict Phase 6 xfail.
+## Evidence standard
 
-## Evidence schema
-
-Each gate writes JSON containing `gate_id`, git SHA, dirty flag, UTC time, OS/arch, runtime/dependency/OpenClaw versions and integrity, command, exit code, duration, counts, unexpected skips/xfails, fixture ids, artifact hashes, and redacted failure summary. A signed aggregate references logs/screenshots/backups without embedding credentials or private content. Human visual/accessibility review supplements but never replaces automated authorization/behavior tests.
+The final report records commit, dirty state, UTC time, OS/architecture,
+runtime and pinned OpenClaw versions, command, exit status, duration/counts,
+unexpected skips/xfails, credential-free fixture boundary, coverage,
+performance, retained artifact hashes, and redacted failures. Human visual and
+live-provider review supplement but never replace authorization or behavior
+tests.

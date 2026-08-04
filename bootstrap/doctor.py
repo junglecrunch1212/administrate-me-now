@@ -30,6 +30,7 @@ from bootstrap.contracts import (
     repository_root,
     sha256_file,
 )
+from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 
@@ -189,9 +190,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             projection_status = client.portal.call(runtime.projections.status)
             event_count = client.portal.call(runtime.event_log.count)
             portal = client.get("/api/member/v1/bootstrap", headers=headers)
-            portal_today = client.get(
-                "/api/member/v1/surfaces/today", headers=headers
-            )
+            portal_today = client.get("/api/member/v1/surfaces/today", headers=headers)
             chat_status = client.get(
                 "/api/member/v1/chat/status", headers=headers
             ).json()
@@ -479,8 +478,15 @@ class Doctor:
             (portal_assets / name).is_file()
             for name in ("index.html", "member.css", "member.js")
         )
-        model_configured = os.environ.get("ADMINME_OPENCLAW_MODEL_CONFIGURED") == "1"
-        chat_transport_configured = bool(os.environ.get("ADMINME_OPENCLAW_GATEWAY_TOKEN"))
+        model_configured = model_provider_configured(self.paths)
+        references_path = self.paths.instance_dir / "config" / "secret-references.json"
+        try:
+            references = json.loads(references_path.read_text("utf-8")).get(
+                "references", {}
+            )
+        except (OSError, json.JSONDecodeError):
+            references = {}
+        chat_transport_configured = bool(references.get("openclaw_shared"))
         checks.append(
             DoctorCheck(
                 "member_portal_domain_and_chat_health",

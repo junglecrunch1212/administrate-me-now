@@ -12,11 +12,11 @@ Cat-D adapters run on a **member bridge** — a dedicated Mac Mini signed
 into one family member's iCloud, running the ``adminme-bridge`` daemon.
 They ingest from per-member knowledge sources (Apple Notes, Voice Memos,
 Obsidian vaults) and emit events over the tailnet to the central CoS Mac
-Mini's bridge-ingest endpoint at ``:3337``.
+Mini's bridge-ingest namespace on loopback ``:3330``.
 
 The cornerstone invariant of Cat-D — and the one this ABC surfaces in code
 — is that **the bridge cannot stamp its own ``owner_scope``**. Per memo 04
-§2.2, the ``:3337 bridge`` ingest endpoint resolves the Tailscale identity
+§2.2, the ``:3330 /api/bridge`` ingest endpoint resolves the Tailscale identity
 via ``Tailscale-User-Login`` and stamps ``owner_scope = private:<member_id>``
 on every event. An adapter that tries to override this is a hard refusal at
 the ingest endpoint (logged as an attempted scope violation).
@@ -93,7 +93,7 @@ class PersonalKnowledgeAdapter(ABC):
         """Authenticate against the local knowledge source (file system
         access for Notes / Obsidian / Voice Memos), emit
         ``adapter.authenticated``, begin watching for changes. The
-        emitted events flow over the tailnet to the ``:3337 bridge``
+        emitted events flow over the tailnet to the ``:3330 /api/bridge``
         ingest endpoint, which stamps ``owner_scope`` from the resolved
         Tailscale identity."""
 

@@ -183,9 +183,11 @@ def test_pack_yaml_loads_cleanly() -> None:
     assert data["pack"]["version"] == "1.0.0"
     # [§6 invariant 10, D11]: financial adapters are privileged-floor.
     assert data["sensitivity_floor"] == "privileged"
-    # Webhook-driven trigger with daily backstop cron.
+    # Webhook-driven trigger with an adapter-owned daily recovery poll. This
+    # interval is provider synchronization, not a product scheduler/cron job.
     assert data["triggers"]["kind"] == "webhook_driven"
-    assert data["triggers"]["schedule"] == "0 4 * * *"
+    assert data["triggers"]["recovery_poll_seconds"] == 86_400
+    assert "schedule" not in data["triggers"]
     # Emits the 4 expected event types (3 cross-cutting + 1 new).
     declared = set(data["depends_on"]["event_types"])
     assert {

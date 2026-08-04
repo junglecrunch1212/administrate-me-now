@@ -92,7 +92,7 @@ class _RecordingStateMirrorAdapter:
 def _config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
-        central_endpoint="http://127.0.0.1:3337",
+        central_endpoint="http://127.0.0.1:3330",
         tailscale_identity="m1@example.ts.net",
     )
 
@@ -103,7 +103,7 @@ def test_configured_builtin_knowledge_packs_are_real_and_opt_in(
     config = BridgeConfig(
         member_id="m1",
         tenant_id="tenant-one",
-        central_endpoint="http://127.0.0.1:3330/api/bridge/ingest",
+        central_endpoint="http://127.0.0.1:3330",
         tailscale_identity="m1@example.ts.net",
         packs_dir=str(tmp_path / "installed-packs"),
         enabled_packs=[

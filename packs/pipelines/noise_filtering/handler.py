@@ -34,7 +34,7 @@ from adminme.lib.skill_runner import (
     SkillInputInvalid,
     SkillOutputInvalid,
 )
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import PipelineContext, Triggers, skill_output
 
 _log = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ class NoiseFilteringPipeline:
             )
             return
 
-        output = result.output if hasattr(result, "output") else result
+        output = skill_output(result)
         classification = str(output.get("classification", DEFAULT_CLASSIFICATION))
         confidence = float(output.get("confidence", 0.0))
         await self._emit_classified(

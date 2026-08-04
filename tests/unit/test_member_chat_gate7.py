@@ -6,7 +6,7 @@ from adminme.member_chat import _assistant_text, _safe_visible_text
 def test_chat_text_sanitizes_runtime_directives_and_tool_envelopes() -> None:
     value = (
         "Hello [[reply_to_current]] "
-        "<tool_call>{\"name\":\"administrateme_state\",\"secret\":\"nope\"}</tool_call>"
+        '<tool_call>{"name":"administrateme_state","secret":"nope"}</tool_call>'
         "<|system|>hidden"
     )
     visible = _safe_visible_text(value)

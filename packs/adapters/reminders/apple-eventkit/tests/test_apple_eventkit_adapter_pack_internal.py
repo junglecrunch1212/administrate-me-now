@@ -317,7 +317,8 @@ def test_pack_manifest_loads_cleanly() -> None:
     assert manifest["pack"]["family"] == "reminders"
     assert manifest["sensitivity_floor"] == "normal"
     assert manifest["triggers"]["kind"] == "external_poll"
-    assert manifest["triggers"]["schedule"] == "*/1 * * * *"
+    assert manifest["triggers"]["poll_interval_seconds"] == 30
+    assert "schedule" not in manifest["triggers"]
 
     declared = set(manifest["depends_on"]["event_types"])
     for required in (

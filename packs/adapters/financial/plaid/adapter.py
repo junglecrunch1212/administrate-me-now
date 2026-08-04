@@ -226,7 +226,7 @@ class PlaidAdapter(InboundDataAdapter):
     # [§6 invariant 10, D11]: sensitivity floor hardcoded at the class
     # level; financial adapters CANNOT be downgraded via configuration.
     name: ClassVar[str] = "financial-plaid"
-    family: ClassVar[Literal["financial"]] = "financial"
+    family: ClassVar[Literal["financial", "iot", "telemetry"]] = "financial"
     version: ClassVar[str] = "1.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "privileged"
 

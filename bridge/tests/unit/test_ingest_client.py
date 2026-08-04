@@ -67,7 +67,7 @@ async def test_submit_happy_path_returns_event_id() -> None:
     client = _ScriptedClient([_FakeResponse(202, {"event_id": "ev_abc"})])
     sleeps, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -76,7 +76,7 @@ async def test_submit_happy_path_returns_event_id() -> None:
     assert result.ok is True
     assert result.event_id == "ev_abc"
     assert result.status_code == 202
-    assert client.calls[0]["url"] == "http://127.0.0.1:3337/api/bridge/ingest"
+    assert client.calls[0]["url"] == "http://127.0.0.1:3330/api/bridge/ingest"
     assert client.calls[0]["headers"]["Tailscale-User-Login"] == "m1@example.ts.net"
     # Happy path = no backoff.
     assert sleeps == []
@@ -94,7 +94,7 @@ async def test_submit_5xx_then_success_records_backoff() -> None:
     )
     sleeps, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -117,7 +117,7 @@ async def test_submit_429_respects_retry_after_header() -> None:
     )
     sleeps, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -135,7 +135,7 @@ async def test_submit_4xx_non_429_fails_fast_no_retry() -> None:
     )
     sleeps, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -157,7 +157,7 @@ async def test_submit_transport_error_retries_then_gives_up() -> None:
     client = _ScriptedClient(errors)  # type: ignore[arg-type]
     _, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -182,7 +182,7 @@ async def test_submit_batch_chunks_at_batch_chunk_size() -> None:
     )
     _, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,
@@ -214,7 +214,7 @@ async def test_submit_batch_failure_reports_chunk_offset() -> None:
     )
     _, sleep = _record_sleeps()
     ic = IngestClient(
-        central_endpoint_url="http://127.0.0.1:3337",
+        central_endpoint_url="http://127.0.0.1:3330",
         tailscale_identity_header="m1@example.ts.net",
         client=client,  # type: ignore[arg-type]
         sleep=sleep,

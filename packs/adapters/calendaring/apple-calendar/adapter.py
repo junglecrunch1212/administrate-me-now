@@ -584,7 +584,7 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         the Task in ``_bridge_emit_tasks`` (set + done-callback discard)
         so it can't be GC'd mid-flight. Memo 04 §2.2: provisional
         ``private:<member_id>`` scopes are re-stamped by the central
-        :3337 router from Tailscale identity post-receipt."""
+        :3330 router from Tailscale identity post-receipt."""
         sink = self._bridge_sink
         if sink is None:
             return

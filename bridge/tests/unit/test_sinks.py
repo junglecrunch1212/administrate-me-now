@@ -6,7 +6,7 @@ abstraction without re-deriving the transport / typed-writer
 unification (F-7).
 
 [§6.19] + memo 04 §2.2: production bridge emit always goes through
-``IngestClientBridgeSink`` → central :3337 ingest router so
+``IngestClientBridgeSink`` → central :3330 ingest namespace so
 ``owner_scope`` is stamped from Tailscale identity. F-8 pins that
 ``EventLogBridgeSink`` is for tests + central-deployment-fallback ONLY."""
 

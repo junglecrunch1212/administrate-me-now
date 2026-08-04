@@ -1,4 +1,4 @@
-"""HTTP client that ships envelopes to the central :3337 ingest service.
+"""HTTP client that ships envelopes to the central :3330 API namespace.
 
 Per memo 04 §2.2: bridge → central over Tailscale; ``Tailscale-User-Login``
 header is the identity binding. The central router enforces F-3

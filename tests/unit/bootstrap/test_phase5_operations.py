@@ -6,6 +6,7 @@ import base64
 import json
 import plistlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -18,6 +19,9 @@ from bootstrap.services import ServiceManager
 from bootstrap.state import EncryptedStateStore
 from bootstrap.upgrade import UpgradeError, validate_candidate
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard
+import bootstrap.openclaw_service as openclaw_service
+import bootstrap.runtime_service as runtime_service
+from bootstrap.openclaw_activation import activate, model_provider_configured
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENTRYPOINTS = (
@@ -158,6 +162,14 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
 ) -> None:
     _stub_runtime(monkeypatch)
     state = _wizard(test_paths).run()
+    adapters = json.loads(
+        (test_paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
+    )
+    assert adapters["member_chat_enabled_members"] == [
+        "member_fixture_principal_a",
+        "member_fixture_principal_b",
+    ]
+    assert adapters["child_chat_enabled_members"] == []
     mapping = json.loads(
         (test_paths.instance_dir / "config" / "member-mapping.json").read_text("utf-8")
     )
@@ -194,6 +206,94 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
         if package["restrictions"]["kid"]:
             assert "obsidian" not in package["allowed_adapters"]
             assert package["restrictions"]["obsidian_allowed"] is False
+
+
+def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_runtime(monkeypatch)
+    state = _wizard(test_paths).run()
+    store = secret_store(test_paths, test_mode=True)
+    shared = store.get(state["secret_references"]["openclaw_shared"]).decode("ascii")
+    monkeypatch.setenv("ADMINME_INSTANCE_ROOT", str(test_paths.root))
+    monkeypatch.setattr(runtime_service, "secret_store", lambda _paths: store)
+
+    runtime_capture: dict[str, object] = {}
+
+    def capture_settings(*_args, **kwargs):
+        runtime_capture.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        runtime_service.RuntimeSettings,
+        "credential_free",
+        staticmethod(capture_settings),
+    )
+    monkeypatch.setattr(runtime_service, "create_application", lambda value: value)
+    monkeypatch.setattr(runtime_service.uvicorn, "run", lambda *_args, **_kwargs: None)
+    runtime_service.main()
+
+    assert runtime_capture["openclaw_gateway_token"] == shared
+    assert runtime_capture["openclaw_shared_secret"] == shared
+    assert runtime_capture["openclaw_model_configured"] is False
+    assert runtime_capture["member_chat_enabled_members"] == frozenset(
+        {"member_fixture_principal_a", "member_fixture_principal_b"}
+    )
+    assert runtime_capture["child_chat_enabled_members"] == frozenset()
+
+    monkeypatch.setattr(openclaw_service, "secret_store", lambda _paths: store)
+    monkeypatch.setattr(openclaw_service.shutil, "which", lambda _name: "/openclaw")
+    monkeypatch.setattr(
+        openclaw_service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.7.2"),
+    )
+    exec_capture: dict[str, object] = {}
+
+    def capture_execve(executable, arguments, environment):
+        exec_capture.update(
+            executable=executable,
+            arguments=arguments,
+            gateway_token=environment.get("OPENCLAW_GATEWAY_TOKEN"),
+        )
+        raise SystemExit(0)
+
+    monkeypatch.setattr(openclaw_service.os, "execve", capture_execve)
+    with pytest.raises(SystemExit):
+        openclaw_service.main()
+    assert exec_capture["gateway_token"] == shared
+    assert exec_capture["arguments"] == ["/openclaw", "gateway", "run"]
+
+
+def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout="OpenClaw 2026.7.2")
+
+    monkeypatch.setattr(
+        "bootstrap.openclaw_activation.shutil.which", lambda _name: "/openclaw"
+    )
+    monkeypatch.setattr("bootstrap.openclaw_activation.subprocess.run", run)
+    result = activate(test_paths)
+
+    assert commands == [
+        ["/openclaw", "--version"],
+        ["/openclaw", "configure", "--section", "model", "--section", "channels"],
+        ["/openclaw", "config", "validate"],
+        ["/openclaw", "models", "status", "--probe"],
+    ]
+    assert result["contains_credentials"] is False
+    assert model_provider_configured(test_paths) is True
+    marker = (
+        test_paths.instance_dir / "config" / "openclaw-activation.json"
+    ).read_text("utf-8")
+    assert all(word not in marker.lower() for word in ("api_key", "token", "password"))
 
 
 def test_start_stop_restart_crash_recovery_states_are_truthful(

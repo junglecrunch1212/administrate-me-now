@@ -67,6 +67,10 @@ def run_preflight(
     actual_machine = machine or platform.machine()
     actual_macos = macos_version or platform.mac_ver()[0]
     supported_majors = versions["macos"]["supported_majors"]
+    get_effective_user_id = getattr(os, "geteuid", None)
+    running_as_non_root = (
+        get_effective_user_id() != 0 if callable(get_effective_user_id) else True
+    )
     checks = [
         PreflightCheck(
             "operating_system",
@@ -88,7 +92,7 @@ def run_preflight(
         ),
         PreflightCheck(
             "dedicated_account",
-            os.geteuid() != 0 if hasattr(os, "geteuid") else True,
+            running_as_non_root,
             "installer is running as a non-root user",
             "Log in to the dedicated AdministrateMe account; do not use sudo.",
         ),

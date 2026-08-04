@@ -88,7 +88,12 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
-from adminme.pipelines.base import PipelineContext, Triggers, parties_connection
+from adminme.pipelines.base import (
+    PipelineContext,
+    Triggers,
+    parties_connection,
+    skill_output,
+)
 from adminme.projections.parties.queries import find_party_by_identifier
 
 _log = logging.getLogger(__name__)
@@ -340,11 +345,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        classify_output = (
-            classify_result.output
-            if hasattr(classify_result, "output")
-            else classify_result
-        )
+        classify_output = skill_output(classify_result)
         is_candidate = bool(classify_output.get("is_candidate", False))
         confidence = float(classify_output.get("confidence", 0.0))
         classify_reasons = list(classify_output.get("reasons", []))
@@ -397,11 +398,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        extract_output = (
-            extract_result.output
-            if hasattr(extract_result, "output")
-            else extract_result
-        )
+        extract_output = skill_output(extract_result)
 
         # 7. Build & emit commitment.proposed with kind="other".
         strength = "confident" if confidence >= review_threshold else "weak"

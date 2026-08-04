@@ -13,6 +13,7 @@ from typing import Any
 from bootstrap.backup_restore import BackupManager
 from bootstrap.contracts import DeploymentPaths, repository_root
 from bootstrap.doctor import Doctor
+from bootstrap.openclaw_activation import activate as activate_openclaw
 from bootstrap.services import ServiceManager
 from bootstrap.upgrade import UpgradeManager
 from bootstrap.wizard import BootstrapWizard
@@ -46,7 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor")
     doctor.add_argument("--export", type=Path)
     doctor.add_argument("--no-synthetic-proof", action="store_true")
-    for name in ("start", "stop", "status", "backup", "restore", "upgrade", "rollback"):
+    for name in (
+        "start",
+        "stop",
+        "status",
+        "backup",
+        "restore",
+        "upgrade",
+        "rollback",
+        "activate-openclaw",
+    ):
         child = subparsers.add_parser(name)
         if name == "backup":
             child.add_argument("--output", type=Path)
@@ -136,6 +146,13 @@ def main(argv: list[str] | None = None) -> int:
             result = getattr(manager, args.command)()
             _print(result.public())
             return 0 if result.status not in {"failed", "degraded"} else 1
+        if args.command == "activate-openclaw":
+            result = activate_openclaw(paths)
+            manager = ServiceManager(paths, test_mode=test_mode)
+            manager.stop()
+            service = manager.start()
+            _print({"activation": result, "services": service.public()})
+            return 0 if service.status == "healthy" else 1
         if args.command == "backup":
             _print(
                 BackupManager(paths, root=root, test_mode=test_mode).create(args.output)
@@ -246,6 +263,8 @@ def _interactive_answers() -> dict[str, Any]:
         "home_assistant",
     )
     openclaw_actor_identities = []
+    member_chat_enabled_members: list[str] = []
+    child_chat_enabled_members: list[str] = []
     print("Map OpenClaw actors explicitly to the household members shown by label.")
     for member in members:
         if member["role"] not in {"principal", "child", "device"}:
@@ -268,6 +287,23 @@ def _interactive_answers() -> dict[str, Any]:
                 "member_id": member["member_id"],
             }
         )
+    print("Choose member-portal chat access separately for each interactive member.")
+    for member in members:
+        if member["role"] not in {"principal", "child"}:
+            continue
+        enabled = _yes_no(
+            f"Enable isolated member-portal chat for {member['label']}?",
+            default=member["role"] == "principal",
+        )
+        if not enabled:
+            continue
+        member_chat_enabled_members.append(member["member_id"])
+        if member["role"] == "child" and _yes_no(
+            f"Confirm the independently restricted child chat policy for {member['label']}?"
+        ):
+            child_chat_enabled_members.append(member["member_id"])
+        elif member["role"] == "child":
+            member_chat_enabled_members.remove(member["member_id"])
     if not openclaw_actor_identities:
         raise RuntimeError("at least one OpenClaw actor mapping is required")
     return {
@@ -298,6 +334,8 @@ def _interactive_answers() -> dict[str, Any]:
             },
             "fixture_channel": False,
             "openclaw_actor_identities": openclaw_actor_identities,
+            "member_chat_enabled_members": member_chat_enabled_members,
+            "child_chat_enabled_members": child_chat_enabled_members,
         },
         "bridges": {
             "apple": apple,

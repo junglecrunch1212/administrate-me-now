@@ -108,7 +108,10 @@ class RuntimeSettings:
                 raise ValueError(
                     "enabled OpenClaw transport requires an injected 24+ character secret"
                 )
-            if not self.openclaw_actor_identities and not self.member_chat_enabled_members:
+            if (
+                not self.openclaw_actor_identities
+                and not self.member_chat_enabled_members
+            ):
                 raise ValueError("enabled OpenClaw transport requires actor mappings")
             mapped_members = set(self.openclaw_actor_identities.values()) | set(
                 self.member_chat_enabled_members
@@ -118,15 +121,22 @@ class RuntimeSettings:
                 raise ValueError(
                     "enabled OpenClaw transport requires a role for every mapped member"
                 )
-        if not self.child_chat_enabled_members.issubset(self.member_chat_enabled_members):
+        if not self.child_chat_enabled_members.issubset(
+            self.member_chat_enabled_members
+        ):
             raise ValueError("child chat members must also be chat-enabled members")
-        if any(self.member_roles.get(member) != "child" for member in self.child_chat_enabled_members):
+        if any(
+            self.member_roles.get(member) != "child"
+            for member in self.child_chat_enabled_members
+        ):
             raise ValueError("child chat allowlist may contain only child-role members")
         if self.openclaw_gateway_url not in {
             "ws://127.0.0.1:18789",
             "ws://[::1]:18789",
         }:
-            raise ValueError("member chat Gateway must remain on pinned loopback port 18789")
+            raise ValueError(
+                "member chat Gateway must remain on pinned loopback port 18789"
+            )
 
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
@@ -430,6 +440,13 @@ class AdministrateMeRuntime:
                     config={},
                     correlation_id_factory=new_correlation_id,
                     now_factory=lambda: datetime.now(timezone.utc),
+                    observation_session=build_internal_session(
+                        "adapter_supervisor",
+                        "device",
+                        self.settings.instance.tenant_id,
+                    ),
+                    observation_manager=self.observation,
+                    observation_event_sink=self._require_events(),
                 ),
             )
             await self.adapters.start()
@@ -516,15 +533,26 @@ class AdministrateMeRuntime:
     def member_chat_policy(self, member_id: str, role: str) -> dict[str, Any]:
         enabled = member_id in self.settings.member_chat_enabled_members
         if role in {"ambient", "device"}:
-            return {"state": "unauthorized", "enabled": False, "reason": "role_has_no_chat"}
-        if role == "child" and member_id not in self.settings.child_chat_enabled_members:
+            return {
+                "state": "unauthorized",
+                "enabled": False,
+                "reason": "role_has_no_chat",
+            }
+        if (
+            role == "child"
+            and member_id not in self.settings.child_chat_enabled_members
+        ):
             return {
                 "state": "disabled",
                 "enabled": False,
                 "reason": "guardian_disabled_child_chat",
             }
         if not enabled:
-            return {"state": "disabled", "enabled": False, "reason": "member_chat_disabled"}
+            return {
+                "state": "disabled",
+                "enabled": False,
+                "reason": "member_chat_disabled",
+            }
         if not self.settings.openclaw_model_configured:
             return {
                 "state": "unavailable",
@@ -806,7 +834,9 @@ class AdministrateMeRuntime:
         elif self.settings.deterministic_member_chat_fixture:
             chat_state = "healthy"
             chat_reason = None
-        elif not self.settings.openclaw_gateway_token or self.openclaw_state != "healthy":
+        elif (
+            not self.settings.openclaw_gateway_token or self.openclaw_state != "healthy"
+        ):
             chat_state = "degraded"
             chat_reason = "OpenClaw chat transport is unavailable or degraded"
         else:
@@ -870,10 +900,14 @@ class AdministrateMeRuntime:
             "startup_error": self.startup_error,
             "member_portal": {
                 "health": "healthy" if self.started else "stopped",
-                "domain_views": "healthy" if self.projections is not None else "degraded",
+                "domain_views": "healthy"
+                if self.projections is not None
+                else "degraded",
                 "chat_transport": self.capabilities.get(
                     "openclaw:member-chat",
-                    CapabilityRecord("member-chat", "openclaw_chat_transport", "disabled"),
+                    CapabilityRecord(
+                        "member-chat", "openclaw_chat_transport", "disabled"
+                    ),
                 ).public(),
                 "model_provider_configured": self.settings.openclaw_model_configured,
             },

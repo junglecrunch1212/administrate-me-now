@@ -1,0 +1,18 @@
+# Known limitations
+
+These are release-candidate limitations, not hidden pass claims. None bypasses
+authorization, encryption, observation mode, or backup safety.
+
+| Limitation | Impact | Workaround | Planned resolution |
+|---|---|---|---|
+| Real OpenClaw model/channel credentials and deep Gateway RPC cannot be exercised in credential-free CI. | Member chat correctly stays unavailable until a real provider probe succeeds; the eight deterministic household views continue to work. | After merge, run `./bootstrap/activate-openclaw.sh` only in the server Terminal. It delegates credentials to OpenClaw, validates config, probes the model, writes only a non-secret marker, and restarts both services. | Record the disposable-Mac live gate, then repeat the exact activation on the family Mac. |
+| Apple privacy grants, OAuth consent, Tailscale identity headers, and provider watermarks require human/provider UI. | Calendar, Reminders, Contacts, Notes, Gmail, Plaid, Home Assistant, and bridge capabilities remain disabled or degraded until explicitly granted. | Enable one integration at a time while observation mode is on; deny once first to verify graceful degradation; run Doctor after each grant. | Retain the post-merge signed activation checklist and provider-specific evidence outside the repository. |
+| The deterministic browser harness ran in Microsoft Edge, not Safari with VoiceOver. | Authorization and accessible markup are automated, but Safari/VoiceOver focus order and announcements still need human confirmation. | Use the keyboard and VoiceOver checklist in `docs/operations/FIRST-MAC-BOOTSTRAP.md` before family rollout. | Capture a disposable-Mac Safari/VoiceOver report before the trust-period signoff. |
+| Per-member bridge packages and the bridge daemon are tested, but unattended bridge LaunchAgent installation is not automated. | A selected Apple/Obsidian source must be run in the foreground for its first activation check; central household operation and the portal do not depend on it. | Use the member-bound package and `bridge/config.example.yaml`, run `poetry -C bridge run adminme-bridge` on that member's Mac, verify private ingest, then stop it until a reviewed service wrapper is available. Never share one bridge config between members. | Add a separately reviewed, revocable per-member LaunchAgent installer; do not improvise a daemon on the family server. |
+| Clean-Mac CI proves credential-free launchd contracts, not long-duration idle resource use on the target Mac mini. | Pathological operations are bounded and local timings are measured, but week-long CPU, memory, and disk growth remain unknown. | Keep observation mode on, check Activity Monitor and disk growth daily during the five-to-seven-day trust period, and retain backups. | Add target-Mac telemetry thresholds after the first disposable-Mac soak without collecting household content. |
+| Root and bridge Poetry builds emit migration warnings for legacy `[tool.poetry]` metadata. | No runtime or package reproducibility impact; lock and wheel builds pass. | None required. | Move static metadata to PEP 621 in a later packaging-only change. |
+| CalDAV, Google Drive, optional channels, and other non-core providers remain deferred. | Those provider-specific conveniences are unavailable; no core domain, privacy, projection, workbook, chat, bootstrap, or backup capability is deferred. | Use the retained supported adapters or member bridge sources. | Add only through a reviewed adapter pack and the full Cat-A–E contract. |
+
+If a limitation would require bypassing observation, sharing a credential,
+opening a non-Tailscale edge, changing the pinned OpenClaw version, or using a
+member's identity for another member, stop and request a reviewed release.

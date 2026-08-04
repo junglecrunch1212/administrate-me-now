@@ -26,7 +26,7 @@ class MemberKnowledgeIndexingPipeline:
     }
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
-        if event.get("type") not in self.triggers["events"]:
+        if event.get("type") not in (self.triggers.get("events") or []):
             return
         payload = event["payload"]
         knowledge_id = str(payload["knowledge_id"])

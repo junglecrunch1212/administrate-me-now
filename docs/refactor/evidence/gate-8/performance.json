@@ -1,0 +1,36 @@
+{
+  "boundary": "credential-free production composition; provider latency excluded",
+  "budgets": {
+    "append_projection_p95_ms": 1000,
+    "cold_start_ms": 30000,
+    "encrypted_event_storage_bytes_after_100_tasks": 10485760,
+    "member_chat_fixture_p95_ms": 2000,
+    "task_projection_rebuild_ms": 15000,
+    "temporary_view_five_query_p95_ms": 1000,
+    "today_query_p95_ms": 1000,
+    "tracemalloc_peak_mib": 256
+  },
+  "failures": [],
+  "metrics": {
+    "append_projection_p50_ms": 49.43,
+    "append_projection_p95_ms": 64.23,
+    "cold_start_ms": 3045.68,
+    "encrypted_event_storage_bytes_after_100_tasks": 2381176,
+    "member_chat_fixture_p95_ms": 13.32,
+    "ordinary_chat_event_delta": 0,
+    "task_projection_rebuild_ms": 73.72,
+    "temporary_view_evaluation_event_delta": 0,
+    "temporary_view_five_query_p95_ms": 74.23,
+    "today_query_p95_ms": 59.47,
+    "tracemalloc_current_mib": 4.06,
+    "tracemalloc_peak_mib": 4.85
+  },
+  "schema_version": 1,
+  "status": "PASS",
+  "workload": {
+    "five-query_temporary_view_evaluations": 50,
+    "ordinary_chat_streams": 10,
+    "tasks": 100,
+    "today_queries": 50
+  }
+}

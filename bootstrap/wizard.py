@@ -151,6 +151,11 @@ def _fixture_answers(name: str | None) -> dict[str, Any]:
             "contacts": False,
             "home_assistant": False,
             "fixture_channel": True,
+            "member_chat_enabled_members": [
+                "member_fixture_principal_a",
+                "member_fixture_principal_b",
+            ],
+            "child_chat_enabled_members": [],
             "openclaw_actor_identities": [
                 {
                     "channel_id": "fixture-channel",
@@ -709,6 +714,27 @@ class BootstrapWizard:
             for member in self.answers["household"]["members"]
         }
         actor_identities: dict[str, str] = {}
+        chat_members = selected.get("member_chat_enabled_members", [])
+        child_chat_members = selected.get("child_chat_enabled_members", [])
+        if not isinstance(chat_members, list) or not all(
+            isinstance(member_id, str)
+            and members.get(member_id) in {"principal", "child"}
+            for member_id in chat_members
+        ):
+            raise WizardFailure("member chat allowlist contains an ineligible member")
+        if len(chat_members) != len(set(chat_members)):
+            raise WizardFailure("member chat allowlist contains duplicates")
+        if not isinstance(child_chat_members, list) or not all(
+            isinstance(member_id, str)
+            and members.get(member_id) == "child"
+            and member_id in chat_members
+            for member_id in child_chat_members
+        ):
+            raise WizardFailure(
+                "child chat allowlist must be an independently confirmed subset"
+            )
+        if len(child_chat_members) != len(set(child_chat_members)):
+            raise WizardFailure("child chat allowlist contains duplicates")
         for actor in selected.get("openclaw_actor_identities", []):
             if not isinstance(actor, dict):
                 raise WizardFailure("OpenClaw actor mappings must be objects")
@@ -765,6 +791,8 @@ class BootstrapWizard:
             "live_provider_claims": [],
             "openclaw_actor_identities": actor_identities,
             "member_roles": members,
+            "member_chat_enabled_members": sorted(chat_members),
+            "child_chat_enabled_members": sorted(child_chat_members),
         }
         path = self.paths.instance_dir / "config" / "adapters.json"
         atomic_write(path, json.dumps(config, indent=2).encode("utf-8"))
@@ -790,6 +818,8 @@ class BootstrapWizard:
                 if isinstance(value, bool) and value
             ),
             "openclaw_actor_mappings": len(actor_identities),
+            "member_chat_enabled": len(chat_members),
+            "child_chat_enabled": len(child_chat_members),
             "live_claims": 0,
         }
 

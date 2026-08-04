@@ -61,6 +61,7 @@ optional = true
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
+pip-audit = "2.10.1"
 ruff = "*"
 mypy = "*"
 pyright = "*"

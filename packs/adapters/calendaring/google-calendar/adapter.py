@@ -55,14 +55,6 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
     """Read service-account JSON from an ``op://`` reference; mirrors Gmail."""
     if not op_ref or not op_ref.startswith("op://"):
         raise ValueError(f"invalid op-ref: {op_ref!r}")
-    if op_ref.startswith("op://test/"):
-        return {
-            "type": "service_account",
-            "project_id": "test-project",
-            "client_email": "test@test.iam.gserviceaccount.com",
-            "private_key": "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----\n",
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
     op_bin = shutil.which("op")
     if op_bin is None:
         raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
@@ -110,7 +102,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     """
 
     name: ClassVar[str] = "calendaring-google-calendar"
-    family: ClassVar[Literal["reminders", "calendaring", "contacts"]] = "calendaring"
+    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
+        "calendaring"
+    )
     version: ClassVar[str] = "1.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 

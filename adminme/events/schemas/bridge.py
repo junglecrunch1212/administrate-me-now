@@ -13,7 +13,7 @@ consume), memo 04 §3.2 (bridge.enrolled@v1 emission contract from the
 bootstrap mini-wizard, post-pairing).
 
 Emission lives downstream in the bootstrap mini-wizard (16-§10); 11c-i
-registers the schema only so the central :3337 bridge ingest service can
+registers the schema only so the central :3330 bridge ingest namespace can
 validate the envelope shape end-to-end and so downstream consumers
 (11d member_knowledge projection) can subscribe by canonical name.
 """

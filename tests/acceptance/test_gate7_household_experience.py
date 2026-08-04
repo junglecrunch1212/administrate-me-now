@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import time
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from adminme import temporary_surfaces as temporary_surface_clock
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -22,10 +23,16 @@ ADULT = "member_gate7_adult"
 CHILD = "member_gate7_child"
 DEVICE = "member_gate7_shared_screen"
 HEADERS = {
-    PRINCIPAL: {"Tailscale-User-Login": "principal.ts.net", "X-Correlation-Id": "gate7:principal"},
+    PRINCIPAL: {
+        "Tailscale-User-Login": "principal.ts.net",
+        "X-Correlation-Id": "gate7:principal",
+    },
     ADULT: {"Tailscale-User-Login": "adult.ts.net", "X-Correlation-Id": "gate7:adult"},
     CHILD: {"Tailscale-User-Login": "child.ts.net", "X-Correlation-Id": "gate7:child"},
-    DEVICE: {"Tailscale-User-Login": "screen.ts.net", "X-Correlation-Id": "gate7:screen"},
+    DEVICE: {
+        "Tailscale-User-Login": "screen.ts.net",
+        "X-Correlation-Id": "gate7:screen",
+    },
 }
 OPENCLAW_HEADERS = {"Authorization": f"Bearer {SECRET}"}
 
@@ -61,12 +68,19 @@ def _settings(instance_dir: Path, *, model_configured: bool = True) -> RuntimeSe
             "child.ts.net": CHILD,
             "screen.ts.net": DEVICE,
         },
-        member_roles={PRINCIPAL: "principal", ADULT: "principal", CHILD: "child", DEVICE: "device"},
+        member_roles={
+            PRINCIPAL: "principal",
+            ADULT: "principal",
+            CHILD: "child",
+            DEVICE: "device",
+        },
         deterministic_openclaw_fixture=True,
         fixture_member_id=PRINCIPAL,
         openclaw_enabled=True,
         openclaw_shared_secret=SECRET,
-        openclaw_actor_identities={"openclaw-dashboard|dashboard-principal|actor-principal": PRINCIPAL},
+        openclaw_actor_identities={
+            "openclaw-dashboard|dashboard-principal|actor-principal": PRINCIPAL
+        },
         openclaw_model_configured=model_configured,
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
@@ -81,7 +95,9 @@ async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _portal_provenance(runtime: Any, member_id: str, correlation_id: str) -> dict[str, Any]:
+def _portal_provenance(
+    runtime: Any, member_id: str, correlation_id: str
+) -> dict[str, Any]:
     actor, session_key = runtime.member_chat_binding(member_id)
     return {
         "actor_id": actor,
@@ -118,14 +134,18 @@ def _domain_counts(runtime: Any) -> dict[str, int]:
         "finance": ("money", "money_flows"),
     }
     return {
-        name: runtime.projections.connection(projection).execute(
+        name: runtime.projections.connection(projection)
+        .execute(
             f"SELECT COUNT(*) FROM {table}"  # noqa: S608 - fixed test constants
-        ).fetchone()[0]
+        )
+        .fetchone()[0]
         for name, (projection, table) in tables.items()
     }
 
 
-def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(tmp_path: Path) -> None:
+def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
+    tmp_path: Path,
+) -> None:
     instance = tmp_path / "instance"
     instance.mkdir()
     app = create_application(_settings(instance))
@@ -133,15 +153,29 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(tmp_path: 
     with TestClient(app) as client:
         runtime = app.state.runtime
         before = client.portal.call(_events, runtime)
-        adult_stream = _chat(client, ADULT, "Help me choose a small step.", "adult-chat-0001")
+        adult_stream = _chat(
+            client, ADULT, "Help me choose a small step.", "adult-chat-0001"
+        )
         after = client.portal.call(_events, runtime)
-        assert len(after) == len(before), "ordinary chat must not append an AdministrateMe event"
+        assert len(after) == len(before), (
+            "ordinary chat must not append an AdministrateMe event"
+        )
         assert "I'm here" in adult_stream
-        forbidden_values = [SECRET, runtime.member_chat_binding(ADULT)[1], "provider", "raw_envelope", "system_prompt"]
+        forbidden_values = [
+            SECRET,
+            runtime.member_chat_binding(ADULT)[1],
+            "provider",
+            "raw_envelope",
+            "system_prompt",
+        ]
         assert all(value not in adult_stream for value in forbidden_values)
 
-        adult_history = client.get("/api/member/v1/chat/history", headers=HEADERS[ADULT])
-        principal_history = client.get("/api/member/v1/chat/history", headers=HEADERS[PRINCIPAL])
+        adult_history = client.get(
+            "/api/member/v1/chat/history", headers=HEADERS[ADULT]
+        )
+        principal_history = client.get(
+            "/api/member/v1/chat/history", headers=HEADERS[PRINCIPAL]
+        )
         assert adult_history.status_code == principal_history.status_code == 200
         assert len(adult_history.json()["items"]) == 2
         assert principal_history.json()["items"] == []
@@ -164,22 +198,32 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(tmp_path: 
         assert proposed.status_code == 200, proposed.text
         assert proposed.json()["state"] == "proposal_only"
         retry = client.post(
-            "/api/openclaw/v1/tools/action", headers=OPENCLAW_HEADERS, json=proposal_body
+            "/api/openclaw/v1/tools/action",
+            headers=OPENCLAW_HEADERS,
+            json=proposal_body,
         )
         assert retry.status_code == 200
         proposals = client.portal.call(_events, runtime, "household.action.proposed")
-        matched = [event for event in proposals if event["payload"]["proposal_id"] == "ocp_gate7-explicit-proposal"]
+        matched = [
+            event
+            for event in proposals
+            if event["payload"]["proposal_id"] == "ocp_gate7-explicit-proposal"
+        ]
         assert len(matched) == 1
         assert matched[0]["owner_scope"] == f"private:{ADULT}"
         assert runtime.member_chat_binding(ADULT)[1] not in str(matched[0])
-        tool_audits = client.portal.call(_events, runtime, "openclaw.tool_call.recorded")
+        tool_audits = client.portal.call(
+            _events, runtime, "openclaw.tool_call.recorded"
+        )
         assert runtime.member_chat_binding(ADULT)[1] not in str(tool_audits)
 
         child_denied = client.post(
             "/api/openclaw/v1/tools/action",
             headers=OPENCLAW_HEADERS,
             json={
-                "provenance": _portal_provenance(runtime, CHILD, "gate7-child-injection"),
+                "provenance": _portal_provenance(
+                    runtime, CHILD, "gate7-child-injection"
+                ),
                 "request_id": "gate7-child-injection",
                 "mode": "propose",
                 "kind": "task",
@@ -189,11 +233,14 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(tmp_path: 
         assert child_denied.status_code == 403
         forged = _portal_provenance(runtime, ADULT, "gate7-forged")
         forged["session_key"] = forged["session_key"][:-1] + "0"
-        assert client.post(
-            "/api/openclaw/v1/tools/state",
-            headers=OPENCLAW_HEADERS,
-            json={"provenance": forged},
-        ).status_code == 403
+        assert (
+            client.post(
+                "/api/openclaw/v1/tools/state",
+                headers=OPENCLAW_HEADERS,
+                json={"provenance": forged},
+            ).status_code
+            == 403
+        )
 
         diagnostics = client.get("/api/system/ready").text
         member_page = client.get("/member/today", headers=HEADERS[ADULT])
@@ -202,18 +249,27 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(tmp_path: 
             + client.get("/member-assets/member.css").text
             + client.get("/member-assets/index.html").text
         )
-        persisted_events = json.dumps(client.portal.call(_events, runtime), sort_keys=True)
-        response_metadata = repr(dict(member_page.headers)) + repr(dict(adult_history.headers))
+        persisted_events = json.dumps(
+            client.portal.call(_events, runtime), sort_keys=True
+        )
+        response_metadata = repr(dict(member_page.headers)) + repr(
+            dict(adult_history.headers)
+        )
         signed_session = runtime.member_chat_binding(ADULT)[1]
         for sensitive_value in (SECRET, signed_session):
-            assert sensitive_value not in diagnostics + assets + persisted_events + response_metadata
+            assert (
+                sensitive_value
+                not in diagnostics + assets + persisted_events + response_metadata
+            )
             for stored_file in instance.rglob("*"):
                 if stored_file.is_file():
                     assert sensitive_value.encode() not in stored_file.read_bytes()
         assert "OPENAI_API_KEY" not in assets and "ANTHROPIC_API_KEY" not in assets
 
 
-def test_eight_surfaces_three_modes_and_independent_route_denial(tmp_path: Path) -> None:
+def test_eight_surfaces_three_modes_and_independent_route_denial(
+    tmp_path: Path,
+) -> None:
     instance = tmp_path / "instance"
     instance.mkdir()
     app = create_application(_settings(instance))
@@ -221,29 +277,76 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(tmp_path: Path)
         adult_bootstrap = client.get("/api/member/v1/bootstrap", headers=HEADERS[ADULT])
         assert adult_bootstrap.status_code == 200
         assert [item["id"] for item in adult_bootstrap.json()["navigation"]] == [
-            "today", "inbox", "people", "knowledge", "finance", "calendar", "scoreboard", "settings"
+            "today",
+            "inbox",
+            "people",
+            "knowledge",
+            "finance",
+            "calendar",
+            "scoreboard",
+            "settings",
         ]
         assert adult_bootstrap.json()["mode"] == "compressed"
-        assert client.get("/api/member/v1/bootstrap", headers=HEADERS[PRINCIPAL]).json()["mode"] == "carousel"
+        assert (
+            client.get("/api/member/v1/bootstrap", headers=HEADERS[PRINCIPAL]).json()[
+                "mode"
+            ]
+            == "carousel"
+        )
         for surface in adult_bootstrap.json()["navigation"]:
-            assert client.get(f"/api/member/v1/surfaces/{surface['id']}", headers=HEADERS[ADULT]).status_code == 200
+            assert (
+                client.get(
+                    f"/api/member/v1/surfaces/{surface['id']}", headers=HEADERS[ADULT]
+                ).status_code
+                == 200
+            )
 
-        child_bootstrap = client.get("/api/member/v1/bootstrap", headers=HEADERS[CHILD]).json()
-        assert [item["id"] for item in child_bootstrap["navigation"]] == ["today", "scoreboard"]
+        child_bootstrap = client.get(
+            "/api/member/v1/bootstrap", headers=HEADERS[CHILD]
+        ).json()
+        assert [item["id"] for item in child_bootstrap["navigation"]] == [
+            "today",
+            "scoreboard",
+        ]
         assert child_bootstrap["mode"] == "child"
-        for forbidden in ("inbox", "people", "knowledge", "finance", "calendar", "settings"):
-            assert client.get(f"/api/member/v1/surfaces/{forbidden}", headers=HEADERS[CHILD]).status_code == 404
-            assert client.get(f"/member/{forbidden}", headers=HEADERS[CHILD]).status_code == 404
+        for forbidden in (
+            "inbox",
+            "people",
+            "knowledge",
+            "finance",
+            "calendar",
+            "settings",
+        ):
+            assert (
+                client.get(
+                    f"/api/member/v1/surfaces/{forbidden}", headers=HEADERS[CHILD]
+                ).status_code
+                == 404
+            )
+            assert (
+                client.get(f"/member/{forbidden}", headers=HEADERS[CHILD]).status_code
+                == 404
+            )
 
         screen = client.get("/api/member/v1/bootstrap", headers=HEADERS[DEVICE]).json()
         assert [item["id"] for item in screen["navigation"]] == ["scoreboard"]
         assert screen["chat"]["state"] == "unauthorized"
-        assert client.get("/api/member/v1/surfaces/today", headers=HEADERS[DEVICE]).status_code == 404
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/today", headers=HEADERS[DEVICE]
+            ).status_code
+            == 404
+        )
         assert client.get("/api/member/v1/bootstrap").status_code == 401
 
-        settings = client.get("/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]).json()
+        settings = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        ).json()
         assert len(settings["workbooks"]) == 2
-        assert {item["state"] for item in settings["workbooks"]} <= {"ready", "not_built"}
+        assert {item["state"] for item in settings["workbooks"]} <= {
+            "ready",
+            "not_built",
+        }
         assert settings["semantics"]["fog_checks_local_hours"] == [15, 17]
         assert settings["semantics"]["micro_steps"] is True
         assert settings["semantics"]["guilt_language_filter"] is True
@@ -263,7 +366,9 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(tmp_path: Path)
         pending = client.get(
             "/api/comms/v1/commitments/pending", headers=HEADERS[PRINCIPAL]
         ).json()["items"]
-        proposal = next(item for item in pending if item["commitment_id"] == commitment_id)
+        proposal = next(
+            item for item in pending if item["commitment_id"] == commitment_id
+        )
         approved = client.post(
             f"/api/comms/v1/commitments/{commitment_id}/approve",
             headers=HEADERS[PRINCIPAL],
@@ -316,8 +421,17 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
                     {"name": "calendar.week"},
                     {"name": "finance.recent"},
                 ],
-                "action_verbs": ["task.complete", "task.defer", "task.snooze", "task.block"],
-                "required_capabilities": ["product:core", "projection:tasks", "projection:money"],
+                "action_verbs": [
+                    "task.complete",
+                    "task.defer",
+                    "task.snooze",
+                    "task.block",
+                ],
+                "required_capabilities": [
+                    "product:core",
+                    "projection:tasks",
+                    "projection:money",
+                ],
                 "compatible_modes": ["carousel", "compressed"],
             },
         )
@@ -338,22 +452,33 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
         assert _domain_counts(runtime) == before_counts
 
         evaluation = client.get(
-            f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate", headers=HEADERS[ADULT]
+            f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate",
+            headers=HEADERS[ADULT],
         )
         assert evaluation.status_code == 200, evaluation.text
         assert [item["query"] for item in evaluation.json()["results"]] == [
-            "what_now", "tasks.open", "lists.open", "calendar.week", "finance.recent"
+            "what_now",
+            "tasks.open",
+            "lists.open",
+            "calendar.week",
+            "finance.recent",
         ]
         assert evaluation.json()["evaluated_fresh"] is True
         assert _domain_counts(runtime) == before_counts
 
         for member in (PRINCIPAL, CHILD, DEVICE):
             response = client.get(
-                f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate", headers=HEADERS[member]
+                f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate",
+                headers=HEADERS[member],
             )
             assert response.status_code == 404
             assert stable_id not in response.text
-        assert client.get(f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate").status_code == 401
+        assert (
+            client.get(
+                f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate"
+            ).status_code
+            == 401
+        )
 
         promoted = client.post(
             f"/api/member/v1/temporary-surfaces/{stable_id}/promote",
@@ -361,30 +486,53 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
             json={"audience_member_ids": [PRINCIPAL]},
         )
         assert promoted.status_code == 200, promoted.text
-        assert client.portal.call(_events, runtime)[-1]["type"] == "temporary_surface.promoted"
-        assert client.get(
-            f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate", headers=HEADERS[PRINCIPAL]
-        ).status_code == 200
+        assert (
+            client.portal.call(_events, runtime)[-1]["type"]
+            == "temporary_surface.promoted"
+        )
+        assert (
+            client.get(
+                f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate",
+                headers=HEADERS[PRINCIPAL],
+            ).status_code
+            == 200
+        )
         assert _domain_counts(runtime) == before_counts
 
         archived = client.post(
-            f"/api/member/v1/temporary-surfaces/{stable_id}/archive", headers=HEADERS[ADULT]
+            f"/api/member/v1/temporary-surfaces/{stable_id}/archive",
+            headers=HEADERS[ADULT],
         )
         assert archived.status_code == 200
-        assert client.portal.call(_events, runtime)[-1]["type"] == "temporary_surface.archived"
-        assert client.get(
-            f"/api/member/v1/temporary-surfaces/{stable_id}", headers=HEADERS[ADULT]
-        ).status_code == 404
+        assert (
+            client.portal.call(_events, runtime)[-1]["type"]
+            == "temporary_surface.archived"
+        )
+        assert (
+            client.get(
+                f"/api/member/v1/temporary-surfaces/{stable_id}", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
         assert _domain_counts(runtime) == before_counts
         assert len(runtime.projections.projection_names()) == 13
-        assert not any("project" in name for name in runtime.projections.projection_names())
+        assert not any(
+            "project" in name for name in runtime.projections.projection_names()
+        )
 
         invalid_specs = [
             {"queries": [{"name": "event_log.raw"}]},
             {"queries": [{"name": "tasks.open", "params": {"sql": "SELECT *"}}]},
-            {"queries": [{"name": "tasks.open", "params": {"template": "{{ secrets }}"}}]},
+            {
+                "queries": [
+                    {"name": "tasks.open", "params": {"template": "{{ secrets }}"}}
+                ]
+            },
             {"queries": [{"name": "tasks.open"}], "action_verbs": ["shell.execute"]},
-            {"queries": [{"name": "tasks.open"}], "required_capabilities": ["provider:secrets"]},
+            {
+                "queries": [{"name": "tasks.open"}],
+                "required_capabilities": ["provider:secrets"],
+            },
         ]
         for index, changes in enumerate(invalid_specs):
             body = {
@@ -396,27 +544,48 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
                 "compatible_modes": ["compressed"],
                 **changes,
             }
-            assert client.post(
-                "/api/member/v1/temporary-surfaces", headers=HEADERS[ADULT], json=body
-            ).status_code == 422
+            assert (
+                client.post(
+                    "/api/member/v1/temporary-surfaces",
+                    headers=HEADERS[ADULT],
+                    json=body,
+                ).status_code
+                == 422
+            )
 
 
-def test_child_safe_promotion_expiry_and_degraded_chat_keep_domain_views_usable(tmp_path: Path) -> None:
+def test_child_safe_promotion_expiry_and_degraded_chat_keep_domain_views_usable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [datetime.now(timezone.utc)]
+    monkeypatch.setattr(temporary_surface_clock, "_now", lambda: clock[0])
     instance = tmp_path / "instance"
     instance.mkdir()
     app = create_application(_settings(instance, model_configured=False))
     with TestClient(app) as client:
         runtime = app.state.runtime
         status = client.get("/api/member/v1/chat/status", headers=HEADERS[ADULT]).json()
-        assert status == {"state": "unavailable", "enabled": True, "reason": "model_provider_not_configured"}
-        assert client.post(
-            "/api/member/v1/chat/stream",
-            headers=HEADERS[ADULT],
-            json={"message": "hello", "request_id": "degraded-chat-1"},
-        ).status_code == 503
-        assert client.get("/api/member/v1/surfaces/today", headers=HEADERS[ADULT]).status_code == 200
+        assert status == {
+            "state": "unavailable",
+            "enabled": True,
+            "reason": "model_provider_not_configured",
+        }
+        assert (
+            client.post(
+                "/api/member/v1/chat/stream",
+                headers=HEADERS[ADULT],
+                json={"message": "hello", "request_id": "degraded-chat-1"},
+            ).status_code
+            == 503
+        )
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/today", headers=HEADERS[ADULT]
+            ).status_code
+            == 200
+        )
 
-        expires = datetime.now(timezone.utc) + timedelta(milliseconds=120)
+        expires = clock[0] + timedelta(minutes=1)
         created = client.post(
             "/api/member/v1/temporary-surfaces",
             headers=HEADERS[PRINCIPAL],
@@ -439,13 +608,14 @@ def test_child_safe_promotion_expiry_and_degraded_chat_keep_domain_views_usable(
         )
         assert promoted.status_code == 200, promoted.text
         child_view = client.get(
-            f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate", headers=HEADERS[CHILD]
+            f"/api/member/v1/temporary-surfaces/{stable_id}/evaluate",
+            headers=HEADERS[CHILD],
         )
         assert child_view.status_code == 200
         assert child_view.json()["mode"] == "child"
         before_counts = _domain_counts(runtime)
         before_events = client.portal.call(_events, runtime)
-        time.sleep(0.15)
+        clock[0] = expires + timedelta(seconds=1)
         expired = client.get(
             f"/api/member/v1/temporary-surfaces/{stable_id}", headers=HEADERS[PRINCIPAL]
         )

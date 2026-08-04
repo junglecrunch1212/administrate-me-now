@@ -37,6 +37,7 @@ def main() -> None:
     shared = secret_store(paths).get(references["openclaw_shared"]).decode("ascii")
     environment = os.environ.copy()
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
+    environment["OPENCLAW_GATEWAY_TOKEN"] = shared
     os.execve(executable, [executable, "gateway", "run"], environment)
 
 

@@ -199,6 +199,7 @@ class AdapterSupervisor:
         adapter = managed.adapter
         while not self._stopping:
             ctx = self._ctx_factory()
+            self._bind_observation_seams(adapter, ctx)
             started_at = self._clock()
             managed.status.state = "starting"
             managed.status.started_at = datetime.now(timezone.utc)
@@ -243,6 +244,23 @@ class AdapterSupervisor:
                     raise
                 managed.backoff_s = min(managed.backoff_s * 2, MAX_BACKOFF_S)
         managed.status.state = "stopped"
+
+    @staticmethod
+    def _bind_observation_seams(adapter: Adapter, ctx: AdapterContext) -> None:
+        """Bind the shared outbound guard to adapters that expose its seam slots.
+
+        Adapter packs retain constructor injection for isolated tests, while the
+        supervisor is the production composition point.  Never replace an
+        explicitly injected seam; fill only missing slots from ``AdapterContext``.
+        """
+        bindings = {
+            "_observation_session": ctx.observation_session,
+            "_observation_manager": ctx.observation_manager,
+            "_observation_event_log": ctx.observation_event_sink,
+        }
+        for attribute, value in bindings.items():
+            if value is not None and getattr(adapter, attribute, None) is None:
+                setattr(adapter, attribute, value)
 
     async def _emit_adapter_error(
         self, ctx: AdapterContext, payload: dict[str, Any]

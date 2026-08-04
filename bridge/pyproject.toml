@@ -1,6 +1,7 @@
 # L1-bridge daemon — sibling Poetry package to the root `adminme` package.
 # Per memo 04 §2 / [D17] / [PM-29]: the bridge runs on per-member Mac Minis
-# and emits canonical events via HTTP to the central :3337 ingest service.
+# and emits canonical events via HTTP to the central runtime's `/api/bridge`
+# namespace on loopback :3330 behind the trusted Tailscale edge.
 # It is NOT installed alongside `adminme` on the central host — it is a
 # separate distributable with its own process lifecycle.
 
@@ -30,7 +31,11 @@ pyyaml = "*"
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
 pytest-asyncio = "*"
+pytest-cov = "*"
+pip-audit = "2.10.1"
 httpx = "*"
+mypy = "2.1.0"
+ruff = "0.7.2"
 
 [tool.poetry.scripts]
 adminme-bridge = "adminme_bridge.main:run"

@@ -242,6 +242,9 @@ def _supervisor(
     event_log: _RecordingEventLog,
     adapters: list[Adapter],
     corr_seq: list[str] | None = None,
+    observation_session: Any = None,
+    observation_manager: Any = None,
+    observation_event_log: Any = None,
 ) -> AdapterSupervisor:
     """Build a supervisor whose ``ctx_factory`` hands each adapter a
     context tied to the shared recording log + frozen clock + a
@@ -261,6 +264,9 @@ def _supervisor(
             config={},
             correlation_id_factory=_next_corr,
             now_factory=lambda: _FROZEN_NOW,
+            observation_session=observation_session,
+            observation_manager=observation_manager,
+            observation_event_sink=observation_event_log,
         )
 
     return AdapterSupervisor(
@@ -838,28 +844,37 @@ async def test_supervisor_loads_gmail_send_path_works_through_loader(
         await sup.stop()
 
 
-@pytest.mark.skip(
-    reason=(
-        "Phase B work: the supervisor's adapter loader does not yet "
-        "propagate observation-mode seam slots into the adapter "
-        "constructor; the Phase-A-conditional `send` path covers the "
-        "current loader contract (test (1) above), and the framework "
-        "test ``test_gmail_send.test_send_happy_path_with_seams_"
-        "populated`` covers the Phase-B-conditional branch with seams "
-        "populated directly. This test reserves the integration-seam "
-        "slot for the future Phase B loader extension per memo 08 §3.4."
-    )
-)
 async def test_supervisor_seam_slots_propagate_through_loader(
     tmp_path: Path,
 ) -> None:
-    """Phase B contract: the supervisor's adapter loader will populate
-    the three ``observation_session`` / ``observation_manager`` /
-    ``observation_event_log`` seam slots from the ``AdapterContext`` (or
-    a sibling factory) so ``GmailAdapter.send`` routes through
-    :func:`adminme.lib.observation.outbound` per [§6.20] without per-
-    adapter wiring. Skipped today because the loader does not yet
-    populate those slots — kept as the integration-seam placeholder."""
+    """The supervisor binds all observation seams before adapter start."""
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+    event_log = _RecordingEventLog()
+    adapter = _build_gmail_adapter(
+        service=_FakeGmailService(profile=_fixture("profile_response.json")),
+        max_poll_cycles=0,
+    )
+    session = object()
+    manager = object()
+    observation_log = object()
+    sup = _supervisor(
+        config_path=channels,
+        event_log=event_log,
+        adapters=[adapter],
+        observation_session=session,
+        observation_manager=manager,
+        observation_event_log=observation_log,
+    )
+
+    await sup.start()
+    try:
+        await _wait_for(lambda: len(event_log.by_type("adapter.authenticated")) == 1)
+        assert adapter._observation_session is session
+        assert adapter._observation_manager is manager
+        assert adapter._observation_event_log is observation_log
+    finally:
+        await sup.stop()
 
 
 async def test_supervisor_observation_off_send_calls_gmail_directly(

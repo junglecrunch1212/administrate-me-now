@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, runtime_chec
 
 if TYPE_CHECKING:
     from adminme.events.writer import EventSink
+    from adminme.lib.observation import ObservationManager
+    from adminme.lib.session import Session
 
 
 SensitivityFloor = Literal["normal", "privileged"]
@@ -56,6 +58,9 @@ class AdapterContext:
     config: dict[str, Any]
     correlation_id_factory: Callable[[], str]
     now_factory: Callable[[], datetime]
+    observation_session: "Session | None" = None
+    observation_manager: "ObservationManager | None" = None
+    observation_event_sink: "EventSink | None" = None
 
 
 @dataclass

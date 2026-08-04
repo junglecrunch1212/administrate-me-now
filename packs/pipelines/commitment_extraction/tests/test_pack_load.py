@@ -15,7 +15,7 @@ def test_pack_loads_cleanly() -> None:
     pack = load_pipeline_pack(PACK_ROOT)
     assert pack.pack_id == "pipeline:commitment_extraction"
     assert pack.version == "4.2.0"
-    assert pack.triggers["events"] == [
+    assert pack.triggers.get("events") == [
         "messaging.received",
         "messaging.sent",
     ]

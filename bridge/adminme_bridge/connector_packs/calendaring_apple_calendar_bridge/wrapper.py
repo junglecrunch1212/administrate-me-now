@@ -21,7 +21,7 @@ exists solely to:
       synthesized ``AdapterContext`` config under ``_bridge_sink`` so
       the central adapter's bridge-mode emit path
       (``deployment_target == "bridge"``) lands envelopes at the bridge
-      sink → central :3337 ingest router → event log, with
+      sink → central :3330 ingest namespace → event log, with
       ``owner_scope`` stamped from Tailscale identity per [§6.19] /
       memo 04 §2.2;
   (d) forward ``stop()`` / ``status()`` to the internal adapter,

@@ -34,7 +34,9 @@ ALLOWED_CAPABILITIES = frozenset(
     }
 )
 CHILD_QUERIES = frozenset({"what_now", "tasks.open"})
-CHILD_ACTIONS = frozenset({"task.complete", "task.defer", "task.snooze", "task.block", "task.unblock"})
+CHILD_ACTIONS = frozenset(
+    {"task.complete", "task.defer", "task.snooze", "task.block", "task.unblock"}
+)
 
 
 def _default_modes() -> list[ViewMode]:
@@ -62,7 +64,9 @@ class SavedQuery(BaseModel):
     def params_are_data_only(cls, value: dict[str, Any]) -> dict[str, Any]:
         forbidden = {"sql", "code", "template", "script", "event_log", "raw_log"}
         if forbidden & set(value):
-            raise ValueError("executable, template, and raw-log declarations are forbidden")
+            raise ValueError(
+                "executable, template, and raw-log declarations are forbidden"
+            )
         encoded = json.dumps(value, sort_keys=True)
         if len(encoded) > 2_000:
             raise ValueError("query parameters are too large")
@@ -113,9 +117,13 @@ class CreateTemporarySurface(BaseModel):
         if "child" not in self.compatible_modes:
             return
         if {query.name for query in self.queries} - CHILD_QUERIES:
-            raise TemporarySurfaceError("child-compatible views contain an adult-only query")
+            raise TemporarySurfaceError(
+                "child-compatible views contain an adult-only query"
+            )
         if set(self.action_verbs) - CHILD_ACTIONS:
-            raise TemporarySurfaceError("child-compatible views contain an adult-only action")
+            raise TemporarySurfaceError(
+                "child-compatible views contain an adult-only action"
+            )
 
 
 @dataclass(frozen=True)
@@ -166,26 +174,43 @@ class TemporarySurfaceSpec:
                 title=str(value["title"]),
                 purpose=str(value["purpose"]),
                 owner_member_id=str(value["owner_member_id"]),
-                audience_member_ids=tuple(str(item) for item in value["audience_member_ids"]),
+                audience_member_ids=tuple(
+                    str(item) for item in value["audience_member_ids"]
+                ),
                 queries=tuple(dict(item) for item in value["queries"]),
                 action_verbs=tuple(str(item) for item in value["action_verbs"]),
-                required_capabilities=tuple(str(item) for item in value["required_capabilities"]),
+                required_capabilities=tuple(
+                    str(item) for item in value["required_capabilities"]
+                ),
                 compatible_modes=tuple(value["compatible_modes"]),
                 created_version=int(value["created_version"]),
                 updated_version=int(value["updated_version"]),
                 created_at=str(value["created_at"]),
                 updated_at=str(value["updated_at"]),
-                expires_at=(str(value["expires_at"]) if value.get("expires_at") else None),
+                expires_at=(
+                    str(value["expires_at"]) if value.get("expires_at") else None
+                ),
                 status=value["status"],
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise TemporarySurfaceError("invalid temporary-surface store") from exc
-        if spec.schema_version != 1 or spec.status not in {"active", "expired", "archived"}:
+        if spec.schema_version != 1 or spec.status not in {
+            "active",
+            "expired",
+            "archived",
+        }:
             raise TemporarySurfaceError("unsupported temporary-surface store schema")
-        if set(spec.action_verbs) - ALLOWED_ACTIONS or set(spec.required_capabilities) - ALLOWED_CAPABILITIES:
-            raise TemporarySurfaceError("stored temporary surface contains an unsafe declaration")
+        if (
+            set(spec.action_verbs) - ALLOWED_ACTIONS
+            or set(spec.required_capabilities) - ALLOWED_CAPABILITIES
+        ):
+            raise TemporarySurfaceError(
+                "stored temporary surface contains an unsafe declaration"
+            )
         if any(query.get("name") not in ALLOWED_QUERIES for query in spec.queries):
-            raise TemporarySurfaceError("stored temporary surface contains an unsafe query")
+            raise TemporarySurfaceError(
+                "stored temporary surface contains an unsafe query"
+            )
         try:
             for query in spec.queries:
                 SavedQuery.model_validate(query)
@@ -217,15 +242,25 @@ class TemporarySurfaceStore:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise TemporarySurfaceError("temporary-surface store is unreadable") from exc
+            raise TemporarySurfaceError(
+                "temporary-surface store is unreadable"
+            ) from exc
         if not isinstance(raw, dict) or raw.get("schema_version") != 1:
             raise TemporarySurfaceError("unsupported temporary-surface store schema")
         values = raw.get("surfaces")
         if not isinstance(values, list):
             raise TemporarySurfaceError("temporary-surface store is malformed")
-        specs = [TemporarySurfaceSpec.from_dict(item) for item in values if isinstance(item, dict)]
-        if len(specs) != len(values) or len({item.stable_id for item in specs}) != len(specs):
-            raise TemporarySurfaceError("temporary-surface store contains invalid identifiers")
+        specs = [
+            TemporarySurfaceSpec.from_dict(item)
+            for item in values
+            if isinstance(item, dict)
+        ]
+        if len(specs) != len(values) or len({item.stable_id for item in specs}) != len(
+            specs
+        ):
+            raise TemporarySurfaceError(
+                "temporary-surface store contains invalid identifiers"
+            )
         return {item.stable_id: item for item in specs}
 
     def _write(self, specs: dict[str, TemporarySurfaceSpec]) -> None:
@@ -235,7 +270,9 @@ class TemporarySurfaceStore:
             "surfaces": [specs[key].public() for key in sorted(specs)],
         }
         encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-        fd, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", dir=self.path.parent
+        )
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(encoded)
@@ -246,7 +283,9 @@ class TemporarySurfaceStore:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def create(self, owner_member_id: str, request: CreateTemporarySurface) -> TemporarySurfaceSpec:
+    def create(
+        self, owner_member_id: str, request: CreateTemporarySurface
+    ) -> TemporarySurfaceSpec:
         with self._lock:
             request.validate_child_contract()
             now = _now()
@@ -261,7 +300,9 @@ class TemporarySurfaceStore:
                 purpose=request.purpose,
                 owner_member_id=owner_member_id,
                 audience_member_ids=(owner_member_id,),
-                queries=tuple(query.model_dump(mode="json") for query in request.queries),
+                queries=tuple(
+                    query.model_dump(mode="json") for query in request.queries
+                ),
                 action_verbs=tuple(request.action_verbs),
                 required_capabilities=tuple(request.required_capabilities),
                 compatible_modes=tuple(request.compatible_modes),
@@ -326,11 +367,21 @@ class TemporarySurfaceStore:
         with self._lock:
             specs = self._read()
             spec = specs.get(stable_id)
-            if spec is None or spec.status != "active" or spec.owner_member_id != actor_member_id:
+            if (
+                spec is None
+                or spec.status != "active"
+                or spec.owner_member_id != actor_member_id
+            ):
                 raise TemporarySurfaceError("temporary surface not found")
             if status == "expired" and not force_expiry:
-                if spec.expires_at is None or datetime.fromisoformat(spec.expires_at.replace("Z", "+00:00")) > _now():
-                    raise TemporarySurfaceError("temporary surface is not due to expire")
+                if (
+                    spec.expires_at is None
+                    or datetime.fromisoformat(spec.expires_at.replace("Z", "+00:00"))
+                    > _now()
+                ):
+                    raise TemporarySurfaceError(
+                        "temporary surface is not due to expire"
+                    )
             updated = TemporarySurfaceSpec(
                 **{
                     **spec.__dict__,

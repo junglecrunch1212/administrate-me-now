@@ -10,6 +10,7 @@ import uvicorn
 
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.contracts import DeploymentPaths, repository_root
+from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.secrets import secret_store
 
 
@@ -35,6 +36,7 @@ def main() -> None:
     }
     actor_identities = adapter_config.get("openclaw_actor_identities", {})
     store = secret_store(paths)
+    shared = store.get(references["openclaw_shared"]).decode("ascii")
     settings = RuntimeSettings.credential_free(
         paths.instance_dir,
         encryption_key=store.get(references["event_log"]),
@@ -45,8 +47,16 @@ def main() -> None:
         member_roles=roles,
         deterministic_openclaw_fixture=False,
         openclaw_enabled=bool(actor_identities),
-        openclaw_shared_secret=store.get(references["openclaw_shared"]).decode("ascii"),
+        openclaw_shared_secret=shared,
         openclaw_actor_identities=actor_identities,
+        openclaw_gateway_token=shared,
+        openclaw_model_configured=model_provider_configured(paths),
+        member_chat_enabled_members=frozenset(
+            adapter_config.get("member_chat_enabled_members", [])
+        ),
+        child_chat_enabled_members=frozenset(
+            adapter_config.get("child_chat_enabled_members", [])
+        ),
     )
     uvicorn.run(
         create_application(settings),

@@ -252,7 +252,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # auto-elevate. JSON-schema rejects most malformed inputs at load time;
     # ``__init__`` is the defense-in-depth runtime check.
     name: ClassVar[str] = "reminders-apple-eventkit"
-    family: ClassVar[Literal["reminders", "calendaring", "contacts"]] = "reminders"
+    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
+        "reminders"
+    )
     version: ClassVar[str] = "1.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
@@ -1355,7 +1357,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         ``_append`` is sync and called from both async + sync sites, so
         a fire-and-forget task keeps the call shape symmetric with the
         central path. Memo 04 §2.2: provisional ``private:<member_id>``
-        scopes are re-stamped by the central :3337 router from
+        scopes are re-stamped by the central :3330 router from
         Tailscale identity post-receipt."""
         sink = self._bridge_sink
         if sink is None:

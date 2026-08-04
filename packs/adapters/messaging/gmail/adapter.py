@@ -87,27 +87,16 @@ subject email. Tests inject a fake; production uses ``google-auth`` /
 def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
     """Read service-account JSON from a 1Password reference.
 
-    Test stubs (``op://test/...``) return a deterministic minimal JSON
-    shape that satisfies ``google.oauth2.service_account.Credentials``'s
-    structural expectations; production shells out to ``op read``.
+    Production shells out to ``op read``. Tests inject their own resolver;
+    test-looking references are never interpreted as credentials here.
     """
     if not op_ref or not op_ref.startswith("op://"):
         raise ValueError(f"invalid op-ref: {op_ref!r}")
-    if op_ref.startswith("op://test/"):
-        return {
-            "type": "service_account",
-            "project_id": "test-project",
-            "client_email": "test@test.iam.gserviceaccount.com",
-            "private_key": (
-                "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----\n"
-            ),
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
     op_bin = shutil.which("op")
     if op_bin is None:
         raise RuntimeError(
             "1Password CLI `op` not on PATH; cannot resolve "
-            f"{op_ref!r} (set up `op` or use an op://test/... ref)"
+            f"{op_ref!r} (install and sign in to the 1Password CLI)"
         )
     proc = subprocess.run(
         [op_bin, "read", "--no-newline", op_ref],

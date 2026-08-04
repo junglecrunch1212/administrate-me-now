@@ -90,7 +90,11 @@ def _runtime(request: Request) -> Any:
 def _chat_policy(runtime: Any, session: Session) -> dict[str, Any]:
     policy = runtime.member_chat_policy(session.auth_member_id, session.auth_role)
     if session.auth_member_id != session.view_member_id:
-        return {"state": "unauthorized", "enabled": False, "reason": "view_as_has_no_chat"}
+        return {
+            "state": "unauthorized",
+            "enabled": False,
+            "reason": "view_as_has_no_chat",
+        }
     return policy
 
 
@@ -156,7 +160,9 @@ async def _audit_surface(
     )
 
 
-def _visible_spec(runtime: Any, session: Session, stable_id: str) -> TemporarySurfaceSpec:
+def _visible_spec(
+    runtime: Any, session: Session, stable_id: str
+) -> TemporarySurfaceSpec:
     spec = runtime.temporary_surfaces.get(stable_id)
     if (
         spec is None
@@ -184,7 +190,9 @@ async def _execute_lifecycle(
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     if body.item_kind == "task":
-        actor_id, signed_session_key = runtime.member_chat_binding(session.auth_member_id)
+        actor_id, signed_session_key = runtime.member_chat_binding(
+            session.auth_member_id
+        )
         return await _task_lifecycle(
             OpenClawLifecycleRequest(
                 provenance=Provenance(
@@ -302,12 +310,16 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
 
 
 @router.get("/api/member/v1/surfaces/{surface}")
-async def surface(surface: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def surface(
+    surface: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     return build_surface(_runtime(request), session, surface)
 
 
 @router.get("/api/member/v1/people/{party_id}")
-async def person_detail(party_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def person_detail(
+    party_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     return crm_detail(_runtime(request), session, party_id)
 
 
@@ -317,27 +329,41 @@ async def chat_status(request: Request, session: SessionDep) -> dict[str, Any]:
 
 
 @router.get("/api/member/v1/chat/history")
-async def chat_history(request: Request, session: SessionDep, limit: int = 30) -> dict[str, Any]:
+async def chat_history(
+    request: Request, session: SessionDep, limit: int = 30
+) -> dict[str, Any]:
     runtime = _runtime(request)
     _, session_key = _require_chat(runtime, session)
     try:
-        items = await runtime.member_chat.history(session_key=session_key, limit=min(max(limit, 1), 50))
+        items = await runtime.member_chat.history(
+            session_key=session_key, limit=min(max(limit, 1), 50)
+        )
     except MemberChatError as exc:
-        raise HTTPException(503, _safe_error(exc, session.correlation_id or str(uuid.uuid4()))) from exc
+        raise HTTPException(
+            503, _safe_error(exc, session.correlation_id or str(uuid.uuid4()))
+        ) from exc
     return {"items": items, "transcript_owner": "openclaw"}
 
 
 @router.post("/api/member/v1/chat/stream")
-async def chat_stream(body: ChatRequest, request: Request, session: SessionDep) -> StreamingResponse:
+async def chat_stream(
+    body: ChatRequest, request: Request, session: SessionDep
+) -> StreamingResponse:
     runtime = _runtime(request)
     _, session_key = _require_chat(runtime, session)
-    decision = runtime.member_chat_limiter.decide(f"chat:{session.auth_member_id}", 60, 12)
+    decision = runtime.member_chat_limiter.decide(
+        f"chat:{session.auth_member_id}", 60, 12
+    )
     if not decision.allowed:
-        raise HTTPException(429, {"code": "rate_limited", "retry_after_s": decision.retry_after_s})
+        raise HTTPException(
+            429, {"code": "rate_limited", "retry_after_s": decision.retry_after_s}
+        )
     correlation_id = session.correlation_id or str(uuid.uuid4())
 
     async def generate() -> AsyncIterator[bytes]:
-        lock = runtime.member_chat_locks.setdefault(session.auth_member_id, asyncio.Lock())
+        lock = runtime.member_chat_locks.setdefault(
+            session.auth_member_id, asyncio.Lock()
+        )
         try:
             async with lock:
                 async for chunk in runtime.member_chat.stream(
@@ -372,7 +398,9 @@ async def chat_abort(request: Request, session: SessionDep) -> dict[str, bool]:
 
 
 @router.get("/api/member/v1/evidence/{event_id}")
-async def evidence(event_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def evidence(
+    event_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     runtime = _runtime(request)
     async for event in runtime.event_log.read_since():
         if event["event_id"] != event_id:
@@ -388,16 +416,28 @@ async def evidence(event_id: str, request: Request, session: SessionDep) -> dict
         safe_fields = {
             key: payload[key]
             for key in (
-                "task_id", "commitment_id", "title", "description", "decision",
-                "outcome", "state", "reason", "confidence", "approval_state",
-                "delivery_result", "correction_of",
+                "task_id",
+                "commitment_id",
+                "title",
+                "description",
+                "decision",
+                "outcome",
+                "state",
+                "reason",
+                "confidence",
+                "approval_state",
+                "delivery_result",
+                "correction_of",
             )
             if key in payload
         }
         return {
             "event_id": event["event_id"],
             "type": event["type"],
-            "source": {"adapter": event["source_adapter"], "account": event["source_account_id"]},
+            "source": {
+                "adapter": event["source_adapter"],
+                "account": event["source_account_id"],
+            },
             "actor": event.get("actor_identity"),
             "occurred_at": event["occurred_at"],
             "ingested_at": event["recorded_at"],
@@ -407,7 +447,10 @@ async def evidence(event_id: str, request: Request, session: SessionDep) -> dict
                 "visibility": event["visibility_scope"],
                 "sensitivity": event["sensitivity"],
             },
-            "why": {"correlation_id": event.get("correlation_id"), "causation_id": event.get("causation_id")},
+            "why": {
+                "correlation_id": event.get("correlation_id"),
+                "causation_id": event.get("causation_id"),
+            },
             "correction": payload.get("correction_of"),
             "approval": payload.get("approval_state") or payload.get("decision"),
             "delivery": payload.get("delivery_result") or payload.get("outcome"),
@@ -428,7 +471,10 @@ async def member_lifecycle(
 async def create_temporary_surface(
     body: CreateTemporarySurface, request: Request, session: SessionDep
 ) -> dict[str, Any]:
-    if session.auth_role in {"child", "device", "ambient"} or session.auth_member_id != session.view_member_id:
+    if (
+        session.auth_role in {"child", "device", "ambient"}
+        or session.auth_member_id != session.view_member_id
+    ):
         raise HTTPException(403, "adult owner authority required")
     try:
         spec = _runtime(request).temporary_surfaces.create(session.auth_member_id, body)
@@ -445,26 +491,49 @@ async def create_temporary_surface(
 
 
 @router.get("/api/member/v1/temporary-surfaces/{stable_id}")
-async def get_temporary_surface(stable_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def get_temporary_surface(
+    stable_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     runtime = _runtime(request)
     await _expire_due(runtime, session)
     return {"surface": _visible_spec(runtime, session, stable_id).public()}
 
 
 @router.get("/api/member/v1/temporary-surfaces/{stable_id}/evaluate")
-async def evaluate_temporary_surface(stable_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def evaluate_temporary_surface(
+    stable_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     runtime = _runtime(request)
     await _expire_due(runtime, session)
     spec = _visible_spec(runtime, session, stable_id)
-    missing = [name for name in spec.required_capabilities if runtime.capabilities.get(name) is None or runtime.capabilities[name].state not in {"healthy", "observation_only"}]
+    missing = [
+        name
+        for name in spec.required_capabilities
+        if runtime.capabilities.get(name) is None
+        or runtime.capabilities[name].state not in {"healthy", "observation_only"}
+    ]
     if missing:
-        return {"surface": {"stable_id": stable_id, "title": spec.title}, "state": "degraded", "missing_capabilities": missing, "results": []}
+        return {
+            "surface": {"stable_id": stable_id, "title": spec.title},
+            "state": "degraded",
+            "missing_capabilities": missing,
+            "results": [],
+        }
     results = [
-        {"query": query["name"], "value": evaluate_query(runtime, session, query["name"], query.get("params", {}))}
+        {
+            "query": query["name"],
+            "value": evaluate_query(
+                runtime, session, query["name"], query.get("params", {})
+            ),
+        }
         for query in spec.queries
     ]
     return {
-        "surface": {"stable_id": stable_id, "title": spec.title, "purpose": spec.purpose},
+        "surface": {
+            "stable_id": stable_id,
+            "title": spec.title,
+            "purpose": spec.purpose,
+        },
         "mode": experience_mode(runtime, session),
         "state": "ready",
         "results": results,
@@ -479,17 +548,29 @@ async def promote_temporary_surface(
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     spec = runtime.temporary_surfaces.get(stable_id)
-    if spec is None or spec.status != "active" or spec.owner_member_id != session.auth_member_id:
+    if (
+        spec is None
+        or spec.status != "active"
+        or spec.owner_member_id != session.auth_member_id
+    ):
         raise HTTPException(404, "temporary surface not found")
-    if session.auth_role != "principal" or session.auth_member_id != session.view_member_id:
+    if (
+        session.auth_role != "principal"
+        or session.auth_member_id != session.view_member_id
+    ):
         raise HTTPException(403, "adult review required")
     known = set(runtime.settings.member_roles)
     audience = set(body.audience_member_ids)
     if not audience or audience - known:
         raise HTTPException(422, "audience contains an unknown member")
-    if any(runtime.settings.member_roles[item] in {"device", "ambient"} for item in audience):
+    if any(
+        runtime.settings.member_roles[item] in {"device", "ambient"}
+        for item in audience
+    ):
         raise HTTPException(422, "shared-screen audience is not supported")
-    children = {item for item in audience if runtime.settings.member_roles[item] == "child"}
+    children = {
+        item for item in audience if runtime.settings.member_roles[item] == "child"
+    }
     if children and (
         "child" not in spec.compatible_modes
         or {query["name"] for query in spec.queries} - CHILD_QUERIES
@@ -509,7 +590,9 @@ async def promote_temporary_surface(
 
 
 @router.post("/api/member/v1/temporary-surfaces/{stable_id}/archive")
-async def archive_temporary_surface(stable_id: str, request: Request, session: SessionDep) -> dict[str, Any]:
+async def archive_temporary_surface(
+    stable_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
     runtime = _runtime(request)
     try:
         spec = runtime.temporary_surfaces.transition(

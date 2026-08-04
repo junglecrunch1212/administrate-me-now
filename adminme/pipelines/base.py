@@ -79,13 +79,21 @@ class PipelineContext:
     session: "Session"
     event_log: "EventLog"
     event_sink: "EventSink"
-    run_skill_fn: Callable[..., Awaitable["SkillResult"]]
+    run_skill_fn: Callable[..., Awaitable["SkillResult | dict[str, Any]"]]
     outbound_fn: Callable[..., Awaitable[Any]]
     guarded_write: "GuardedWrite | None"
     observation_manager: "ObservationManager | None"
     triggering_event_id: str
     correlation_id: str | None
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
+
+
+def skill_output(result: Any) -> dict[str, Any]:
+    """Normalize the production ``SkillResult`` and dictionary test seam."""
+    output = getattr(result, "output", result)
+    if not isinstance(output, dict):
+        raise TypeError("skill results must contain an object output")
+    return output
 
 
 @contextmanager

@@ -1,22 +1,53 @@
-"""
-Canary test: no hardcoded tenant identity in platform code.
+"""Canary: tenant identity must never be embedded in platform code."""
 
-Per SYSTEM_INVARIANTS.md §12 and DECISIONS.md §D11 (rule 4 from BUILD.md): no
-family name, person's name, address, phone number, email, account number, or
-medical detail appears anywhere in platform code. Tenant data lives only in
-the instance directory.
+from __future__ import annotations
 
-This test fails CI if hardcoded tenant data appears in adminme/, bootstrap/,
-profiles/, personas/, integrations/, or tests/ (except fixtures explicitly
-flagged with `# fixture:tenant_data:ok`).
-
-Implemented in a later prompt (likely prompt 08 or 17). Stub for now.
-"""
-
-import pytest
+import re
+from pathlib import Path
 
 
-@pytest.mark.skip(reason="Implemented in a later prompt per SYSTEM_INVARIANTS.md §12")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PLATFORM_ROOTS = (
+    "adminme",
+    "bootstrap",
+    "profiles",
+    "personas",
+    "integrations",
+)
+SCANNED_SUFFIXES = frozenset({".py", ".json", ".yaml", ".yml", ".sql", ".ts"})
+
+# These values identify the original household from which the constitutional
+# prohibition was derived. Keeping the terms in this canary (outside platform
+# roots) makes the rule executable without putting them into shipped code.
+FORBIDDEN_IDENTITY = re.compile(
+    r"\b(?:james|laura|charlie|stice|morningside)\b", re.IGNORECASE
+)
+HARDCODED_INSTANCE = re.compile(
+    r"(?:/Users/[^/]+/AdministrateMe|[A-Za-z]:\\Users\\[^\\]+\\AdministrateMe)",
+    re.IGNORECASE,
+)
+
+
 def test_no_hardcoded_identity_in_platform_code() -> None:
-    """Scan platform directories for hardcoded identity strings; fail if found."""
-    pass
+    """Report every platform source line that embeds tenant-specific data."""
+    violations: list[str] = []
+    for root_name in PLATFORM_ROOTS:
+        root = REPOSITORY_ROOT / root_name
+        if not root.exists():
+            continue
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            if path.suffix.lower() not in SCANNED_SUFFIXES:
+                continue
+            relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8", errors="replace").splitlines(),
+                start=1,
+            ):
+                if "fixture:tenant_data:ok" in line:
+                    continue
+                if FORBIDDEN_IDENTITY.search(line) or HARDCODED_INSTANCE.search(line):
+                    violations.append(f"{relative}:{line_number}: {line.strip()}")
+
+    assert not violations, "tenant identity embedded in platform code:\n" + "\n".join(
+        violations
+    )

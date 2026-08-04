@@ -1,5 +1,12 @@
 # Constitutional crosswalk
 
+Gate 8 release audit (2026-08-04): all 96 rows (C001–C096) were reread
+against the complete `main...codex/administrateme-v2-runtime` diff. Every row
+maps to an executable AC-00–AC-23 gate in `ACCEPTANCE-CONTRACT.md`; the final
+command, coverage, security, clean-room, performance, and live-boundary
+evidence is recorded in `FINAL-VALIDATION-REPORT.md`. The only `DEFER`
+disposition remains C085 and names optional providers, never a core function.
+
 Gate 6 implementation evidence (2026-08-03): the baseline columns below are
 historical observations. Current executable evidence preserves C001–C090 while
 converging implementation ownership: six product namespaces; thirteen

@@ -2,7 +2,7 @@
 
 Per [§6.19] (bridge sovereignty) + memo 04 §2.2 (Tailscale-bound bridge → central
 emit identity): production bridge adapters always emit through ``IngestClient``,
-which forwards envelopes over HTTPS to the central :3337 ingest router. The router
+which forwards envelopes over HTTPS to the central :3330 ingest namespace. The router
 stamps ``owner_scope`` from Tailscale identity. Bridges never write directly to a
 local event log on the bridge host.
 
@@ -102,7 +102,7 @@ class BridgeTransportEventSink:
 
 
 class IngestClientBridgeSink:
-    """Production bridge emit path — HTTPS to central :3337 ingest router.
+    """Production bridge emit path — HTTPS to central :3330 ingest namespace.
 
     Per [§6.19] / memo 04 §2.2: bridge adapters always emit through this sink in
     production deployments. The underlying ``IngestClient.submit`` retries 5xx with

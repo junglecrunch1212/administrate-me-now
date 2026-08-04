@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-04T14:53:09.751Z",
+  "generated_at": "2026-08-04T16:53:08.496Z",
   "status": "PASS",
   "browser": "installed Microsoft Edge via playwright-core@1.62.0",
   "viewports": [
@@ -336,12 +336,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_8d783c98a16b48cb HTTP",
+      "name": "/member/quests/view_75030b420c8b4aed HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_8d783c98a16b48cb title",
+      "name": "/member/quests/view_75030b420c8b4aed title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -356,12 +356,12 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_8d783c98a16b48cb HTTP",
+      "name": "/member/quests/view_75030b420c8b4aed HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_8d783c98a16b48cb title",
+      "name": "/member/quests/view_75030b420c8b4aed title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -534,16 +534,16 @@
       "sha256": "0047944c8607d0666b189841dcecf9cca4cba134f024ebf60d2c609ec7b412b1"
     },
     "surface-inbox-carousel-desktop.png": {
-      "bytes": 81147,
-      "sha256": "f719b3e0e5118758790f751759110f1aa99de32e88ff3d399e81d43811d5407e"
+      "bytes": 81139,
+      "sha256": "2ad235036db11e7cc8de2cfe7242fe903607a3c6546f10f0e4cb5e497e050cdf"
     },
     "surface-people-carousel-desktop.png": {
-      "bytes": 85821,
-      "sha256": "4d5bfa9e463e68b5421ddad85096ab0b5b4b9891fbef66026f75d717949b22b1"
+      "bytes": 85806,
+      "sha256": "6523c0431d61a59b1d758544e3332b8801f50c84e56392a9c4238a673f434b15"
     },
     "surface-knowledge-carousel-desktop.png": {
-      "bytes": 90398,
-      "sha256": "799c0e006211c7f092e1f29b86d9e9fc84bcc3500307c58d252038dcf3862367"
+      "bytes": 90403,
+      "sha256": "6fbc037ffd0ef4522886c2d48e85d566147b8fe52638ade0d779fafddfca3244"
     },
     "surface-finance-carousel-desktop.png": {
       "bytes": 76248,
@@ -582,16 +582,16 @@
       "sha256": "2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 89932,
-      "sha256": "33068dbfea01bf1ba669f86baddba1aff06d302dd16ea76ea86ce23cb0d154b7"
+      "bytes": 89936,
+      "sha256": "1e9711b5cab7995070def4b61f90f861e07274e5d330296f26cf5181512cc8d2"
     },
     "mode-child-today-narrow.png": {
       "bytes": 45540,
       "sha256": "eae42ea4cdcbd9c5a25b11d049f3b112c6c8ac8971d2d27e06c8046f43a92948"
     },
     "mode-child-scoreboard-narrow.png": {
-      "bytes": 43721,
-      "sha256": "8461521294324ca91bf5407ff78fd65b20ae307e66661807e5d10e8b412eb106"
+      "bytes": 43724,
+      "sha256": "fcbecc2545467a6f6f84aaf272c4d044c12a0fbbc1c336795f15a7d2dca05b0d"
     },
     "shared-screen-scoreboard.png": {
       "bytes": 73231,

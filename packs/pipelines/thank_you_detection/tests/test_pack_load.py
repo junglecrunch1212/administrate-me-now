@@ -17,7 +17,7 @@ def test_pack_loads_cleanly() -> None:
     assert pack.version == "1.0.0"
     # Inbound only — F-5 carry-forward (no `messaging.sent` in the
     # trigger list).
-    assert pack.triggers["events"] == ["messaging.received"]
+    assert pack.triggers.get("events") == ["messaging.received"]
     assert "commitment.proposed" in pack.events_emitted
     assert "commitment.suppressed" in pack.events_emitted
     assert isinstance(pack.instance, Pipeline)

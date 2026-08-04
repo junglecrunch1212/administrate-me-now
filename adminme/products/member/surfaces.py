@@ -13,7 +13,11 @@ from adminme.products.core import main as core
 from adminme.projections.artifacts.queries import linked_to, list_recent
 from adminme.projections.calendars.queries import week
 from adminme.projections.commitments.queries import by_party, pending_approval
-from adminme.projections.interactions.queries import closeness_signals, recent, recent_with
+from adminme.projections.interactions.queries import (
+    closeness_signals,
+    recent,
+    recent_with,
+)
 from adminme.projections.lists.queries import open_items_for_member
 from adminme.projections.member_knowledge.queries import list_visible
 from adminme.projections.money.queries import flows_in_range
@@ -103,7 +107,16 @@ def experience_semantics(runtime: Any, session: Session) -> dict[str, Any]:
         "quiet_hours": behavior.get("quiet_hours", {"start": 22, "end": 7}),
         "nudge_penalty": behavior.get("nudge_penalty", 0),
         "proactive_cap": 1 if experience_mode(runtime, session) == "compressed" else 3,
-        "temporal_horizons": ["now", "next_hour", "morning", "afternoon", "evening", "day", "week", "longer"],
+        "temporal_horizons": [
+            "now",
+            "next_hour",
+            "morning",
+            "afternoon",
+            "evening",
+            "day",
+            "week",
+            "longer",
+        ],
     }
 
 
@@ -117,7 +130,9 @@ def _workbook_health(runtime: Any) -> list[dict[str, Any]]:
                 "name": name,
                 "state": "ready" if path.is_file() else "not_built",
                 "updated_at": (
-                    datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+                    datetime.fromtimestamp(
+                        path.stat().st_mtime, timezone.utc
+                    ).isoformat()
                     if path.is_file()
                     else None
                 ),
@@ -151,7 +166,9 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
     elif surface == "inbox":
         base["review"] = [
             row
-            for row in pending_approval(runtime.projections.connection("commitments"), session)
+            for row in pending_approval(
+                runtime.projections.connection("commitments"), session
+            )
             if row.get("owed_by_party") == member
         ]
         base["tasks"] = open_for_member(
@@ -200,7 +217,9 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
     elif surface == "settings":
         if session.auth_role != "principal":
             base["state"] = "limited"
-        base["capabilities"] = [record.public() for _, record in sorted(runtime.capabilities.items())]
+        base["capabilities"] = [
+            record.public() for _, record in sorted(runtime.capabilities.items())
+        ]
         base["workbooks"] = _workbook_health(runtime)
         base["observation_mode"] = runtime._observation_active
         base["chat"] = {
@@ -212,59 +231,101 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
 
 def crm_detail(runtime: Any, session: Session, party_id: str) -> dict[str, Any]:
     authorize_surface(session, "people")
-    party = get_party(runtime.projections.connection("parties"), session, party_id=party_id)
+    party = get_party(
+        runtime.projections.connection("parties"), session, party_id=party_id
+    )
     if party is None:
         raise HTTPException(404, "person not found")
     interactions = recent_with(
-        runtime.projections.connection("interactions"), session, party_id=party_id, days=365
+        runtime.projections.connection("interactions"),
+        session,
+        party_id=party_id,
+        days=365,
     )
     signals = closeness_signals(
         runtime.projections.connection("interactions"),
         session,
         party_id=party_id,
-        since_iso=(datetime.now(timezone.utc) - timedelta(days=365)).isoformat().replace("+00:00", "Z"),
+        since_iso=(datetime.now(timezone.utc) - timedelta(days=365))
+        .isoformat()
+        .replace("+00:00", "Z"),
     )
     recurrences = [
         item
         for item in for_member(
-            runtime.projections.connection("recurrences"), session, member_party_id=party_id
+            runtime.projections.connection("recurrences"),
+            session,
+            member_party_id=party_id,
         )
         if item.get("linked_id") == party_id or item.get("linked_kind") == "household"
     ]
     return {
         "party": party,
-        "identifiers": identifiers_of(runtime.projections.connection("parties"), session, party_id=party_id),
-        "memberships": memberships_of(runtime.projections.connection("parties"), session, party_id=party_id),
-        "relationships": relationships_of(runtime.projections.connection("parties"), session, party_id=party_id),
+        "identifiers": identifiers_of(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
+        "memberships": memberships_of(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
+        "relationships": relationships_of(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
         "interactions": interactions,
-        "commitments": by_party(runtime.projections.connection("commitments"), session, party_id=party_id),
-        "artifacts": linked_to(runtime.projections.connection("artifacts"), session, linked_kind="party", linked_id=party_id),
-        "summary": party.get("attributes", {}).get("summary") if isinstance(party.get("attributes"), dict) else None,
+        "commitments": by_party(
+            runtime.projections.connection("commitments"), session, party_id=party_id
+        ),
+        "artifacts": linked_to(
+            runtime.projections.connection("artifacts"),
+            session,
+            linked_kind="party",
+            linked_id=party_id,
+        ),
+        "summary": party.get("attributes", {}).get("summary")
+        if isinstance(party.get("attributes"), dict)
+        else None,
         "tier": party.get("tier"),
         "contact_gap": signals,
-        "hosting_balance": party.get("attributes", {}).get("hosting_balance") if isinstance(party.get("attributes"), dict) else None,
+        "hosting_balance": party.get("attributes", {}).get("hosting_balance")
+        if isinstance(party.get("attributes"), dict)
+        else None,
         "upcoming_recurrence": recurrences[:1],
-        "linked": linked_to_party(runtime.projections.connection("places_assets_accounts"), session, party_id=party_id),
+        "linked": linked_to_party(
+            runtime.projections.connection("places_assets_accounts"),
+            session,
+            party_id=party_id,
+        ),
         "evidence_policy": "scope-filtered projection provenance",
     }
 
 
-def evaluate_query(runtime: Any, session: Session, name: str, params: dict[str, Any]) -> Any:
+def evaluate_query(
+    runtime: Any, session: Session, name: str, params: dict[str, Any]
+) -> Any:
     """Evaluate one saved-view query through an existing scope-filtered seam."""
 
     del params  # Gate 7 declarations intentionally accept no cross-scope identifiers.
     if name == "what_now":
         return core._what_now(runtime, session)
     if name == "tasks.open":
-        return open_for_member(runtime.projections.connection("tasks"), session, member_party_id=session.view_member_id)
+        return open_for_member(
+            runtime.projections.connection("tasks"),
+            session,
+            member_party_id=session.view_member_id,
+        )
     if name == "lists.open":
-        return open_items_for_member(runtime.projections.connection("lists"), session, member_id=session.view_member_id)
+        return open_items_for_member(
+            runtime.projections.connection("lists"),
+            session,
+            member_id=session.view_member_id,
+        )
     if name == "calendar.week":
         return week(
             runtime.projections.connection("calendars"),
             session,
             member_party_id=session.view_member_id,
-            start_date_iso=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            start_date_iso=datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
         )
     if name == "finance.recent":
         if session.auth_role in {"child", "device", "ambient"}:
