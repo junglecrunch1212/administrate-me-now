@@ -124,3 +124,41 @@ def accounts_renewing_before(
         (session.tenant_id, cutoff_iso),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])
+
+
+def linked_to_party(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    party_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    places = conn.execute(
+        """
+        SELECT p.*, pa.role AS association_role
+          FROM place_associations pa
+          JOIN places p ON p.tenant_id = pa.tenant_id AND p.place_id = pa.place_id
+         WHERE pa.tenant_id = ? AND pa.party_id = ?
+         ORDER BY p.display_name ASC
+        """,
+        (session.tenant_id, party_id),
+    ).fetchall()
+    assets = conn.execute(
+        """
+        SELECT a.*, ao.share_pct, ao.since AS ownership_since
+          FROM asset_owners ao
+          JOIN assets a ON a.tenant_id = ao.tenant_id AND a.asset_id = ao.asset_id
+         WHERE ao.tenant_id = ? AND ao.party_id = ?
+         ORDER BY a.display_name ASC
+        """,
+        (session.tenant_id, party_id),
+    ).fetchall()
+    accounts = conn.execute(
+        "SELECT * FROM accounts WHERE tenant_id = ? AND organization = ? "
+        "ORDER BY display_name ASC",
+        (session.tenant_id, party_id),
+    ).fetchall()
+    return {
+        "places": filter_rows(session, [dict(row) for row in places]),
+        "assets": filter_rows(session, [dict(row) for row in assets]),
+        "accounts": filter_rows(session, [dict(row) for row in accounts]),
+    }

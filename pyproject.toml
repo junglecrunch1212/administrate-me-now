@@ -33,6 +33,7 @@ python-dateutil = "*"
 httpx = "*"
 watchdog = "*"
 jsonschema = ">=4.21"
+websockets = ">=15,<16"
 
 # L5: products + CLI + wizard
 fastapi = ">=0.110"

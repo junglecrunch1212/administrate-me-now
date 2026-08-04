@@ -43,6 +43,7 @@ ViewRole = Literal["principal", "child", "ambient", "device"]
 DmScope = Literal["per_channel_peer", "shared"]
 Source = Literal[
     "node_console",
+    "member_portal",
     "product_api_internal",
     "openclaw_slash_command",
     "openclaw_standing_order",
@@ -68,6 +69,7 @@ _VALID_VIEW_ROLES: frozenset[str] = frozenset(
 _VALID_SOURCES: frozenset[str] = frozenset(
     {
         "node_console",
+        "member_portal",
         "product_api_internal",
         "openclaw_slash_command",
         "openclaw_standing_order",

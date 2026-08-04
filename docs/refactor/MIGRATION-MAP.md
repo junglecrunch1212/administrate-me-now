@@ -1,5 +1,22 @@
 # Migration map
 
+Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
+deleted Node scaffold stays deleted; FastAPI serves a small static member
+portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
+gains the six remaining domain dashboard bindings and signed member-session
+provenance, not a second Control UI. A schema-versioned JSON configuration
+seam adds disposable saved views without adding a domain aggregate,
+projection, scheduler, workflow, or copied record store.
+
+| Gate 7 subsystem | Final class | Executable result |
+|---|---|---|
+| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Inbox, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, and governed review/lifecycle bindings. |
+| Member/child experience | REWRITE COMPLETE | Python-served portal has adult eight-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence. |
+| Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
+| Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
+| Browser runtime | KEEP DELETED NODE / ADD STATIC PYTHON SURFACE | No Node app server, service worker, local transcript/cache, provider SDK, model picker, admin console, plugin manager, or terminal. |
+| Live deployment | DEFER TRUTHFULLY | Supported-Mac real Gateway/providers/Tailscale/Apple grants remain Phase 8 evidence. |
+
 Gate 6 update (2026-08-03): the remaining retained domain code is converged on
 the Gate 2–5 runtime. All six products and thirteen projections are composed;
 member knowledge and scoped vector search are distinct; workbooks, profiles,

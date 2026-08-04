@@ -109,6 +109,11 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             member_roles={FIXTURE_MEMBER_ID: "principal"},
             deterministic_openclaw_fixture=True,
             fixture_member_id=FIXTURE_MEMBER_ID,
+            openclaw_enabled=True,
+            openclaw_shared_secret="doctor-openclaw-secret-32-characters",
+            openclaw_model_configured=True,
+            member_chat_enabled_members=frozenset({FIXTURE_MEMBER_ID}),
+            deterministic_member_chat_fixture=True,
         )
         app = create_application(settings)
         headers = {
@@ -183,6 +188,13 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             projection_names = tuple(runtime.projections.projection_names())
             projection_status = client.portal.call(runtime.projections.status)
             event_count = client.portal.call(runtime.event_log.count)
+            portal = client.get("/api/member/v1/bootstrap", headers=headers)
+            portal_today = client.get(
+                "/api/member/v1/surfaces/today", headers=headers
+            )
+            chat_status = client.get(
+                "/api/member/v1/chat/status", headers=headers
+            ).json()
             return {
                 "message_state": message.json()["output"]["state"],
                 "dashboard_review_visible": dashboard_visible,
@@ -203,6 +215,12 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
                 ),
                 "event_count": event_count,
                 "external_side_effects": len(runtime.fixture_adapter.delivered),
+                "member_portal_health": "healthy"
+                if portal.status_code == 200
+                else "degraded",
+                "deterministic_domain_views": portal_today.status_code == 200,
+                "chat_transport": chat_status.get("state"),
+                "model_provider_configured": settings.openclaw_model_configured,
             }
 
 
@@ -456,6 +474,34 @@ class Doctor:
                 plugin_evidence,
             )
         )
+        portal_assets = self.root / "adminme" / "products" / "member" / "assets"
+        portal_ok = all(
+            (portal_assets / name).is_file()
+            for name in ("index.html", "member.css", "member.js")
+        )
+        model_configured = os.environ.get("ADMINME_OPENCLAW_MODEL_CONFIGURED") == "1"
+        chat_transport_configured = bool(os.environ.get("ADMINME_OPENCLAW_GATEWAY_TOKEN"))
+        checks.append(
+            DoctorCheck(
+                "member_portal_domain_and_chat_health",
+                portal_ok,
+                "member portal contract is installed; optional chat state is explicit"
+                if portal_ok
+                else "member portal assets are incomplete",
+                "Reinstall the exact AdministrateMe package; configure chat only for opted-in members.",
+                {
+                    "portal_health": "installed" if portal_ok else "degraded",
+                    "deterministic_domain_views": "covered_by_thirteen_projection_check",
+                    "openclaw_chat_transport": "configured"
+                    if chat_transport_configured
+                    else "optional_unconfigured",
+                    "model_provider": "configured"
+                    if model_configured
+                    else "optional_unconfigured",
+                    "credentials_in_report": False,
+                },
+            )
+        )
         launchd: dict[str, bool] = {}
         for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
             path = self.paths.launch_agent_dir / f"{label}.plist"
@@ -572,6 +618,10 @@ class Doctor:
                     and set(proof["projection_names"]) == set(PROJECTION_NAMES)
                     and proof["projection_checkpoints_healthy"]
                     and proof["external_side_effects"] == 0
+                    and proof["member_portal_health"] == "healthy"
+                    and proof["deterministic_domain_views"]
+                    and proof["chat_transport"] == "healthy"
+                    and proof["model_provider_configured"]
                 )
             except Exception as exc:
                 proof = {"failure": type(exc).__name__}
@@ -580,7 +630,7 @@ class Doctor:
                 DoctorCheck(
                     "canonical_synthetic_round_trip",
                     proof_ok,
-                    "message, review, dashboard, workbook, completion, recalculation, and rebuild passed"
+                    "message, review, portal, chat seam, dashboard, workbook, completion, recalculation, and rebuild passed"
                     if proof_ok
                     else "canonical proof failed",
                     "Keep observation on and run the focused acceptance test.",

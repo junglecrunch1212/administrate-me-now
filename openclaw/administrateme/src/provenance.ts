@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type {
   GatewayClient,
   OpenClawPluginToolContext,
@@ -35,7 +35,33 @@ function base(callKind: CallKind, actorId: string, channelId: string): Provenanc
 export function provenanceFromTool(
   context: OpenClawPluginToolContext,
   callKind: "tool" | "standing_order" = "tool",
+  sharedSecretEnv = "ADMINME_OPENCLAW_SHARED_SECRET",
 ): Provenance {
+  const sessionKey = context.sessionKey ?? "";
+  const portal = /^agent:main:administrateme-portal-([0-9a-f]{20})-([0-9a-f]{32})$/.exec(sessionKey);
+  if (portal && callKind === "tool") {
+    const peer = portal[1]!;
+    const signature = portal[2]!;
+    const secret = process.env[sharedSecretEnv];
+    if (!secret || secret.length < 24) {
+      throw new Error("AdministrateMe portal provenance credential is unavailable");
+    }
+    const expected = createHmac("sha256", secret)
+      .update(`portal-session|${peer}`)
+      .digest("hex")
+      .slice(0, 32);
+    const suppliedBuffer = Buffer.from(signature, "utf8");
+    const expectedBuffer = Buffer.from(expected, "utf8");
+    if (!timingSafeEqual(suppliedBuffer, expectedBuffer)) {
+      throw new Error("AdministrateMe portal session provenance is invalid");
+    }
+    const result = base("tool", `portal:${peer}`, "administrateme-portal");
+    result.account_id = "member-portal";
+    result.session_key = sessionKey;
+    if (context.sessionId) result.session_id = context.sessionId;
+    if (context.agentId) result.agent_id = context.agentId;
+    return result;
+  }
   const delivery = context.deliveryContext;
   const actor =
     context.requesterSenderId ?? (callKind === "standing_order" ? delivery?.to : undefined);

@@ -9,7 +9,7 @@
   "runtime": {
     "node": "v24.14.1",
     "browser": "Microsoft Edge",
-    "browser_version": "150.0.4078.105",
+    "browser_version": "151.0.4129.59",
     "playwright_core": "1.62.0"
   },
   "determinism": {
@@ -36,8 +36,8 @@
   },
   "screenshots": {
     "desktop.png": {
-      "bytes": 99193,
-      "sha256": "8239050463ba5dac56b5759564fec11b94eb76a3c6361182922fa830acdd2f4b"
+      "bytes": 99181,
+      "sha256": "6f71236a1d7a8469ff1fe423f95bb41b9f2b211c09d270ef2400b3a3978bf3cf"
     },
     "narrow.png": {
       "bytes": 102062,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import time
@@ -42,6 +44,12 @@ from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
 from adminme.lib.skill_runner.wrapper import run_skill
+from adminme.member_chat import (
+    DeterministicOpenClawChatTransport,
+    MemberChatTransport,
+    OpenClawGatewayChatTransport,
+    UnavailableMemberChatTransport,
+)
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
 from adminme.products.bridge.auth import DictMemberIdResolver
@@ -49,11 +57,13 @@ from adminme.products.bridge.routers import ingest_router
 from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
+from adminme.products.member.main import router as member_router
 from adminme.products.openclaw.main import router as openclaw_router
 from adminme.projections.base import Projection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.temporary_surfaces import TemporarySurfaceStore
 
 CapabilityState = Literal[
     "healthy", "observation_only", "degraded", "blocked", "disabled"
@@ -74,6 +84,12 @@ class RuntimeSettings:
     openclaw_enabled: bool = False
     openclaw_shared_secret: str | None = field(default=None, repr=False)
     openclaw_actor_identities: dict[str, str] = field(default_factory=dict)
+    openclaw_gateway_url: str = "ws://127.0.0.1:18789"
+    openclaw_gateway_token: str | None = field(default=None, repr=False)
+    openclaw_model_configured: bool = False
+    member_chat_enabled_members: frozenset[str] = field(default_factory=frozenset)
+    child_chat_enabled_members: frozenset[str] = field(default_factory=frozenset)
+    deterministic_member_chat_fixture: bool = False
     deterministic_openclaw_fixture: bool = False
     member_roles: dict[str, str] = field(default_factory=dict)
     fixture_member_id: str | None = None
@@ -92,15 +108,25 @@ class RuntimeSettings:
                 raise ValueError(
                     "enabled OpenClaw transport requires an injected 24+ character secret"
                 )
-            if not self.openclaw_actor_identities:
+            if not self.openclaw_actor_identities and not self.member_chat_enabled_members:
                 raise ValueError("enabled OpenClaw transport requires actor mappings")
-            unmapped_roles = set(self.openclaw_actor_identities.values()) - set(
-                self.member_roles
+            mapped_members = set(self.openclaw_actor_identities.values()) | set(
+                self.member_chat_enabled_members
             )
+            unmapped_roles = mapped_members - set(self.member_roles)
             if unmapped_roles:
                 raise ValueError(
                     "enabled OpenClaw transport requires a role for every mapped member"
                 )
+        if not self.child_chat_enabled_members.issubset(self.member_chat_enabled_members):
+            raise ValueError("child chat members must also be chat-enabled members")
+        if any(self.member_roles.get(member) != "child" for member in self.child_chat_enabled_members):
+            raise ValueError("child chat allowlist may contain only child-role members")
+        if self.openclaw_gateway_url not in {
+            "ws://127.0.0.1:18789",
+            "ws://[::1]:18789",
+        }:
+            raise ValueError("member chat Gateway must remain on pinned loopback port 18789")
 
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
@@ -121,9 +147,13 @@ class RuntimeSettings:
             "ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON", "{}"
         )
         roles_value = os.environ.get("ADMINME_OPENCLAW_MEMBER_ROLES_JSON", "{}")
+        chat_members_value = os.environ.get("ADMINME_MEMBER_CHAT_MEMBERS_JSON", "[]")
+        child_chat_value = os.environ.get("ADMINME_CHILD_CHAT_MEMBERS_JSON", "[]")
         try:
             identities = json.loads(identities_value)
             roles = json.loads(roles_value)
+            chat_members = json.loads(chat_members_value)
+            child_chat_members = json.loads(child_chat_value)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
                 "OpenClaw identity or role mapping environment is not valid JSON"
@@ -142,14 +172,30 @@ class RuntimeSettings:
             raise RuntimeError(
                 "ADMINME_OPENCLAW_MEMBER_ROLES_JSON must map members to interactive roles"
             )
+        if not isinstance(chat_members, list) or not all(
+            isinstance(value, str) and value for value in chat_members
+        ):
+            raise RuntimeError("ADMINME_MEMBER_CHAT_MEMBERS_JSON must be a string list")
+        if not isinstance(child_chat_members, list) or not all(
+            isinstance(value, str) and value for value in child_chat_members
+        ):
+            raise RuntimeError("ADMINME_CHILD_CHAT_MEMBERS_JSON must be a string list")
+        gateway_token = os.environ.get("ADMINME_OPENCLAW_GATEWAY_TOKEN")
         return cls(
             instance=instance,
             encryption_key=key,
             repository_root=root,
-            openclaw_enabled=bool(secret and identities),
+            openclaw_enabled=bool(secret and (identities or chat_members)),
             openclaw_shared_secret=secret,
             openclaw_actor_identities=identities,
             member_roles=roles,
+            openclaw_gateway_token=gateway_token,
+            openclaw_model_configured=os.environ.get(
+                "ADMINME_OPENCLAW_MODEL_CONFIGURED", "0"
+            )
+            == "1",
+            member_chat_enabled_members=frozenset(chat_members),
+            child_chat_enabled_members=frozenset(child_chat_members),
         )
 
     @classmethod
@@ -166,6 +212,12 @@ class RuntimeSettings:
         openclaw_enabled: bool = False,
         openclaw_shared_secret: str | None = None,
         openclaw_actor_identities: dict[str, str] | None = None,
+        openclaw_gateway_url: str = "ws://127.0.0.1:18789",
+        openclaw_gateway_token: str | None = None,
+        openclaw_model_configured: bool = False,
+        member_chat_enabled_members: frozenset[str] | None = None,
+        child_chat_enabled_members: frozenset[str] | None = None,
+        deterministic_member_chat_fixture: bool = False,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -180,6 +232,12 @@ class RuntimeSettings:
             openclaw_enabled=openclaw_enabled,
             openclaw_shared_secret=openclaw_shared_secret,
             openclaw_actor_identities=dict(openclaw_actor_identities or {}),
+            openclaw_gateway_url=openclaw_gateway_url,
+            openclaw_gateway_token=openclaw_gateway_token,
+            openclaw_model_configured=openclaw_model_configured,
+            member_chat_enabled_members=frozenset(member_chat_enabled_members or ()),
+            child_chat_enabled_members=frozenset(child_chat_enabled_members or ()),
+            deterministic_member_chat_fixture=deterministic_member_chat_fixture,
         )
 
 
@@ -198,7 +256,15 @@ class CapabilityRecord:
 class AdministrateMeRuntime:
     """Own all central resources and their ordered startup/shutdown."""
 
-    PRODUCT_NAMES = ("core", "comms", "capture", "automation", "bridge", "system")
+    PRODUCT_NAMES = (
+        "core",
+        "comms",
+        "capture",
+        "automation",
+        "bridge",
+        "member",
+        "system",
+    )
 
     def __init__(self, settings: RuntimeSettings) -> None:
         self.settings = settings
@@ -212,11 +278,17 @@ class AdministrateMeRuntime:
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
+        self.member_chat_locks: dict[str, asyncio.Lock] = {}
+        self.member_chat_limiter = RateLimiter()
+        self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
         self.member_id_resolver = DictMemberIdResolver(settings.member_identities)
         self.extensions = ExtensionCatalog(
             settings.repository_root, settings.instance.instance_dir
+        )
+        self.temporary_surfaces = TemporarySurfaceStore(
+            settings.instance.config_dir / "temporary-surfaces.json"
         )
         self.capabilities: dict[str, CapabilityRecord] = {}
         self.standing_orders: dict[str, dict[str, Any]] = {}
@@ -244,6 +316,13 @@ class AdministrateMeRuntime:
             self.observation = ObservationManager(
                 self.events, self.settings.instance.config_dir / "runtime.yaml"
             )
+            if self.settings.deterministic_member_chat_fixture:
+                self.member_chat = DeterministicOpenClawChatTransport()
+            elif self.settings.openclaw_gateway_token:
+                self.member_chat = OpenClawGatewayChatTransport(
+                    url=self.settings.openclaw_gateway_url,
+                    token=self.settings.openclaw_gateway_token,
+                )
             if self.settings.deterministic_openclaw_fixture:
                 fixture_member = self.settings.fixture_member_id or next(
                     (
@@ -408,6 +487,69 @@ class AdministrateMeRuntime:
         if self.events is None:
             raise RuntimeError("event writer unavailable")
         return self.events
+
+    def member_chat_binding(self, member_id: str) -> tuple[str, str]:
+        """Return an opaque actor reference and signed OpenClaw session key."""
+
+        material = (
+            self.settings.openclaw_shared_secret.encode("utf-8")
+            if self.settings.openclaw_shared_secret
+            else self.settings.encryption_key
+        )
+        peer = hmac.new(
+            material,
+            f"portal-peer|{self.settings.instance.tenant_id}|{member_id}".encode(),
+            hashlib.sha256,
+        ).hexdigest()[:20]
+        signature = hmac.new(
+            material, f"portal-session|{peer}".encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        return f"portal:{peer}", f"agent:main:administrateme-portal-{peer}-{signature}"
+
+    def resolve_member_chat_actor(self, actor_id: str) -> str | None:
+        for member_id in sorted(self.settings.member_chat_enabled_members):
+            expected, _ = self.member_chat_binding(member_id)
+            if hmac.compare_digest(actor_id, expected):
+                return member_id
+        return None
+
+    def member_chat_policy(self, member_id: str, role: str) -> dict[str, Any]:
+        enabled = member_id in self.settings.member_chat_enabled_members
+        if role in {"ambient", "device"}:
+            return {"state": "unauthorized", "enabled": False, "reason": "role_has_no_chat"}
+        if role == "child" and member_id not in self.settings.child_chat_enabled_members:
+            return {
+                "state": "disabled",
+                "enabled": False,
+                "reason": "guardian_disabled_child_chat",
+            }
+        if not enabled:
+            return {"state": "disabled", "enabled": False, "reason": "member_chat_disabled"}
+        if not self.settings.openclaw_model_configured:
+            return {
+                "state": "unavailable",
+                "enabled": True,
+                "reason": "model_provider_not_configured",
+            }
+        if self.settings.deterministic_member_chat_fixture:
+            return {
+                "state": "healthy",
+                "enabled": True,
+                "transport": "deterministic-openclaw-fixture",
+            }
+        if not self.settings.openclaw_gateway_token:
+            return {
+                "state": "unavailable",
+                "enabled": True,
+                "reason": "openclaw_chat_transport_not_configured",
+            }
+        if self.openclaw_state != "healthy":
+            return {
+                "state": "degraded",
+                "enabled": True,
+                "reason": f"openclaw_{self.openclaw_state}",
+            }
+        return {"state": "healthy", "enabled": True, "transport": "openclaw-gateway"}
 
     async def wait_for_projection(
         self, projection_name: str, event_id: str, *, timeout_s: float = 8.0
@@ -654,6 +796,41 @@ class AdministrateMeRuntime:
                 "delivery_owner": "openclaw",
             },
         )
+        configured_chat_members = len(self.settings.member_chat_enabled_members)
+        if configured_chat_members == 0:
+            chat_state: CapabilityState = "disabled"
+            chat_reason = "member chat is disabled by policy"
+        elif not self.settings.openclaw_model_configured:
+            chat_state = "blocked"
+            chat_reason = "OpenClaw model provider is not configured"
+        elif self.settings.deterministic_member_chat_fixture:
+            chat_state = "healthy"
+            chat_reason = None
+        elif not self.settings.openclaw_gateway_token or self.openclaw_state != "healthy":
+            chat_state = "degraded"
+            chat_reason = "OpenClaw chat transport is unavailable or degraded"
+        else:
+            chat_state = "healthy"
+            chat_reason = None
+        self.capabilities["surface:member-portal"] = CapabilityRecord(
+            name="member-portal",
+            kind="member_surface",
+            state="healthy",
+            details={"server_authorized": True, "operator_access_required": False},
+        )
+        self.capabilities["openclaw:member-chat"] = CapabilityRecord(
+            name="member-chat",
+            kind="openclaw_chat_transport",
+            state=chat_state,
+            reason=chat_reason,
+            details={
+                "configured_members": configured_chat_members,
+                "child_chat_members": len(self.settings.child_chat_enabled_members),
+                "model_provider_configured": self.settings.openclaw_model_configured,
+                "transcripts_owned_by": "openclaw",
+                "provider_credentials_exposed": False,
+            },
+        )
 
     def overall_state(
         self,
@@ -691,6 +868,15 @@ class AdministrateMeRuntime:
                 key: value.public() for key, value in sorted(self.capabilities.items())
             },
             "startup_error": self.startup_error,
+            "member_portal": {
+                "health": "healthy" if self.started else "stopped",
+                "domain_views": "healthy" if self.projections is not None else "degraded",
+                "chat_transport": self.capabilities.get(
+                    "openclaw:member-chat",
+                    CapabilityRecord("member-chat", "openclaw_chat_transport", "disabled"),
+                ).public(),
+                "model_provider_configured": self.settings.openclaw_model_configured,
+            },
         }
 
 
@@ -737,6 +923,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(automation_router)
     app.include_router(ingest_router)
     app.include_router(openclaw_router)
+    app.include_router(member_router)
     app.include_router(system_router)
     return app
 

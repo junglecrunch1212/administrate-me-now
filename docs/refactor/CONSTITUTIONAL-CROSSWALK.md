@@ -133,6 +133,12 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C088 | Reference examples preserve typed pack shape, tests, version/provenance, not stale APIs or tenant data | EXAMPLES preamble and §§1–7 | many pack shapes implemented; examples contain exemplar data | MODERNIZE/sanitize | AC-16, AC-17 |
 | C089 | Field manual workflows remain operable through v2 UX | FIELD daily/weekly/admin/recovery workflows | no running console/product APIs | PRESERVE | AC-03, AC-06, AC-18, AC-20 |
 | C090 | Diagrams explain relationships but never override prose | DIAGRAMS; source precedence rule | used as trace evidence only | PRESERVE rule | AC-22 |
+| C091 | Authenticated non-admin adults can use the household CoS without operator access | Gate 7 experience contract; C048/C054 boundary | Signed per-member protocol-v4 relay, isolated OpenClaw history, no ordinary-chat domain event, exact explicit-tool audit | PRESERVE COMPLETE | AC-23 |
+| C092 | Child chat is guardian-configurable with a narrow independent tool/data allowlist | Gate 7 item 7A; C060 | Disabled unless allowlisted; state/what-now/own-task lifecycle only; adult actions/review/correction/skills/bridge/notification/model/admin denied | PRESERVE COMPLETE | AC-08, AC-23 |
+| C093 | Temporary quests are disposable data-only lenses over stable household truth | Gate 7 item 7B; anti-slop rule | Atomic schema v1 config, five named reads/actions, private owner binding, reviewed promotion, child compatibility, expiry/archive, typed audit | PRESERVE COMPLETE | AC-23 |
+| C094 | Temporary surfaces add no Project aggregate, projection, scheduler, workflow, executable code/SQL/template, copied data, transcript, or raw-log access | Gate 7 item 7B; C024/C047/C048 | Negative validation plus exact 13-projection and unchanged task/list/calendar/finance counts | PRESERVE prohibition COMPLETE | AC-22, AC-23 |
+| C095 | Eight surfaces and three modes use server authorization and retained visual vocabulary | Gate 7 experience contract; C071/C072/C076 | OpenClaw nine read bindings; Python adult/child/device allowlists; 17 Edge captures at phone/tablet/desktop/reduced-motion states | PRESERVE COMPLETE | AC-18 |
+| C096 | Model/chat loss is explicit while deterministic domain views remain usable | Gate 7 items 6/7A; C044/C046 | Separate chat policy states, Settings pills/reasons, Doctor fields, degraded rendered process proof | MODERNIZE COMPLETE | AC-14, AC-18, AC-23 |
 
 ## Source coverage index
 

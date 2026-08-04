@@ -28,7 +28,7 @@ def session_from_request(request: Request) -> Session:
         view_member_id=view_member,
         view_role=view_role,
         dm_scope="per_channel_peer",
-        source="node_console",
+        source="member_portal",
         correlation_id=request.headers.get("X-Correlation-Id"),
     )
 

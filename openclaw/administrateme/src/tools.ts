@@ -37,6 +37,7 @@ function makeTool(
       const provenance = provenanceFromTool(
         context,
         definition.standingOrder ? "standing_order" : "tool",
+        runtime.transport.config.sharedSecretEnv,
       );
       trackSession(runtime, provenance);
       const approvedParams =

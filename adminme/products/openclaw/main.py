@@ -24,6 +24,7 @@ from adminme.lib.session import Session, Source
 from adminme.lib.skill_runner.wrapper import SkillContext
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
+from adminme.products.member.surfaces import build_surface
 from adminme.products.openclaw.constants import (
     BRIDGE_EVENT_KINDS,
     OPENCLAW_COMMIT,
@@ -52,12 +53,15 @@ class Provenance(BaseModel):
     openclaw_commit: Literal["944cf08f94c334cff2b0fdf7e01187a9efa42715"]
 
     def audit_payload(self, *, member_id: str) -> dict[str, Any]:
+        portal = self.channel_id == "administrateme-portal"
         return {
             "actor_id": self.actor_id,
             "member_id": member_id,
             "agent_id": self.agent_id,
-            "session_key": self.session_key,
-            "session_id": self.session_id,
+            # The signed portal binding is validated in memory. Persisting it
+            # would turn audit evidence into a retrievable session identifier.
+            "session_key": None if portal else self.session_key,
+            "session_id": None if portal else self.session_id,
             "channel_id": self.channel_id,
             "account_id": self.account_id,
             "message_id": self.message_id,
@@ -185,6 +189,19 @@ def _session(request: Request, provenance: Provenance) -> Session:
     account = provenance.account_id or "-"
     key = f"{provenance.channel_id}|{account}|{provenance.actor_id}"
     member_id = runtime.settings.openclaw_actor_identities.get(key)
+    portal_binding = (
+        provenance.channel_id == "administrateme-portal"
+        and provenance.account_id == "member-portal"
+        and provenance.call_kind == "tool"
+    )
+    if member_id is None and portal_binding:
+        candidate = runtime.resolve_member_chat_actor(provenance.actor_id)
+        if candidate is not None:
+            expected_actor, expected_session = runtime.member_chat_binding(candidate)
+            if hmac.compare_digest(provenance.actor_id, expected_actor) and hmac.compare_digest(
+                provenance.session_key or "", expected_session
+            ):
+                member_id = candidate
     if not member_id:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
     role = runtime.settings.member_roles.get(member_id)
@@ -193,7 +210,9 @@ def _session(request: Request, provenance: Provenance) -> Session:
             403, "mapped OpenClaw actor has no interactive household role"
         )
     source: Source
-    if provenance.call_kind == "slash_command":
+    if portal_binding:
+        source = "member_portal"
+    elif provenance.call_kind == "slash_command":
         source = "openclaw_slash_command"
     elif provenance.call_kind == "standing_order":
         source = "openclaw_standing_order"
@@ -209,6 +228,11 @@ def _session(request: Request, provenance: Provenance) -> Session:
         source=source,
         correlation_id=provenance.correlation_id,
     )
+
+
+def _require_adult(session: Session) -> None:
+    if session.auth_role == "child":
+        raise HTTPException(403, "child chat tool is outside the guardian-safe allowlist")
 
 
 def _fingerprint(value: Any) -> str:
@@ -412,6 +436,7 @@ async def what_now(body: ContextRequest, request: Request) -> dict[str, Any]:
 @router.post("/tools/action")
 async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     runtime = _runtime(request)
     observation_active = await runtime.observation.is_active()
     payload: dict[str, Any]
@@ -425,7 +450,9 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
             "reason": (
                 "observation_mode_active" if observation_active else "explicit_proposal"
             ),
-            "provenance": body.provenance.model_dump(mode="json"),
+            "provenance": body.provenance.audit_payload(
+                member_id=session.auth_member_id
+            ),
         }
         await _guard(runtime, session, "household.action.proposed", payload)
         event_id, duplicate = await _append(
@@ -523,6 +550,7 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
 @router.post("/tools/review")
 async def review(body: ReviewRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     if body.action == "inspect":
         result = await comms.pending(request, session)
         await _record_tool_call(
@@ -677,6 +705,8 @@ async def _task_lifecycle(
 @router.post("/tools/lifecycle")
 async def lifecycle(body: LifecycleRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    if session.auth_role == "child" and body.item_kind != "task":
+        raise HTTPException(403, "child chat may update only the child's own tasks")
     if body.item_kind == "task":
         result = await _task_lifecycle(body, request, session)
     else:
@@ -706,6 +736,7 @@ async def lifecycle(body: LifecycleRequest, request: Request) -> dict[str, Any]:
 @router.post("/tools/correct")
 async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     if body.item_kind == "commitment":
         unsupported = set(body.fields) - {"description", "due_at"}
         if unsupported:
@@ -808,6 +839,7 @@ async def correct(body: CorrectionRequest, request: Request) -> dict[str, Any]:
 @router.post("/tools/skill")
 async def invoke_skill(body: SkillRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     if body.skill_id not in PHASE3_SKILL_IDS:
         raise HTTPException(403, "skill is outside the Phase 3 allowlist")
     runtime = _runtime(request)
@@ -839,6 +871,7 @@ async def invoke_skill(body: SkillRequest, request: Request) -> dict[str, Any]:
 @router.post("/bridge/events")
 async def bridge_event(body: BridgeRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     if body.event_kind not in BRIDGE_EVENT_KINDS:
         raise HTTPException(422, "domain event is not allowlisted")
     payload = {
@@ -888,6 +921,7 @@ async def notification_result(
     """Accept a delivery receipt only for this member's routed decision."""
 
     session = _session(request, body.provenance)
+    _require_adult(session)
     runtime = _runtime(request)
     matched: dict[str, Any] | None = None
     async for event in runtime.event_log.read_since(
@@ -942,6 +976,7 @@ async def notification_result(
 @router.post("/model-calls")
 async def model_call(body: ModelCallRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     if not (body.provenance.session_key or "").startswith("adminme:"):
         return {"accepted": False, "reason": "not_an_administrateme_session"}
     event_id, _ = await _append(
@@ -970,6 +1005,7 @@ async def standing_order(
     body: StandingOrderRequest, request: Request
 ) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     runtime = _runtime(request)
     if body.provenance.call_kind != "standing_order":
         raise HTTPException(422, "standing-order provenance required")
@@ -1033,6 +1069,7 @@ async def dashboard_today(body: ContextRequest, request: Request) -> dict[str, A
 @router.post("/dashboard/inbox")
 async def dashboard_inbox(body: ContextRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     result = await core.inbox(request, session)
     await _record_tool_call(
         request, session, body.provenance, operation="dashboard.inbox"
@@ -1043,6 +1080,7 @@ async def dashboard_inbox(body: ContextRequest, request: Request) -> dict[str, A
 @router.post("/dashboard/health")
 async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
+    _require_adult(session)
     runtime = _runtime(request)
     result = {
         "openclaw_state": runtime.openclaw_state,
@@ -1054,6 +1092,23 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
     }
     await _record_tool_call(
         request, session, body.provenance, operation="dashboard.health"
+    )
+    return result
+
+
+@router.post("/dashboard/{surface}")
+async def dashboard_surface(
+    surface: Literal["people", "knowledge", "finance", "calendar", "scoreboard", "settings"],
+    body: ContextRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Bind the remaining stable domain views into the pinned Control UI."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    result = build_surface(_runtime(request), session, surface)
+    await _record_tool_call(
+        request, session, body.provenance, operation=f"dashboard.{surface}"
     )
     return result
 

@@ -26,6 +26,12 @@ export function registerDashboard(api: OpenClawPluginApi, runtime: PluginRuntime
   const reads = [
     ["administrateme.dashboard.today", "/api/openclaw/v1/dashboard/today"],
     ["administrateme.dashboard.inbox", "/api/openclaw/v1/dashboard/inbox"],
+    ["administrateme.dashboard.people", "/api/openclaw/v1/dashboard/people"],
+    ["administrateme.dashboard.knowledge", "/api/openclaw/v1/dashboard/knowledge"],
+    ["administrateme.dashboard.finance", "/api/openclaw/v1/dashboard/finance"],
+    ["administrateme.dashboard.calendar", "/api/openclaw/v1/dashboard/calendar"],
+    ["administrateme.dashboard.scoreboard", "/api/openclaw/v1/dashboard/scoreboard"],
+    ["administrateme.dashboard.settings", "/api/openclaw/v1/dashboard/settings"],
     ["administrateme.dashboard.health", "/api/openclaw/v1/dashboard/health"],
   ] as const;
   for (const [method, path] of reads) {

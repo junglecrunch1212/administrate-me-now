@@ -53,3 +53,24 @@ def list_recent(
         (session.tenant_id, limit),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])
+
+
+def linked_to(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    linked_kind: str,
+    linked_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT a.*, l.link_role
+          FROM artifact_links l
+          JOIN artifacts a
+            ON a.tenant_id = l.tenant_id AND a.artifact_id = l.artifact_id
+         WHERE l.tenant_id = ? AND l.linked_kind = ? AND l.linked_id = ?
+         ORDER BY a.captured_at DESC
+        """,
+        (session.tenant_id, linked_kind, linked_id),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])

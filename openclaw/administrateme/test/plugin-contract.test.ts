@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,7 +34,7 @@ function fakeApi(config: Record<string, unknown> = {}) {
   const api = {
     id: "administrateme",
     name: "AdministrateMe",
-    version: "2.0.0-gate4",
+    version: "2.0.0-gate7",
     source: "fixture",
     registrationMode: "full",
     pluginConfig: config,
@@ -118,7 +119,7 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(9);
     expect([...runtime.commands]).toHaveLength(7);
-    expect([...runtime.gateways]).toHaveLength(5);
+    expect([...runtime.gateways]).toHaveLength(11);
     expect(runtime.services).toHaveLength(1);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
   });
@@ -150,6 +151,43 @@ describe("native OpenClaw contract fixture", () => {
     });
     expect(JSON.stringify(body)).not.toContain("fixture-secret");
     expect(result.details).toEqual({ state: "captured", event_id: "evt-1" });
+  });
+
+  it("derives member-portal tool authority only from a valid signed isolated session", async () => {
+    const peer = "0123456789abcdefabcd";
+    const signature = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!)
+      .update(`portal-session|${peer}`)
+      .digest("hex")
+      .slice(0, 32);
+    const sessionKey = `agent:main:administrateme-portal-${peer}-${signature}`;
+    const runtime = fakeApi();
+    const factory = runtime.tools.get("administrateme_state");
+    const context = toolContext({
+      sessionKey,
+      messageChannel: "gateway",
+    });
+    delete context.requesterSenderId;
+    delete context.agentAccountId;
+    delete context.deliveryContext;
+    const tool = factory?.(context) as AnyAgentTool;
+    await tool.execute("portal-call", {});
+    expect(requestBody(fetchMock).provenance).toMatchObject({
+      actor_id: `portal:${peer}`,
+      session_key: sessionKey,
+      channel_id: "administrateme-portal",
+      account_id: "member-portal",
+      call_kind: "tool",
+    });
+    expect(JSON.stringify(requestBody(fetchMock))).not.toContain(
+      process.env.ADMINME_OPENCLAW_SHARED_SECRET,
+    );
+
+    const forgedContext = toolContext({
+      sessionKey: `agent:main:administrateme-portal-${peer}-${"0".repeat(32)}`,
+    });
+    delete forgedContext.requesterSenderId;
+    const forged = factory?.(forgedContext) as AnyAgentTool;
+    await expect(forged.execute("forged-call", {})).rejects.toThrow("invalid");
   });
 
   it("adds one OpenClaw approval gate only to side-effect tools", async () => {

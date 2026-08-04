@@ -1,0 +1,608 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-04T14:53:09.751Z",
+  "status": "PASS",
+  "browser": "installed Microsoft Edge via playwright-core@1.62.0",
+  "viewports": [
+    "1440x1000",
+    "1280x900",
+    "1024x768",
+    "820x1180",
+    "390x844"
+  ],
+  "states": [
+    "carousel",
+    "compressed",
+    "child",
+    "observation",
+    "degraded",
+    "chat-streamed",
+    "quest-private",
+    "quest-promoted",
+    "quest-expired",
+    "quest-archived"
+  ],
+  "results": [
+    {
+      "name": "canonical fixture seeded",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today title",
+      "status": "PASS",
+      "detail": "Today"
+    },
+    {
+      "name": "today carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/inbox HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/inbox title",
+      "status": "PASS",
+      "detail": "Inbox"
+    },
+    {
+      "name": "inbox carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/people HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/people title",
+      "status": "PASS",
+      "detail": "People"
+    },
+    {
+      "name": "people carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/knowledge HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/knowledge title",
+      "status": "PASS",
+      "detail": "Knowledge"
+    },
+    {
+      "name": "knowledge carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/finance HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/finance title",
+      "status": "PASS",
+      "detail": "Finance"
+    },
+    {
+      "name": "finance carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/calendar HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/calendar title",
+      "status": "PASS",
+      "detail": "Calendar"
+    },
+    {
+      "name": "calendar carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/scoreboard HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/scoreboard title",
+      "status": "PASS",
+      "detail": "Scoreboard"
+    },
+    {
+      "name": "scoreboard carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "/member/settings HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/settings title",
+      "status": "PASS",
+      "detail": "Settings"
+    },
+    {
+      "name": "settings carousel mode",
+      "status": "PASS",
+      "detail": "carousel · visual_principal"
+    },
+    {
+      "name": "eight principal navigation items",
+      "status": "PASS",
+      "detail": 8
+    },
+    {
+      "name": "desktop named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "desktop no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "desktop single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "desktop screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "desktop contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "desktop keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/today HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today title",
+      "status": "PASS",
+      "detail": "Today"
+    },
+    {
+      "name": "compressed profile",
+      "status": "PASS",
+      "detail": "compressed · visual_adult"
+    },
+    {
+      "name": "observation mode visible",
+      "status": "PASS",
+      "detail": "Observation mode"
+    },
+    {
+      "name": "adult OpenClaw stream rendered",
+      "status": "PASS",
+      "detail": "I'm here. I can help you choose the next small step."
+    },
+    {
+      "name": "browser stores no transcript, session, cache, worker, or service credential",
+      "status": "PASS",
+      "detail": {
+        "localStorageKeys": [],
+        "sessionStorageKeys": [],
+        "cacheNames": [],
+        "serviceWorkers": 0,
+        "secretInDocument": false
+      }
+    },
+    {
+      "name": "tablet reduced-motion named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "tablet reduced-motion no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "tablet reduced-motion single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "tablet reduced-motion screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "tablet reduced-motion contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "tablet reduced-motion keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "textarea",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "reduced motion honored",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414,
+        "keyboard": {
+          "tag": "textarea",
+          "visible": true,
+          "outline": 3
+        }
+      }
+    },
+    {
+      "name": "private quest created",
+      "status": "PASS",
+      "detail": 201
+    },
+    {
+      "name": "/member/quests/view_8d783c98a16b48cb HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/quests/view_8d783c98a16b48cb title",
+      "status": "PASS",
+      "detail": "30-day Garage Quest"
+    },
+    {
+      "name": "private quest undiscoverable",
+      "status": "PASS",
+      "detail": 404
+    },
+    {
+      "name": "quest promoted by explicit review",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/quests/view_8d783c98a16b48cb HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/quests/view_8d783c98a16b48cb title",
+      "status": "PASS",
+      "detail": "30-day Garage Quest"
+    },
+    {
+      "name": "archived quest has no navigation entry",
+      "status": "PASS",
+      "detail": "TodayInboxPeopleKnowledgeFinanceCalendarScoreboardSettings"
+    },
+    {
+      "name": "expiring quest created",
+      "status": "PASS",
+      "detail": 201
+    },
+    {
+      "name": "expired quest has no navigation entry",
+      "status": "PASS",
+      "detail": "TodayInboxPeopleKnowledgeFinanceCalendarScoreboardSettings"
+    },
+    {
+      "name": "/member/today HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today title",
+      "status": "PASS",
+      "detail": "Today"
+    },
+    {
+      "name": "child has two routes",
+      "status": "PASS",
+      "detail": "TodayScoreboard"
+    },
+    {
+      "name": "/member/scoreboard HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/scoreboard title",
+      "status": "PASS",
+      "detail": "Scoreboard"
+    },
+    {
+      "name": "narrow child named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow child no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow child single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow child screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow child contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow child keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "child direct finance denial",
+      "status": "PASS",
+      "detail": 404
+    },
+    {
+      "name": "/member/scoreboard HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/scoreboard title",
+      "status": "PASS",
+      "detail": "Scoreboard"
+    },
+    {
+      "name": "shared screen has scoreboard only",
+      "status": "PASS",
+      "detail": "Scoreboard"
+    },
+    {
+      "name": "/member/today HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today title",
+      "status": "PASS",
+      "detail": "Today"
+    },
+    {
+      "name": "degraded chat explicit",
+      "status": "PASS",
+      "detail": "Chat is enabled for you, but no model provider is configured in OpenClaw yet."
+    },
+    {
+      "name": "domain view remains usable during model loss",
+      "status": "PASS",
+      "detail": "Decision queueYour queue is clear. Leave it that way for a minute.Open listsNo open list items."
+    },
+    {
+      "name": "no browser console errors",
+      "status": "PASS",
+      "detail": []
+    },
+    {
+      "name": "expected unavailable-view 404s handled",
+      "status": "PASS",
+      "detail": 2
+    },
+    {
+      "name": "no uncaught page errors",
+      "status": "PASS",
+      "detail": []
+    },
+    {
+      "name": "no failed browser requests",
+      "status": "PASS",
+      "detail": []
+    }
+  ],
+  "screenshots": {
+    "surface-today-carousel-desktop.png": {
+      "bytes": 89736,
+      "sha256": "0047944c8607d0666b189841dcecf9cca4cba134f024ebf60d2c609ec7b412b1"
+    },
+    "surface-inbox-carousel-desktop.png": {
+      "bytes": 81147,
+      "sha256": "f719b3e0e5118758790f751759110f1aa99de32e88ff3d399e81d43811d5407e"
+    },
+    "surface-people-carousel-desktop.png": {
+      "bytes": 85821,
+      "sha256": "4d5bfa9e463e68b5421ddad85096ab0b5b4b9891fbef66026f75d717949b22b1"
+    },
+    "surface-knowledge-carousel-desktop.png": {
+      "bytes": 90398,
+      "sha256": "799c0e006211c7f092e1f29b86d9e9fc84bcc3500307c58d252038dcf3862367"
+    },
+    "surface-finance-carousel-desktop.png": {
+      "bytes": 76248,
+      "sha256": "3f0079f46839735ad6e59d3413d1f9b6db2c622996ecb0194053451b531b36f4"
+    },
+    "surface-calendar-carousel-desktop.png": {
+      "bytes": 75580,
+      "sha256": "f95b008171d41c9b419d169992f2a658035153d61aaa4525e67d4136f9241dd6"
+    },
+    "surface-scoreboard-carousel-desktop.png": {
+      "bytes": 87583,
+      "sha256": "ae4c20cdffcf1062e3cf8b0ce4ec92dd7eb728971d8d7bfe555d267c64ee5ee6"
+    },
+    "surface-settings-carousel-desktop.png": {
+      "bytes": 160717,
+      "sha256": "bf075fe247130b1d1a9f9dc27cbe0dcadf208c66c99ee7abcfb519cc6cff4e38"
+    },
+    "mode-compressed-observation-tablet.png": {
+      "bytes": 69213,
+      "sha256": "9088836c6c18173485c4619bc81f07340733be4e7cc000b6f9372ecdab6b25a6"
+    },
+    "adult-chat-streamed-tablet.png": {
+      "bytes": 64212,
+      "sha256": "762fcc6bd352ea7d5fe6d018587d6ea029621f8830dd37fd2e17ceea3f687f4d"
+    },
+    "quest-private-compressed.png": {
+      "bytes": 151177,
+      "sha256": "748fc3469e05d326567d1dcf665b320303035be5ea2a2b20bbd247e3332faba9"
+    },
+    "quest-promoted-carousel.png": {
+      "bytes": 181388,
+      "sha256": "eafbc7523e343443b4e54bf5205ab2a41475c2b1d32b026fc54a10e2a2c3905a"
+    },
+    "quest-archived-bookmark.png": {
+      "bytes": 89935,
+      "sha256": "2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820"
+    },
+    "quest-expired-bookmark.png": {
+      "bytes": 89932,
+      "sha256": "33068dbfea01bf1ba669f86baddba1aff06d302dd16ea76ea86ce23cb0d154b7"
+    },
+    "mode-child-today-narrow.png": {
+      "bytes": 45540,
+      "sha256": "eae42ea4cdcbd9c5a25b11d049f3b112c6c8ac8971d2d27e06c8046f43a92948"
+    },
+    "mode-child-scoreboard-narrow.png": {
+      "bytes": 43721,
+      "sha256": "8461521294324ca91bf5407ff78fd65b20ae307e66661807e5d10e8b412eb106"
+    },
+    "shared-screen-scoreboard.png": {
+      "bytes": 73231,
+      "sha256": "0ee50d530f1961d63f4d7ace9b21e8a1d51c06112e875729c1f84c8b12a4277f"
+    },
+    "adult-chat-degraded-domain-healthy.png": {
+      "bytes": 71641,
+      "sha256": "546a85e439586c0a18143ea49f0123020a7a07c573a22e7cb143131a708dd305"
+    }
+  },
+  "console_errors": [],
+  "page_errors": [],
+  "request_failures": []
+}

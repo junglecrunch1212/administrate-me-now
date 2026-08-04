@@ -1,5 +1,20 @@
 # Deletion and deferral map
 
+Gate 7 update: the browser household UX is no longer deferred. A small static
+portal served by the existing Python runtime replaces the deleted Node
+scaffold. It adds no frontend application server, service worker, persistent
+browser cache, provider SDK, model picker, generic transcript/memory store,
+OpenClaw administration surface, plugin manager, terminal, scheduler, or task
+runner. The immutable reference HTML remains acceptance vocabulary only.
+
+The missing non-admin chat capability is closed by a narrow OpenClaw protocol
+relay; OpenClaw still owns every generic chat/runtime concern. The missing
+quest capability is closed by atomic presentation configuration over existing
+authorized reads; no Project object, fourteenth projection, domain cache,
+workflow engine, executable template/code/SQL, or raw-log query was introduced.
+Only live optional providers and the supported-Mac rehearsal remain deferred
+to Phase 8.
+
 Gate 6 update: deletion prerequisites are now met for the empty `console/`
 Node package, `adminme/daemons/pipeline_supervisor.py`, duplicate xlsx daemon
 facades, and dead correlation/identifier helpers. AdministrateMe-side

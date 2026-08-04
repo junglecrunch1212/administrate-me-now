@@ -2,7 +2,7 @@
   "id": "administrateme",
   "name": "AdministrateMe",
   "description": "Authorized household state and action seam for AdministrateMe v2.",
-  "version": "2.0.0-gate4",
+  "version": "2.0.0-gate7",
   "activation": {
     "onStartup": true,
     "onCommands": [
@@ -57,6 +57,36 @@
         "id": "inbox.review",
         "method": "administrateme.dashboard.inbox",
         "description": "Scope-filtered inbox and commitment review queue."
+      },
+      {
+        "id": "crm.people",
+        "method": "administrateme.dashboard.people",
+        "description": "Scope-filtered CRM people and interaction context."
+      },
+      {
+        "id": "capture.knowledge",
+        "method": "administrateme.dashboard.knowledge",
+        "description": "Authorized knowledge, artifact, and list read surface."
+      },
+      {
+        "id": "finance.recent",
+        "method": "administrateme.dashboard.finance",
+        "description": "Scope-filtered household finance evidence."
+      },
+      {
+        "id": "calendar.week",
+        "method": "administrateme.dashboard.calendar",
+        "description": "Privacy-filtered calendar week."
+      },
+      {
+        "id": "scoreboard.rhythm",
+        "method": "administrateme.dashboard.scoreboard",
+        "description": "Profile-aware household progress and reward state."
+      },
+      {
+        "id": "settings.domain",
+        "method": "administrateme.dashboard.settings",
+        "description": "Capability, observation, workbook, and member-chat health."
       },
       {
         "id": "capability.health",

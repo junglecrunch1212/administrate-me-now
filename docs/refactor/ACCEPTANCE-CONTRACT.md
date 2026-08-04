@@ -1,5 +1,17 @@
 # Release acceptance contract
 
+Gate 7 status (2026-08-04): **household experience PASS at the
+credential-free process and rendered-browser boundaries.** AC-18 now targets
+the Python-served member portal rather than the deleted Node scaffold. The
+Gate 7 acceptance test proves the non-admin adult OpenClaw chat seam, signed
+per-member isolation, no-event ordinary conversation, exactly-once explicit
+domain proposals, role/direct-route denial, all eight surfaces and three
+modes, immediate daily-loop recalculation, and data-only temporary-surface
+isolation/lifecycle while retaining exactly thirteen projections. The pinned
+Edge harness proves responsive, reduced-motion, chat/degraded, and
+private/promoted/archived quest states. Live provider and supported-Mac claims
+remain AC-12/21 work.
+
 Gate 6 status (2026-08-03): **domain convergence PASS at the credential-free
 production-composition boundary.** AC-04's bridge/private-knowledge slice now
 passes, and the full suite supplies executable Gate 6 coverage for all 13
@@ -39,11 +51,12 @@ Standard environment: supported macOS lab, Python 3.11, a Node version satisfyin
 | AC-15 | `./scripts/acceptance/backup-restore.sh` | **Gate 5 process PASS:** quiesced encrypted backup plus manifest; authenticated staging restore; active state untouched until validation; rollback copy; all 13 projections/workbooks rebuilt from the event log. Wrong-key/tamper paths fail closed. |
 | AC-16 | `./scripts/acceptance/tenant-isolation.sh` | Static email/phone/address/name and hardcoded-instance-path scan; start two instances with distinct keys/tenants/ports; concurrent identical ids cannot cross log, offsets, projections, cache, files, HTTP, OpenClaw session, or backup. |
 | AC-17 | `python -m pytest tests/acceptance/test_pack_lifecycle_profiles_personas.py --runxfail -q` | All six pack kinds validate dependencies, stage/test/build, atomic install, event, rollback; five profiles and four personas compile/behave; tenant-neutral scan; profile/persona cannot change authority/model routing. |
-| AC-18 | `cd console && npm test -- --runInBand` plus `./scripts/acceptance/browser-e2e.sh` | Eight surfaces, three modes, child denial, calendar redaction, one reward toast under dual path, banners, evidence, states, responsive breakpoints, WCAG 2.2 AA; superseded capture flows absent; sanitized rendering. |
+| AC-18 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_gate7_household_experience.py -q && npm --prefix tools/console-reference-harness run test:gate7` | **Gate 7 PASS:** eight Python-served surfaces; carousel/compressed/child modes; independent child/device/direct-route denial; observation/degraded/chat/quest states; deterministic desktop/tablet/narrow captures; named controls, heading/reflow/reduced-motion checks; sanitized DOM rendering; no unexpected browser error/request failure. Calendar privacy, reward dedupe, guarded-write order, and final-outbound behavior retain their lower-layer executable suites. |
 | AC-19 | `python -m pytest tests/acceptance/test_network_boundary.py --runxfail -q` | Only expected loopback listeners; Tailscale Serve is sole edge; spoofed identity headers rejected; legacy ports absent or tested aliases; routes preserve product ownership; member bridge endpoint least-privilege. |
 | AC-20 | `python -m pytest tests/acceptance/test_migrations_shutdown.py --runxfail -q` | Every supported old schema fixture migrates/upcasts or fails before mutation; backup made; SIGTERM under ingest/pipeline/xlsx work drains/checkpoints/closes within bound; restart is consistent; forced-kill recovery proven. |
 | AC-21 | `./scripts/acceptance/macos-bootstrap-rehearsal.sh` | Gate 5 supplies the reproducible credential-free macOS job and live checklist. A disposable Apple-silicon live rehearsal must still record grants, crash/login recovery, real pinned Gateway health, and a signed report; target family Mac remains untouched. |
 | AC-22 | `./scripts/acceptance/architecture-negative-checks.sh` | No direct provider SDK/call, duplicate chat/memory/scheduler/router/gateway/app builder, Vellum runtime, plaintext secret, projection write from adapter/pipeline, or required capability marked deferred. |
+| AC-23 | `PYTHONPATH=bridge python -m pytest tests/acceptance/test_gate7_household_experience.py tests/unit/test_member_chat_gate7.py -q && npm --prefix openclaw/administrateme run check && npm --prefix openclaw/administrateme test` | Portal chat is a cancellable/backpressure-bounded exact-protocol OpenClaw relay; two members cannot cross-read transcript/session/tool output; no credential/raw envelope leaves the boundary; child tools are independently allowlisted. Temporary views are atomic presentation config over allowlisted scope-filtered reads, default private, reviewed for promotion/child exposure, and disappear without changing domain facts, history, or the 13-projection registry. |
 
 ## Baseline and development commands
 

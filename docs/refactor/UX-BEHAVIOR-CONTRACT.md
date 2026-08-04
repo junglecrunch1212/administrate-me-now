@@ -1,5 +1,17 @@
 # UX behavior contract
 
+Gate 7 production status (2026-08-04): the real member portal now implements
+the eight stable surfaces, role-derived navigation/routes, carousel,
+compressed, and child modes, evidence dialog, lifecycle-to-next-action
+feedback, workbook/capability states, the narrow OpenClaw chat relay, and
+private disposable quest navigation. `tools/console-reference-harness/
+run-gate7.mjs` rendered and inspected 17 deterministic captures across
+1440×1000, 1280×900, 1024×768, 820×1180, and 390×844. Its accessibility and
+browser checks pass with no unexpected console/page/request failures. The
+pixel review caught and corrected a disabled-provider/Ready labeling defect;
+Settings now shows distinct disabled, healthy, degraded, blocked,
+unavailable, and not-built states with reasons.
+
 Gate 3 backend behavior evidence (2026-07-30): pending commitment review supports explicit edit, approve, and dismiss commands; active commitments support complete, defer, snooze, block, and unblock; every write is authorized under `authMember` rather than `viewMember`; observation mode returns and audits a suppressed delivery intent; what-now returns six stable horizons with structured explanations. This gate makes no new production visual-fidelity claim, so the immutable Gate 1 console evidence below remains the visual reference.
 
 ## Evidence status
@@ -26,6 +38,12 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 | Settings | Member/profile/persona, connectors, packs, observation, approvals, privacy/audit, backup/restore, diagnostics; progressive disclosure and explicit unavailable states. | Stale adapter inventory and broad OpenClaw operator controls. |
 
 Generic chat remains an OpenClaw surface. A narrow chat pane may embed/hand off to OpenClaw for authorized members, but AdministrateMe must not persist a second generic transcript or expose operator administration. Members without safe operator access use a narrow member portal.
+
+Gate 7 implements that exception as an authenticated streaming relay only.
+The browser receives rendered text and safe stream phases; OpenClaw retains
+history and all provider/runtime responsibilities. View-as chat is refused.
+Child chat is guardian-enabled and its server tool allowlist is narrower than
+adult portal navigation.
 
 ## View modes
 
@@ -71,3 +89,14 @@ Gate 1 reference evidence is complete at `docs/refactor/evidence/console-referen
 ## Gate 2 implementation status
 
 Gate 2 establishes the server-side route topology and truthful system health needed by the future UI: `/api/core`, `/api/comms`, `/api/capture`, `/api/automation`, `/api/bridge`, and `/api/system` share one application. It does not claim AC-18: the Gate 1 captures remain immutable design evidence, and the real browser application, role-aware navigation, accessibility, and all interaction states remain later work.
+
+## Gate 7 implementation status
+
+AC-18's production portal portion is complete. Material values are built with
+safe DOM text assignment; page and JSON routes independently authorize roles;
+disabled/degraded/empty states are separate; the observation state is visible;
+model loss leaves deterministic domain views available; and expired/archived
+quests leave no navigation entry or household payload. The retained Gate 1
+mock remains vocabulary evidence only. Live assistive-technology review and a
+supported-Mac/provider rehearsal remain Phase 8 release evidence, not a reason
+to reintroduce the deleted Node application.
