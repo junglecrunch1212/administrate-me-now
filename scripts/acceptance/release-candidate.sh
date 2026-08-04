@@ -39,8 +39,8 @@ bash scripts/acceptance/backup-restore.sh
   npm audit --omit=dev
 )
 
-shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh
-bash -n bootstrap/*.sh scripts/acceptance/*.sh
+shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
+bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
 git diff --check
 
 echo "ADMINISTRATEME RELEASE CANDIDATE SUITE: PASS"

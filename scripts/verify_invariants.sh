@@ -153,11 +153,10 @@ fi
 # call run_skill() and never construct skill.call.* envelopes themselves.
 
 SKILL_EMITS='skill\.call\.recorded|skill\.call\.failed|skill\.call\.suppressed'
-SKILL_EMIT_FILE="adminme/lib/skill_runner/wrapper.py"
 
 skill_violations=$(grep -rnE "type\s*=\s*\"($SKILL_EMITS)\"" \
     adminme/ --include='*.py' 2>/dev/null \
-    | grep -v "^${SKILL_EMIT_FILE}:" \
+    | grep -vE "^adminme/+lib/skill_runner/wrapper\.py:" \
     || true)
 if [ -n "$skill_violations" ]; then
     report "[§7]/[ADR-0002] skill.call.* emitted outside skill_runner wrapper:"

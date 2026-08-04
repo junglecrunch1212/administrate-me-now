@@ -7,6 +7,7 @@ on:
       - "adminme/**"
       - "openclaw/administrateme/**"
       - "scripts/acceptance/**"
+      - "scripts/verify_invariants.sh"
       - "tests/acceptance/test_macos_bootstrap_operations.py"
       - "tests/unit/bootstrap/**"
       - ".github/workflows/macos-bootstrap.yml"
@@ -67,8 +68,8 @@ jobs:
       - name: Validate shell entrypoints
         run: |
           brew install shellcheck
-          shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh
-          bash -n bootstrap/*.sh scripts/acceptance/*.sh
+          shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
+          bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
 
       - name: Validate the exact native plugin contract
         run: |
