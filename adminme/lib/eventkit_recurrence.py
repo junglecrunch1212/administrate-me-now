@@ -95,7 +95,7 @@ def build_eventkit_rule(eventkit: Any, value: str) -> Any:
             parsed["count"]
         )
     elif parsed["until"] is not None:
-        from Foundation import NSDate  # type: ignore[import-not-found]
+        from Foundation import NSDate  # type: ignore[import-not-found,import-untyped]
 
         native_until = NSDate.dateWithTimeIntervalSince1970_(
             parsed["until"].timestamp()
