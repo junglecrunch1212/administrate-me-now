@@ -319,8 +319,10 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     only; ``update_event`` / ``delete_event`` are out of scope per §6 and
     intentionally NOT declared. A declared-but-not-implemented kind would
     fail the validator's method-presence rule per memo 05 §3.4."""
-    assert AppleCalendarAdapter.write_capabilities == ["create_event"]
-    assert len(AppleCalendarAdapter.write_capabilities) == 1
+    assert AppleCalendarAdapter.write_capabilities == [
+        "create_event", "update_event", "delete_event", "move_event"
+    ]
+    assert len(AppleCalendarAdapter.write_capabilities) == 4
 
 
 def test_sharing_model_discriminator_is_owner_member_id() -> None:
@@ -344,7 +346,7 @@ async def test_apply_write_gate_raises_on_undeclared_kind() -> None:
     deferred to a later split)."""
     adapter = _make_adapter()
     operation = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="apple-evt-1",
         payload={},
     )

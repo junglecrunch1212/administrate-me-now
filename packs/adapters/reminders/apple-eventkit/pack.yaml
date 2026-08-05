@@ -16,7 +16,7 @@ deployment_targets: [central, bridge]
 pack:
   id: adapter:reminders-apple-eventkit
   name: Apple Reminders bidirectional adapter
-  version: 1.0.0
+  version: 2.0.0
   kind: adapter
   family: reminders
   author: built-in
@@ -72,6 +72,14 @@ events_emitted:
   - adapter.authenticated
   - adapter.cursor_advanced
   - reminder.list_item.synced
+  - list.created
+  - list.updated
+  - list.deleted
+  - list_item.added
+  - list_item.updated
+  - list_item.completed
+  - list_item.uncompleted
+  - list_item.deleted
 
 # Config schema reference. The supervisor's loader validates each
 # adapter entry from channels.yaml against this schema before
@@ -107,10 +115,18 @@ documentation:
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [reminder.list_item.synced]
+    event_families: [reminder.list_item.synced, list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
 write_capabilities:
   - create_reminder
+  - update_reminder
+  - delete_reminder
+  - complete_reminder
+  - uncomplete_reminder
+  - move_reminder
+  - create_list
+  - update_list
+  - delete_list
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 dedup_strategy:
-  kind: external_id
+  kind: calendar_item_identifier_last_modified

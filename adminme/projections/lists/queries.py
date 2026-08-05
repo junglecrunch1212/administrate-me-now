@@ -95,9 +95,27 @@ def open_items_for_member(
     return filter_rows(session, [dict(r) for r in rows])
 
 
+def lists_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    provider: str | None = None,
+) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM lists WHERE tenant_id=? AND member_id=?"
+    params: list[Any] = [session.tenant_id, member_id]
+    if provider is not None:
+        sql += " AND provider=?"
+        params.append(provider)
+    sql += " ORDER BY provider, list_name"
+    rows = conn.execute(sql, params).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
+
+
 __all__ = [
     "get_item",
     "items_for_list",
     "items_for_member",
     "open_items_for_member",
+    "lists_for_member",
 ]

@@ -488,10 +488,12 @@ bash bootstrap/member-bridge.sh bridge-disable
 
 Run `./bootstrap/doctor.sh` on the central Mac after all selected records show
 `active` or `revoked`. It must now be healthy. A successful enrollment proves
-the private transport and member binding; built-in Notes, Voice Memos,
-Obsidian, Calendar, and Reminders packs remain disabled until a separately
-reviewed pack configuration and the minimum macOS privacy grant are applied.
-Do not hand-edit bridge YAML to turn them on.
+the private transport and member binding and enables that member's Apple
+Calendar, Apple Reminders, and Apple Notes packs. Start the bridge once in the
+member's interactive macOS session and approve full Calendar access, full
+Reminders access, and Notes Automation access. Keep observation mode enabled
+until the initial counts, account ownership, recurrence, and location alarms
+have been reviewed. Do not hand-edit bridge YAML to bypass enrollment.
 
 Gmail, Plaid, Home Assistant, Google Calendar/Tasks, and Apple permissions are
 also live-provider gates, not part of credential-free Doctor proof. Plaid must

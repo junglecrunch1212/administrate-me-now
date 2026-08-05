@@ -89,6 +89,18 @@ class IngestClient:
             all_ids.extend(result.event_id or [])
         return SubmitBatchResult(ok=True, event_ids=all_ids, chunks_sent=chunks_sent)
 
+    async def fetch_commands(self, providers: list[str]) -> dict[str, Any]:
+        response = await self._client.get(
+            f"{self._endpoint}/api/bridge/commands",
+            params={"providers": ",".join(sorted(providers))},
+            headers={"Tailscale-User-Login": self._identity},
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or not isinstance(body.get("commands"), list):
+            raise RuntimeError("central command response was malformed")
+        return body
+
     async def _post_with_retry(
         self, *, url: str, payload: Any, mode: str
     ) -> SubmitResult:

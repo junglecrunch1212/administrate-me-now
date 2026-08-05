@@ -34,9 +34,60 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "commitment.cancelled": apply_commitment_cancelled,
         "commitment.delegated": apply_commitment_delegated,
         "commitment.expired": apply_commitment_expired,
+        "list_item.completed": apply_external_completion,
+        "list_item.uncompleted": apply_external_completion,
+        "calendar.event_outcome_recorded": apply_calendar_completion,
     }.get(envelope["type"])
     if handler is not None:
         handler(envelope, conn)
+
+
+def apply_calendar_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    policy = p.get("completion_policy", "manual")
+    qualifies = (
+        policy == "on_elapsed" and p.get("outcome") in {"elapsed", "attended"}
+    ) or (policy == "on_attended" and p.get("outcome") == "attended")
+    if p.get("linked_item_kind") != "commitment" or not p.get("linked_item_id") or not qualifies:
+        return
+    conn.execute(
+        """UPDATE commitments SET status='done', completed_at=?, lifecycle_at=?,
+                  lifecycle_actor=?, last_event_id=?
+             WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
+        (
+            p["recorded_at"], p["recorded_at"], p["member_id"], envelope["event_id"],
+            envelope["tenant_id"], p["linked_item_id"], envelope["event_id"],
+        ),
+    )
+
+
+def apply_external_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    if (
+        p.get("linked_item_kind") != "commitment"
+        or not p.get("linked_item_id")
+        or p.get("completion_policy") != "mirror"
+    ):
+        return
+    completed = envelope["type"] == "list_item.completed"
+    at = str(p.get("completion_at") or p.get("last_modified_at"))
+    conn.execute(
+        """UPDATE commitments SET status=?, completed_at=?, lifecycle_at=?,
+                  lifecycle_actor=?, last_event_id=?
+             WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
+        (
+            "done" if completed else "pending",
+            at if completed else None,
+            at,
+            p.get("member_id"),
+            envelope["event_id"], envelope["tenant_id"], p["linked_item_id"],
+            envelope["event_id"],
+        ),
+    )
 
 
 def _where_newer(envelope: dict[str, Any], commitment_id: str) -> tuple[str, str, str]:

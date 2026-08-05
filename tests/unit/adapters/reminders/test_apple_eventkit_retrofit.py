@@ -203,8 +203,18 @@ def test_apple_eventkit_adapter_write_capabilities_declared_asymmetrically() -> 
     are explicitly NOT declared because the methods don't exist, and
     declaring them would fail ``write_capabilities_check``'s method-
     presence rule per memo 05 §3.4."""
-    assert AppleEventKitAdapter.write_capabilities == ["create_reminder"]
-    assert len(AppleEventKitAdapter.write_capabilities) == 1
+    assert AppleEventKitAdapter.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
+    assert len(AppleEventKitAdapter.write_capabilities) == 9
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +374,17 @@ def test_pack_yaml_capabilities_block_parses_as_cat_b() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-B"
     assert cap.runtime == "central"
-    assert cap.event_families == ["reminder.list_item.synced"]
+    assert cap.event_families == [
+        "reminder.list_item.synced",
+        "list.created",
+        "list.updated",
+        "list.deleted",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "list_item.deleted",
+    ]
 
 
 def test_pack_yaml_extension_fields_round_trip() -> None:
@@ -381,8 +401,20 @@ def test_pack_yaml_extension_fields_round_trip() -> None:
 
     assert manifest.sensitivity_default == "normal"
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {"kind": "external_id"}
-    assert manifest.write_capabilities == ["create_reminder"]
+    assert manifest.dedup_strategy == {
+        "kind": "calendar_item_identifier_last_modified"
+    }
+    assert manifest.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
     assert manifest.observation_mode_required is False
 
 
@@ -558,7 +590,7 @@ def test_simple_adapter_protocol_surface_preserved() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "reminders-apple-eventkit"
     assert adapter.family == "reminders"
-    assert adapter.version == "1.0.0"
+    assert adapter.version == "2.0.0"
     assert adapter.sensitivity_floor == "normal"
     assert callable(adapter.start)
     assert callable(adapter.stop)

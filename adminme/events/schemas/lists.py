@@ -142,7 +142,121 @@ class ListItemDeletedV1(BaseModel):
     sync_cycle_id: str = Field(min_length=1)
 
 
+ListProvider = Literal["apple_reminders", "google_tasks", "apple_notes_checklist"]
+
+
+class ListChangedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: ListProvider
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    list_external_id: str = Field(min_length=1, max_length=1000)
+    list_name: str = Field(min_length=1, max_length=500)
+    color: str | None = None
+    is_default: bool = False
+    provider_revision: str | None = None
+    changed_at: datetime
+
+
+class ListDeletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: ListProvider
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    list_external_id: str = Field(min_length=1, max_length=1000)
+    deleted_at: datetime
+
+
+class ReminderDateComponentsV2(BaseModel):
+    """EventKit-compatible date components, including floating dates."""
+
+    model_config = {"extra": "forbid"}
+    year: int | None = None
+    month: int | None = Field(default=None, ge=1, le=12)
+    day: int | None = Field(default=None, ge=1, le=31)
+    hour: int | None = Field(default=None, ge=0, le=23)
+    minute: int | None = Field(default=None, ge=0, le=59)
+    second: int | None = Field(default=None, ge=0, le=59)
+    time_zone: str | None = None
+    all_day: bool = False
+    floating: bool = False
+
+
+class ReminderLocationV2(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str = Field(min_length=1, max_length=500)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_meters: float = Field(default=100.0, gt=0)
+
+
+class ReminderAlarmV2(BaseModel):
+    model_config = {"extra": "forbid"}
+    kind: Literal["absolute", "relative", "location"]
+    absolute_at: datetime | None = None
+    relative_offset_seconds: int | None = None
+    location: ReminderLocationV2 | None = None
+    proximity: Literal["enter", "leave", "none"] = "none"
+
+
+class ListItemV2(BaseModel):
+    """Complete provider-neutral list/reminder snapshot.
+
+    Fields that EventKit cannot expose (for example Apple Reminders tags and
+    subtasks) remain nullable so the canonical model can preserve them from
+    future providers without falsely advertising an EventKit capability.
+    """
+
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: ListProvider
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    list_external_id: str = Field(min_length=1, max_length=1000)
+    item_external_id: str = Field(min_length=1, max_length=1000)
+    list_name: str = Field(min_length=1, max_length=500)
+    list_color: str | None = None
+    title: str = Field(min_length=1, max_length=1000)
+    notes: str | None = None
+    url: str | None = None
+    priority: Literal[0, 1, 5, 9] = 0
+    completed: bool = False
+    completion_at: datetime | None = None
+    start: ReminderDateComponentsV2 | None = None
+    due: ReminderDateComponentsV2 | None = None
+    alarms: list[ReminderAlarmV2] = Field(default_factory=list)
+    recurrence_rules: list[str] = Field(default_factory=list)
+    flagged: bool | None = None
+    tags: list[str] | None = None
+    parent_external_id: str | None = None
+    sort_order: int | None = None
+    linked_item_kind: Literal["task", "commitment"] | None = None
+    linked_item_id: str | None = None
+    completion_policy: Literal["manual", "mirror"] = "manual"
+    provider_revision: str | None = None
+    last_modified_at: datetime
+    sync_cycle_id: str = Field(min_length=1)
+
+
+class ListItemDeletedV2(BaseModel):
+    model_config = {"extra": "forbid"}
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: ListProvider
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    list_external_id: str = Field(min_length=1, max_length=1000)
+    item_external_id: str = Field(min_length=1, max_length=1000)
+    deleted_at: datetime
+    sync_cycle_id: str = Field(min_length=1)
+
+
 registry.register("list_item.added", 1, ListItemAddedV1)
 registry.register("list_item.updated", 1, ListItemUpdatedV1)
 registry.register("list_item.completed", 1, ListItemCompletedV1)
 registry.register("list_item.deleted", 1, ListItemDeletedV1)
+registry.register("list.created", 1, ListChangedV1)
+registry.register("list.updated", 1, ListChangedV1)
+registry.register("list.deleted", 1, ListDeletedV1)
+registry.register("list_item.added", 2, ListItemV2)
+registry.register("list_item.updated", 2, ListItemV2)
+registry.register("list_item.completed", 2, ListItemV2)
+registry.register("list_item.uncompleted", 1, ListItemV2)
+registry.register("list_item.deleted", 2, ListItemDeletedV2)

@@ -27,6 +27,9 @@ adminme = { path = "..", develop = true }
 httpx = "*"
 pydantic = ">=2.6"
 pyyaml = "*"
+pyobjc-framework-EventKit = { version = "*", markers = "sys_platform == 'darwin'" }
+pyobjc-framework-CoreLocation = { version = "*", markers = "sys_platform == 'darwin'" }
+pyobjc-framework-Quartz = { version = "*", markers = "sys_platform == 'darwin'" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

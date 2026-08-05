@@ -216,7 +216,7 @@ def test_wrapper_synthesizes_adapter_context_with_deployment_target_bridge(
     assert synthesized.config["_bridge_sink"] is sink
     # A typed bridge writer is supplied on the bridge path (central
     # adapter's _append routes through _bridge_sink in bridge mode).
-    assert synthesized.event_sink.tenant_id == "default"
+    assert synthesized.event_sink.tenant_id == bridge_ctx.tenant_id == "tenant-default"
 
 
 def test_wrapper_passes_member_id_into_internal_constructor_config(

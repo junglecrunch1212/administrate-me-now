@@ -83,8 +83,93 @@ class MemberLifecycleRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class ExternalWriteRequest(BaseModel):
+    """One member-authorized mutation of a primary external surface."""
+
+    model_config = {"extra": "forbid"}
+    provider: Literal[
+        "google_calendar", "apple_calendar", "apple_reminders", "apple_notes"
+    ]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    operation: str = Field(min_length=1, max_length=120)
+    target_external_id: str | None = Field(default=None, max_length=1000)
+    expected_provider_revision: str | None = Field(default=None, max_length=1000)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    request_id: str = Field(min_length=8, max_length=120)
+
+
 def _runtime(request: Request) -> Any:
     return request.app.state.runtime
+
+
+_EXTERNAL_OPERATIONS = {
+    "google_calendar": {"create_event", "update_event", "delete_event", "move_event", "respond_event"},
+    "apple_calendar": {"create_event", "update_event", "delete_event", "move_event"},
+    "apple_reminders": {
+        "create_reminder", "update_reminder", "delete_reminder", "complete_reminder",
+        "uncomplete_reminder", "move_reminder", "create_list", "update_list", "delete_list",
+    },
+    "apple_notes": {
+        "create_note", "update_note", "append_note", "move_note", "delete_note",
+        "create_folder", "update_folder", "delete_folder",
+    },
+}
+
+
+@router.post("/api/member/v1/external-sync/commands", status_code=202)
+async def request_external_write(
+    body: ExternalWriteRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "external writes are unavailable while viewing another member")
+    if body.operation not in _EXTERNAL_OPERATIONS[body.provider]:
+        raise HTTPException(422, "operation is not supported by this provider")
+    runtime = _runtime(request)
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "command_id": body.request_id,
+        "member_id": session.auth_member_id,
+        "provider": body.provider,
+        "provider_account_id": body.provider_account_id,
+        "operation": body.operation,
+        "target_external_id": body.target_external_id,
+        "expected_provider_revision": body.expected_provider_revision,
+        "payload": {
+            **body.payload,
+            **(
+                {"expected_provider_revision": body.expected_provider_revision}
+                if body.expected_provider_revision
+                else {}
+            ),
+        },
+        "requested_at": now,
+    }
+    decision = await runtime.guarded_write.check(
+        session, "external_sync.write_requested", payload
+    )
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {"reason": decision.reason, "correlation_id": decision.correlation_id},
+        )
+    envelope = EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type="external_sync.write_requested",
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity="normal",
+        correlation_id=decision.correlation_id,
+        actor_identity=session.auth_member_id,
+        idempotency_key=f"external-sync:{session.auth_member_id}:{body.request_id}",
+        payload=payload,
+    )
+    event_id = await runtime.events.write(envelope)
+    return {"accepted": True, "command_id": body.request_id, "event_id": event_id}
 
 
 def _chat_policy(runtime: Any, session: Session) -> dict[str, Any]:

@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
 from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
+from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -40,6 +41,7 @@ from adminme.lib.instance_config import (
     resolve_instance_dir,
 )
 from adminme.lib.observation import ObservationManager
+from adminme.lib.adapters import WriteOperation
 from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
@@ -394,6 +396,7 @@ class AdministrateMeRuntime:
                                 "communication.*",
                                 "task.*",
                                 "household.action.*",
+                                "external_sync.*",
                             ],
                         )
                     ]
@@ -454,15 +457,12 @@ class AdministrateMeRuntime:
             self._inventory_optional_adapters()
             self._inventory_data_extensions()
 
-            # All subscriptions are explicit before the one bus owner starts.
-            await self.projections.start(start_bus=False)
-            await self.pipelines.start(start_bus=False)
-            await self.bus.start()
-
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
                 config_data=self.settings.adapter_config,
-                adapter_loader=lambda _config: [],  # optional providers are disabled
+                adapter_loader=lambda config: load_builtin_adapters(
+                    config, repository_root=self.settings.repository_root
+                ),
                 ctx_factory=lambda: AdapterContext(
                     event_sink=self._require_events(),
                     config={},
@@ -477,7 +477,19 @@ class AdministrateMeRuntime:
                     observation_event_sink=self._require_events(),
                 ),
             )
+            self.adapters.prepare()
+            self.bus.subscribe(
+                "external-sync:central-providers",
+                ["external_sync.write_requested"],
+                self._dispatch_external_write,
+            )
+
+            # All subscriptions are explicit before the one bus owner starts.
+            await self.projections.start(start_bus=False)
+            await self.pipelines.start(start_bus=False)
             await self.adapters.start()
+            await asyncio.sleep(0)
+            await self.bus.start()
             await self._refresh_capability_registry()
             self.started = True
 
@@ -532,6 +544,74 @@ class AdministrateMeRuntime:
         if self.events is None:
             raise RuntimeError("event writer unavailable")
         return self.events
+
+    async def _dispatch_external_write(self, event: dict[str, Any]) -> None:
+        """Execute central-hosted provider commands; Apple commands wait for bridges."""
+
+        payload = event["payload"]
+        if payload.get("provider") != "google_calendar":
+            return
+        if self.adapters is None:
+            raise RuntimeError("adapter supervisor unavailable")
+        now = EventEnvelope.now_utc_iso()
+        result_type = "external_sync.write_completed"
+        try:
+            result = await self.adapters.dispatch_write(
+                provider=str(payload["provider"]),
+                member_id=str(payload["member_id"]),
+                provider_account_id=str(payload["provider_account_id"]),
+                operation=WriteOperation(
+                    kind=str(payload["operation"]),
+                    target_external_id=payload.get("target_external_id"),
+                    payload=dict(payload.get("payload") or {}),
+                ),
+            )
+            result_payload: dict[str, Any] = {
+                "command_id": payload["command_id"],
+                "member_id": payload["member_id"],
+                "provider": payload["provider"],
+                "operation": payload["operation"],
+                "external_id": result.external_id,
+                "provider_revision": None,
+                "result": {"applied": result.applied},
+                "completed_at": now,
+                "suppressed": result.suppressed,
+            }
+        except Exception as exc:  # provider failures are terminal, typed evidence
+            result_type = "external_sync.write_failed"
+            result_payload = {
+                "command_id": payload["command_id"],
+                "member_id": payload["member_id"],
+                "provider": payload["provider"],
+                "operation": payload["operation"],
+                "error_kind": (
+                    "conflict"
+                    if getattr(getattr(exc, "resp", None), "status", None) == 412
+                    or "conflict" in type(exc).__name__.casefold()
+                    else "not_found" if isinstance(exc, LookupError) else "provider"
+                ),
+                "message": f"{type(exc).__name__}: {exc}",
+                "retryable": not isinstance(exc, (LookupError, ValueError)),
+                "failed_at": now,
+            }
+        await self._require_events().write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=event["tenant_id"],
+                type=result_type,
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="external-sync-central-dispatcher",
+                source_account_id=str(payload["provider_account_id"]),
+                owner_scope=f"private:{payload['member_id']}",
+                visibility_scope=f"private:{payload['member_id']}",
+                sensitivity="normal",
+                correlation_id=event.get("correlation_id"),
+                causation_id=event["event_id"],
+                idempotency_key=f"external-sync-result:{payload['command_id']}",
+                payload=result_payload,
+            )
+        )
 
     def member_chat_binding(self, member_id: str) -> tuple[str, str]:
         """Return an opaque actor reference and signed OpenClaw session key."""
@@ -721,10 +801,10 @@ class AdministrateMeRuntime:
             self.capabilities[f"adapter:{capability_id}"] = CapabilityRecord(
                 name=capability_id,
                 kind="adapter",
-                state="blocked" if enabled else "disabled",
+                state="observation_only" if enabled else "disabled",
                 reason=(
-                    "provider activation is deferred; remove this configured entry "
-                    "until a production loader is installed"
+                    "configured for the production adapter supervisor; inbound sync "
+                    "is active while outbound writes remain governed by observation mode"
                     if enabled
                     else "optional provider not configured; no credential loaded"
                 ),
@@ -732,7 +812,8 @@ class AdministrateMeRuntime:
                     "manifest": str(manifest_path.relative_to(root)),
                     "categories": categories,
                     "runtimes": runtimes,
-                    "provider_health": "not_configured" if not enabled else "blocked",
+                    "provider_health": "not_configured" if not enabled else "starting",
+                    "production_loader": enabled,
                     "deterministic_fixture_coverage": True,
                 },
             )

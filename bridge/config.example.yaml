@@ -4,6 +4,19 @@ central_endpoint: https://replace-with-server-magicdns-name.ts.net
 tailscale_identity: replace-with-verified-member-login
 packs_dir: ~/.adminme-bridge/packs
 cursor_db_path: ~/.adminme-bridge/adapter-cursors.db
+command_poll_interval_s: 5
+enabled_packs:
+  - calendaring-apple-calendar-bridge
+  - reminders-apple-eventkit-bridge
+  - knowledge-apple-notes
+pack_config:
+  calendaring-apple-calendar-bridge:
+    calendar_identifier: default
+    emit_schema_version: 2
+  reminders-apple-eventkit-bridge:
+    target_list_identifier: default
+    emit_schema_version: 2
+  knowledge-apple-notes:
+    automation_mode: notes_scripting
+    emit_schema_version: 2
 log_level: info
-enabled_packs: []
-pack_config: {}

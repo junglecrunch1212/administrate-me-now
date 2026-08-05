@@ -135,8 +135,17 @@ def test_lists_projection_registered_in_runner() -> None:
     # registry seam so a future refactor cannot silently rename them.
     instance = ListsProjection()
     assert instance.name == "lists"
-    assert instance.version == 1
-    assert list(instance.subscribes_to) == ["list_item.added"]
+    assert instance.version == 2
+    assert list(instance.subscribes_to) == [
+        "list.created",
+        "list.updated",
+        "list.deleted",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "list_item.deleted",
+    ]
     assert instance.schema_path.name == "schema.sql"
 
 

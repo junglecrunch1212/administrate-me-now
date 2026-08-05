@@ -56,11 +56,60 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "task.completed": apply_task_completed,
         "task.updated": apply_task_updated,
         "task.deleted": apply_task_deleted,
+        "list_item.completed": apply_external_completion,
+        "list_item.uncompleted": apply_external_completion,
+        "calendar.event_outcome_recorded": apply_calendar_completion,
     }
     handler = dispatch.get(event_type)
     if handler is None:
         return
     handler(envelope, conn)
+
+
+def apply_calendar_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    policy = p.get("completion_policy", "manual")
+    qualifies = (
+        policy == "on_elapsed" and p.get("outcome") in {"elapsed", "attended"}
+    ) or (policy == "on_attended" and p.get("outcome") == "attended")
+    if p.get("linked_item_kind") != "task" or not p.get("linked_item_id") or not qualifies:
+        return
+    conn.execute(
+        """UPDATE tasks SET status='done', completed_at=?, completed_by=?, last_event_id=?
+             WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
+        (
+            p["recorded_at"], p["member_id"], envelope["event_id"],
+            envelope["tenant_id"], p["linked_item_id"], envelope["event_id"],
+        ),
+    )
+
+
+def apply_external_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    """Mirror only reminders explicitly linked to a task by AdministrateMe."""
+
+    p = envelope["payload"]
+    if (
+        p.get("linked_item_kind") != "task"
+        or not p.get("linked_item_id")
+        or p.get("completion_policy") != "mirror"
+    ):
+        return
+    completed = envelope["type"] == "list_item.completed"
+    conn.execute(
+        """UPDATE tasks SET status=?, completed_at=?, completed_by=?, last_event_id=?
+             WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
+        (
+            "done" if completed else "next",
+            str(p.get("completion_at") or p.get("last_modified_at")) if completed else None,
+            p.get("member_id") if completed else None,
+            envelope["event_id"], envelope["tenant_id"], p["linked_item_id"],
+            envelope["event_id"],
+        ),
+    )
 
 
 def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:

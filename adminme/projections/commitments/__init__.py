@@ -15,7 +15,7 @@ from adminme.projections.commitments import handlers
 
 class CommitmentsProjection(Projection):
     name = "commitments"
-    version = 2
+    version = 3
     subscribes_to = [
         "commitment.proposed",
         "commitment.confirmed",
@@ -29,6 +29,9 @@ class CommitmentsProjection(Projection):
         "commitment.cancelled",
         "commitment.delegated",
         "commitment.expired",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "calendar.event_outcome_recorded",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

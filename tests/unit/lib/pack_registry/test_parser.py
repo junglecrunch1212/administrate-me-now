@@ -74,9 +74,29 @@ def test_parse_existing_reminders_pack_yaml_yields_cat_b_capability() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-B"
     assert cap.runtime == "central"
-    assert cap.event_families == ["reminder.list_item.synced"]
+    assert cap.event_families == [
+        "reminder.list_item.synced",
+        "list.created",
+        "list.updated",
+        "list.deleted",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "list_item.deleted",
+    ]
     assert manifest.sensitivity_default == "normal"
-    assert manifest.write_capabilities == ["create_reminder"]
+    assert manifest.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
     assert manifest.sharing_model_discriminator == "owner_member_id"
 
 

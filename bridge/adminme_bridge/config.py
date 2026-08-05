@@ -29,6 +29,7 @@ class BridgeConfig(BaseModel):
     cursor_db_path: str = "~/.adminme-bridge/adapter-cursors.db"
     enabled_packs: list[str] = Field(default_factory=list)
     pack_config: dict[str, dict[str, object]] = Field(default_factory=dict)
+    command_poll_interval_s: float = Field(default=5.0, ge=1.0, le=300.0)
 
     def resolved_packs_dir(self) -> Path:
         return Path(self.packs_dir).expanduser()

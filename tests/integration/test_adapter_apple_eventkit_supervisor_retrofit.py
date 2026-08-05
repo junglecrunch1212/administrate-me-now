@@ -158,7 +158,17 @@ def test_retrofit_apple_eventkit_write_capabilities_gate_rejects_undeclared_kind
     (``send``), Cat-C (no write surface), Cat-E (``execute_action``)
     is the per-operation gate observed here."""
     adapter = _make_adapter()
-    assert AppleEventKitAdapter.write_capabilities == ["create_reminder"]
+    assert AppleEventKitAdapter.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
     assert hasattr(adapter, "apply_write")
     assert callable(adapter.apply_write)
 

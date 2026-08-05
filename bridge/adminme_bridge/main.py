@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
+import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+from adminme.events.envelope import EventEnvelope
 
 from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
@@ -24,6 +29,35 @@ from adminme_bridge.packs import (
 DEFAULT_CONFIG_PATH = Path("~/.adminme-bridge/config.yaml").expanduser()
 
 logger = logging.getLogger(__name__)
+
+
+class _CommandLedger:
+    """Durable result envelope cache preventing duplicate create side effects."""
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(path), isolation_level=None)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_command_results ("
+            "command_id TEXT PRIMARY KEY, envelope_json TEXT NOT NULL)"
+        )
+
+    def get(self, command_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT envelope_json FROM bridge_command_results WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put(self, command_id: str, envelope: dict) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO bridge_command_results VALUES (?, ?)",
+            (command_id, json.dumps(envelope, separators=(",", ":"), sort_keys=True)),
+        )
+
+    def close(self) -> None:
+        self._conn.close()
 
 
 def configured_packs(config: BridgeConfig) -> list[PackHandle]:
@@ -82,6 +116,7 @@ class BridgeSupervisor:
             self._adapters = list(adapters)
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
+        self._command_ledger = _CommandLedger(config.resolved_cursor_db_path())
 
     @property
     def adapters(self) -> list[BridgeAdapter]:
@@ -102,6 +137,16 @@ class BridgeSupervisor:
                 asyncio.create_task(
                     adapter.start(ctx=self.make_context()),
                     name=f"bridge-adapter:{type(adapter).__name__}",
+                )
+            )
+        if any(
+            getattr(adapter, "provider", None)
+            and callable(getattr(adapter, "apply_write", None))
+            for adapter in self._adapters
+        ) and callable(getattr(self._ingest_client, "fetch_commands", None)):
+            self._tasks.append(
+                asyncio.create_task(
+                    self._command_loop(), name="bridge-command-dispatcher"
                 )
             )
 
@@ -128,6 +173,104 @@ class BridgeSupervisor:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._tasks.clear()
+        self._command_ledger.close()
+
+    async def _command_loop(self) -> None:
+        adapters = {
+            str(adapter.provider): adapter
+            for adapter in self._adapters
+            if getattr(adapter, "provider", None)
+            and callable(getattr(adapter, "apply_write", None))
+        }
+        while not self._stopping:
+            try:
+                response = await self._ingest_client.fetch_commands(list(adapters))
+                for command in response["commands"]:
+                    command_id = str(command["command_id"])
+                    result_envelope = self._command_ledger.get(command_id)
+                    if result_envelope is None:
+                        adapter = adapters.get(str(command["provider"]))
+                        if adapter is None:
+                            continue
+                        try:
+                            result = await adapter.apply_write(
+                                str(command["operation"]),
+                                dict(command.get("payload") or {}),
+                                command.get("target_external_id"),
+                            )
+                        except RuntimeError as exc:
+                            if "has not finished starting" in str(exc):
+                                continue
+                            result_envelope = self._result_envelope(command, error=exc)
+                        except Exception as exc:  # noqa: BLE001 - typed provider failure
+                            result_envelope = self._result_envelope(command, error=exc)
+                        else:
+                            result_envelope = self._result_envelope(command, result=result)
+                        self._command_ledger.put(command_id, result_envelope)
+                    submit = await self._ingest_client.submit(result_envelope)
+                    if not submit.ok:
+                        logger.warning(
+                            "bridge command result upload failed for %s: %s",
+                            command_id,
+                            submit.error,
+                        )
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - polling supervisor retries
+                logger.exception("bridge command poll failed")
+            try:
+                await asyncio.sleep(self._config.command_poll_interval_s)
+            except asyncio.CancelledError:
+                return
+
+    def _result_envelope(
+        self, command: dict, *, result: dict | None = None, error: Exception | None = None
+    ) -> dict:
+        now = datetime.now(timezone.utc)
+        if error is None:
+            event_type = "external_sync.write_completed"
+            payload = {
+                "command_id": command["command_id"],
+                "member_id": self._config.member_id,
+                "provider": command["provider"],
+                "operation": command["operation"],
+                "external_id": (result or {}).get("external_id"),
+                "provider_revision": (result or {}).get("provider_revision"),
+                "result": result or {},
+                "completed_at": now.isoformat(),
+                "suppressed": bool((result or {}).get("suppressed", False)),
+            }
+        else:
+            event_type = "external_sync.write_failed"
+            payload = {
+                "command_id": command["command_id"],
+                "member_id": self._config.member_id,
+                "provider": command["provider"],
+                "operation": command["operation"],
+                "error_kind": (
+                    "conflict" if "conflict" in type(error).__name__.casefold() or "conflict" in str(error).casefold() else
+                    "not_found" if isinstance(error, LookupError) else
+                    "validation" if isinstance(error, ValueError) else "provider"
+                ),
+                "message": f"{type(error).__name__}: {error}",
+                "retryable": not isinstance(error, (LookupError, ValueError)),
+                "failed_at": now.isoformat(),
+            }
+        return EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=self._config.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now.isoformat(),
+            source_adapter="adminme-bridge-command-dispatcher",
+            source_account_id=self._config.member_id,
+            owner_scope=f"private:{self._config.member_id}",
+            visibility_scope=f"private:{self._config.member_id}",
+            sensitivity="normal",
+            causation_id=str(command["event_id"]),
+            idempotency_key=f"external-sync-result:{command['command_id']}",
+            payload=payload,
+        ).model_dump(mode="json")
 
     def snapshot(self) -> dict:
         return {

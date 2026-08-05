@@ -91,7 +91,17 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     assert (
         cls_entry["event_families"]
         == manifest_entry.event_families
-        == ["reminder.list_item.synced"]
+        == [
+            "reminder.list_item.synced",
+            "list.created",
+            "list.updated",
+            "list.deleted",
+            "list_item.added",
+            "list_item.updated",
+            "list_item.completed",
+            "list_item.uncompleted",
+            "list_item.deleted",
+        ]
     )
 
 
@@ -117,9 +127,21 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest_with_write_capabil
     assert manifest.capabilities[0].kind == "Cat-B"
     assert manifest.sensitivity_default == "normal"
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {"kind": "external_id"}
+    assert manifest.dedup_strategy == {
+        "kind": "calendar_item_identifier_last_modified"
+    }
     assert manifest.observation_mode_required is False
-    assert manifest.write_capabilities == ["create_reminder"]
+    assert manifest.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
 
 
 def test_six_validator_checks_return_zero_errors_and_no_advisory_pending_retrofit() -> (

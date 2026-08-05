@@ -83,7 +83,7 @@ def _deleted_payload(**overrides: object) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def test_all_four_list_item_schemas_registered_at_v1() -> None:
+def test_list_item_schemas_preserve_v1_and_publish_rich_v2() -> None:
     """Each of the four new ``list_item.*@v1`` event types resolves
     through the canonical registry, with ``latest_version == 1``. Per
     [§D7] these are NEW v1 schemas — the legacy
@@ -99,7 +99,7 @@ def test_all_four_list_item_schemas_registered_at_v1() -> None:
         "list_item.completed",
         "list_item.deleted",
     ):
-        assert registry.latest_version(name) == 1
+        assert registry.latest_version(name) == 2
 
 
 # ---------------------------------------------------------------------------

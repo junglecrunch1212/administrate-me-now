@@ -1077,8 +1077,27 @@ class BootstrapWizard:
                 "owner_scope": f"private:{member_id}",
                 "tailscale_identity": tailscale_identity,
                 "allowed_packs": sorted(allowed_packs),
-                "enabled_packs": [],
-                "pack_config": {},
+                "enabled_packs": [
+                    "calendaring-apple-calendar-bridge",
+                    "knowledge-apple-notes",
+                    "reminders-apple-eventkit-bridge",
+                ],
+                "pack_config": {
+                    "calendaring-apple-calendar-bridge": {
+                        "calendar_identifier": "default",
+                        "provider_account_id": member_id,
+                        "emit_schema_version": 2,
+                    },
+                    "reminders-apple-eventkit-bridge": {
+                        "target_list_identifier": "default",
+                        "provider_account_id": member_id,
+                        "emit_schema_version": 2,
+                    },
+                    "knowledge-apple-notes": {
+                        "automation_mode": "notes_scripting",
+                        "emit_schema_version": 2,
+                    },
+                },
                 "release_commit": release_commit,
                 "restrictions": {
                     "kid": is_child,

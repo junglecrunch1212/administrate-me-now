@@ -3,15 +3,34 @@ subkind: knowledge-source
 entrypoint: adminme_bridge.connector_packs.apple_notes:AppleNotesAdapter
 pack:
   name: knowledge-apple-notes
-  version: 1.0.0
+  version: 2.0.0
   author: built-in
 capabilities:
   - kind: Cat-D
     runtime: bridge
-    event_families: [member_knowledge]
+    event_families: [member_knowledge.note_added, member_knowledge.note_updated, member_knowledge.note_deleted, member_knowledge.folder_created, member_knowledge.folder_updated, member_knowledge.folder_deleted]
     sensitivity_default: normal
 owner_scope_overridability_at_install: false
 sharing_model_discriminator: member-private
 dedup_strategy:
-  kind: external_id_and_content_sha256
-config: {}
+  kind: external_id_revision_and_content_sha256
+write_capabilities:
+  - create_note
+  - update_note
+  - append_note
+  - move_note
+  - delete_note
+  - create_folder
+  - update_folder
+  - delete_folder
+capability_limits:
+  - no_public_notes_framework
+  - attachments_not_scriptable
+  - tags_not_scriptable
+  - pin_not_scriptable
+  - collaboration_not_scriptable
+  - locked_note_contents_may_be_unavailable
+config:
+  defaults:
+    automation_mode: notes_scripting
+    emit_schema_version: 2

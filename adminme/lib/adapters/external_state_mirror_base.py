@@ -53,6 +53,10 @@ class WriteCapabilityError(RuntimeError):
     """
 
 
+class ProviderConflictError(RuntimeError):
+    """The provider changed after the caller's expected revision was read."""
+
+
 @dataclass(frozen=True)
 class WriteOperation:
     """A write request handed to

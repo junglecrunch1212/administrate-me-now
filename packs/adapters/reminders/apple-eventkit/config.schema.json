@@ -20,6 +20,11 @@
       "minLength": 1,
       "description": "Household member who owns the EventKit grant for this adapter instance. Stamped onto every reminder.list_item.synced event so downstream consumers can owner-scope correctly."
     },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable alias for the member's iCloud Reminders account."
+    },
     "deployment_target": {
       "type": "string",
       "enum": ["central", "bridge"],
@@ -49,6 +54,11 @@
       "minimum": 1,
       "default": 30,
       "description": "Seconds between outbound EventKit write batches. The adapter drains queued upstream events (`reminder.dispatched` / `task.created` / `commitment.proposed`) at this cadence to minimize iCloud sync churn."
+    },
+    "emit_schema_version": {
+      "const": 2,
+      "default": 2,
+      "description": "Emit the rich list/reminder contract including recurrence, geofences, completion timestamps, URL links, and date components."
     },
     "sensitivity_floor": {
       "const": "normal",

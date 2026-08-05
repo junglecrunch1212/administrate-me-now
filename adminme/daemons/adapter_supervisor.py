@@ -35,6 +35,7 @@ import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
 from adminme.events.envelope import EventEnvelope
+from adminme.lib.adapters import WriteOperation, WriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class AdapterSupervisor:
         self._config: dict[str, Any] = dict(config_data or {})
         self._http_server: asyncio.base_events.Server | None = None
         self._stopping = False
+        self._prepared = False
 
     # ------------------------------------------------------------------
     # config
@@ -126,12 +128,7 @@ class AdapterSupervisor:
     async def start(self) -> None:
         """Load config, instantiate adapters, spawn supervised tasks, and
         (optionally) start the /status HTTP endpoint."""
-        if not self._config:
-            self.load_config()
-
-        adapters = self._loader(self._config)
-        for adapter in adapters:
-            self._managed[adapter.name] = _ManagedAdapter(adapter=adapter)
+        self.prepare()
 
         for name, managed in self._managed.items():
             managed.task = asyncio.create_task(
@@ -144,6 +141,58 @@ class AdapterSupervisor:
             self._http_server = await asyncio.start_server(
                 self._handle_http, host=host, port=port
             )
+
+    def prepare(self) -> None:
+        """Load configured instances without starting provider I/O."""
+
+        if self._prepared:
+            return
+        if not self._config:
+            self.load_config()
+        for index, adapter in enumerate(self._loader(self._config)):
+            base = str(getattr(adapter, "instance_name", None) or adapter.name)
+            name = base if base not in self._managed else f"{base}:{index}"
+            self._managed[name] = _ManagedAdapter(adapter=adapter)
+        self._prepared = True
+
+    async def dispatch_write(
+        self,
+        *,
+        provider: str,
+        member_id: str,
+        provider_account_id: str,
+        operation: WriteOperation,
+    ) -> WriteResult:
+        """Route a typed command to exactly one matching provider instance."""
+
+        provider_names = {
+            "google_calendar": "calendaring-google-calendar",
+            "apple_calendar": "calendaring-apple-calendar",
+            "apple_reminders": "reminders-apple-eventkit",
+        }
+        expected_name = provider_names.get(provider)
+        candidates: list[Adapter] = []
+        for managed in self._managed.values():
+            adapter = managed.adapter
+            config = getattr(adapter, "_config", {})
+            if expected_name and getattr(adapter, "name", None) != expected_name:
+                continue
+            if config.get("member_id") not in (None, "", member_id):
+                continue
+            configured_account = config.get("provider_account_id") or config.get("subject_email")
+            if configured_account not in (None, "", provider_account_id):
+                continue
+            if callable(getattr(adapter, "apply_write", None)):
+                candidates.append(adapter)
+        if len(candidates) != 1:
+            raise LookupError(
+                f"external write route expected one {provider} adapter for "
+                f"{member_id}/{provider_account_id}, found {len(candidates)}"
+            )
+        result = await candidates[0].apply_write(operation)  # type: ignore[attr-defined]
+        if not result.applied and not result.suppressed:
+            raise RuntimeError("provider adapter is not ready to accept writes")
+        return result
 
     async def stop(self) -> None:
         """Stop the HTTP endpoint and request every managed adapter to

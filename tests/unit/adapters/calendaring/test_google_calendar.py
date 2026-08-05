@@ -253,8 +253,10 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     parent draft and intentionally NOT declared. A declared-but-not-
     implemented kind would fail the validator's method-presence rule per
     memo 05 §3.4."""
-    assert GoogleCalendarAdapter.write_capabilities == ["create_event"]
-    assert len(GoogleCalendarAdapter.write_capabilities) == 1
+    assert GoogleCalendarAdapter.write_capabilities == [
+        "create_event", "update_event", "delete_event", "respond_event", "move_event"
+    ]
+    assert len(GoogleCalendarAdapter.write_capabilities) == 5
 
 
 # ===========================================================================
@@ -271,7 +273,7 @@ async def test_apply_write_gate_raises_on_undeclared_kind() -> None:
     deferred to 11b-iii-β)."""
     adapter = _make_adapter()
     operation = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="gcal-evt-1",
         payload={},
     )

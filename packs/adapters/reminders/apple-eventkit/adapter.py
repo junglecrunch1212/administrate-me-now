@@ -87,6 +87,7 @@ from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
+    ProviderConflictError,
     WriteCapabilityError,
     WriteOperation,
     WriteResult,
@@ -134,6 +135,7 @@ DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS: tuple[str, ...] = tuple(
 EKEventStoreLike: Any = _shim_mod.EKEventStoreLike
 EKReminderLike: Any = _shim_mod.EKReminderLike
 NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
+default_event_store: Any = _shim_mod.default_event_store
 
 
 # OS-level token-storage reference. EventKit access is granted at the OS
@@ -193,7 +195,7 @@ def _noop_ek_event_store_factory() -> Any:
     """PM-27 default factory. Returns a ``NoopEKEventStore`` that raises
     on every operation — surfaces missing-factory bugs loudly instead of
     silently no-op-ing writes."""
-    return NoopEKEventStore()
+    return default_event_store()
 
 
 def _default_member_role_resolver(_member_id: str) -> str:
@@ -255,7 +257,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
         "reminders"
     )
-    version: ClassVar[str] = "1.0.0"
+    version: ClassVar[str] = "2.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
@@ -267,7 +269,17 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         {
             "kind": "Cat-B",
             "runtime": "central",
-            "event_families": ["reminder.list_item.synced"],
+            "event_families": [
+                "reminder.list_item.synced",
+                "list.created",
+                "list.updated",
+                "list.deleted",
+                "list_item.added",
+                "list_item.updated",
+                "list_item.completed",
+                "list_item.uncompleted",
+                "list_item.deleted",
+            ],
         }
     ]
 
@@ -276,7 +288,17 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ``delete_reminder`` are out of scope per memo 08 §5 (inheritance +
     # manifest only, not a rewrite); declaring them without method
     # presence would fail ``write_capabilities_check``.
-    write_capabilities: ClassVar[list[str]] = ["create_reminder"]
+    write_capabilities: ClassVar[list[str]] = [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
 
     # [memo 05 §2.5, PM-35] projection-row column distinguishing
     # per-member vs shared rows on the ``lists`` projection.
@@ -373,6 +395,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # the legacy ``reminder.list_item.synced@v1`` dedupe path
         # continues to consult ``_seen_inbound`` byte-for-byte.
         self._inbound_snapshots: dict[str, dict[str, Any]] = {}
+        self._known_inbound_ids: set[str] = set()
+        self._known_lists: dict[str, dict[str, Any]] = {}
+        self._initial_sync_complete = False
 
         # Cursor-advance milestone state. Mirrors Gmail's and Plaid's
         # pattern: count emissions since last advance + track wall-clock
@@ -760,13 +785,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         ``external_id`` on save; ``applied=False`` + ``suppressed=True``
         on observation-mode suppression.
         """
-        if operation.kind != "create_reminder":  # defense-in-depth
+        if operation.kind not in self.write_capabilities:
             # [UT-27]: the apply_write gate should have caught this.
             # If we got here, write_capabilities and this dispatch are
             # out of sync — surface loudly rather than silently no-op.
             raise WriteCapabilityError(
-                f"AppleEventKitAdapter._apply_write_impl received "
-                f"undeclared kind={operation.kind!r}"
+                f"unsupported Apple Reminders operation {operation.kind!r}"
             )
 
         ek_store = self._ek_store
@@ -776,14 +800,61 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             # start(). Honest no-op rather than a crash.
             return WriteResult(applied=False, external_id=None, suppressed=False)
 
-        payload = operation.payload
-        reminder = ek_store.build_reminder(
-            list_identifier=str(payload["target_list_id"]),
-            title=str(payload["title"]),
-            notes=payload.get("notes"),
-            due_at=payload.get("due_at"),
-            priority=payload["priority"],
+        payload = dict(operation.payload)
+        if (
+            not payload.get("url")
+            and payload.get("linked_item_kind") in {"task", "commitment"}
+            and payload.get("linked_item_id")
+        ):
+            payload["url"] = (
+                f"adminme://{payload['linked_item_kind']}/{payload['linked_item_id']}"
+            )
+        reminder: Any = None
+        external_id: str | None = None
+        target_list_id = str(
+            payload.get("target_list_id")
+            or payload.get("list_external_id")
+            or self._config.get("target_list_identifier")
+            or ""
         )
+        if operation.kind == "create_reminder":
+            reminder = ek_store.build_reminder(
+                list_identifier=target_list_id,
+                title=str(payload["title"]),
+                notes=payload.get("notes"),
+                due_at=payload.get("due_at"),
+                priority=int(payload.get("priority") or 0),
+            )
+            if hasattr(ek_store, "update_reminder"):
+                reminder = ek_store.update_reminder(reminder, payload=payload)
+        elif operation.kind not in {"create_list", "update_list", "delete_list"}:
+            target_id = str(
+                operation.target_external_id or payload.get("item_external_id") or ""
+            )
+            reminder = ek_store.reminder_with_identifier(target_id)
+            if reminder is None:
+                raise LookupError(f"EventKit reminder not found: {target_id}")
+            expected_revision = payload.get("expected_provider_revision")
+            actual_modified = getattr(reminder, "last_modified_at", None)
+            actual_revision = (
+                _to_iso(actual_modified) if isinstance(actual_modified, datetime) else None
+            )
+            if expected_revision and actual_revision and str(expected_revision) != actual_revision:
+                raise ProviderConflictError(
+                    f"Apple Reminder {target_id} changed ({actual_revision})"
+                )
+            changes = dict(payload)
+            if operation.kind == "complete_reminder":
+                changes["completed"] = True
+                now = self._ctx.now_factory() if self._ctx is not None else datetime.now(timezone.utc)
+                changes.setdefault("completion_at", _to_iso(now))
+            elif operation.kind == "uncomplete_reminder":
+                changes["completed"] = False
+                changes["completion_at"] = None
+            elif operation.kind == "move_reminder":
+                changes["target_list_id"] = str(payload["destination_list_id"])
+            if operation.kind != "delete_reminder":
+                reminder = ek_store.update_reminder(reminder, payload=changes)
 
         # [§6.20] observation-mode wrap. The 11-β validator's
         # ``observation_mode_wrapping`` AST-walk finds the call site;
@@ -798,24 +869,44 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             # — ``commit=True`` flushes immediately rather than batching
             # for a later ``commit()`` call. Each outbound write is its
             # own transaction so iCloud sync churn stays per-reminder.
-            ek_store.save(reminder, commit=True)
+            nonlocal external_id
+            if operation.kind == "create_list":
+                external_id = ek_store.create_list(
+                    name=str(payload["list_name"]), color=payload.get("color")
+                )
+            elif operation.kind == "update_list":
+                ek_store.update_list(
+                    target_list_id,
+                    name=payload.get("list_name"),
+                    color=payload.get("color"),
+                )
+                external_id = target_list_id
+            elif operation.kind == "delete_list":
+                ek_store.delete_list(target_list_id)
+                external_id = target_list_id
+            elif operation.kind == "delete_reminder":
+                ek_store.remove(reminder, commit=True)
+                external_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+            else:
+                ek_store.save(reminder, commit=True)
+                external_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
 
         if session is not None and manager is not None and event_log is not None:
             outbound_result = await observation_outbound(
                 session,
-                "reminders.create_reminder",
+                f"reminders.{operation.kind}",
                 {
                     "member_id": str(payload.get("member_id", "")),
-                    "list_identifier": str(payload["target_list_id"]),
+                    "list_identifier": target_list_id,
                     "list_name": str(payload.get("target_list_name", "")),
-                    "title": str(payload["title"]),
-                    "priority": payload["priority"],
+                    "title": str(payload.get("title") or ""),
+                    "priority": int(payload.get("priority") or 0),
                 },
                 _do_save,
                 manager=manager,
                 event_sink=event_log,
                 target_channel="reminders-apple-eventkit",
-                target_identifier=str(payload["target_list_id"]),
+                target_identifier=target_list_id,
             )
             if outbound_result.suppressed:
                 return WriteResult(applied=False, external_id=None, suppressed=True)
@@ -824,9 +915,8 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             # is preserved byte-for-byte.
             await _do_save()
 
-        remind_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
         return WriteResult(
-            applied=True, external_id=remind_id or None, suppressed=False
+            applied=True, external_id=external_id or None, suppressed=False
         )
 
     async def _on_external_change(self, envelope: ChangeEnvelope) -> None:
@@ -1003,7 +1093,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         if self._ek_store is None:
             return 0
         sync_cycle_id = _next_sync_cycle_id()
+        if int(self._config.get("emit_schema_version", 1)) >= 2:
+            await self._sync_lists(ctx=ctx)
         reminders = self._fetch_reminders_filtered()
+        observed_ids = {
+            str(getattr(reminder, "calendarItemIdentifier", "") or "")
+            for reminder in reminders
+        }
         emitted = 0
         for rem in reminders:
             if not self._is_new_or_modified(rem):
@@ -1012,8 +1108,90 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 ctx=ctx, reminder=rem, sync_cycle_id=sync_cycle_id
             )
             emitted += 1
+        if self._initial_sync_complete and int(self._config.get("emit_schema_version", 1)) >= 2:
+            for missing_id in self._known_inbound_ids - observed_ids:
+                await self._append(
+                    ctx=ctx,
+                    event_type="list_item.deleted",
+                    schema_version=2,
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": str(
+                            self._config.get("provider_account_id")
+                            or self._config["member_id"]
+                        ),
+                        "list_external_id": str(
+                            self._inbound_snapshots.get(missing_id, {}).get("list_external_id")
+                            or self._config["target_list_identifier"]
+                        ),
+                        "item_external_id": missing_id,
+                        "deleted_at": ctx.now_factory().isoformat(),
+                        "sync_cycle_id": sync_cycle_id,
+                    },
+                )
+                self._inbound_snapshots.pop(missing_id, None)
+                self._seen_inbound.pop(missing_id, None)
+                emitted += 1
+        self._known_inbound_ids = observed_ids
+        self._initial_sync_complete = True
         await self._maybe_emit_inbound_cursor_advance(ctx=ctx)
         return emitted
+
+    async def _sync_lists(self, *, ctx: AdapterContext) -> None:
+        """Mirror every EventKit reminder list, including empty lists."""
+
+        ek_store = self._ek_store
+        if ek_store is None or not hasattr(ek_store, "fetch_lists"):
+            return
+        current: dict[str, dict[str, Any]] = {}
+        provider_account_id = str(
+            self._config.get("provider_account_id") or self._config["member_id"]
+        )
+        for native_list in ek_store.fetch_lists():
+            list_id = str(
+                getattr(native_list, "calendarIdentifier", None)
+                or getattr(native_list, "calendar_identifier", None)
+                or ""
+            )
+            if not list_id:
+                continue
+            snapshot = {
+                "list_name": str(getattr(native_list, "title", None) or list_id),
+                "color": getattr(native_list, "color", None),
+                "is_default": bool(getattr(native_list, "is_default", False)),
+            }
+            current[list_id] = snapshot
+            if self._known_lists.get(list_id) != snapshot:
+                await self._append(
+                    ctx=ctx,
+                    event_type=(
+                        "list.updated" if list_id in self._known_lists else "list.created"
+                    ),
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": provider_account_id,
+                        "list_external_id": list_id,
+                        **snapshot,
+                        "provider_revision": None,
+                        "changed_at": _to_iso(ctx.now_factory()),
+                    },
+                )
+        if self._initial_sync_complete:
+            for missing_id in set(self._known_lists) - set(current):
+                await self._append(
+                    ctx=ctx,
+                    event_type="list.deleted",
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": provider_account_id,
+                        "list_external_id": missing_id,
+                        "deleted_at": _to_iso(ctx.now_factory()),
+                    },
+                )
+        self._known_lists = current
 
     def _fetch_reminders_filtered(self) -> list[Any]:
         """Fetch every reminder across non-never-sync lists and apply
@@ -1176,6 +1354,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             and completed
         ):
             new_event_type = "list_item.completed"
+        elif (
+            prior_snapshot is not None
+            and prior_snapshot.get("completed") is True
+            and not completed
+        ):
+            new_event_type = "list_item.uncompleted"
         else:
             new_event_type = "list_item.updated"
             field_updates: dict[str, Any] = {}
@@ -1199,12 +1383,65 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                             diff_field
                         )
             new_list_item_payload["field_updates"] = field_updates
-        await self._append(
-            ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
-        )
+        schema_version = int(self._config.get("emit_schema_version", 1))
+        if schema_version >= 2:
+            due_components = getattr(reminder, "due_components", None)
+            start_components = getattr(reminder, "start_components", None)
+            completion_date = getattr(reminder, "completion_date", None)
+            url = getattr(reminder, "url", None)
+            linked_kind: str | None = None
+            linked_id: str | None = None
+            if isinstance(url, str) and url.startswith("adminme://"):
+                parts = url.removeprefix("adminme://").split("/", 1)
+                if len(parts) == 2 and parts[0] in {"task", "commitment"}:
+                    linked_kind, linked_id = parts
+            rich_payload: dict[str, Any] = {
+                "member_id": member_id,
+                "provider": "apple_reminders",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id") or member_id
+                ),
+                "list_external_id": list_id,
+                "item_external_id": remind_id,
+                "list_name": list_name,
+                "list_color": None,
+                "title": title[:1000],
+                "notes": notes,
+                "url": url,
+                "priority": int(raw_priority or 0),
+                "completed": completed,
+                "completion_at": _maybe_iso(completion_date),
+                "start": start_components,
+                "due": due_components,
+                "alarms": list(getattr(reminder, "alarms", None) or []),
+                "recurrence_rules": list(
+                    getattr(reminder, "recurrence_rules", None) or []
+                ),
+                "flagged": None,
+                "tags": None,
+                "parent_external_id": None,
+                "sort_order": None,
+                "linked_item_kind": linked_kind,
+                "linked_item_id": linked_id,
+                "completion_policy": "mirror" if linked_id else "manual",
+                "provider_revision": _to_iso(emit_lmod),
+                "last_modified_at": _to_iso(emit_lmod),
+                "sync_cycle_id": sync_cycle_id,
+            }
+            await self._append(
+                ctx=ctx,
+                event_type=new_event_type,
+                payload=rich_payload,
+                schema_version=2 if new_event_type != "list_item.uncompleted" else 1,
+            )
+        else:
+            await self._append(
+                ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
+            )
 
         self._seen_inbound[remind_id] = emit_lmod
         self._inbound_snapshots[remind_id] = {
+            "list_external_id": list_id,
             "title": title[:500],
             "notes": notes,
             "due_at": _maybe_iso(due_at),
@@ -1310,6 +1547,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         event_type: str,
         payload: dict[str, Any],
         causation_id: str | None = None,
+        schema_version: int = 1,
     ) -> None:
         """Best-effort write through the typed event-sink contract.
 
@@ -1327,6 +1565,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 event_type=event_type,
                 payload=payload,
                 causation_id=causation_id,
+                schema_version=schema_version,
             )
             return
 
@@ -1340,6 +1579,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 event_type=event_type,
                 payload=payload,
                 causation_id=causation_id,
+                schema_version=schema_version,
             )
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception("reminders adapter failed to emit %s event", event_type)
@@ -1351,6 +1591,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         event_type: str,
         payload: dict[str, Any],
         causation_id: str | None,
+        schema_version: int = 1,
     ) -> None:
         """Bridge-deployment emit path. Build an ``EventEnvelope`` and
         schedule ``sink.emit(envelope)`` on the running event loop —
@@ -1371,7 +1612,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             event_at_ms=int(now.timestamp() * 1000),
             tenant_id=str(self._config.get("tenant_id") or "default"),
             type=event_type,
-            schema_version=1,
+            schema_version=schema_version,
             occurred_at=_to_iso(now),
             recorded_at="",
             source_adapter=self.name,

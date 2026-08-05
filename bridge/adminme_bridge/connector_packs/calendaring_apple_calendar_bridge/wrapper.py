@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext
+from adminme.lib.adapters import WriteOperation
 from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
 from adminme_bridge.adapters.sinks import (
     BridgeEventSink,
@@ -88,6 +89,7 @@ class AppleCalendarBridgeAdapter:
     """
 
     family: ClassVar[Literal["calendaring"]] = "calendaring"
+    provider: ClassVar[str] = "apple_calendar"
 
     def __init__(
         self,
@@ -124,6 +126,9 @@ class AppleCalendarBridgeAdapter:
         # emit scope.
         internal_config: dict[str, Any] = dict(self._internal_config)
         internal_config["member_id"] = ctx.member_id
+        internal_config["tenant_id"] = ctx.tenant_id
+        internal_config.setdefault("provider_account_id", ctx.member_id)
+        internal_config.setdefault("emit_schema_version", 2)
 
         internal = AppleCalendarAdapter(config=internal_config)
         self._internal = internal
@@ -156,6 +161,20 @@ class AppleCalendarBridgeAdapter:
         """Forward to the internal adapter (no-op if never started)."""
         if self._internal is not None:
             await self._internal.stop()
+
+    async def apply_write(
+        self, operation: str, payload: dict[str, Any], target_external_id: str | None = None
+    ) -> dict[str, Any]:
+        if self._internal is None:
+            raise RuntimeError("Apple Calendar adapter has not finished starting")
+        result = await self._internal.apply_write(
+            WriteOperation(operation, target_external_id, payload)
+        )
+        return {
+            "applied": result.applied,
+            "external_id": result.external_id,
+            "suppressed": result.suppressed,
+        }
 
     def status(self) -> AdapterStatus:
         """Return a bridge :class:`AdapterStatus`, translating from the

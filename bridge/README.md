@@ -5,18 +5,18 @@ package and process from the one central AdministrateMe runtime. It sends
 canonical, typed events to the central `/api/bridge/ingest` namespace over the
 member's authenticated Tailscale route.
 
-Gate 6 ships three opt-in Cat-D sources:
+The primary iPhone-surface enrollment enables three member-owned packs:
 
 - `knowledge-apple-notes`
-- `knowledge-apple-voice-memos`
-- `knowledge-obsidian` (adult members only; central authorization denies child
-  use even if a local config is tampered with)
+- `calendaring-apple-calendar-bridge`
+- `reminders-apple-eventkit-bridge`
 
-Set a source name in `enabled_packs` (or provide its `pack_config`) and provide
-its export/transcript/vault `root`. Unconfigured sources remain disabled. Each
-watcher uses the durable metadata-only cursor database for lease renewal,
-provider watermark, external-id/content-hash deduplication, error count, and
-circuit recovery. Content and credentials are never stored in that database.
+Apple Calendar and Reminders use EventKit through PyObjC. Apple Notes uses the
+Notes application's supported scripting dictionary; it never touches Notes'
+private SQLite/CoreData files. The daemon both emits observed provider changes
+and pulls governed `external_sync.write_requested` commands from the central
+runtime. A durable local command ledger prevents a result-upload failure from
+duplicating a create operation.
 
 Every accepted knowledge event is private to the enrolled member, keeps source
 and correction provenance, and enters the `member_knowledge` read model. Only
@@ -30,5 +30,6 @@ with `bootstrap/install-member-bridge.sh`, and closed centrally with
 transfer and separately conveyed one-time code expire after 30 minutes. The
 installer verifies the Git SHA and Tailscale self identity, writes a per-user
 LaunchAgent, emits the owner-scoped enrollment proof, and consumes the transfer
-file. Enrollment deliberately enables no data pack; pack roots and macOS
-privacy grants remain explicit later opt-ins.
+file. The first interactive launch requests full Calendar and Reminders access
+and Notes Automation access. Enrollment remains in observation mode until the
+operator validates inbound counts and deliberately releases outbound writes.

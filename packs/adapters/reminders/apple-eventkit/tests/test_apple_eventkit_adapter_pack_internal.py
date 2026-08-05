@@ -310,7 +310,7 @@ def test_pack_manifest_loads_cleanly() -> None:
 
     assert manifest["pack"]["id"] == "adapter:reminders-apple-eventkit"
     assert manifest["pack"]["kind"] == "adapter"
-    assert manifest["pack"]["version"] == "1.0.0"
+    assert manifest["pack"]["version"] == "2.0.0"
     # ``family`` lives inside the ``pack:`` block per the c1 manifest
     # layout (the Gmail pack hoists ``family`` to top-level — Reminders
     # nests it; both are valid manifest shapes for the loader).
@@ -347,7 +347,7 @@ def test_apple_eventkit_adapter_satisfies_protocol() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "reminders-apple-eventkit"
     assert adapter.family == "reminders"
-    assert adapter.version == "1.0.0"
+    assert adapter.version == "2.0.0"
     assert adapter.sensitivity_floor == "normal"
 
 

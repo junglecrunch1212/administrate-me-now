@@ -17,9 +17,14 @@ entrypoint: adminme_bridge.connector_packs.calendaring_apple_calendar_bridge:App
 
 pack:
   name: calendaring-apple-calendar-bridge
-  version: 1.0.0
+  version: 2.0.0
   author: built-in
   license: Apache-2.0
+write_capabilities: [create_event, update_event, delete_event, move_event]
+config:
+  defaults:
+    calendar_identifier: default
+    emit_schema_version: 2
 
 # Documentation-only metadata. The runtime contract is the entrypoint
 # class implementing StateMirrorBridgeAdapter; the central adapter's

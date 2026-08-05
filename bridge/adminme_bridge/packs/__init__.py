@@ -101,7 +101,16 @@ def instantiate_pack(
         raise PackLoadError(
             f"failed to load bridge entrypoint {handle.entrypoint}: {exc}"
         ) from exc
-    config = dict(handle.config)
+    raw_config = dict(handle.config)
+    defaults = raw_config.pop("defaults", {})
+    if defaults and not isinstance(defaults, dict):
+        raise PackLoadError(
+            f"{handle.pack_dir / 'pack.yaml'}: config.defaults must be a mapping"
+        )
+    # Manifests describe adapter defaults under ``config.defaults``.  Keep
+    # accepting the older flat form so installed third-party packs remain
+    # compatible, but never leak the schema wrapper into adapter settings.
+    config = {**defaults, **raw_config}
     config.update(config_override or {})
     try:
         if handle.subkind == KNOWLEDGE_SOURCE_SUBKIND:

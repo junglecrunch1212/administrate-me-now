@@ -285,28 +285,32 @@ def test_supervisor_write_capabilities_gate_through_loader() -> None:
     NOT touched — the gate rejects the operation BEFORE the impl is
     dispatched."""
     adapter = _make_adapter()
-    assert AppleCalendarAdapter.write_capabilities == ["create_event"]
+    assert AppleCalendarAdapter.write_capabilities == [
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
+    ]
     assert hasattr(adapter, "apply_write")
     assert callable(adapter.apply_write)
 
     op = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="apple-evt-1",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
         asyncio.run(adapter.apply_write(op))
 
-    # The defense-in-depth check inside ``_apply_write_impl`` also
-    # rejects ``delete_event`` directly (the gate would catch it first
-    # in production; this asserts the inner guard is wired correctly).
-    delete_op = WriteOperation(
-        kind="delete_event",
+    # A second unsupported operation remains blocked before the
+    # provider implementation is reached.
+    unsupported_op = WriteOperation(
+        kind="share_calendar",
         target_external_id="apple-evt-2",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
-        asyncio.run(adapter.apply_write(delete_op))
+        asyncio.run(adapter.apply_write(unsupported_op))
 
 
 # ===========================================================================

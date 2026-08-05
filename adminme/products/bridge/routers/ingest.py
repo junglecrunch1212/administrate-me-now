@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+import time
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.events.envelope import EventEnvelope
@@ -200,6 +202,91 @@ async def health(request: Request) -> dict[str, Any]:
         "status": "ok",
         "bridge_endpoint": "/api/bridge/ingest",
         "ingest_count": int(getattr(request.app.state, "ingest_count", 0)),
+    }
+
+
+@router.get("/commands")
+async def pending_commands(
+    request: Request,
+    providers: str = Query(default="apple_calendar,apple_reminders,apple_notes"),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """Return unresolved commands for the authenticated member bridge.
+
+    Results are derived from the append-only log.  Observation mode turns
+    each would-have-run command into a terminal suppressed result, preventing
+    it from unexpectedly executing when observation is later disabled.
+    """
+
+    identity = resolve_tailscale_identity(request)
+    member_id = resolve_member_id(identity, _get_resolver(request))
+    event_log = getattr(request.app.state, "event_log", None)
+    if event_log is None:
+        raise HTTPException(503, detail="event_log_unavailable")
+    allowed = {"apple_calendar", "apple_reminders", "apple_notes"}
+    selected = {item.strip() for item in providers.split(",") if item.strip()}
+    if not selected or selected - allowed:
+        raise HTTPException(422, detail="unsupported bridge provider filter")
+    owner_scope = f"private:{member_id}"
+    terminal: set[str] = set()
+    async for event in event_log.read_since(
+        owner_scope=owner_scope,
+        types=["external_sync.write_completed", "external_sync.write_failed"],
+    ):
+        terminal.add(str(event["payload"]["command_id"]))
+    commands: list[dict[str, Any]] = []
+    async for event in event_log.read_since(
+        owner_scope=owner_scope, types=["external_sync.write_requested"]
+    ):
+        payload = event["payload"]
+        if (
+            payload["command_id"] not in terminal
+            and payload["provider"] in selected
+            and payload["member_id"] == member_id
+        ):
+            commands.append({"event_id": event["event_id"], **payload})
+            if len(commands) >= limit:
+                break
+
+    runtime = getattr(request.app.state, "runtime", None)
+    observation = getattr(runtime, "observation", None)
+    observation_active = True if observation is None else await observation.is_active()
+    if observation_active and commands:
+        sink = _get_event_sink(request)
+        for command in commands:
+            now = EventEnvelope.now_utc_iso()
+            await sink.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=_expected_tenant_id(request) or "tenant-default",
+                    type="external_sync.write_completed",
+                    schema_version=1,
+                    occurred_at=now,
+                    source_adapter="bridge-command-observation-gate",
+                    source_account_id=str(command["provider_account_id"]),
+                    owner_scope=owner_scope,
+                    visibility_scope=owner_scope,
+                    sensitivity="normal",
+                    causation_id=str(command["event_id"]),
+                    idempotency_key=f"external-sync-result:{command['command_id']}",
+                    payload={
+                        "command_id": command["command_id"],
+                        "member_id": member_id,
+                        "provider": command["provider"],
+                        "operation": command["operation"],
+                        "external_id": None,
+                        "provider_revision": None,
+                        "result": {"reason": "observation_mode_active"},
+                        "completed_at": now,
+                        "suppressed": True,
+                    },
+                )
+            )
+        commands = []
+    return {
+        "commands": commands,
+        "count": len(commands),
+        "observation_active": observation_active,
     }
 
 

@@ -16,7 +16,7 @@ deployment_targets: [central, bridge]
 pack:
   id: adapter:calendaring-apple-calendar
   name: Apple Calendar central Cat-B adapter
-  version: 1.0.0
+  version: 2.0.0
   kind: adapter
   family: calendaring
   author: built-in
@@ -71,11 +71,14 @@ config:
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [calendar.event_added]
+    event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.event_outcome_recorded]
 write_capabilities:
   - create_event
+  - update_event
+  - delete_event
+  - move_event
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 observation_mode_required: true
 dedup_strategy:
-  kind: external_id
+  kind: event_identifier_last_modified

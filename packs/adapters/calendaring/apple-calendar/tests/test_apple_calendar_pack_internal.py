@@ -128,7 +128,12 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     assert (
         cls_entry["event_families"]
         == manifest_entry.event_families
-        == ["calendar.event_added"]
+        == [
+            "calendar.event_added",
+            "calendar.event_updated",
+            "calendar.event_deleted",
+            "calendar.event_outcome_recorded",
+        ]
     )
 
 
@@ -152,9 +157,16 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
 
     assert manifest.capabilities[0].kind == "Cat-B"
     assert manifest.capabilities[0].runtime == "central"
-    assert manifest.write_capabilities == ["create_event"]
+    assert manifest.write_capabilities == [
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
+    ]
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {"kind": "external_id"}
+    assert manifest.dedup_strategy == {
+        "kind": "event_identifier_last_modified"
+    }
     assert manifest.sensitivity_default == "normal"
     assert manifest.observation_mode_required is True
 

@@ -17,9 +17,16 @@ entrypoint: adminme_bridge.connector_packs.reminders_apple_eventkit_bridge:Apple
 
 pack:
   name: reminders-apple-eventkit-bridge
-  version: 1.0.0
+  version: 2.0.0
   author: built-in
   license: Apache-2.0
+write_capabilities:
+  [create_reminder, update_reminder, delete_reminder, complete_reminder,
+   uncomplete_reminder, move_reminder, create_list, update_list, delete_list]
+config:
+  defaults:
+    target_list_identifier: default
+    emit_schema_version: 2
 
 # Documentation-only metadata. The runtime contract is the entrypoint
 # class implementing StateMirrorBridgeAdapter; the central adapter's
