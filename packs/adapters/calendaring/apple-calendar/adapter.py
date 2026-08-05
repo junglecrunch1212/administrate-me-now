@@ -144,7 +144,11 @@ def _to_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     timestamp = _call(value, "timeIntervalSince1970") if value is not None else None
-    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc) if timestamp is not None else None
+    return (
+        datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+        if timestamp is not None
+        else None
+    )
 
 
 def _adminme_link(value: Any) -> tuple[str | None, str | None]:
@@ -167,7 +171,9 @@ def _participant_v2(value: Any) -> dict[str, Any]:
         "display_name": _call(value, "name"),
         "participant_id": str(url) if url else None,
         "role": str(role) if role is not None else None,
-        "participant_type": str(participant_type) if participant_type is not None else None,
+        "participant_type": str(participant_type)
+        if participant_type is not None
+        else None,
         "response_status": str(response) if response is not None else None,
         "self": bool(_call(value, "isCurrentUser", False)),
         "organizer": False,
@@ -404,7 +410,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         now = ctx.now_factory()
         emit_schema_version = int(self._config.get("emit_schema_version", 1))
         lookback_days = int(self._config.get("sync_lookback_days", 90))
-        window_start = now if emit_schema_version == 1 else now - timedelta(days=lookback_days)
+        window_start = (
+            now if emit_schema_version == 1 else now - timedelta(days=lookback_days)
+        )
         window_end = now + timedelta(
             days=(
                 self._poll_window_days
@@ -426,7 +434,11 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 continue
             observed_ids.add(event_id)
             revision = _to_iso(_call(event, "lastModifiedDate")) or "|".join(
-                [_to_iso(event.startDate()), _to_iso(event.endDate()), str(event.title())]
+                [
+                    _to_iso(event.startDate()),
+                    _to_iso(event.endDate()),
+                    str(event.title()),
+                ]
             )
             prior_revision = self._seen_inbound.get(event_id)
             if prior_revision != revision:
@@ -451,7 +463,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             self._known_events[event_id] = {
                 "end": end_at,
                 "ical_uid": _call(event, "calendarItemExternalIdentifier"),
-                "calendar_external_id": _call(_call(event, "calendar"), "calendarIdentifier")
+                "calendar_external_id": _call(
+                    _call(event, "calendar"), "calendarIdentifier"
+                )
                 or calendar_identifier,
                 "linked_item_kind": linked_kind,
                 "linked_item_id": linked_id,
@@ -478,7 +492,10 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                         payload={
                             "member_id": str(self._config["member_id"]),
                             "provider": "apple_calendar",
-                            "provider_account_id": str(self._config.get("provider_account_id") or self._config["member_id"]),
+                            "provider_account_id": str(
+                                self._config.get("provider_account_id")
+                                or self._config["member_id"]
+                            ),
                             "calendar_external_id": prior.get("calendar_external_id")
                             or calendar_identifier,
                             "external_event_id": missing_id,
@@ -544,11 +561,15 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 {
                     "method": "alert",
                     "trigger_at": _to_iso(absolute) or None,
-                    "relative_offset_seconds": int(relative) if relative is not None else None,
+                    "relative_offset_seconds": int(relative)
+                    if relative is not None
+                    else None,
                     "provider_alarm_id": None,
                 }
             )
-        attendees = [_participant_v2(item) for item in (_call(event, "attendees", []) or [])]
+        attendees = [
+            _participant_v2(item) for item in (_call(event, "attendees", []) or [])
+        ]
         organizer_raw = _call(event, "organizer")
         url = _call(event, "URL")
         linked_kind, linked_id = _adminme_link(url)
@@ -559,9 +580,12 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             payload={
                 "member_id": str(self._config["member_id"]),
                 "provider": "apple_calendar",
-                "provider_account_id": str(self._config.get("provider_account_id") or self._config["member_id"]),
+                "provider_account_id": str(
+                    self._config.get("provider_account_id") or self._config["member_id"]
+                ),
                 "calendar_external_id": actual_calendar_identifier,
-                "calendar_name": _call(calendar, "title") or self._config.get("calendar_name"),
+                "calendar_name": _call(calendar, "title")
+                or self._config.get("calendar_name"),
                 "external_event_id": str(event.eventIdentifier() or ""),
                 "ical_uid": _call(event, "calendarItemExternalIdentifier"),
                 "provider_revision": _to_iso(_call(event, "lastModifiedDate")) or None,
@@ -577,8 +601,12 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 "end_time_zone": time_zone_name,
                 "all_day": bool(_call(event, "isAllDay", False)),
                 "availability": "busy",
-                "visibility": "private" if bool(_call(event, "isDetached", False)) else "default",
-                "organizer": _participant_v2(organizer_raw) if organizer_raw is not None else None,
+                "visibility": "private"
+                if bool(_call(event, "isDetached", False))
+                else "default",
+                "organizer": _participant_v2(organizer_raw)
+                if organizer_raw is not None
+                else None,
                 "attendees": attendees,
                 "alarms": alarms[:5],
                 "use_default_alarms": False,
@@ -601,11 +629,14 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 "linked_item_id": linked_id,
                 "completion_policy": "manual",
                 "created_at": _to_iso(_call(event, "creationDate")) or None,
-                "updated_at": _to_iso(_call(event, "lastModifiedDate")) or _to_iso(ctx.now_factory()),
+                "updated_at": _to_iso(_call(event, "lastModifiedDate"))
+                or _to_iso(ctx.now_factory()),
             },
         )
 
-    async def _emit_calendar_outcome(self, *, ctx: AdapterContext, event_id: str) -> None:
+    async def _emit_calendar_outcome(
+        self, *, ctx: AdapterContext, event_id: str
+    ) -> None:
         known = self._known_events.get(event_id, {})
         await self._append(
             ctx=ctx,
@@ -633,7 +664,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         the save through :func:`observation_outbound` per [§6.20]; Phase A
         direct-calls when seams are unset."""
         if operation.kind not in self.write_capabilities:
-            raise WriteCapabilityError(f"unsupported Apple Calendar operation {operation.kind!r}")
+            raise WriteCapabilityError(
+                f"unsupported Apple Calendar operation {operation.kind!r}"
+            )
         store = self._store
         if store is None:
             return WriteResult(applied=False, external_id=None, suppressed=False)
@@ -674,7 +707,11 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
                 raise LookupError(f"EventKit event not found: {target_id}")
             expected_revision = payload.get("expected_provider_revision")
             actual_revision = _to_iso(_call(event, "lastModifiedDate"))
-            if expected_revision and actual_revision and str(expected_revision) != actual_revision:
+            if (
+                expected_revision
+                and actual_revision
+                and str(expected_revision) != actual_revision
+            ):
                 raise ProviderConflictError(
                     f"Apple Calendar event {target_id} changed ({actual_revision})"
                 )
@@ -683,7 +720,9 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
         ):
             update_payload = dict(payload)
             if operation.kind == "move_event":
-                update_payload["calendar_identifier"] = str(payload["destination_calendar_id"])
+                update_payload["calendar_identifier"] = str(
+                    payload["destination_calendar_id"]
+                )
             if (
                 not (update_payload.get("url") or update_payload.get("source_url"))
                 and update_payload.get("linked_item_kind")
@@ -831,20 +870,16 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             )
             return
 
-        # ----- central path (byte-for-byte preserved from β-α) -----
-        try:
-            await write_adapter_event(
-                ctx,
-                adapter_name=self.name,
-                sensitivity_floor=self.sensitivity_floor,
-                config=self._config,
-                event_type=event_type,
-                payload=payload,
-                causation_id=causation_id,
-                schema_version=schema_version,
-            )
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception("apple-calendar adapter failed to emit %s event", event_type)
+        await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            schema_version=schema_version,
+        )
 
     async def _append_via_bridge_sink(
         self,
@@ -885,33 +920,16 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             causation_id=causation_id,
             payload=payload,
         )
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _log.exception(
-                "apple-calendar adapter bridge emit skipped — no running "
-                "event loop (type=%s)",
-                event_type,
-            )
-            return
-        # F-5: hold the Task reference to prevent GC mid-flight; done-
-        # callback discards once the emit resolves so the set stays bounded.
-        del loop
         await self._dispatch_bridge_emit(envelope)
 
     async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
-        """Best-effort sink dispatch — symmetric with the central path's
-        exception swallow so a sink-side failure doesn't crash the loop."""
+        """Require a durable central-ingest acknowledgement before returning."""
         sink = self._bridge_sink
         if sink is None:
-            return
-        try:
-            await sink.emit(envelope)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "apple-calendar adapter bridge sink emit failed for %s",
-                envelope.type,
-            )
+            raise RuntimeError("Apple Calendar bridge sink is not configured")
+        result = await sink.emit(envelope)
+        if not result.ok or result.event_id is None:
+            raise RuntimeError(result.error or "Apple Calendar bridge emit failed")
 
 
 def _classify_eventkit_error(exc: BaseException) -> tuple[str, str]:

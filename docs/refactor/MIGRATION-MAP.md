@@ -1,5 +1,16 @@
 # Migration map
 
+Primary-surface update (2026-08-05): central Google Calendar and per-member
+Apple Calendar, Reminders, and Notes are now **KEEP/HARDEN COMPLETE IN CODE**.
+The release preserves provider-native schemas at the transport boundary,
+normalizes typed facts into the event log, reconciles external authority, and
+routes governed writes and terminal results through the central/bridge command
+paths. Production bootstrap now actually supplies `config/adapters.json` to
+the runtime supervisor. Real OAuth, macOS privacy consent, and device
+propagation remain live activation gates rather than simulated readiness.
+Central and bridge emits now require durable acknowledgement before cursor
+advancement; transport failure is retried instead of treated as success.
+
 Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
 deleted Node scaffold stays deleted; FastAPI serves a small static member
 portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
@@ -69,9 +80,9 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Five adapter ABCs | `adminme/lib/adapters/` | Cat-A–E contracts and validation tests | KEEP | Preserve categories/verbs/floors/deployment; unify final outbound guard. |
 | Adapter pack registry/validator/CLI | `adminme/lib/pack_registry/`, `adminme/cli/commands/adapters*` | useful validation; Windows-invalid `<NAME>` tracked templates | HARDEN | Portable template names/placeholders, all six pack lifecycle stages, atomic rollback/install events. |
 | Central adapter supervisor | `adminme/daemons/adapter_supervisor.py` | restart/status primitive; error emit uses ambiguous call shape; not composed | HARDEN | Construct real packs/contexts, retain tasks, durable state, orderly drain, composition status. |
-| Bridge package/runtime | `bridge/adminme_bridge/`, `adminme/products/bridge/`, `bootstrap/bridge_enrollment.py` | Central ingest and owner-scoped knowledge are retained; reviewed bootstrap adds encrypted export, identity/release/expiry validation, per-member launchd, real enrollment proof, finalization, and independent revocation | HARDEN COMPLETE FOR ENROLLMENT | Live opt-in pack configuration and Apple/provider grants remain separate evidence. |
+| Bridge package/runtime | `bridge/adminme_bridge/`, `adminme/products/bridge/`, `bootstrap/bridge_enrollment.py` | Central ingest and owner-scoped knowledge are retained; reviewed bootstrap adds encrypted export, identity/release/expiry validation, per-member launchd, real enrollment proof, finalization/revocation, and durable idempotent commands for Apple Calendar, Reminders, and Notes | HARDEN COMPLETE FOR ENROLLMENT AND PRIMARY APP COMMANDS | Live opt-in pack configuration, Apple grants, and iCloud propagation remain separate evidence. |
 | Gmail Cat-A | `packs/adapters/messaging/gmail/` | implementation/tests present | HARDEN | Canonical communication slice; assistant identity modes and OpenClaw delivery outcome. |
-| Cat-B calendar/reminder/task packs | `packs/adapters/{calendaring,reminders,tasks}/` | many tests; bridge dual-deployment failures | HARDEN | Durable bridge emit, external reconciliation, explicit observation policy, idempotent writes. |
+| Cat-B calendar/reminder/task packs | `packs/adapters/{calendaring,reminders,tasks}/` | Google/Apple Calendar and Apple Reminders now cover supported native fields, calendars/lists, recurrences, alarms/geofences, completions, change feedback, durable cursors, and central/bridge command paths | HARDEN COMPLETE IN CODE | Retain external authority, observation/governance, idempotent writes, and require live OAuth/EventKit propagation evidence. |
 | Plaid Cat-C | `packs/adapters/financial/plaid/` | inbound code/tests; vendored docs lint noise | KEEP | Compose sandbox-first; redact/privileged scope; authority and workbook proof. |
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |

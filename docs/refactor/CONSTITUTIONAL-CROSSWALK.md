@@ -1,5 +1,17 @@
 # Constitutional crosswalk
 
+Primary-surface release amendment (2026-08-05): C035 and C037 now have
+executable bidirectional implementations for central Google Calendar and
+per-member Apple Calendar, Reminders, and Notes. Provider-native fields stay at
+adapter boundaries; canonical events preserve provenance and owner scope;
+calendar attendance/change and reminder completion feed typed projections and
+outcomes. Central runtime adapter configuration is passed into the production
+supervisor, and failed central/bridge ingest prevents local sync advancement.
+This **MODERNIZES** the transport and projection coverage while
+**PRESERVING** external authority, event-log truth, observation, governance,
+and separate calendar/task/list/recurrence models. Real provider consent and
+propagation remain AC-21 live evidence, not a credential-free code claim.
+
 Gate 8 release audit (2026-08-04): all 96 rows (C001–C096) were reread
 against the complete `main...codex/administrateme-v2-runtime` diff. Every row
 maps to an executable AC-00–AC-23 gate in `ACCEPTANCE-CONTRACT.md`; the final
@@ -81,9 +93,9 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C032 | Replay/restart/recovery and orderly shutdown | BUILD final checks; DIAGRAMS; FIELD recovery | isolated runner/bridge shutdown; central composition missing | MODERNIZE | AC-09, AC-15, AC-20 |
 | C033 | Durable adapter watermarks and circuit state | BUILD adapters; selected Vellum pattern | some adapter status/cursors; no uniform durable circuit contract | MODERNIZE | AC-10, AC-14 |
 | C034 | Cat-A communication | BUILD adapter framework D19; VISION taxonomy | Gmail exists; OpenClaw channel plugin missing | PRESERVE | AC-03, AC-10 |
-| C035 | Cat-B external-state mirror and external authority | BUILD D18/D22; VISION taxonomy | reminders/calendar/tasks implementations; tests include failures | PRESERVE/HARDEN | AC-05, AC-10 |
+| C035 | Cat-B external-state mirror and external authority | BUILD D18/D22; VISION taxonomy | Google/Apple Calendar and Apple Reminders expose bidirectional supported fields, lists, recurrence, alarms/geofences, completion/change feedback, durable reconciliation, and production supervisor wiring | PRESERVE/HARDEN COMPLETE IN CODE; LIVE PROVIDER EVIDENCE PENDING | AC-05, AC-10, AC-11, AC-21 |
 | C036 | Cat-C inbound data | BUILD adapter framework | Plaid present | PRESERVE | AC-10 |
-| C037 | Cat-D personal knowledge, bridge-private | BUILD D17/D19; ARCH §4 | bridge package present; source packs/member projection missing | PRESERVE | AC-04, AC-10 |
+| C037 | Cat-D personal knowledge, bridge-private | BUILD D17/D19; ARCH §4 | owner-scoped member knowledge plus bidirectional Apple Notes folders/notes through per-member bridge commands and durable idempotent results | PRESERVE/HARDEN COMPLETE IN CODE; LIVE NOTES CONSENT PENDING | AC-04, AC-10, AC-21 |
 | C038 | Cat-E outbound action | BUILD D19; adapter framework | Home Assistant present | PRESERVE | AC-10, AC-11 |
 | C039 | Multi-capability adapters, explicit verbs, sensitivity floors, sharing models, central/bridge/dual runtime | BUILD adapter framework/amendments; EXAMPLES shapes | manifest/validator code and tests present; composition gaps | PRESERVE | AC-10 |
 | C040 | Six pack kinds: adapter, pipeline, skill, projection, profile, persona | VISION pack table; BUILD pack system; EXAMPLES | adapter/pipeline/skill assets only | PRESERVE | AC-17 |

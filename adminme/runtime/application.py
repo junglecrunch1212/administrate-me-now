@@ -251,6 +251,7 @@ class RuntimeSettings:
         member_chat_enabled_members: frozenset[str] | None = None,
         child_chat_enabled_members: frozenset[str] | None = None,
         deterministic_member_chat_fixture: bool = False,
+        adapter_config: dict[str, Any] | None = None,
     ) -> "RuntimeSettings":
         """Build a no-network credential-free configuration with test keys."""
 
@@ -274,6 +275,9 @@ class RuntimeSettings:
             member_chat_enabled_members=frozenset(member_chat_enabled_members or ()),
             child_chat_enabled_members=frozenset(child_chat_enabled_members or ()),
             deterministic_member_chat_fixture=deterministic_member_chat_fixture,
+            adapter_config=dict(
+                adapter_config or {"adapter_supervisor_port": 0, "adapters": []}
+            ),
         )
 
 
@@ -588,7 +592,9 @@ class AdministrateMeRuntime:
                     "conflict"
                     if getattr(getattr(exc, "resp", None), "status", None) == 412
                     or "conflict" in type(exc).__name__.casefold()
-                    else "not_found" if isinstance(exc, LookupError) else "provider"
+                    else "not_found"
+                    if isinstance(exc, LookupError)
+                    else "provider"
                 ),
                 "message": f"{type(exc).__name__}: {exc}",
                 "retryable": not isinstance(exc, (LookupError, ValueError)),

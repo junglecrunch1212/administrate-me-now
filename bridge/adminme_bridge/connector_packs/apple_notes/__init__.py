@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from adminme_bridge.knowledge_sources import LocalKnowledgeSourceAdapter
-from adminme_bridge.connector_packs.apple_notes.provider import AppleNotesScriptingProvider
+from adminme_bridge.connector_packs.apple_notes.provider import (
+    AppleNotesScriptingProvider,
+)
 
 
 class AppleNotesAdapter(LocalKnowledgeSourceAdapter):
@@ -15,13 +17,29 @@ class AppleNotesAdapter(LocalKnowledgeSourceAdapter):
     version: ClassVar[str] = "2.0.0"
     provider: ClassVar[str] = "apple_notes"
     write_capabilities: ClassVar[list[str]] = [
-        "create_note", "update_note", "append_note", "move_note", "delete_note",
-        "create_folder", "update_folder", "delete_folder",
+        "create_note",
+        "update_note",
+        "append_note",
+        "move_note",
+        "delete_note",
+        "create_folder",
+        "update_folder",
+        "delete_folder",
     ]
 
-    def __init__(self, *, config: dict[str, Any] | None = None, provider: Any = None, cursor_store: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        config: dict[str, Any] | None = None,
+        provider: Any = None,
+        cursor_store: Any = None,
+    ) -> None:
         resolved = dict(config or {})
-        if provider is None and not resolved.get("root") and resolved.get("automation_mode", "notes_scripting") == "notes_scripting":
+        if (
+            provider is None
+            and not resolved.get("root")
+            and resolved.get("automation_mode", "notes_scripting") == "notes_scripting"
+        ):
             provider = AppleNotesScriptingProvider()
         super().__init__(config=resolved, provider=provider, cursor_store=cursor_store)
 
@@ -33,7 +51,7 @@ class AppleNotesAdapter(LocalKnowledgeSourceAdapter):
     ) -> dict[str, Any]:
         if operation not in self.write_capabilities:
             raise ValueError(f"unsupported Apple Notes operation: {operation}")
-        provider = self._provider
+        provider: Any = self._provider
         if provider is None or not hasattr(provider, "apply_write"):
             raise RuntimeError("Apple Notes scripting provider is not active")
         return await provider.apply_write(operation, payload, target_external_id)

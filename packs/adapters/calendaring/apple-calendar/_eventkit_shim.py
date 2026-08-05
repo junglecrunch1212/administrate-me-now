@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """
 Protocol-shaped stand-in for EventKit's ``EKEventStore`` (EKEntityTypeEvent).
 
@@ -132,13 +133,21 @@ class NoopEKEventStore:
         raise RuntimeError("NoopEKEventStore.save_event called without a real factory")
 
     def event_with_identifier(self, external_id: str) -> EKEventLike | None:
-        raise RuntimeError("NoopEKEventStore.event_with_identifier called without a real factory")
+        raise RuntimeError(
+            "NoopEKEventStore.event_with_identifier called without a real factory"
+        )
 
     def remove_event(self, event: EKEventLike, *, span: str, commit: bool) -> None:
-        raise RuntimeError("NoopEKEventStore.remove_event called without a real factory")
+        raise RuntimeError(
+            "NoopEKEventStore.remove_event called without a real factory"
+        )
 
-    def update_event(self, event: EKEventLike, *, payload: dict[str, Any]) -> EKEventLike:
-        raise RuntimeError("NoopEKEventStore.update_event called without a real factory")
+    def update_event(
+        self, event: EKEventLike, *, payload: dict[str, Any]
+    ) -> EKEventLike:
+        raise RuntimeError(
+            "NoopEKEventStore.update_event called without a real factory"
+        )
 
 
 def _nsdate(value: Any) -> Any:
@@ -184,11 +193,15 @@ class PyObjCEventStore:
         if callable(modern):
             modern(callback)
         else:  # macOS 13 and earlier
-            self._store.requestAccessToEntityType_completion_(EKEntityTypeEvent, callback)
+            self._store.requestAccessToEntityType_completion_(
+                EKEntityTypeEvent, callback
+            )
         if not completed.wait(60):
             raise TimeoutError("EventKit Calendar permission request timed out")
         if not result["granted"]:
-            raise PermissionError(f"full Apple Calendar access was not granted: {result['error']}")
+            raise PermissionError(
+                f"full Apple Calendar access was not granted: {result['error']}"
+            )
 
     def _calendar(self, identifier: str) -> Any:
         calendar = (
@@ -259,7 +272,10 @@ class PyObjCEventStore:
         if not ok:
             raise RuntimeError(f"EventKit delete failed: {error}")
 
-    def update_event(self, event: EKEventLike, *, payload: dict[str, Any]) -> EKEventLike:
+    def update_event(
+        self, event: EKEventLike, *, payload: dict[str, Any]
+    ) -> EKEventLike:
+        native_event: Any = event
         setters = {
             "summary": "setTitle_",
             "location": "setLocation_",
@@ -269,24 +285,30 @@ class PyObjCEventStore:
         }
         for key, setter in setters.items():
             if key in payload:
-                getattr(event, setter)(payload[key])
+                getattr(native_event, setter)(payload[key])
         if "start" in payload:
-            event.setStartDate_(_nsdate(payload["start"]))
+            native_event.setStartDate_(_nsdate(payload["start"]))
         if "end" in payload:
-            event.setEndDate_(_nsdate(payload["end"]))
-        calendar_identifier = payload.get("calendar_identifier") or payload.get("calendar_id")
+            native_event.setEndDate_(_nsdate(payload["end"]))
+        calendar_identifier = payload.get("calendar_identifier") or payload.get(
+            "calendar_id"
+        )
         if calendar_identifier:
-            event.setCalendar_(self._calendar(str(calendar_identifier)))
+            native_event.setCalendar_(self._calendar(str(calendar_identifier)))
         if "url" in payload or "source_url" in payload:
             from Foundation import NSURL
 
             raw_url = payload.get("url") or payload.get("source_url")
-            event.setURL_(NSURL.URLWithString_(str(raw_url)) if raw_url else None)
+            native_event.setURL_(
+                NSURL.URLWithString_(str(raw_url)) if raw_url else None
+            )
         if "time_zone" in payload or "start_time_zone" in payload:
             from Foundation import NSTimeZone
 
             name = payload.get("time_zone") or payload.get("start_time_zone")
-            event.setTimeZone_(NSTimeZone.timeZoneWithName_(str(name)) if name else None)
+            native_event.setTimeZone_(
+                NSTimeZone.timeZoneWithName_(str(name)) if name else None
+            )
         if "alarms" in payload:
             from EventKit import EKAlarm
 
@@ -299,16 +321,16 @@ class PyObjCEventStore:
                         float(spec.get("relative_offset_seconds") or 0)
                     )
                 alarms.append(alarm)
-            event.setAlarms_(alarms)
+            native_event.setAlarms_(alarms)
         recurrence_lines = payload.get("recurrence_rules")
         if recurrence_lines is None and isinstance(payload.get("recurrence"), dict):
             recurrence_lines = payload["recurrence"].get("lines")
         if recurrence_lines is not None:
             import EventKit
 
-            event.setRecurrenceRules_([
-                build_eventkit_rule(EventKit, line) for line in recurrence_lines or []
-            ])
+            native_event.setRecurrenceRules_(
+                [build_eventkit_rule(EventKit, line) for line in recurrence_lines or []]
+            )
         return event
 
 

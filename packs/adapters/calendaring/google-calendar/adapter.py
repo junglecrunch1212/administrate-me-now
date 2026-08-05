@@ -82,7 +82,10 @@ def _default_service_factory(
         creds = Credentials(
             token=None,
             refresh_token=str(credentials_json["refresh_token"]),
-            token_uri=str(credentials_json.get("token_uri") or "https://oauth2.googleapis.com/token"),
+            token_uri=str(
+                credentials_json.get("token_uri")
+                or "https://oauth2.googleapis.com/token"
+            ),
             client_id=str(credentials_json["client_id"]),
             client_secret=str(credentials_json["client_secret"]),
             scopes=scopes,
@@ -141,11 +144,28 @@ def _event_body(payload: dict[str, Any]) -> dict[str, Any]:
         "conference": "conferenceData",
     }
     allowed = {
-        "summary", "description", "location", "start", "end", "recurrence",
-        "attendees", "reminders", "visibility", "transparency", "colorId",
-        "conferenceData", "attachments", "extendedProperties", "source",
-        "guestsCanInviteOthers", "guestsCanModify", "guestsCanSeeOtherGuests",
-        "anyoneCanAddSelf", "status", "focusTimeProperties", "outOfOfficeProperties",
+        "summary",
+        "description",
+        "location",
+        "start",
+        "end",
+        "recurrence",
+        "attendees",
+        "reminders",
+        "visibility",
+        "transparency",
+        "colorId",
+        "conferenceData",
+        "attachments",
+        "extendedProperties",
+        "source",
+        "guestsCanInviteOthers",
+        "guestsCanModify",
+        "guestsCanSeeOtherGuests",
+        "anyoneCanAddSelf",
+        "status",
+        "focusTimeProperties",
+        "outOfOfficeProperties",
         "workingLocationProperties",
     }
     normalized = dict(payload)
@@ -155,7 +175,9 @@ def _event_body(payload: dict[str, Any]) -> dict[str, Any]:
     for name, zone_name in (("start", "start_time_zone"), ("end", "end_time_zone")):
         value = normalized.get(name)
         if isinstance(value, str):
-            key = "date" if normalized.get("all_day") and "T" not in value else "dateTime"
+            key = (
+                "date" if normalized.get("all_day") and "T" not in value else "dateTime"
+            )
             normalized[name] = {key: value}
             if normalized.get(zone_name):
                 normalized[name]["timeZone"] = normalized[zone_name]
@@ -173,7 +195,8 @@ def _event_body(payload: dict[str, Any]) -> dict[str, Any]:
             overrides.append(
                 {
                     "method": (
-                        "popup" if alarm.get("method") in (None, "alert", "default")
+                        "popup"
+                        if alarm.get("method") in (None, "alert", "default")
                         else alarm.get("method")
                     ),
                     "minutes": max(0, round(-int(offset) / 60)),
@@ -195,9 +218,11 @@ def _event_body(payload: dict[str, Any]) -> dict[str, Any]:
                     "email": item.get("email"),
                     "displayName": item.get("display_name") or item.get("displayName"),
                     "optional": item.get("optional"),
-                    "responseStatus": item.get("response_status") or item.get("responseStatus"),
+                    "responseStatus": item.get("response_status")
+                    or item.get("responseStatus"),
                     "comment": item.get("comment"),
-                    "additionalGuests": item.get("additional_guests") or item.get("additionalGuests"),
+                    "additionalGuests": item.get("additional_guests")
+                    or item.get("additionalGuests"),
                 }.items()
                 if value is not None
             }
@@ -223,12 +248,16 @@ def _event_body(payload: dict[str, Any]) -> dict[str, Any]:
             "title": normalized.get("summary") or "AdministrateMe",
         }
     if normalized.get("linked_item_kind") and normalized.get("linked_item_id"):
-        private = dict((normalized.get("extendedProperties") or {}).get("private") or {})
+        private = dict(
+            (normalized.get("extendedProperties") or {}).get("private") or {}
+        )
         private.update(
             {
                 "adminme_linked_kind": str(normalized["linked_item_kind"]),
                 "adminme_linked_id": str(normalized["linked_item_id"]),
-                "adminme_completion_policy": str(normalized.get("completion_policy") or "manual"),
+                "adminme_completion_policy": str(
+                    normalized.get("completion_policy") or "manual"
+                ),
             }
         )
         normalized["extendedProperties"] = {
@@ -450,7 +479,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         "external_event_id": event_id,
                         "ical_uid": event.get("iCalUID"),
                         "provider_revision": event.get("etag"),
-                        "deleted_at": str(event.get("updated") or ctx.now_factory().isoformat()),
+                        "deleted_at": str(
+                            event.get("updated") or ctx.now_factory().isoformat()
+                        ),
                     },
                 )
                 if was_initial_sync_complete:
@@ -460,7 +491,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     emitted += 1
                 self._known_events.pop(event_id, None)
             else:
-                kind = "calendar.event_updated" if incremental else "calendar.event_added"
+                kind = (
+                    "calendar.event_updated" if incremental else "calendar.event_added"
+                )
                 await self._emit_calendar_snapshot(
                     ctx=ctx,
                     event_type=kind,
@@ -476,7 +509,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         "adminme_completion_policy", "manual"
                     ),
                 }
-            self._seen_inbound[event_id] = str(event.get("etag") or event.get("updated") or "")
+            self._seen_inbound[event_id] = str(
+                event.get("etag") or event.get("updated") or ""
+            )
             emitted += 1
         if was_initial_sync_complete:
             now = ctx.now_factory()
@@ -688,18 +723,23 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "start_time_zone": start.get("timeZone"),
                 "end_time_zone": end.get("timeZone"),
                 "all_day": "date" in start,
-                "availability": "free" if event.get("transparency") == "transparent" else "busy",
+                "availability": "free"
+                if event.get("transparency") == "transparent"
+                else "busy",
                 "visibility": str(event.get("visibility") or "default"),
                 "organizer": _participant(organizer_raw, organizer=True)
                 if isinstance(organizer_raw, dict)
                 else None,
-                "attendees": [_participant(item) for item in event.get("attendees") or []],
+                "attendees": [
+                    _participant(item) for item in event.get("attendees") or []
+                ],
                 "alarms": alarms,
                 "use_default_alarms": bool(reminders.get("useDefault")),
                 "recurrence": {
                     "lines": list(event.get("recurrence") or []),
                     "recurring_event_id": event.get("recurringEventId"),
-                    "original_start": _extract_when(event.get("originalStartTime")) or None,
+                    "original_start": _extract_when(event.get("originalStartTime"))
+                    or None,
                     "this_and_future": False,
                 },
                 "sequence": int(event.get("sequence") or 0),
@@ -708,11 +748,19 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "color_id": event.get("colorId"),
                 "source_url": (event.get("source") or {}).get("url"),
                 "html_link": event.get("htmlLink"),
-                "linked_item_kind": (event.get("extendedProperties") or {}).get("private", {}).get("adminme_linked_kind"),
-                "linked_item_id": (event.get("extendedProperties") or {}).get("private", {}).get("adminme_linked_id"),
-                "completion_policy": (event.get("extendedProperties") or {}).get("private", {}).get("adminme_completion_policy", "manual"),
+                "linked_item_kind": (event.get("extendedProperties") or {})
+                .get("private", {})
+                .get("adminme_linked_kind"),
+                "linked_item_id": (event.get("extendedProperties") or {})
+                .get("private", {})
+                .get("adminme_linked_id"),
+                "completion_policy": (event.get("extendedProperties") or {})
+                .get("private", {})
+                .get("adminme_completion_policy", "manual"),
                 "created_at": event.get("created"),
-                "updated_at": str(event.get("updated") or ctx.now_factory().isoformat()),
+                "updated_at": str(
+                    event.get("updated") or ctx.now_factory().isoformat()
+                ),
             },
         )
 
@@ -721,7 +769,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         ``events.insert`` through :func:`observation_outbound` per
         [§6.20]; Phase A direct-calls when seams are unset."""
         if operation.kind not in self.write_capabilities:
-            raise WriteCapabilityError(f"unsupported calendar operation {operation.kind!r}")
+            raise WriteCapabilityError(
+                f"unsupported calendar operation {operation.kind!r}"
+            )
         service = self._service
         if service is None:
             return WriteResult(applied=False, external_id=None, suppressed=False)
@@ -781,7 +831,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 current = events.get(calendarId=calendar_id, eventId=event_id).execute()
                 attendees = list(current.get("attendees") or [])
                 for attendee in attendees:
-                    if attendee.get("self") or attendee.get("email") == self._config.get("user_email"):
+                    if attendee.get("self") or attendee.get(
+                        "email"
+                    ) == self._config.get("user_email"):
                         attendee["responseStatus"] = str(payload["response_status"])
                         break
                 else:
@@ -904,21 +956,16 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         schema_version: int = 1,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
-        try:
-            await write_adapter_event(
-                ctx,
-                adapter_name=self.name,
-                sensitivity_floor=self.sensitivity_floor,
-                config=self._config,
-                event_type=event_type,
-                payload=payload,
-                causation_id=causation_id,
-                schema_version=schema_version,
-            )
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "google-calendar adapter failed to emit %s event", event_type
-            )
+        await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            schema_version=schema_version,
+        )
 
     @staticmethod
     def _classify_calendar_error(

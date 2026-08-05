@@ -163,7 +163,10 @@ class AppleCalendarBridgeAdapter:
             await self._internal.stop()
 
     async def apply_write(
-        self, operation: str, payload: dict[str, Any], target_external_id: str | None = None
+        self,
+        operation: str,
+        payload: dict[str, Any],
+        target_external_id: str | None = None,
     ) -> dict[str, Any]:
         if self._internal is None:
             raise RuntimeError("Apple Calendar adapter has not finished starting")

@@ -50,15 +50,24 @@ def apply_calendar_completion(
     qualifies = (
         policy == "on_elapsed" and p.get("outcome") in {"elapsed", "attended"}
     ) or (policy == "on_attended" and p.get("outcome") == "attended")
-    if p.get("linked_item_kind") != "commitment" or not p.get("linked_item_id") or not qualifies:
+    if (
+        p.get("linked_item_kind") != "commitment"
+        or not p.get("linked_item_id")
+        or not qualifies
+    ):
         return
     conn.execute(
         """UPDATE commitments SET status='done', completed_at=?, lifecycle_at=?,
                   lifecycle_actor=?, last_event_id=?
              WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
         (
-            p["recorded_at"], p["recorded_at"], p["member_id"], envelope["event_id"],
-            envelope["tenant_id"], p["linked_item_id"], envelope["event_id"],
+            p["recorded_at"],
+            p["recorded_at"],
+            p["member_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
+            envelope["event_id"],
         ),
     )
 
@@ -84,7 +93,9 @@ def apply_external_completion(
             at if completed else None,
             at,
             p.get("member_id"),
-            envelope["event_id"], envelope["tenant_id"], p["linked_item_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
             envelope["event_id"],
         ),
     )

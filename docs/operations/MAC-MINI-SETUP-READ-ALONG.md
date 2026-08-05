@@ -8,25 +8,42 @@ This runbook installs one AdministrateMe Python service and one exactly pinned
 OpenClaw Gateway on a dedicated Apple-silicon Mac mini. Both listen only on the
 Mac itself. Tailscale Serve is the only supported private web entry point.
 
-## Stop sign: the final release is not on `main` yet
+## Release gate: use the exact reviewed `main` commit
 
-As of 2026-08-04, [PR #248](https://github.com/junglecrunch1212/administrate-me-now/pull/248)
-is open and ready for review, but has no recorded independent review. GitHub
-`main` was still `64192f465606d0bcf92f5137cb0c1f0e4c729297` at the last audit; the
-PR head may advance as remediation is reviewed. Do **not** install `main` or
-the open PR branch on the family Mac. The candidate must first be independently
-reviewed, amended if needed, merged, and identified by a new full 40-character
-merged commit SHA.
+This guide is for the reviewed AdministrateMe v2 release on GitHub `main`,
+including the primary Google Calendar, Apple Calendar, Apple Reminders, and
+Apple Notes work. The final release reviewer gives you one full 40-character
+Git SHA, called `APPROVED_SHA` below, and confirms that GitHub checks passed for
+that exact revision.
 
-The rest of this guide is ready to follow after that event. A reviewer must
-give you all three of these facts:
+Do not copy a SHA from an old issue, this document, or a screenshot. Use the
+SHA in the final release handoff that sent you to this page. Do not accept
+“latest,” a branch name, a ZIP file, or a short seven-character SHA. Stage 4
+will stop if the GitHub `main` checkout does not exactly match it.
 
-- the words “PR #248 has been independently reviewed and merged”;
-- the full merged commit SHA, called `APPROVED_SHA` below;
-- confirmation that GitHub checks passed for that exact SHA.
+## Decide what you are installing today
 
-Do not accept “latest,” a branch name, a ZIP file, a screenshot, or a short
-seven-character SHA as the release boundary.
+There are two different installations. Do not combine their identities:
+
+1. **CoS Mac Mini central service — install this first.** It owns the encrypted
+   event log, projections, member portal, OpenClaw, governance, Tailscale Serve,
+   and central Google adapters. Use Stages 1–9 and 11–12 on the CoS Mac Mini.
+2. **One Apple member bridge per member — install only on a suitable member
+   Mac.** It reads and writes that member's iCloud Calendar, Reminders, and
+   Notes through macOS. An iPhone is a primary surface but cannot run the bridge
+   daemon. Use Stage 10 later on a Mac signed into that member's iCloud account.
+
+For the first CoS Mac Mini install, it is safe to answer **No** when asked to
+prepare member bridges if those member Macs are not sitting beside you and
+ready. Do not sign the central service account into multiple people's iCloud
+accounts. Do not duplicate Google-backed events through Apple Calendar:
+AdministrateMe owns those calendars through the Google Calendar API even when
+they appear inside Calendar on an iPhone.
+
+The central wizard intentionally does not request Google OAuth credentials or
+macOS privacy grants. First prove the credential-free central installation in
+observation mode. Live Google authorization and Apple bridge consent are
+separate provider gates after the base system is healthy.
 
 ## What you need before starting
 
@@ -52,21 +69,31 @@ AdministrateMe answer file, or a support bundle.
 
 Do this while signed into a separate Mac administrator account.
 
-1. Install all macOS updates and reboot.
-2. In **System Settings → Users & Groups**, add a **Standard** user for the
-   AdministrateMe service. It must not be an administrator.
-3. In **Privacy & Security → FileVault**, turn FileVault on. Store the recovery
-   key away from the Mac.
-4. In **Energy** settings, keep the Mac from automatically sleeping while on
-   power. Display sleep is fine. Do not enable automatic login.
+1. Click **Apple menu → System Settings → General → Software Update**. Click
+   **Update Now** or **Upgrade Now**, let it finish, and restart the Mac.
+2. Return to **System Settings → Users & Groups → Add User…**. Authenticate as
+   the Mac administrator. Set **New Account** to **Standard**, use a name such
+   as `AdministrateMe Service`, choose a strong unique login password, and
+   click **Create User**. Do not change it to Administrator.
+3. Open **System Settings → Privacy & Security → FileVault**. Click **Turn On**.
+   Store the recovery key somewhere other than this Mac and wait until System
+   Settings says FileVault is on. If **Enable Users** appears, click it, select
+   the new AdministrateMe service user, enter that user's login password, click
+   **OK**, then click **Continue**. That user must be able to unlock the disk
+   after a restart.
+4. Open **System Settings → Energy**. Enable the option that prevents automatic
+   sleeping while the display is off/on power. Also enable **Start up
+   automatically after a power failure**. Display sleep is fine. In **Users &
+   Groups → Login Options**, leave automatic login off.
 5. Understand the reboot behavior: these are user LaunchAgents. After a reboot,
    FileVault must be unlocked and the dedicated user must log in before the two
    services can run. Locking the screen is fine; logging out stops availability.
-6. Sign out of the administrator account and into the dedicated standard
-   account. Stay in this account for every command below.
+6. Click **Apple menu → Log Out**. Log into the new dedicated standard account.
+   Stay in this account for every central-install command below.
 
-Open **Applications → Utilities → Terminal**. Run one command at a time. Wait
-for the prompt to return before continuing.
+Open **Finder → Applications → Utilities → Terminal**. Keep this page open on
+another device. Copy only one code block at a time into Terminal, press
+**Return**, and wait for the `%` prompt to come back before continuing.
 
 ```bash
 date
@@ -86,7 +113,8 @@ xcode-select --install
 ```
 
 Accept Apple’s dialog and wait. If it says the tools are already installed,
-that is okay. Verify:
+that is okay. If a window opens, click **Install**, accept Apple's license, and
+wait for it to finish. Verify:
 
 ```bash
 xcode-select -p
@@ -95,14 +123,23 @@ git --version
 
 ## Stage 2: install Homebrew correctly
 
-Use only [Homebrew’s official installation instructions](https://brew.sh/).
-The initial installation may ask for the separate administrator password. It
-must install to `/opt/homebrew` on Apple silicon.
+Open [brew.sh](https://brew.sh/) and compare its displayed install command with
+the command below. They must match. Then paste it into Terminal:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+The script explains its changes and pauses. Read the summary, press **Return**
+to continue, and enter the separate administrator password if macOS asks. The
+password will not appear while you type. Homebrew must install to
+`/opt/homebrew` on Apple silicon.
 
 After Homebrew finishes, it prints a `brew shellenv` command. Run it. For the
 standard Apple-silicon location, the command is:
 
 ```bash
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
 eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
@@ -124,15 +161,23 @@ Install the **Standalone** macOS app from
 [Tailscale’s official package](https://tailscale.com/docs/install/mac). Do not
 also install the App Store edition; the two variants conflict.
 
-1. Open Tailscale and approve Apple’s system-extension and VPN prompts.
-2. Join the intended household tailnet. The server has its own node identity;
-   do not reuse a member bridge identity as a shortcut.
-3. In **Tailscale → Settings → CLI integration**, select **Show me how → Install
+1. On the Tailscale page, choose the **Standalone** download. Open the
+   downloaded installer, follow its prompts, then open **Applications →
+   Tailscale**.
+2. When macOS reports a blocked system extension, click **Open System
+   Settings**, enable Tailscale under **Privacy & Security**, authenticate with
+   the administrator password, and click **Allow** on the VPN-configuration
+   dialog.
+3. Click the Tailscale menu-bar icon, choose **Log in**, and finish sign-in in
+   the browser. Join the intended household tailnet. The server is its own
+   Tailscale device; do not copy a member bridge key or enrollment package to
+   make it the server identity.
+4. In **Tailscale → Settings → CLI integration**, select **Show me how → Install
    Now** and approve the bounded administrator prompt.
-4. In the Tailscale admin console, restrict access to the future server to the
+5. In the Tailscale admin console, restrict access to the future server to the
    intended household users. Device sharing also receives identity headers, so
    do not share this server node casually.
-5. Leave automatic security updates enabled for the Standalone app. An update
+6. Leave automatic security updates enabled for the Standalone app. An update
    must not be confused with permission to change the separately pinned
    OpenClaw release.
 
@@ -269,6 +314,24 @@ Start:
 ./bootstrap/install.sh --expected-commit "$APPROVED_SHA"
 ```
 
+For a two-principal household in which both principals use Apple devices but are
+installing only the CoS Mac Mini today, use this first-install pattern:
+
+- answer **Yes** to Apple member devices;
+- enter the detected `America/New_York` timezone if it is correct;
+- enroll each real household person once; choose `principal` for both adults
+  if you both administer household truth;
+- enter each person's exact Tailscale login email;
+- enable private member-portal chat for both principals;
+- answer **No** to OpenClaw actor pairing unless you can see the exact tuple;
+- answer **Yes** to the calendar/shared-list follow-ups you intend to complete;
+- answer **No** to each member-bridge package unless a separate Mac signed into
+  that person's iCloud and Tailscale accounts is ready within the next hour;
+- confirm observation mode.
+
+Answer for the actual household if there are children, helpers, or ambient
+people; the pattern above is not permission to omit them.
+
 Use this parallel prompt guide:
 
 | Terminal prompt | Recommended first-run answer | What it actually does |
@@ -285,7 +348,7 @@ Use this parallel prompt guide:
 | Confirm child chat policy? | No until separately reviewed | A second child-specific gate |
 | Prepare Plaid sandbox Link? | No unless testing sandbox now | Live banking is never enabled here |
 | Create after-bootstrap data-entry follow-up? | Yes for categories you intend to enter | Creates follow-ups, not facts |
-| Prepare integration pairing? | Only the integrations you will review next | Records pending configuration; it does not grant macOS/OAuth access |
+| Prepare integration pairing? | Yes for calendars/shared lists you intend to connect | Records a follow-up only; it does not grant macOS/OAuth access or activate Google Calendar |
 | Prepare a separate member-bridge package? | Yes only for a member who has their own Mac ready now | Stages a member-bound, 30-minute enrollment; Doctor remains pending until it is accepted or revoked |
 | Allow Obsidian for adult bridges? | Only if adult vault ingestion is intended | Child packages still deny Obsidian |
 | Confirm observation mode? | Yes, after reading the prompt | Installation stops unless the minimum trust workflow is accepted |
@@ -405,15 +468,21 @@ tailscale serve reset
 ./bootstrap/stop.sh
 ```
 
+At this point the CoS Mac Mini central installation is complete and still in
+observation mode. If no separate member Mac is ready, skip Stage 10 for now and
+continue with Stage 11. A staged bridge is not required for the central portal.
+
 ## Stage 10: enroll each selected member bridge
 
-Enable one provider or Apple privacy grant at a time while observation remains
-on. First deny the permission and verify the system reports a degraded or
-disabled capability honestly. Then grant only the minimum access.
+Do this later on one suitable member Mac at a time while central observation
+mode remains on. Do **not** deliberately deny the first privacy prompt; a
+denial must be repaired manually in System Settings and adds no useful safety
+to the installation.
 
 The central portal does not require a member bridge. For every bridge you chose
 in Stage 7, complete this one-member-at-a-time flow. Never reuse a package,
-code, Mac, or Tailscale identity for a different member.
+code, macOS login, Mac, or Tailscale identity for a different member. One
+macOS login may host only one member bridge.
 
 On the central Mac, display the selected member IDs:
 
@@ -437,10 +506,22 @@ code expire after 30 minutes. Send the `.adminmebridge` file with AirDrop or an
 equivalent private file transfer. Give the code separately, for example by
 voice or a shared password-manager item. Do not paste either into chat.
 
-On that member’s Apple-silicon Mac, first turn on FileVault, install Homebrew,
-install the Standalone Tailscale app plus its CLI integration, and sign in as
-the exact Tailscale user shown by `bridge-status`. Then repeat Stage 4 on that
-Mac to clone the exact approved AdministrateMe SHA. In that clean checkout:
+On that member's Apple-silicon Mac:
+
+1. Log into the macOS account that is signed into **that member's** iCloud
+   account. Open Calendar, Reminders, and Notes once and verify the intended
+   iCloud data is visible.
+2. In **Calendar → Settings → General → Default Calendar**, select an iCloud
+   calendar that AdministrateMe may organize. Do not select a Google calendar;
+   Google-backed calendars are owned by the central Google adapter.
+3. In Reminders, verify the default list is an iCloud list suitable for new
+   AdministrateMe reminders. Existing accessible lists will still be observed.
+4. Turn on FileVault, install Homebrew, install the Standalone Tailscale app
+   plus CLI integration, and sign in as the exact Tailscale user printed by
+   central `bridge-status`.
+5. Repeat Stage 4 on this Mac to clone the exact approved `main` SHA.
+
+In that clean checkout run:
 
 ```bash
 export APPROVED_SHA="paste-the-same-full-40-character-sha"
@@ -455,9 +536,36 @@ creates a separate release/venv/config, installs a per-user LaunchAgent,
 submits an owner-scoped `bridge.enrolled` proof through Tailscale Serve, and
 deletes the transferred package after success. Check it locally:
 
+The first start can display three macOS consent dialogs. Click these exact
+choices:
+
+1. For Calendar, click **Allow Full Access**.
+2. For Reminders, click **Allow Full Access**.
+3. When AdministrateMe/Python/osascript asks to control Notes, click **Allow**.
+
+If a dialog does not appear within two minutes, open **Apple menu → System
+Settings → Privacy & Security**. Check **Calendars**, **Reminders**, and
+**Automation**. Enable the entry associated with the AdministrateMe bridge,
+Python, Terminal, or `osascript`; under Automation, enable **Notes**. Then run:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.administrateme.member-bridge"
+```
+
+Do not grant Contacts, Photos, microphone, Full Disk Access, or Accessibility
+unless a later separately reviewed connector explicitly requires it. Now check
+the bridge:
+
 ```bash
 bash bootstrap/member-bridge.sh bridge-local-status
+launchctl print "gui/$(id -u)/com.administrateme.member-bridge" >/dev/null \
+  && echo "MEMBER BRIDGE IS RUNNING"
 ```
+
+Expected: JSON top-level status `healthy`, service `running`, the correct
+member ID, all three primary Apple packs under `enabled_packs`, and the final
+line `MEMBER BRIDGE IS RUNNING`. Leave the member logged in; screen lock is
+fine, logout stops the LaunchAgent.
 
 Back on the central Mac, finalize only after the local status says `healthy`:
 
@@ -489,15 +597,28 @@ bash bootstrap/member-bridge.sh bridge-disable
 Run `./bootstrap/doctor.sh` on the central Mac after all selected records show
 `active` or `revoked`. It must now be healthy. A successful enrollment proves
 the private transport and member binding and enables that member's Apple
-Calendar, Apple Reminders, and Apple Notes packs. Start the bridge once in the
-member's interactive macOS session and approve full Calendar access, full
-Reminders access, and Notes Automation access. Keep observation mode enabled
+Calendar, Apple Reminders, and Apple Notes packs. Keep observation mode enabled
 until the initial counts, account ownership, recurrence, and location alarms
 have been reviewed. Do not hand-edit bridge YAML to bypass enrollment.
 
 Gmail, Plaid, Home Assistant, Google Calendar/Tasks, and Apple permissions are
 also live-provider gates, not part of credential-free Doctor proof. Plaid must
 remain sandbox-only during bootstrap.
+
+### Google calendars are paired centrally, not through the Apple bridge
+
+The first-run wizard records a calendar-pairing follow-up but does not ask for
+or create personal Google OAuth credentials. Therefore a healthy first install
+may truthfully report Google Calendar as `optional_unconfigured`. Do not repair
+that by selecting a Google calendar as the Apple bridge's default calendar, by
+pasting OAuth JSON into `adapters.json`, or by putting a token in `.env`.
+
+The production runtime now loads configured Google Calendar adapter instances,
+one member/account/calendar at a time, but live OAuth enrollment remains a
+separate provider-consent operation after the credential-free base and backup
+are proven. Keep using the iPhone Google Calendar account normally during the
+initial observation period; AdministrateMe will not create a duplicate
+EventKit copy.
 
 ## Stage 11: backup, diagnostic, and recovery proof
 
@@ -608,6 +729,29 @@ These commands preserve data, backups, Keychain items, and enrollment state.
 | Bridge says different Tailscale identity | The member Mac is signed into another user | Stop. Sign into the exact intended Tailscale user or revoke the selection; do not edit the package or mapping |
 | Bridge enrollment proof not found | The target could not reach the private Serve URL or ingest was denied | Keep the package if still present, run local bridge status and central Doctor, verify Serve/Tailscale identity, then retry once before expiry |
 | Backup or restore fails | Keychain, path, disk, or archive authentication problem | Keep services stopped if the command did so; do not move/unpack the archive; attach the safe diagnostic |
+
+## Before you leave the CoS Mac Mini
+
+Read each line and check it only after you have seen the stated evidence:
+
+- [ ] `git rev-parse HEAD` exactly equals the 40-character `APPROVED_SHA` from
+  the release handoff, on branch `main`, with an empty `git status --short`.
+- [ ] FileVault is on, automatic login is off, and the dedicated standard user
+  is the logged-in service account.
+- [ ] `./bootstrap/status.sh` reports both central user services running.
+- [ ] `./bootstrap/doctor.sh` is healthy, or its only expected incomplete state
+  is a member bridge you deliberately staged and will finalize/revoke.
+- [ ] OpenClaw's model probe passed and no floating/latest OpenClaw install was
+  added.
+- [ ] `tailscale serve status --json` points only to
+  `http://127.0.0.1:3330`, and Funnel is absent.
+- [ ] Both principals tested the private portal from their own
+  Tailscale-connected device and saw only your authorized view.
+- [ ] The encrypted backup and safe diagnostic were created, and the backup was
+  copied to its separate protected location.
+- [ ] Observation mode is still active. No calendar, reminder, note, message,
+  banking, or home-automation side effect was enabled merely to make Doctor
+  look green.
 
 ## What “finished” means for this release
 

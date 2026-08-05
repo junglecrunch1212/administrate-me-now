@@ -320,7 +320,10 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     intentionally NOT declared. A declared-but-not-implemented kind would
     fail the validator's method-presence rule per memo 05 §3.4."""
     assert AppleCalendarAdapter.write_capabilities == [
-        "create_event", "update_event", "delete_event", "move_event"
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
     ]
     assert len(AppleCalendarAdapter.write_capabilities) == 4
 

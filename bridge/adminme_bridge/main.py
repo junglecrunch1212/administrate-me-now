@@ -12,6 +12,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from adminme.events.envelope import EventEnvelope
 
@@ -176,8 +177,8 @@ class BridgeSupervisor:
         self._command_ledger.close()
 
     async def _command_loop(self) -> None:
-        adapters = {
-            str(adapter.provider): adapter
+        adapters: dict[str, Any] = {
+            str(getattr(adapter, "provider")): adapter
             for adapter in self._adapters
             if getattr(adapter, "provider", None)
             and callable(getattr(adapter, "apply_write", None))
@@ -193,7 +194,7 @@ class BridgeSupervisor:
                         if adapter is None:
                             continue
                         try:
-                            result = await adapter.apply_write(
+                            result = await getattr(adapter, "apply_write")(
                                 str(command["operation"]),
                                 dict(command.get("payload") or {}),
                                 command.get("target_external_id"),
@@ -205,7 +206,9 @@ class BridgeSupervisor:
                         except Exception as exc:  # noqa: BLE001 - typed provider failure
                             result_envelope = self._result_envelope(command, error=exc)
                         else:
-                            result_envelope = self._result_envelope(command, result=result)
+                            result_envelope = self._result_envelope(
+                                command, result=result
+                            )
                         self._command_ledger.put(command_id, result_envelope)
                     submit = await self._ingest_client.submit(result_envelope)
                     if not submit.ok:
@@ -224,7 +227,11 @@ class BridgeSupervisor:
                 return
 
     def _result_envelope(
-        self, command: dict, *, result: dict | None = None, error: Exception | None = None
+        self,
+        command: dict,
+        *,
+        result: dict | None = None,
+        error: Exception | None = None,
     ) -> dict:
         now = datetime.now(timezone.utc)
         if error is None:
@@ -248,9 +255,14 @@ class BridgeSupervisor:
                 "provider": command["provider"],
                 "operation": command["operation"],
                 "error_kind": (
-                    "conflict" if "conflict" in type(error).__name__.casefold() or "conflict" in str(error).casefold() else
-                    "not_found" if isinstance(error, LookupError) else
-                    "validation" if isinstance(error, ValueError) else "provider"
+                    "conflict"
+                    if "conflict" in type(error).__name__.casefold()
+                    or "conflict" in str(error).casefold()
+                    else "not_found"
+                    if isinstance(error, LookupError)
+                    else "validation"
+                    if isinstance(error, ValueError)
+                    else "provider"
                 ),
                 "message": f"{type(error).__name__}: {error}",
                 "retryable": not isinstance(error, (LookupError, ValueError)),

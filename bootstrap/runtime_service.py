@@ -79,6 +79,7 @@ def main() -> None:
         child_chat_enabled_members=frozenset(
             adapter_config.get("child_chat_enabled_members", [])
         ),
+        adapter_config=adapter_config,
     )
     uvicorn.run(
         create_application(settings),

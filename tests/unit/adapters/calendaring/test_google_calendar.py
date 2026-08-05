@@ -92,6 +92,11 @@ class _FakeEventLog:
         return f"event-{len(self.calls)}"
 
 
+class _FailingEventLog(_FakeEventLog):
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        raise RuntimeError("event log unavailable")
+
+
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
@@ -99,6 +104,16 @@ def _ctx(event_log: _FakeEventLog) -> AdapterContext:
         correlation_id_factory=lambda: "corr-gcal-test",
         now_factory=lambda: _FROZEN_NOW,
     )
+
+
+async def test_append_failure_propagates_before_sync_state_can_advance() -> None:
+    adapter = _make_adapter(service=_FakeCalendarService())
+    with pytest.raises(RuntimeError, match="event log unavailable"):
+        await adapter._append(
+            ctx=_ctx(_FailingEventLog()),
+            event_type="calendar.event_added",
+            payload={"source": "google_calendar"},
+        )
 
 
 class _FakeHttpResponse:
@@ -254,7 +269,11 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     implemented kind would fail the validator's method-presence rule per
     memo 05 §3.4."""
     assert GoogleCalendarAdapter.write_capabilities == [
-        "create_event", "update_event", "delete_event", "respond_event", "move_event"
+        "create_event",
+        "update_event",
+        "delete_event",
+        "respond_event",
+        "move_event",
     ]
     assert len(GoogleCalendarAdapter.write_capabilities) == 5
 

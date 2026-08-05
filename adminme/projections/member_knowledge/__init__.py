@@ -19,21 +19,31 @@ class MemberKnowledgeProjection(Projection):
         apply_event(envelope, conn)
 
     def migrate_schema(self, conn: Any) -> None:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(member_knowledge)")}
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(member_knowledge)")
+        }
         additions = {
             "body_format": "TEXT NOT NULL DEFAULT 'plain'",
-            "account_external_id": "TEXT", "account_name": "TEXT",
-            "folder_external_id": "TEXT", "folder_path": "TEXT",
-            "provider_created_at": "TEXT", "provider_modified_at": "TEXT",
-            "provider_revision": "TEXT", "locked": "INTEGER NOT NULL DEFAULT 0",
-            "shared": "INTEGER NOT NULL DEFAULT 0", "pinned": "INTEGER",
-            "tags_json": "TEXT", "attachments_json": "TEXT NOT NULL DEFAULT '[]'",
+            "account_external_id": "TEXT",
+            "account_name": "TEXT",
+            "folder_external_id": "TEXT",
+            "folder_path": "TEXT",
+            "provider_created_at": "TEXT",
+            "provider_modified_at": "TEXT",
+            "provider_revision": "TEXT",
+            "locked": "INTEGER NOT NULL DEFAULT 0",
+            "shared": "INTEGER NOT NULL DEFAULT 0",
+            "pinned": "INTEGER",
+            "tags_json": "TEXT",
+            "attachments_json": "TEXT NOT NULL DEFAULT '[]'",
             "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
             "capability_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
         }
         for name, declaration in additions.items():
             if name not in columns:
-                conn.execute(f"ALTER TABLE member_knowledge ADD COLUMN {name} {declaration}")
+                conn.execute(
+                    f"ALTER TABLE member_knowledge ADD COLUMN {name} {declaration}"
+                )
 
 
 __all__ = ["MemberKnowledgeProjection"]

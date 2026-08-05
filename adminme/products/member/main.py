@@ -103,15 +103,34 @@ def _runtime(request: Request) -> Any:
 
 
 _EXTERNAL_OPERATIONS = {
-    "google_calendar": {"create_event", "update_event", "delete_event", "move_event", "respond_event"},
+    "google_calendar": {
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
+        "respond_event",
+    },
     "apple_calendar": {"create_event", "update_event", "delete_event", "move_event"},
     "apple_reminders": {
-        "create_reminder", "update_reminder", "delete_reminder", "complete_reminder",
-        "uncomplete_reminder", "move_reminder", "create_list", "update_list", "delete_list",
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
     },
     "apple_notes": {
-        "create_note", "update_note", "append_note", "move_note", "delete_note",
-        "create_folder", "update_folder", "delete_folder",
+        "create_note",
+        "update_note",
+        "append_note",
+        "move_note",
+        "delete_note",
+        "create_folder",
+        "update_folder",
+        "delete_folder",
     },
 }
 
@@ -121,7 +140,9 @@ async def request_external_write(
     body: ExternalWriteRequest, request: Request, session: SessionDep
 ) -> dict[str, Any]:
     if session.auth_member_id != session.view_member_id:
-        raise HTTPException(403, "external writes are unavailable while viewing another member")
+        raise HTTPException(
+            403, "external writes are unavailable while viewing another member"
+        )
     if body.operation not in _EXTERNAL_OPERATIONS[body.provider]:
         raise HTTPException(422, "operation is not supported by this provider")
     runtime = _runtime(request)

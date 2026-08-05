@@ -177,7 +177,9 @@ class LocalKnowledgeSourceAdapter:
         schema_version = int(self._config.get("emit_schema_version", 1))
         if schema_version >= 2 and callable(getattr(provider, "folders", None)):
             await self._sync_folders(
-                ctx, sink, await provider.folders()  # type: ignore[attr-defined]
+                ctx,
+                sink,
+                await provider.folders(),  # type: ignore[attr-defined]
             )
         for document in documents:
             hash_material = document.body
@@ -288,9 +290,10 @@ class LocalKnowledgeSourceAdapter:
         if self._initial_scan_complete and schema_version >= 2:
             for external_id in self._known_external_ids - observed_ids:
                 knowledge_seed = f"{ctx.member_id}|{self.source_kind}|{external_id}"
-                knowledge_id = "knowledge_" + hashlib.sha256(
-                    knowledge_seed.encode("utf-8")
-                ).hexdigest()[:32]
+                knowledge_id = (
+                    "knowledge_"
+                    + hashlib.sha256(knowledge_seed.encode("utf-8")).hexdigest()[:32]
+                )
                 now = ctx.now_factory()
                 envelope = EventEnvelope(
                     event_at_ms=int(now.timestamp() * 1000),
@@ -326,7 +329,9 @@ class LocalKnowledgeSourceAdapter:
     async def _sync_folders(
         self, ctx: BridgeContext, sink: Any, folders: list[KnowledgeFolder]
     ) -> None:
-        current = {folder.external_id: folder for folder in folders if folder.external_id}
+        current = {
+            folder.external_id: folder for folder in folders if folder.external_id
+        }
         for folder_id, folder in current.items():
             if self._known_folders.get(folder_id) == folder:
                 continue
@@ -337,7 +342,10 @@ class LocalKnowledgeSourceAdapter:
                 else "member_knowledge.folder_created"
             )
             envelope = self._folder_envelope(
-                ctx, event_type, folder, changed_at,
+                ctx,
+                event_type,
+                folder,
+                changed_at,
                 idempotency_suffix=changed_at.isoformat(),
             )
             result = await sink.emit(envelope)
@@ -356,7 +364,9 @@ class LocalKnowledgeSourceAdapter:
                     )
                 )
                 if not result.ok:
-                    raise RuntimeError(result.error or "bridge folder deletion ingest failed")
+                    raise RuntimeError(
+                        result.error or "bridge folder deletion ingest failed"
+                    )
         self._known_folders = current
 
     def _folder_envelope(

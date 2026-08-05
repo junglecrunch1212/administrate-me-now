@@ -20,7 +20,9 @@ from jsonschema import Draft202012Validator
 from adminme.adapters.base import Adapter
 
 
-def load_builtin_adapters(config: dict[str, Any], *, repository_root: Path) -> list[Adapter]:
+def load_builtin_adapters(
+    config: dict[str, Any], *, repository_root: Path
+) -> list[Adapter]:
     catalog = _catalog(repository_root / "packs" / "adapters")
     adapters: list[Adapter] = []
     for index, entry in enumerate(config.get("adapters") or []):
@@ -50,18 +52,26 @@ def load_builtin_adapters(config: dict[str, Any], *, repository_root: Path) -> l
         )
         module = sys.modules.get(module_name)
         if module is None:
-            spec = importlib.util.spec_from_file_location(module_name, pack_dir / entrypoint)
+            spec = importlib.util.spec_from_file_location(
+                module_name, pack_dir / entrypoint
+            )
             if spec is None or spec.loader is None:
-                raise ImportError(f"cannot load adapter entrypoint {pack_dir / entrypoint}")
+                raise ImportError(
+                    f"cannot load adapter entrypoint {pack_dir / entrypoint}"
+                )
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
         adapter_class = getattr(module, class_name)
         adapter = adapter_class(config=adapter_config)
-        account = adapter_config.get("provider_account_id") or adapter_config.get("subject_email")
+        account = adapter_config.get("provider_account_id") or adapter_config.get(
+            "subject_email"
+        )
         member = adapter_config.get("member_id")
         configured_id = entry.get("id") or ":".join(
-            str(value) for value in (kind, member, account, index) if value not in (None, "")
+            str(value)
+            for value in (kind, member, account, index)
+            if value not in (None, "")
         )
         setattr(adapter, "instance_name", str(configured_id))
         adapters.append(adapter)
@@ -80,7 +90,9 @@ def _catalog(root: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
             str(pack.get("id") or ""),
             str(pack.get("name") or ""),
         }
-        identifiers |= {identifier.removeprefix("adapter:") for identifier in identifiers}
+        identifiers |= {
+            identifier.removeprefix("adapter:") for identifier in identifiers
+        }
         for identifier in identifiers - {""}:
             result[identifier] = (manifest_path.parent, manifest)
     return result

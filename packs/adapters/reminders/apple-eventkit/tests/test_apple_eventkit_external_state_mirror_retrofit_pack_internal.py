@@ -127,9 +127,7 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest_with_write_capabil
     assert manifest.capabilities[0].kind == "Cat-B"
     assert manifest.sensitivity_default == "normal"
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {
-        "kind": "calendar_item_identifier_last_modified"
-    }
+    assert manifest.dedup_strategy == {"kind": "calendar_item_identifier_last_modified"}
     assert manifest.observation_mode_required is False
     assert manifest.write_capabilities == [
         "create_reminder",

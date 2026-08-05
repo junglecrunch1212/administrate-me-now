@@ -17,7 +17,7 @@
     "oauth_credentials_ref": {
       "type": "string",
       "pattern": "^op://[^/]+/[^/]+/[^/]+$",
-      "description": "1Password reference to installed-app OAuth JSON containing client_id, client_secret, and refresh_token. Recommended for Laura's and the other member's personal Google accounts."
+      "description": "1Password reference to installed-app OAuth JSON containing client_id, client_secret, and refresh_token. Configure one independently authorized instance for each member account."
     },
     "member_id": {
       "type": "string",

@@ -445,6 +445,9 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
         {"member_fixture_principal_a", "member_fixture_principal_b"}
     )
     assert runtime_capture["child_chat_enabled_members"] == frozenset()
+    assert runtime_capture["adapter_config"] == json.loads(
+        (test_paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
+    )
 
     monkeypatch.setattr(openclaw_service, "secret_store", lambda _paths: store)
     monkeypatch.setattr(

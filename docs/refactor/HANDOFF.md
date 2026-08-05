@@ -1,27 +1,45 @@
 ---
 schema_version: 1
 current_phase: 8
-phase_name: deployment_candidate_remediated
+phase_name: production_activation
 gate: 8
-gate_result: AUTOMATED_RELEASE_MATRIX_PASS_AWAITING_INDEPENDENT_REVIEW_AND_DISPOSABLE_MAC
-verified_local_date: 2026-08-04
-verified_github_date: 2026-08-04
-verified_github_apple_silicon_run: 30964802418
-verified_github_candidate_commit: 95f2fe8d0a007ecf4a000057ab456a4b49a2d5f2
-branch: codex/administrateme-v2-runtime
+gate_result: CODE_REVIEWED_MERGED_MAIN_AWAITING_LIVE_MAC_ACTIVATION
+verified_local_date: 2026-08-05
+verified_github_date: 2026-08-05
+branch: main
 candidate_commit_resolution: git rev-parse HEAD
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: independent_review_merge_disposable_mac_gate
+next_phase: central_observation_then_live_provider_activation
 ---
 
 # Release handoff
 
+## 2026-08-05 release disposition
+
+The operator explicitly authorized final review, amendment, green-check merge,
+and installation preparation. The reviewed release adds the bidirectional
+primary surfaces: central Google Calendar plus per-member Apple Calendar,
+Reminders, and Notes. It also fixes production composition so
+`config/adapters.json` reaches the central adapter supervisor after service
+restart. Calendar and reminder sync also now requires a durable central event
+ID before local cursor/state advancement, so an ingest outage retries instead
+of silently losing the provider change. The exact merged `main` SHA and final
+GitHub check result are supplied with the operator handoff; the Mac must refuse
+any other revision.
+
+The initial CoS Mac Mini installation remains credential-free and starts in
+observation mode. Provider credentials and Apple grants are deliberately not
+bootstrap inputs. The central service is installed first; each member's Apple
+apps require a separate per-member bridge running under a macOS login signed
+into that member's iCloud account. Google-backed calendars remain owned by the
+central Google adapter and must not be duplicated through EventKit.
+
 ## Outcome
 
-The repository is a complete deployment candidate for independent review. The
+The repository is the reviewed production-activation candidate. The
 two bootstrap gaps that reopened Gate 8 are implemented: AdministrateMe now
 reconciles its five pinned OpenClaw schedules, and the central/member bridge
 enrollment lifecycle has supported export, acceptance, proof, finalization,
@@ -29,12 +47,12 @@ status, disable, and revocation commands. The audit also found that OpenClaw
 `2026.7.2` is absent from npm; bootstrap now builds only the exact reviewed
 GitHub commit from a pinned archive checksum and records source provenance.
 
-This handoff does not authorize installation on the family Mac. GitHub's
-Apple-silicon `macos-15` contract passed at the executable candidate in run
-30964802418. PR #248 still requires independent review and merge only while
-checks at its final head are green, followed by a disposable Apple-silicon
-live rehearsal. No household data, provider credential, family identity, or
-family Mac was touched by this remediation.
+Installation is authorized only at the exact merged SHA stated in the final
+operator handoff and only after its GitHub checks are green. The Mac install is
+itself the live Apple-silicon rehearsal: stop on any failed release boundary,
+Doctor, backup/restore, Tailscale identity, service, or isolation check. No
+household data, provider credential, family identity, or family Mac was touched
+while preparing this release.
 
 ## What is ready
 
@@ -73,6 +91,32 @@ family Mac was touched by this remediation.
 
 ## Local release evidence
 
+The 2026-08-05 primary-surface amendment passed the current release matrix on
+the Windows review host before push:
+
+- strict acceptance: 21 passed with `--runxfail`;
+- root and pack suite: 1,455 passed; bridge distribution: 60 passed;
+- focused primary-surface/bootstrap regression: 25 passed; three explicit
+  central/bridge ingest-failure tests also passed;
+- Ruff clean and 455 files formatted; mypy clean across 199 production source
+  files; production Pyright: zero errors and zero warnings;
+- root and bridge dependency audits found no known vulnerabilities; both lock
+  checks and wheel/sdist builds passed;
+- architecture-negative, credential-free clean-install, two-instance tenant
+  isolation, and encrypted backup/restore process rehearsals passed;
+- pinned OpenClaw contract, TypeScript, 12 tests, build, package dry run, and
+  production dependency audit passed;
+- performance smoke passed all budgets: 11.46-second cold start, 128.26 ms
+  append/projection p95, 352.81 ms temporary-view p95, 26.53 ms member-chat
+  fixture p95, 5.77 MiB peak traced memory, and 2.38 MB encrypted storage after
+  100 task events;
+- `git diff --check` passed. Unix `shellcheck` remains intentionally delegated
+  to the final Apple-silicon GitHub job because it is not installed on the
+  Windows review host.
+
+The final PR-head Apple-silicon check is a merge prerequisite and is reported
+with the exact merged SHA in the operator handoff.
+
 All commands below passed on 2026-08-04 from the complete candidate tree:
 
 - acceptance contract: 21 passed with `--runxfail`;
@@ -106,18 +150,18 @@ rehearsal, checked the static and secret-safe tree, and ran the whole release
 candidate suite. The later receipt-path patch passed in that same run under
 macOS's canonical `/private/var` temporary path.
 
-## Remaining independent and live gates
+## Remaining live activation gates
 
-The following cannot be honestly completed on the current Windows workstation:
+The following must be completed from the operator read-along on Apple hardware:
 
-1. independent review and approval of PR #248, confirmation that GitHub checks
-   are green for the exact final head, and merge without bypassing protection;
-2. a disposable Apple-silicon Mac rehearsal of real launchd startup, reboot,
+1. an Apple-silicon Mac rehearsal of real launchd startup, reboot,
    Tailscale Serve identity headers, OpenClaw Gateway RPC, cron list state, and
-   one non-household bridge enrollment/revocation;
-3. real model/channel sign-in, minimal Apple/provider grants, Safari with
+   one bridge enrollment/revocation before enabling provider writes;
+2. real model/channel sign-in, minimal Apple/provider grants, Safari with
    VoiceOver, encrypted off-machine restore, and the five-to-seven-day
-   observation soak.
+   observation soak;
+3. member-by-member OAuth/EventKit/Notes consent and propagation checks, with
+   calendar attendance/change and reminder completion verified as feedback.
 
 Treat any failed item as a deployment stop, not as permission to weaken a pin,
 disable identity checks, hand-edit encrypted state, copy a secret into a file,
@@ -125,10 +169,11 @@ or use a family Mac as the experiment.
 
 ## Operator path
 
-After merge, the only first-install guide is
+The only first-install guide is
 `docs/operations/MAC-MINI-SETUP-READ-ALONG.md`. The concise pointer is
 `docs/operations/FIRST-MAC-BOOTSTRAP.md`; command detail is also mirrored in
 `docs/refactor/MAC-MINI-OPERATIONS.md`. `KNOWN-LIMITATIONS.md` remains the
 authoritative statement of live-only and deferred behavior.
 
-No automated merge or family deployment is authorized or performed.
+Repository merge is authorized and completed only with green final-head checks.
+No tool has remotely installed or activated a household Mac or provider.

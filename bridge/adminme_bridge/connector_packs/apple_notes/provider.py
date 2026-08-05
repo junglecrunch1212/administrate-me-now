@@ -19,7 +19,7 @@ from adminme_bridge.knowledge_sources import KnowledgeDocument, KnowledgeFolder
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 
-_JXA = r'''
+_JXA = r"""
 function safe(fn, fallback) { try { const v = fn(); return v === undefined ? fallback : v; } catch (_) { return fallback; } }
 function iso(value) { try { return value ? new Date(value).toISOString() : null; } catch (_) { return null; } }
 function idOf(value) { return String(safe(() => value.id(), "")); }
@@ -116,11 +116,13 @@ function run(argv) {
   } else throw new Error("Unsupported Notes operation: " + req.operation);
   return JSON.stringify({ok: true, result: result});
 }
-'''
+"""
 
 
 def _default_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, check=False, capture_output=True, text=True, timeout=60)
+    return subprocess.run(
+        command, check=False, capture_output=True, text=True, timeout=60
+    )
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -135,17 +137,25 @@ class AppleNotesScriptingProvider:
         self._runner = runner or _default_runner
         self._last_folders: list[KnowledgeFolder] = []
 
-    def _invoke(self, operation: str, payload: dict[str, Any], target: str | None = None) -> Any:
+    def _invoke(
+        self, operation: str, payload: dict[str, Any], target: str | None = None
+    ) -> Any:
         request = json.dumps(
             {"operation": operation, "payload": payload, "target_external_id": target},
             separators=(",", ":"),
         )
-        completed = self._runner(["osascript", "-l", "JavaScript", "-e", _JXA, "--", request])
+        completed = self._runner(
+            ["osascript", "-l", "JavaScript", "-e", _JXA, "--", request]
+        )
         if completed.returncode != 0:
-            raise RuntimeError(f"Apple Notes automation failed: {completed.stderr.strip()[:1000]}")
+            raise RuntimeError(
+                f"Apple Notes automation failed: {completed.stderr.strip()[:1000]}"
+            )
         response = json.loads(completed.stdout)
         if not response.get("ok"):
-            raise RuntimeError(str(response.get("error") or "Apple Notes automation failed"))
+            raise RuntimeError(
+                str(response.get("error") or "Apple Notes automation failed")
+            )
         return response.get("result")
 
     async def documents(self) -> list[KnowledgeDocument]:
@@ -176,7 +186,9 @@ class AppleNotesScriptingProvider:
         ]
         documents: list[KnowledgeDocument] = []
         for row in rows or []:
-            modified = _parse_datetime(row.get("modified_at")) or datetime.now(timezone.utc)
+            modified = _parse_datetime(row.get("modified_at")) or datetime.now(
+                timezone.utc
+            )
             locked = bool(row.get("locked"))
             body = str(row.get("body") or "")
             if not body:
@@ -219,7 +231,9 @@ class AppleNotesScriptingProvider:
     async def apply_write(
         self, operation: str, payload: dict[str, Any], target_external_id: str | None
     ) -> dict[str, Any]:
-        result = await asyncio.to_thread(self._invoke, operation, payload, target_external_id)
+        result = await asyncio.to_thread(
+            self._invoke, operation, payload, target_external_id
+        )
         return dict(result or {})
 
 

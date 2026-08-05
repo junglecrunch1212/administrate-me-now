@@ -6,6 +6,15 @@ existed; a dead command is not evidence. Every row below now names a retained
 test, script, build, or CI job. The aggregate interface is
 `scripts/acceptance/release-candidate.sh` on the supported macOS runner.
 
+Primary-surface amendment (2026-08-05): AC-05, AC-10, AC-11, AC-14, and AC-21
+also cover the bidirectional Google Calendar, Apple Calendar, Apple Reminders,
+and Apple Notes release. Deterministic tests exercise complete supported
+provider schemas, create/update/delete and completion feedback, recurrence and
+alarms, reminder lists and geofences, Notes folders and mutations, durable
+cursors, bridge command idempotency, runtime adapter configuration, and
+observation/governance. Real OAuth, EventKit, Notes Automation consent, and
+iCloud propagation remain explicit live activation evidence.
+
 ## Rules
 
 A row passes only from a clean checkout using production composition and
@@ -32,12 +41,12 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-02 | `tests/acceptance/test_runtime_spine.py` and `tests/integration/test_runtime_application.py` | One Python composition owns encrypted log, durable bus, exactly 13 projections, pipelines, six product routers, bridge ingest, readiness, unwind, and shutdown. |
 | AC-03 | `tests/acceptance/test_communication_commitment_vertical_slice.py` | Communication-to-outcome slice, guarded approval, replay, rebuild, stale/duplicate denial, and contextual next action pass. |
 | AC-04 | `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` | Enrolled member knowledge remains owner-stamped, searchable only where allowed, correctable, replayable, and source-spoof resistant. |
-| AC-05 | Full suite projection/schema tests, including calendar, task, commitment, list, recurrence, and interaction modules | Domain types remain separate while linked feedback updates the correct projections. |
+| AC-05 | Full suite projection/schema tests, including calendar, task, commitment, list, recurrence, interaction, and `tests/unit/test_primary_surface_v2.py` | Domain types remain separate while linked calendar attendance/change and reminder completion feedback update the correct projections. |
 | AC-06 | `tests/unit/test_what_now_gate6.py` plus the communication and Gate 7 acceptance slices | Deterministic time/context/energy/availability/blocker/freshness inputs produce explained next actions and immediate feedback. |
 | AC-07 | `tests/unit/test_event_log.py`, `tests/integration/test_projection_rebuild.py`, and runtime inventory tests | SQLCipher, wrong-key rejection, append-only log, exact 13-name registry, replay, and scope filtering pass. |
 | AC-08 | `tests/integration/test_security_end_to_end.py`, `tests/unit/test_scope.py`, and Gate 7 abuse tests | `authMember`/`viewMember`, owner, role, visibility, sensitivity, child, shared-screen, direct-route, and cross-owner rules fail closed. |
 | AC-09 | `tests/unit/test_event_bus.py`, pipeline runner tests, communication slice, and forced-exit test in `test_release_candidate_hardening.py` | Append-before-publish, checkpoints, redelivery, poison isolation, idempotency, retry bounds, restart, and committed-event recovery pass. |
-| AC-10 | Adapter base, validator, supervisor, cursor, and dual-deployment suites under `tests/unit/adapters`, `tests/unit/lib/adapters`, and `tests/integration/test_adapter_*` | Cat-A/B/C/D/E contracts, capabilities, allowlists, sensitivity, cursors, circuits, identities, and install validation pass. |
+| AC-10 | Adapter base, validator, supervisor, cursor, dual-deployment, primary-surface, and Apple Notes bridge command suites under `tests/unit/adapters`, `tests/unit/lib/adapters`, `tests/integration/test_adapter_*`, and `bridge/tests/` | Cat-A/B/C/D/E contracts, complete supported provider fields, bidirectional verbs, capabilities, allowlists, sensitivity, cursors, circuits, identities, command idempotency, and runtime adapter configuration pass. |
 | AC-11 | `tests/integration/test_security_end_to_end.py`, `tests/unit/test_observation.py`, and `tests/unit/test_notifications_gate6.py` | Governance order, independent approval, observation suppression, result ingestion, retries, and terminal audit pass. |
 | AC-12 | OpenClaw `check`, `contract`, `test`, `build`, and `pack --dry-run`; `tests/acceptance/test_openclaw_native_seam.py`; `tests/unit/bootstrap/test_openclaw_cron_reconciliation.py` | Exact native contract, scoped tools, model provenance, actor denial, exact-once outcomes, outage/restart, owned cron reconciliation/rollback, and compatibility refusal pass. Live install/inspect/deep-RPC remains an activation step. |
 | AC-13 | All `test_xlsx_*` unit/integration suites | Both named workbooks, protected/derived rejection, reverse events, sidecars, locks, conflicts, retries, and rebuild pass. |
@@ -48,7 +57,7 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-18 | `tests/acceptance/test_gate7_household_experience.py` and console harness `test:gate7` | Eight surfaces, three modes, named controls, responsive/reduced-motion captures, chat/degraded states, and private/promoted/archived quest states pass without browser errors. |
 | AC-19 | Runtime loopback validation, bridge authorization/enrollment tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, portal and bridge authorization maps are independently revocable, member self identity and owner scope are bound, spoofed/cross-owner requests fail, and legacy listeners are absent. |
 | AC-20 | `tests/acceptance/test_release_candidate_hardening.py`, runtime shutdown tests, and backup/restore tests | A real v1 encrypted file migrates through v3, old facts survive, wrong keys and mutation fail, repeated shutdown is safe, startup unwinds, and a committed append survives forced exit. |
-| AC-21 | `scripts/acceptance/openclaw-source-install.sh` and `scripts/acceptance/macos-bootstrap-rehearsal.sh` in the `macOS bootstrap contract` PR job plus the live checklist | Credential-free Apple-silicon exact-source build, central/member launchd/plist contracts, cron/bridge process contracts, start/stop/restart, backup/restore, and Doctor pass. Live Gateway RPC, real grants, and household providers remain post-merge human activation. |
+| AC-21 | `scripts/acceptance/openclaw-source-install.sh` and `scripts/acceptance/macos-bootstrap-rehearsal.sh` in the `macOS bootstrap contract` PR job plus the live checklist | Credential-free Apple-silicon exact-source build, central/member launchd/plist contracts, cron/bridge process contracts, start/stop/restart, backup/restore, and Doctor pass. Live Gateway RPC, OAuth, EventKit/Notes grants, iCloud propagation, and household providers remain post-merge human activation. |
 | AC-22 | `scripts/acceptance/architecture-negative-checks.sh` | No direct model SDK, manual pipeline/adapter bus publish, hardcoded tenant path/identity, direct projection write, executable/raw-log temporary view, or projection count other than 13. |
 | AC-23 | Gate 7 acceptance, `tests/unit/test_member_chat_gate7.py`, and OpenClaw checks | Adult chat is cancellable and bounded; sessions/transcripts/results cannot cross; ordinary chat emits no domain event; explicit proposals are private and guarded; temporary lenses are data-only, private, review-promoted, expirable, and non-contaminating. |
 

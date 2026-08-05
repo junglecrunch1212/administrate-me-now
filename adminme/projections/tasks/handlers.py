@@ -74,14 +74,22 @@ def apply_calendar_completion(
     qualifies = (
         policy == "on_elapsed" and p.get("outcome") in {"elapsed", "attended"}
     ) or (policy == "on_attended" and p.get("outcome") == "attended")
-    if p.get("linked_item_kind") != "task" or not p.get("linked_item_id") or not qualifies:
+    if (
+        p.get("linked_item_kind") != "task"
+        or not p.get("linked_item_id")
+        or not qualifies
+    ):
         return
     conn.execute(
         """UPDATE tasks SET status='done', completed_at=?, completed_by=?, last_event_id=?
              WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
         (
-            p["recorded_at"], p["member_id"], envelope["event_id"],
-            envelope["tenant_id"], p["linked_item_id"], envelope["event_id"],
+            p["recorded_at"],
+            p["member_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
+            envelope["event_id"],
         ),
     )
 
@@ -104,9 +112,13 @@ def apply_external_completion(
              WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
         (
             "done" if completed else "next",
-            str(p.get("completion_at") or p.get("last_modified_at")) if completed else None,
+            str(p.get("completion_at") or p.get("last_modified_at"))
+            if completed
+            else None,
             p.get("member_id") if completed else None,
-            envelope["event_id"], envelope["tenant_id"], p["linked_item_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
             envelope["event_id"],
         ),
     )

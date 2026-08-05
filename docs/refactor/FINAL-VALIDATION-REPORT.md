@@ -1,5 +1,35 @@
 # Gate 8 final validation report
 
+## 2026-08-05 primary-surface and install-readiness amendment
+
+The release candidate now includes the complete supported bidirectional schema
+and command paths for central Google Calendar and per-member Apple Calendar,
+Apple Reminders, and Apple Notes. It adds calendar/list discovery, recurrence,
+alarms, reminder time/location triggers, completion/change outcome feedback,
+Notes folder and note mutations, durable bridge commands, and deterministic
+projection enrichment. Review also found and fixed an install-critical
+composition defect: the production service parsed `config/adapters.json` but
+did not pass it to `RuntimeSettings`, so centrally configured adapters would
+not have started after reboot. Review also removed a best-effort exception
+swallow from all three primary sync adapters: a failed event-log or bridge
+ingest write must now return a durable event ID before local sync state moves.
+
+The operator read-along now separates the central CoS service from one
+per-member macOS bridge, gives exact macOS consent and Tailscale steps, prevents
+Google/EventKit duplication, and keeps the initial install credential-free in
+observation mode. Provider-native execution still requires live OAuth,
+EventKit full access, Notes Automation consent, iCloud propagation, and
+member-isolation checks on the actual Macs; these are documented activation
+gates rather than preclaimed test results.
+
+Local amendment evidence is 21 strict acceptance tests, 1,455 root/pack tests,
+60 bridge tests, and 25 focused primary-surface/bootstrap tests, with Ruff,
+format, mypy, production Pyright, dependency audits, root/bridge builds,
+architecture-negative checks, clean install, tenant isolation, encrypted
+backup/restore, OpenClaw contract/12-test/build/package/audit, and every
+performance budget passing. The final Apple-silicon aggregate and shellcheck
+remain mandatory green checks on the exact PR head before merge.
+
 ## 2026-08-04 bootstrap remediation addendum
 
 The historical Gate 8 report below describes the earlier implementation

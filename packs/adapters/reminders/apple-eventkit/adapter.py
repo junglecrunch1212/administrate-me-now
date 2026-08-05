@@ -837,16 +837,26 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             expected_revision = payload.get("expected_provider_revision")
             actual_modified = getattr(reminder, "last_modified_at", None)
             actual_revision = (
-                _to_iso(actual_modified) if isinstance(actual_modified, datetime) else None
+                _to_iso(actual_modified)
+                if isinstance(actual_modified, datetime)
+                else None
             )
-            if expected_revision and actual_revision and str(expected_revision) != actual_revision:
+            if (
+                expected_revision
+                and actual_revision
+                and str(expected_revision) != actual_revision
+            ):
                 raise ProviderConflictError(
                     f"Apple Reminder {target_id} changed ({actual_revision})"
                 )
             changes = dict(payload)
             if operation.kind == "complete_reminder":
                 changes["completed"] = True
-                now = self._ctx.now_factory() if self._ctx is not None else datetime.now(timezone.utc)
+                now = (
+                    self._ctx.now_factory()
+                    if self._ctx is not None
+                    else datetime.now(timezone.utc)
+                )
                 changes.setdefault("completion_at", _to_iso(now))
             elif operation.kind == "uncomplete_reminder":
                 changes["completed"] = False
@@ -1108,7 +1118,10 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 ctx=ctx, reminder=rem, sync_cycle_id=sync_cycle_id
             )
             emitted += 1
-        if self._initial_sync_complete and int(self._config.get("emit_schema_version", 1)) >= 2:
+        if (
+            self._initial_sync_complete
+            and int(self._config.get("emit_schema_version", 1)) >= 2
+        ):
             for missing_id in self._known_inbound_ids - observed_ids:
                 await self._append(
                     ctx=ctx,
@@ -1122,7 +1135,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                             or self._config["member_id"]
                         ),
                         "list_external_id": str(
-                            self._inbound_snapshots.get(missing_id, {}).get("list_external_id")
+                            self._inbound_snapshots.get(missing_id, {}).get(
+                                "list_external_id"
+                            )
                             or self._config["target_list_identifier"]
                         ),
                         "item_external_id": missing_id,
@@ -1166,7 +1181,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 await self._append(
                     ctx=ctx,
                     event_type=(
-                        "list.updated" if list_id in self._known_lists else "list.created"
+                        "list.updated"
+                        if list_id in self._known_lists
+                        else "list.created"
                     ),
                     payload={
                         "member_id": str(self._config["member_id"]),
@@ -1549,10 +1566,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         causation_id: str | None = None,
         schema_version: int = 1,
     ) -> None:
-        """Best-effort write through the typed event-sink contract.
-
-        A failed emit must not crash the adapter; the structured adapter log
-        remains the diagnostic path when the event store itself is down.
+        """Write through the typed event sink before advancing local sync state.
 
         α-2 dual-deployment branch: ``deployment_target=="bridge"``
         dispatches through the wrapper-injected ``BridgeEventSink``
@@ -1569,20 +1583,16 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             )
             return
 
-        # ----- central path (byte-for-byte preserved from 11b-i / 11r-c) -----
-        try:
-            await write_adapter_event(
-                ctx,
-                adapter_name=self.name,
-                sensitivity_floor=self.sensitivity_floor,
-                config=self._config,
-                event_type=event_type,
-                payload=payload,
-                causation_id=causation_id,
-                schema_version=schema_version,
-            )
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception("reminders adapter failed to emit %s event", event_type)
+        await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            schema_version=schema_version,
+        )
 
     async def _append_via_bridge_sink(
         self,
@@ -1624,30 +1634,16 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             causation_id=causation_id,
             payload=payload,
         )
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            _log.exception(
-                "reminders adapter bridge emit skipped — no running event "
-                "loop (type=%s)",
-                event_type,
-            )
-            return
         await self._dispatch_bridge_emit(envelope)
 
     async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
-        """Best-effort sink dispatch — symmetric with the central path's
-        exception swallow so a sink-side failure doesn't crash the loop."""
+        """Require a durable central-ingest acknowledgement before returning."""
         sink = self._bridge_sink
         if sink is None:
-            return
-        try:
-            await sink.emit(envelope)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "reminders adapter bridge sink emit failed for %s",
-                envelope.type,
-            )
+            raise RuntimeError("Apple Reminders bridge sink is not configured")
+        result = await sink.emit(envelope)
+        if not result.ok or result.event_id is None:
+            raise RuntimeError(result.error or "Apple Reminders bridge emit failed")
 
 
 # ----------------------------------------------------------------------

@@ -179,7 +179,9 @@ class AdapterSupervisor:
                 continue
             if config.get("member_id") not in (None, "", member_id):
                 continue
-            configured_account = config.get("provider_account_id") or config.get("subject_email")
+            configured_account = config.get("provider_account_id") or config.get(
+                "subject_email"
+            )
             if configured_account not in (None, "", provider_account_id):
                 continue
             if callable(getattr(adapter, "apply_write", None)):

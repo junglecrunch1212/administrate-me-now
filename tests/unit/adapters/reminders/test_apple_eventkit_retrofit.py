@@ -401,9 +401,7 @@ def test_pack_yaml_extension_fields_round_trip() -> None:
 
     assert manifest.sensitivity_default == "normal"
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {
-        "kind": "calendar_item_identifier_last_modified"
-    }
+    assert manifest.dedup_strategy == {"kind": "calendar_item_identifier_last_modified"}
     assert manifest.write_capabilities == [
         "create_reminder",
         "update_reminder",

@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """RFC 5545 recurrence conversion for the PyObjC EventKit bridges.
 
 EventKit exposes recurrence as object graphs while Google Calendar and the
@@ -9,7 +10,7 @@ that ``EKRecurrenceRule`` makes public.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 
 _WEEKDAYS = {"SU": 1, "MO": 2, "TU": 3, "WE": 4, "TH": 5, "FR": 6, "SA": 7}
@@ -43,7 +44,9 @@ def parse_rrule(value: str) -> dict[str, Any]:
             if day_name not in _WEEKDAYS:
                 raise ValueError(f"invalid RRULE weekday: {token!r}")
             ordinal_raw = token[:-2]
-            weekdays.append((_WEEKDAYS[day_name], int(ordinal_raw) if ordinal_raw else 0))
+            weekdays.append(
+                (_WEEKDAYS[day_name], int(ordinal_raw) if ordinal_raw else 0)
+            )
 
     until: datetime | None = None
     if "UNTIL" in parts:
@@ -88,11 +91,15 @@ def build_eventkit_rule(eventkit: Any, value: str) -> Any:
             )
     end = None
     if parsed["count"] is not None:
-        end = eventkit.EKRecurrenceEnd.recurrenceEndWithOccurrenceCount_(parsed["count"])
+        end = eventkit.EKRecurrenceEnd.recurrenceEndWithOccurrenceCount_(
+            parsed["count"]
+        )
     elif parsed["until"] is not None:
-        from Foundation import NSDate
+        from Foundation import NSDate  # type: ignore[import-not-found]
 
-        native_until = NSDate.dateWithTimeIntervalSince1970_(parsed["until"].timestamp())
+        native_until = NSDate.dateWithTimeIntervalSince1970_(
+            parsed["until"].timestamp()
+        )
         end = eventkit.EKRecurrenceEnd.recurrenceEndWithEndDate_(native_until)
     return eventkit.EKRecurrenceRule.alloc().initRecurrenceWithFrequency_interval_daysOfTheWeek_daysOfTheMonth_monthsOfTheYear_weeksOfTheYear_daysOfTheYear_setPositions_end_(
         frequency,
@@ -118,7 +125,9 @@ def eventkit_rule_to_rrule(rule: Any) -> str:
         int(call("frequency", -1))
     )
     if frequency is None:
-        raise ValueError(f"unknown EventKit recurrence frequency: {call('frequency')!r}")
+        raise ValueError(
+            f"unknown EventKit recurrence frequency: {call('frequency')!r}"
+        )
     parts = [f"FREQ={frequency}"]
     interval = int(call("interval", 1) or 1)
     if interval != 1:
@@ -129,9 +138,14 @@ def eventkit_rule_to_rrule(rule: Any) -> str:
         for day in days:
             weekday = getattr(day, "dayOfTheWeek", None)
             weekday = weekday() if callable(weekday) else weekday
+            if weekday is None:
+                raise ValueError("EventKit recurrence weekday is missing")
             ordinal = getattr(day, "weekNumber", None)
             ordinal = ordinal() if callable(ordinal) else (ordinal or 0)
-            encoded.append(f"{int(ordinal) if ordinal else ''}{_WEEKDAY_NAMES[int(weekday)]}")
+            encoded.append(
+                f"{int(cast(Any, ordinal)) if ordinal else ''}"
+                f"{_WEEKDAY_NAMES[int(cast(Any, weekday))]}"
+            )
         parts.append("BYDAY=" + ",".join(encoded))
     for field, name in (
         ("daysOfTheMonth", "BYMONTHDAY"),
@@ -142,7 +156,9 @@ def eventkit_rule_to_rrule(rule: Any) -> str:
     ):
         values = call(field, []) or []
         if values:
-            parts.append(f"{name}=" + ",".join(str(int(value)) for value in values))
+            parts.append(
+                f"{name}=" + ",".join(str(int(cast(Any, value))) for value in values)
+            )
     recurrence_end = call("recurrenceEnd")
     if recurrence_end is not None:
         count = getattr(recurrence_end, "occurrenceCount", None)
@@ -150,12 +166,14 @@ def eventkit_rule_to_rrule(rule: Any) -> str:
         end_date = getattr(recurrence_end, "endDate", None)
         end_date = end_date() if callable(end_date) else end_date
         if count:
-            parts.append(f"COUNT={int(count)}")
+            parts.append(f"COUNT={int(cast(Any, count))}")
         elif end_date is not None:
             timestamp = getattr(end_date, "timeIntervalSince1970", None)
             timestamp = timestamp() if callable(timestamp) else timestamp
             if timestamp is not None:
-                until = datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+                until = datetime.fromtimestamp(
+                    float(cast(Any, timestamp)), tz=timezone.utc
+                )
                 parts.append("UNTIL=" + until.strftime("%Y%m%dT%H%M%SZ"))
     return "RRULE:" + ";".join(parts)
 

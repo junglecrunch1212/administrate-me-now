@@ -164,9 +164,7 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
         "move_event",
     ]
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {
-        "kind": "event_identifier_last_modified"
-    }
+    assert manifest.dedup_strategy == {"kind": "event_identifier_last_modified"}
     assert manifest.sensitivity_default == "normal"
     assert manifest.observation_mode_required is True
 

@@ -101,6 +101,14 @@ class _FakeBridgeSink:
         return EmitResult(ok=True, event_id="evt-bridge-1", error=None)
 
 
+class _FailingBridgeSink(_FakeBridgeSink):
+    async def emit(self, envelope: EventEnvelope) -> Any:
+        from adminme_bridge.adapters.sinks import EmitResult
+
+        self.envelopes.append(envelope)
+        return EmitResult(ok=False, event_id=None, error="central ingest unavailable")
+
+
 def _make_adapter() -> Any:
     """Construct an adapter with the minimal constructor config the
     central-path start() validates. Pack-level fixture state
@@ -324,6 +332,27 @@ def test_bridge_path_uses_injected_sink_for_emit() -> None:
     # Per memo 04 §2.2: provisional owner_scope reflects the per-member
     # bridge identity; central :3337 router re-stamps from Tailscale.
     assert envelope.owner_scope == "private:member-bridge-alice"
+
+
+def test_bridge_emit_failure_propagates_before_reminder_cursor_advances() -> None:
+    adapter = _make_adapter()
+    startup_sink = _FakeBridgeSink()
+    ctx = _make_ctx(
+        deployment_target="bridge",
+        bridge_member_id="member-bridge-failure",
+        bridge_sink=startup_sink,
+    )
+    _start(adapter, ctx)
+    adapter._bridge_sink = _FailingBridgeSink()
+
+    with pytest.raises(RuntimeError, match="central ingest unavailable"):
+        asyncio.run(
+            adapter._append(
+                ctx=ctx,
+                event_type="list_item.added",
+                payload={"member_id": "member-bridge-failure"},
+            )
+        )
 
 
 def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:

@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 """EventKit transport boundary for Apple Reminders.
 
 Tests inject protocol-shaped fakes.  On macOS the default factory uses PyObjC
@@ -64,15 +65,21 @@ class EKEventStoreLike(Protocol):
         priority: int,
     ) -> EKReminderLike: ...
 
-    def update_reminder(self, reminder: EKReminderLike, *, payload: dict[str, Any]) -> EKReminderLike: ...
+    def update_reminder(
+        self, reminder: EKReminderLike, *, payload: dict[str, Any]
+    ) -> EKReminderLike: ...
     def reminder_with_identifier(self, external_id: str) -> EKReminderLike | None: ...
     def save(self, reminder: EKReminderLike, *, commit: bool) -> None: ...
     def remove(self, reminder: EKReminderLike, *, commit: bool) -> None: ...
-    def fetch_reminders(self, *, list_identifier: str | None = None) -> list[EKReminderLike]: ...
+    def fetch_reminders(
+        self, *, list_identifier: str | None = None
+    ) -> list[EKReminderLike]: ...
     def fetch_lists(self) -> list[ReminderListRecord]: ...
     def list_name_for_identifier(self, list_identifier: str) -> str: ...
     def create_list(self, *, name: str, color: str | None = None) -> str: ...
-    def update_list(self, list_identifier: str, *, name: str | None, color: str | None) -> None: ...
+    def update_list(
+        self, list_identifier: str, *, name: str | None, color: str | None
+    ) -> None: ...
     def delete_list(self, list_identifier: str) -> None: ...
 
 
@@ -92,7 +99,9 @@ class NoopEKEventStore:
     def remove(self, reminder: EKReminderLike, *, commit: bool) -> None:
         self.__getattr__("remove")()
 
-    def fetch_reminders(self, *, list_identifier: str | None = None) -> list[EKReminderLike]:
+    def fetch_reminders(
+        self, *, list_identifier: str | None = None
+    ) -> list[EKReminderLike]:
         return self.__getattr__("fetch_reminders")()
 
     def list_name_for_identifier(self, list_identifier: str) -> str:
@@ -110,13 +119,21 @@ def _datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     timestamp = _call(value, "timeIntervalSince1970")
-    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc) if timestamp is not None else None
+    return (
+        datetime.fromtimestamp(float(timestamp), tz=timezone.utc)
+        if timestamp is not None
+        else None
+    )
 
 
 def _nsdate(value: datetime | str) -> Any:
     from Foundation import NSDate
 
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+    parsed = (
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, str)
+        else value
+    )
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return NSDate.dateWithTimeIntervalSince1970_(parsed.timestamp())
@@ -137,17 +154,27 @@ def _components_dict(value: Any) -> dict[str, Any] | None:
     return result
 
 
-def _native_components(spec: dict[str, Any] | None, due_at: datetime | str | None) -> Any:
+def _native_components(
+    spec: dict[str, Any] | None, due_at: datetime | str | None
+) -> Any:
     from Foundation import NSDateComponents, NSTimeZone
 
     if spec is None and due_at is None:
         return None
     if spec is None:
-        parsed = datetime.fromisoformat(due_at.replace("Z", "+00:00")) if isinstance(due_at, str) else due_at
+        parsed = (
+            datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+            if isinstance(due_at, str)
+            else due_at
+        )
         assert parsed is not None
         spec = {
-            "year": parsed.year, "month": parsed.month, "day": parsed.day,
-            "hour": parsed.hour, "minute": parsed.minute, "second": parsed.second,
+            "year": parsed.year,
+            "month": parsed.month,
+            "day": parsed.day,
+            "hour": parsed.hour,
+            "minute": parsed.minute,
+            "second": parsed.second,
             "time_zone": str(parsed.tzinfo) if parsed.tzinfo else None,
         }
     components = NSDateComponents.alloc().init()
@@ -181,7 +208,9 @@ def _ensure_access(store: Any) -> None:
     if not complete.wait(60):
         raise TimeoutError("EventKit Reminders permission request timed out")
     if not result["granted"]:
-        raise PermissionError(f"full Apple Reminders access was not granted: {result['error']}")
+        raise PermissionError(
+            f"full Apple Reminders access was not granted: {result['error']}"
+        )
 
 
 def _cgcolor_hex(value: Any) -> str | None:
@@ -197,7 +226,9 @@ def _cgcolor_hex(value: Any) -> str | None:
         components = [components[0], components[0], components[0], components[1]]
     if len(components) < 3:
         return None
-    return "#" + "".join(f"{round(max(0, min(1, float(c))) * 255):02X}" for c in components[:3])
+    return "#" + "".join(
+        f"{round(max(0, min(1, float(c))) * 255):02X}" for c in components[:3]
+    )
 
 
 def _set_calendar_color(calendar: Any, value: str | None) -> None:
@@ -206,7 +237,9 @@ def _set_calendar_color(calendar: Any, value: str | None) -> None:
     raw = value.lstrip("#")
     if len(raw) not in {6, 8}:
         raise ValueError("calendar color must be #RRGGBB or #RRGGBBAA")
-    channels = [int(raw[index : index + 2], 16) / 255 for index in range(0, len(raw), 2)]
+    channels = [
+        int(raw[index : index + 2], 16) / 255 for index in range(0, len(raw), 2)
+    ]
     if len(channels) == 3:
         channels.append(1.0)
     from Quartz import CGColorCreate, CGColorSpaceCreateDeviceRGB
@@ -219,7 +252,9 @@ class PyObjCEventStore:
         try:
             from EventKit import EKEventStore
         except ImportError as exc:  # pragma: no cover - macOS-only
-            raise RuntimeError("pyobjc-framework-EventKit is required on the member bridge") from exc
+            raise RuntimeError(
+                "pyobjc-framework-EventKit is required on the member bridge"
+            ) from exc
         self._store = EKEventStore.alloc().init()
         _ensure_access(self._store)
 
@@ -237,7 +272,9 @@ class PyObjCEventStore:
         calendar = _call(reminder, "calendar")
         due_components = _components_dict(_call(reminder, "dueDateComponents"))
         due_at: str | None = None
-        if due_components and all(due_components.get(key) for key in ("year", "month", "day")):
+        if due_components and all(
+            due_components.get(key) for key in ("year", "month", "day")
+        ):
             due_at = (
                 f"{due_components['year']:04d}-{due_components['month']:02d}-{due_components['day']:02d}"
                 f"T{int(due_components.get('hour') or 0):02d}:{int(due_components.get('minute') or 0):02d}:00"
@@ -248,27 +285,44 @@ class PyObjCEventStore:
             geo = _call(location, "geoLocation") if location is not None else None
             if location is not None and geo is not None:
                 coordinate = _call(geo, "coordinate")
-                alarms.append({
-                    "kind": "location", "absolute_at": None, "relative_offset_seconds": None,
-                    "location": {
-                        "title": str(_call(location, "title") or "Location"),
-                        "latitude": float(getattr(coordinate, "latitude", 0.0)),
-                        "longitude": float(getattr(coordinate, "longitude", 0.0)),
-                        "radius_meters": float(_call(location, "radius", 100.0)),
-                    },
-                    "proximity": {1: "enter", 2: "leave"}.get(int(_call(alarm, "proximity", 0)), "none"),
-                })
+                alarms.append(
+                    {
+                        "kind": "location",
+                        "absolute_at": None,
+                        "relative_offset_seconds": None,
+                        "location": {
+                            "title": str(_call(location, "title") or "Location"),
+                            "latitude": float(getattr(coordinate, "latitude", 0.0)),
+                            "longitude": float(getattr(coordinate, "longitude", 0.0)),
+                            "radius_meters": float(_call(location, "radius", 100.0)),
+                        },
+                        "proximity": {1: "enter", 2: "leave"}.get(
+                            int(_call(alarm, "proximity", 0)), "none"
+                        ),
+                    }
+                )
             elif _call(alarm, "absoluteDate") is not None:
-                alarms.append({
-                    "kind": "absolute", "absolute_at": _datetime(_call(alarm, "absoluteDate")),
-                    "relative_offset_seconds": None, "location": None, "proximity": "none",
-                })
+                alarms.append(
+                    {
+                        "kind": "absolute",
+                        "absolute_at": _datetime(_call(alarm, "absoluteDate")),
+                        "relative_offset_seconds": None,
+                        "location": None,
+                        "proximity": "none",
+                    }
+                )
             else:
-                alarms.append({
-                    "kind": "relative", "absolute_at": None,
-                    "relative_offset_seconds": int(_call(alarm, "relativeOffset", 0)),
-                    "location": None, "proximity": "none",
-                })
+                alarms.append(
+                    {
+                        "kind": "relative",
+                        "absolute_at": None,
+                        "relative_offset_seconds": int(
+                            _call(alarm, "relativeOffset", 0)
+                        ),
+                        "location": None,
+                        "proximity": "none",
+                    }
+                )
         url = _call(reminder, "URL")
         return ReminderRecord(
             calendarItemIdentifier=str(_call(reminder, "calendarItemIdentifier") or ""),
@@ -292,54 +346,85 @@ class PyObjCEventStore:
         )
 
     def build_reminder(
-        self, *, list_identifier: str, title: str, notes: str | None,
-        due_at: datetime | str | None, priority: int
+        self,
+        *,
+        list_identifier: str,
+        title: str,
+        notes: str | None,
+        due_at: datetime | str | None,
+        priority: int,
     ) -> ReminderRecord:
         from EventKit import EKReminder
 
         native = EKReminder.reminderWithEventStore_(self._store)
-        record = ReminderRecord("", list_identifier, title, notes, priority, due_at=due_at, _native=native)
-        return self.update_reminder(record, payload={
-            "target_list_id": list_identifier, "title": title, "notes": notes,
-            "due_at": due_at, "priority": priority,
-        })
+        record = ReminderRecord(
+            "", list_identifier, title, notes, priority, due_at=due_at, _native=native
+        )
+        return self.update_reminder(
+            record,
+            payload={
+                "target_list_id": list_identifier,
+                "title": title,
+                "notes": notes,
+                "due_at": due_at,
+                "priority": priority,
+            },
+        )
 
     def reminder_with_identifier(self, external_id: str) -> ReminderRecord | None:
         native = self._store.calendarItemWithIdentifier_(external_id)
         return self._record(native) if native is not None else None
 
-    def update_reminder(self, reminder: EKReminderLike, *, payload: dict[str, Any]) -> ReminderRecord:
+    def update_reminder(
+        self, reminder: EKReminderLike, *, payload: dict[str, Any]
+    ) -> ReminderRecord:
         from Foundation import NSURL
 
-        record = reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
+        record = (
+            reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
+        )
         native = record._native
         list_id = payload.get("target_list_id") or payload.get("list_external_id")
         if list_id:
             native.setCalendar_(self._calendar(str(list_id)))
             record.list_identifier = str(list_id)
-        for key, setter in (("title", "setTitle_"), ("notes", "setNotes_"), ("priority", "setPriority_")):
+        for key, setter in (
+            ("title", "setTitle_"),
+            ("notes", "setNotes_"),
+            ("priority", "setPriority_"),
+        ):
             if key in payload:
                 getattr(native, setter)(payload[key])
                 setattr(record, key, payload[key])
         if "url" in payload:
-            native.setURL_(NSURL.URLWithString_(str(payload["url"])) if payload["url"] else None)
+            native.setURL_(
+                NSURL.URLWithString_(str(payload["url"])) if payload["url"] else None
+            )
         if "due" in payload or "due_at" in payload:
-            native.setDueDateComponents_(_native_components(payload.get("due"), payload.get("due_at")))
+            native.setDueDateComponents_(
+                _native_components(payload.get("due"), payload.get("due_at"))
+            )
         if "start" in payload:
-            native.setStartDateComponents_(_native_components(payload.get("start"), None))
+            native.setStartDateComponents_(
+                _native_components(payload.get("start"), None)
+            )
         if "completed" in payload:
             native.setCompleted_(bool(payload["completed"]))
         if "completion_at" in payload and payload["completion_at"]:
             native.setCompletionDate_(_nsdate(payload["completion_at"]))
         if "alarms" in payload:
-            native.setAlarms_([self._alarm(spec) for spec in payload.get("alarms") or []])
+            native.setAlarms_(
+                [self._alarm(spec) for spec in payload.get("alarms") or []]
+            )
         if "recurrence_rules" in payload:
             import EventKit
 
-            native.setRecurrenceRules_([
-                build_eventkit_rule(EventKit, rule)
-                for rule in payload.get("recurrence_rules") or []
-            ])
+            native.setRecurrenceRules_(
+                [
+                    build_eventkit_rule(EventKit, rule)
+                    for rule in payload.get("recurrence_rules") or []
+                ]
+            )
         return record
 
     @staticmethod
@@ -349,33 +434,48 @@ class PyObjCEventStore:
         if spec["kind"] == "absolute":
             return EKAlarm.alarmWithAbsoluteDate_(_nsdate(spec["absolute_at"]))
         if spec["kind"] == "relative":
-            return EKAlarm.alarmWithRelativeOffset_(float(spec["relative_offset_seconds"]))
+            return EKAlarm.alarmWithRelativeOffset_(
+                float(spec["relative_offset_seconds"])
+            )
         from CoreLocation import CLLocation
 
         location_spec = spec["location"]
         location = EKStructuredLocation.locationWithTitle_(location_spec["title"])
-        location.setGeoLocation_(CLLocation.alloc().initWithLatitude_longitude_(
-            float(location_spec["latitude"]), float(location_spec["longitude"])
-        ))
+        location.setGeoLocation_(
+            CLLocation.alloc().initWithLatitude_longitude_(
+                float(location_spec["latitude"]), float(location_spec["longitude"])
+            )
+        )
         location.setRadius_(float(location_spec.get("radius_meters") or 100.0))
         alarm = EKAlarm.alarmWithStructuredLocation_(location)
-        alarm.setProximity_({"enter": 1, "leave": 2}.get(spec.get("proximity"), 0))
+        proximity = str(spec.get("proximity") or "")
+        alarm.setProximity_({"enter": 1, "leave": 2}.get(proximity, 0))
         return alarm
 
     def save(self, reminder: EKReminderLike, *, commit: bool) -> None:
-        record = reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
+        record = (
+            reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
+        )
         ok, error = self._store.saveReminder_commit_error_(record._native, commit, None)
         if not ok:
             raise RuntimeError(f"EventKit reminder save failed: {error}")
-        record.calendarItemIdentifier = str(_call(record._native, "calendarItemIdentifier") or "")
+        record.calendarItemIdentifier = str(
+            _call(record._native, "calendarItemIdentifier") or ""
+        )
 
     def remove(self, reminder: EKReminderLike, *, commit: bool) -> None:
-        record = reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
-        ok, error = self._store.removeReminder_commit_error_(record._native, commit, None)
+        record = (
+            reminder if isinstance(reminder, ReminderRecord) else self._record(reminder)
+        )
+        ok, error = self._store.removeReminder_commit_error_(
+            record._native, commit, None
+        )
         if not ok:
             raise RuntimeError(f"EventKit reminder delete failed: {error}")
 
-    def fetch_reminders(self, *, list_identifier: str | None = None) -> list[ReminderRecord]:
+    def fetch_reminders(
+        self, *, list_identifier: str | None = None
+    ) -> list[EKReminderLike]:
         calendars = [self._calendar(list_identifier)] if list_identifier else None
         predicate = self._store.predicateForRemindersInCalendars_(calendars)
         completed = threading.Event()
@@ -400,9 +500,12 @@ class PyObjCEventStore:
                 calendarIdentifier=str(_call(calendar, "calendarIdentifier") or ""),
                 title=str(_call(calendar, "title") or ""),
                 color=_cgcolor_hex(_call(calendar, "CGColor")),
-                is_default=str(_call(calendar, "calendarIdentifier") or "") == default_id,
+                is_default=str(_call(calendar, "calendarIdentifier") or "")
+                == default_id,
             )
-            for calendar in (self._store.calendarsForEntityType_(EKEntityTypeReminder) or [])
+            for calendar in (
+                self._store.calendarsForEntityType_(EKEntityTypeReminder) or []
+            )
         ]
 
     def list_name_for_identifier(self, list_identifier: str) -> str:
@@ -411,16 +514,22 @@ class PyObjCEventStore:
     def create_list(self, *, name: str, color: str | None = None) -> str:
         from EventKit import EKCalendar, EKEntityTypeReminder
 
-        calendar = EKCalendar.calendarForEntityType_eventStore_(EKEntityTypeReminder, self._store)
+        calendar = EKCalendar.calendarForEntityType_eventStore_(
+            EKEntityTypeReminder, self._store
+        )
         calendar.setTitle_(name)
-        calendar.setSource_(_call(self._store.defaultCalendarForNewReminders(), "source"))
+        calendar.setSource_(
+            _call(self._store.defaultCalendarForNewReminders(), "source")
+        )
         _set_calendar_color(calendar, color)
         ok, error = self._store.saveCalendar_commit_error_(calendar, True, None)
         if not ok:
             raise RuntimeError(f"EventKit list create failed: {error}")
         return str(_call(calendar, "calendarIdentifier") or "")
 
-    def update_list(self, list_identifier: str, *, name: str | None, color: str | None) -> None:
+    def update_list(
+        self, list_identifier: str, *, name: str | None, color: str | None
+    ) -> None:
         calendar = self._calendar(list_identifier)
         if name is not None:
             calendar.setTitle_(name)
@@ -430,7 +539,9 @@ class PyObjCEventStore:
             raise RuntimeError(f"EventKit list update failed: {error}")
 
     def delete_list(self, list_identifier: str) -> None:
-        ok, error = self._store.removeCalendar_commit_error_(self._calendar(list_identifier), True, None)
+        ok, error = self._store.removeCalendar_commit_error_(
+            self._calendar(list_identifier), True, None
+        )
         if not ok:
             raise RuntimeError(f"EventKit list delete failed: {error}")
 
@@ -440,6 +551,11 @@ def default_event_store() -> EKEventStoreLike:
 
 
 __all__ = [
-    "EKEventStoreLike", "EKReminderLike", "NoopEKEventStore",
-    "PyObjCEventStore", "ReminderListRecord", "ReminderRecord", "default_event_store",
+    "EKEventStoreLike",
+    "EKReminderLike",
+    "NoopEKEventStore",
+    "PyObjCEventStore",
+    "ReminderListRecord",
+    "ReminderRecord",
+    "default_event_store",
 ]

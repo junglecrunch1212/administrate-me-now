@@ -44,7 +44,12 @@ def apply_event(envelope: dict[str, Any], conn: Any) -> None:
     elif event_type == "member_knowledge.folder_deleted":
         conn.execute(
             "DELETE FROM member_knowledge_folders WHERE tenant_id=? AND member_id=? AND source_kind=? AND folder_external_id=?",
-            (envelope["tenant_id"], member_id, payload["source_kind"], payload["folder_external_id"]),
+            (
+                envelope["tenant_id"],
+                member_id,
+                payload["source_kind"],
+                payload["folder_external_id"],
+            ),
         )
     else:
         apply_folder(envelope, conn)
@@ -86,24 +91,41 @@ def apply_note(envelope: dict[str, Any], conn: Any) -> None:
         WHERE excluded.last_event_id >= member_knowledge.last_event_id
         """,
         (
-            envelope["tenant_id"], p["knowledge_id"], p["member_id"],
-            envelope["owner_scope"], envelope["visibility_scope"],
-            envelope.get("sensitivity", "normal"), p.get("title"), p["body"],
-            p.get("body_format", "plain"), p["source_kind"], p["source_external_id"],
-            p.get("account_external_id"), p.get("account_name"),
-            p.get("folder_external_id"), p.get("folder_path"), p["content_sha256"],
-            str(p["captured_at"]), str(p.get("created_at") or "") or None,
+            envelope["tenant_id"],
+            p["knowledge_id"],
+            p["member_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope.get("sensitivity", "normal"),
+            p.get("title"),
+            p["body"],
+            p.get("body_format", "plain"),
+            p["source_kind"],
+            p["source_external_id"],
+            p.get("account_external_id"),
+            p.get("account_name"),
+            p.get("folder_external_id"),
+            p.get("folder_path"),
+            p["content_sha256"],
+            str(p["captured_at"]),
+            str(p.get("created_at") or "") or None,
             str(p.get("provider_modified_at") or "") or None,
-            p.get("provider_revision"), 1 if p.get("locked") else 0,
+            p.get("provider_revision"),
+            1 if p.get("locked") else 0,
             1 if p.get("shared") else 0,
             None if p.get("pinned") is None else (1 if p.get("pinned") else 0),
-            None if p.get("tags") is None else json.dumps(p["tags"], separators=(",", ":")),
+            None
+            if p.get("tags") is None
+            else json.dumps(p["tags"], separators=(",", ":")),
             json.dumps(p.get("attachments") or [], separators=(",", ":")),
             json.dumps(p.get("metadata") or {}, separators=(",", ":")),
             json.dumps(p.get("capability_warnings") or [], separators=(",", ":")),
-            p.get("supersedes_event_id"), envelope["source_adapter"],
-            envelope["source_account_id"], envelope.get("correlation_id"),
-            envelope.get("causation_id"), envelope["event_id"],
+            p.get("supersedes_event_id"),
+            envelope["source_adapter"],
+            envelope["source_account_id"],
+            envelope.get("correlation_id"),
+            envelope.get("causation_id"),
+            envelope["event_id"],
         ),
     )
 
@@ -124,11 +146,18 @@ def apply_folder(envelope: dict[str, Any], conn: Any) -> None:
             changed_at=excluded.changed_at, last_event_id=excluded.last_event_id
         """,
         (
-            envelope["tenant_id"], p["member_id"], p["source_kind"],
-            p.get("account_external_id"), p["folder_external_id"], p["folder_path"],
-            p.get("parent_folder_external_id"), str(p["changed_at"]),
-            envelope["owner_scope"], envelope["visibility_scope"],
-            envelope["sensitivity"], envelope["event_id"],
+            envelope["tenant_id"],
+            p["member_id"],
+            p["source_kind"],
+            p.get("account_external_id"),
+            p["folder_external_id"],
+            p["folder_path"],
+            p.get("parent_folder_external_id"),
+            str(p["changed_at"]),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
         ),
     )
 

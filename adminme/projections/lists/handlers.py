@@ -31,7 +31,9 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     elif event_type == "list.deleted":
         apply_list_deleted(envelope, conn)
     elif event_type in {
-        "list_item.added", "list_item.updated", "list_item.completed",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
         "list_item.uncompleted",
     }:
         apply_list_item_snapshot(envelope, conn)
@@ -57,12 +59,20 @@ def apply_list_changed(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             sensitivity=excluded.sensitivity, last_event_id=excluded.last_event_id
         """,
         (
-            envelope["tenant_id"], p["member_id"], p["provider"],
-            p["provider_account_id"], p["list_external_id"], p["list_name"],
-            p.get("color"), 1 if p.get("is_default") else 0,
-            p.get("provider_revision"), _iso(p["changed_at"]),
-            envelope["owner_scope"], envelope["visibility_scope"],
-            envelope["sensitivity"], envelope["event_id"],
+            envelope["tenant_id"],
+            p["member_id"],
+            p["provider"],
+            p["provider_account_id"],
+            p["list_external_id"],
+            p["list_name"],
+            p.get("color"),
+            1 if p.get("is_default") else 0,
+            p.get("provider_revision"),
+            _iso(p["changed_at"]),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
         ),
     )
 
@@ -71,7 +81,12 @@ def apply_list_deleted(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
     p = envelope["payload"]
     conn.execute(
         "DELETE FROM lists WHERE tenant_id=? AND provider=? AND provider_account_id=? AND list_external_id=?",
-        (envelope["tenant_id"], p["provider"], p["provider_account_id"], p["list_external_id"]),
+        (
+            envelope["tenant_id"],
+            p["provider"],
+            p["provider_account_id"],
+            p["list_external_id"],
+        ),
     )
     conn.execute(
         "DELETE FROM list_items WHERE tenant_id=? AND list_external_id=? AND member_id=?",
@@ -87,10 +102,10 @@ def apply_list_item_snapshot(
     due = p.get("due") if v2 else None
     due_at = p.get("due_at")
     if due_at is None and isinstance(due, dict):
-        parts = [due.get("year"), due.get("month"), due.get("day")]
-        if all(part is not None for part in parts):
+        year, month, day = due.get("year"), due.get("month"), due.get("day")
+        if year is not None and month is not None and day is not None:
             due_at = (
-                f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+                f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
                 f"T{int(due.get('hour') or 0):02d}:{int(due.get('minute') or 0):02d}:00"
             )
     conn.execute(
@@ -125,21 +140,39 @@ def apply_list_item_snapshot(
             sensitivity=excluded.sensitivity, last_event_id=excluded.last_event_id
         """,
         (
-            envelope["tenant_id"], p["list_external_id"], p["item_external_id"],
-            p["member_id"], _provider(envelope, p), p.get("provider_account_id"),
-            p["list_name"], p.get("list_color"), p["title"], p.get("notes"),
-            p.get("url"), _iso(due_at), int(p.get("priority") or 0),
-            1 if p.get("completed") else 0, _iso(p.get("completion_at")),
-            _json(p.get("start"), None), _json(due, None),
-            _json(p.get("alarms"), []), _json(p.get("recurrence_rules"), []),
+            envelope["tenant_id"],
+            p["list_external_id"],
+            p["item_external_id"],
+            p["member_id"],
+            _provider(envelope, p),
+            p.get("provider_account_id"),
+            p["list_name"],
+            p.get("list_color"),
+            p["title"],
+            p.get("notes"),
+            p.get("url"),
+            _iso(due_at),
+            int(p.get("priority") or 0),
+            1 if p.get("completed") else 0,
+            _iso(p.get("completion_at")),
+            _json(p.get("start"), None),
+            _json(due, None),
+            _json(p.get("alarms"), []),
+            _json(p.get("recurrence_rules"), []),
             None if p.get("flagged") is None else (1 if p.get("flagged") else 0),
             None if p.get("tags") is None else _json(p.get("tags"), []),
-            p.get("parent_external_id"), p.get("sort_order"),
-            p.get("linked_item_kind"), p.get("linked_item_id"),
-            p.get("completion_policy", "manual"), p.get("provider_revision"),
-            _iso(p["last_modified_at"]), p["sync_cycle_id"],
-            envelope["owner_scope"], envelope["visibility_scope"],
-            envelope["sensitivity"], envelope["event_id"],
+            p.get("parent_external_id"),
+            p.get("sort_order"),
+            p.get("linked_item_kind"),
+            p.get("linked_item_id"),
+            p.get("completion_policy", "manual"),
+            p.get("provider_revision"),
+            _iso(p["last_modified_at"]),
+            p["sync_cycle_id"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
         ),
     )
 
