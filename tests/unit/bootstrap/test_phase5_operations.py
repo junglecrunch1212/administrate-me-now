@@ -6,7 +6,9 @@ import base64
 import copy
 import json
 import plistlib
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -135,6 +137,47 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert (
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
     )
+
+
+def test_macos_installer_dispatches_without_optional_passthrough_args(tmp_path: Path) -> None:
+    """The real first run has no fixture args and must work under macOS Bash 3."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured = tmp_path / "python-args.txt"
+    python = fake_bin / "python3"
+    python.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$ADMINME_CAPTURE"\n', "utf-8")
+    python.chmod(0o755)
+    instance_root = tmp_path / "instance"
+    env = os.environ.copy()
+    env.update(
+        {
+            "ADMINME_CAPTURE": str(captured),
+            "ADMINME_TEST_MODE": "1",
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+        }
+    )
+
+    subprocess.run(
+        [
+            "/bin/bash",
+            str(REPO_ROOT / "bootstrap" / "bootstrap-macos.sh"),
+            "--instance-root",
+            str(instance_root),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert captured.read_text("utf-8").splitlines() == [
+        "-m",
+        "bootstrap.cli",
+        "--instance-root",
+        str(instance_root),
+        "bootstrap",
+    ]
 
 
 def test_bootstrap_reports_expected_pending_bridge_work_without_masking_failures() -> (
