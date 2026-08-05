@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "gate": 6,
+  "result": "PASS",
+  "date": "2026-08-03",
+  "branch": "codex/administrateme-v2-runtime",
+  "draft_pr_url": "https://github.com/junglecrunch1212/administrate-me-now/pull/248",
+  "inventory": {
+    "relevant_files": 645,
+    "operational_files_excluding_docs_prompts_ci": 630,
+    "path_list_sha256": "40ca6e8c9358b13fe9570ea16ddac8b81e892b34b9b5d8ba7d59ea242823e6cb",
+    "extensions": {
+      ".json": 89,
+      ".mjs": 4,
+      ".py": 437,
+      ".pyi": 1,
+      ".sh": 15,
+      ".sql": 16,
+      ".toml": 2,
+      ".ts": 18,
+      ".yaml": 63
+    },
+    "products": 6,
+    "projections": 13,
+    "reactive_pipelines": 6,
+    "proactive_programs": 5,
+    "skills": 10,
+    "profiles": 5,
+    "personas": 4,
+    "workbooks": 2
+  },
+  "validation": {
+    "python_full": {"passed": 1270, "skipped": 3},
+    "acceptance": {"passed": 12},
+    "bridge": {"passed": 60},
+    "openclaw": {"passed": 11},
+    "mypy_source_files": 172,
+    "pyright_errors": 0,
+    "npm_production_vulnerabilities": 0
+  },
+  "live_provider_success_claimed": false,
+  "human_action_required": "Review/merge PR and complete the disposable supported Apple-silicon live rehearsal before family activation."
+}

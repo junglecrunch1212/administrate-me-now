@@ -23,6 +23,7 @@ from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -90,6 +91,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -100,25 +102,48 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
     runner.register(MoneyProjection())
     await runner.start()
 
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "P1", "sort_name": "P1",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "first task",
-    }))
-    last = await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r1",
-        "linked_kind": "household",
-        "linked_id": "household",
-        "kind": "maintenance",
-        "rrule": "FREQ=MONTHLY",
-        "next_occurrence": "2026-05-01T09:00:00Z",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "P1",
+                "sort_name": "P1",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "first task",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r1",
+                "linked_kind": "household",
+                "linked_id": "household",
+                "kind": "maintenance",
+                "rrule": "FREQ=MONTHLY",
+                "next_occurrence": "2026-05-01T09:00:00Z",
+            },
+        )
+    )
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -131,12 +156,14 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    forward = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.05)
+    forward = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.05
+    )
     await forward.regenerate_now(OPS_WORKBOOK_NAME)
     reverse = XlsxReverseDaemon(
         config,
         ctx,
-        event_log=log,
+        event_sink=events,
         flush_wait_s=0.05,
         forward_lock_timeout_s=0.5,
         delete_undo_window_s=0.05,
@@ -157,9 +184,7 @@ async def rig(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
         await log.close()
 
 
-async def test_no_sidecar_writes_sidecar_emits_nothing(
-    rig: dict[str, Any]
-) -> None:
+async def test_no_sidecar_writes_sidecar_emits_nothing(rig: dict[str, Any]) -> None:
     reverse = rig["reverse"]
     log = rig["log"]
     config = rig["config"]
@@ -195,18 +220,14 @@ async def test_no_sidecar_writes_sidecar_emits_nothing(
     assert projected[0]["payload"]["events_emitted"] == []
 
 
-async def test_partial_sidecar_only_diffs_what_can_diff(
-    rig: dict[str, Any]
-) -> None:
+async def test_partial_sidecar_only_diffs_what_can_diff(rig: dict[str, Any]) -> None:
     reverse = rig["reverse"]
     log = rig["log"]
     config = rig["config"]
     cursor = rig["cursor"]
 
     # Delete only the Tasks sidecar — Recurrences keeps its baseline.
-    sidecar_path(
-        config.xlsx_workbooks_dir, OPS_WORKBOOK_NAME, "Tasks"
-    ).unlink()
+    sidecar_path(config.xlsx_workbooks_dir, OPS_WORKBOOK_NAME, "Tasks").unlink()
 
     # Edit a Tasks row (would normally produce task.updated) AND a
     # Recurrences row (will produce recurrence.updated, because its

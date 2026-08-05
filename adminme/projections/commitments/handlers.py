@@ -1,67 +1,108 @@
-"""
-Commitments projection handlers — obligation-tracker state transitions.
-
-Per ADMINISTRATEME_BUILD.md §3.4 and SYSTEM_INVARIANTS.md §4. Handlers are
-idempotent: re-applying the same event produces the same row state
-(§2 invariant 4). Keyed by ``(tenant_id, commitment_id)``.
-
-Subscribed event types:
-- ``commitment.proposed``   → INSERT with status='pending'
-- ``commitment.confirmed``  → set confirmed_at / confirmed_by
-- ``commitment.completed``  → status='done', completed_at
-- ``commitment.dismissed``  → status='cancelled'
-- ``commitment.edited``     → apply field_updates
-- ``commitment.snoozed``    → status='snoozed', due_at=snoozed_until
-- ``commitment.cancelled``  → status='cancelled', completed_at
-- ``commitment.delegated``  → status='delegated', owed_by_party=delegated_to
-- ``commitment.expired``    → status='cancelled' (no completed_by)
-
-Per [§2.3], handlers do not validate cross-projection references — if an
-event carries a party_id that does not exist in ``parties``, the row still
-lands. Integrity is preserved by upstream pipelines.
-"""
+"""Idempotent commitment projection state transitions."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import sqlcipher3
 
-_log = logging.getLogger(__name__)
-
-# Columns accepted by commitment.edited's field_updates. Anything outside
-# this allowlist is ignored to keep handlers deterministic across evolving
-# payloads.
-_EDITABLE_COLUMNS = frozenset({
-    "kind",
-    "description",
-    "due_at",
-    "owed_by_party",
-    "owed_to_party",
-    "confidence",
-    "source_interaction_id",
-    "source_skill",
-})
+_EDITABLE_COLUMNS = frozenset(
+    {
+        "kind",
+        "description",
+        "due_at",
+        "owed_by_party",
+        "owed_to_party",
+        "confidence",
+        "source_interaction_id",
+        "source_skill",
+    }
+)
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
-    event_type = envelope["type"]
-    dispatch = {
+    handler = {
         "commitment.proposed": apply_commitment_proposed,
         "commitment.confirmed": apply_commitment_confirmed,
         "commitment.completed": apply_commitment_completed,
         "commitment.dismissed": apply_commitment_dismissed,
         "commitment.edited": apply_commitment_edited,
         "commitment.snoozed": apply_commitment_snoozed,
+        "commitment.deferred": apply_commitment_deferred,
+        "commitment.blocked": apply_commitment_blocked,
+        "commitment.unblocked": apply_commitment_unblocked,
         "commitment.cancelled": apply_commitment_cancelled,
         "commitment.delegated": apply_commitment_delegated,
         "commitment.expired": apply_commitment_expired,
-    }
-    handler = dispatch.get(event_type)
-    if handler is None:
+        "list_item.completed": apply_external_completion,
+        "list_item.uncompleted": apply_external_completion,
+        "calendar.event_outcome_recorded": apply_calendar_completion,
+    }.get(envelope["type"])
+    if handler is not None:
+        handler(envelope, conn)
+
+
+def apply_calendar_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    policy = p.get("completion_policy", "manual")
+    qualifies = (
+        policy == "on_elapsed" and p.get("outcome") in {"elapsed", "attended"}
+    ) or (policy == "on_attended" and p.get("outcome") == "attended")
+    if (
+        p.get("linked_item_kind") != "commitment"
+        or not p.get("linked_item_id")
+        or not qualifies
+    ):
         return
-    handler(envelope, conn)
+    conn.execute(
+        """UPDATE commitments SET status='done', completed_at=?, lifecycle_at=?,
+                  lifecycle_actor=?, last_event_id=?
+             WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
+        (
+            p["recorded_at"],
+            p["recorded_at"],
+            p["member_id"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_external_completion(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    if (
+        p.get("linked_item_kind") != "commitment"
+        or not p.get("linked_item_id")
+        or p.get("completion_policy") != "mirror"
+    ):
+        return
+    completed = envelope["type"] == "list_item.completed"
+    at = str(p.get("completion_at") or p.get("last_modified_at"))
+    conn.execute(
+        """UPDATE commitments SET status=?, completed_at=?, lifecycle_at=?,
+                  lifecycle_actor=?, last_event_id=?
+             WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
+        (
+            "done" if completed else "pending",
+            at if completed else None,
+            at,
+            p.get("member_id"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["linked_item_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _where_newer(envelope: dict[str, Any], commitment_id: str) -> tuple[str, str, str]:
+    return envelope["tenant_id"], commitment_id, envelope["event_id"]
 
 
 def apply_commitment_proposed(
@@ -78,21 +119,7 @@ def apply_commitment_proposed(
             last_event_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, NULL,
                   NULL, ?, ?, ?, ?)
-        ON CONFLICT(tenant_id, commitment_id) DO UPDATE SET
-            owed_by_party         = excluded.owed_by_party,
-            owed_to_party         = excluded.owed_to_party,
-            kind                  = excluded.kind,
-            description           = excluded.description,
-            due_at                = excluded.due_at,
-            status                = 'pending',
-            confidence            = excluded.confidence,
-            source_interaction_id = excluded.source_interaction_id,
-            source_skill          = excluded.source_skill,
-            proposed_at           = excluded.proposed_at,
-            owner_scope           = excluded.owner_scope,
-            visibility_scope      = excluded.visibility_scope,
-            sensitivity           = excluded.sensitivity,
-            last_event_id         = excluded.last_event_id
+        ON CONFLICT(tenant_id, commitment_id) DO NOTHING
         """,
         (
             p["commitment_id"],
@@ -104,7 +131,7 @@ def apply_commitment_proposed(
             p.get("suggested_due"),
             p.get("confidence"),
             p.get("source_interaction_id"),
-            p.get("source_skill"),
+            p.get("source_skill") or envelope["source_adapter"],
             envelope["occurred_at"],
             envelope["owner_scope"],
             envelope["visibility_scope"],
@@ -119,19 +146,16 @@ def apply_commitment_confirmed(
 ) -> None:
     p = envelope["payload"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET confirmed_at  = ?,
-               confirmed_by  = ?,
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        """UPDATE commitments SET confirmed_at = ?, confirmed_by = ?,
+                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["confirmed_at"],
             p["confirmed_by_member_id"],
+            p["confirmed_at"],
+            p["confirmed_by_member_id"],
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, p["commitment_id"]),
         ),
     )
 
@@ -141,18 +165,16 @@ def apply_commitment_completed(
 ) -> None:
     p = envelope["payload"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET status        = 'done',
-               completed_at  = ?,
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        """UPDATE commitments SET status = 'done', completed_at = ?,
+                  blocked_reason = NULL, deferred_until = NULL,
+                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["completed_at"],
+            p["completed_at"],
+            p["completed_by_party_id"],
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, p["commitment_id"]),
         ),
     )
 
@@ -161,20 +183,8 @@ def apply_commitment_dismissed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
-    conn.execute(
-        """
-        UPDATE commitments
-           SET status        = 'cancelled',
-               completed_at  = ?,
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
-        (
-            p["dismissed_at"],
-            envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
-        ),
+    _terminal(
+        envelope, conn, "cancelled", p["dismissed_at"], p["dismissed_by_party_id"]
     )
 
 
@@ -182,20 +192,22 @@ def apply_commitment_edited(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
-    updates: dict[str, Any] = p.get("field_updates") or {}
-    if not updates:
-        return
-    columns = [k for k in updates.keys() if k in _EDITABLE_COLUMNS]
+    updates = p.get("field_updates") or {}
+    columns = [key for key in updates if key in _EDITABLE_COLUMNS]
     if not columns:
         return
-    assignments = ", ".join(f"{c} = ?" for c in columns) + ", last_event_id = ?"
-    params: list[Any] = [updates[c] for c in columns]
-    params.append(envelope["event_id"])
-    params.extend([envelope["tenant_id"], p["commitment_id"]])
+    assignments = ", ".join(f"{column} = ?" for column in columns)
     conn.execute(
-        f"UPDATE commitments SET {assignments} "
-        "WHERE tenant_id = ? AND commitment_id = ?",
-        params,
+        f"""UPDATE commitments SET {assignments}, lifecycle_at = ?,
+                  lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
+        (
+            *(updates[column] for column in columns),
+            p["edited_at"],
+            p["edited_by_party_id"],
+            envelope["event_id"],
+            *_where_newer(envelope, p["commitment_id"]),
+        ),
     )
 
 
@@ -203,19 +215,89 @@ def apply_commitment_snoozed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
+    _timed_state(
+        envelope,
+        conn,
+        "snoozed",
+        p["snoozed_until"],
+        p["snoozed_at"],
+        p["snoozed_by_party_id"],
+        "due_at",
+    )
+
+
+def apply_commitment_deferred(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    _timed_state(
+        envelope,
+        conn,
+        "deferred",
+        p["deferred_until"],
+        p["deferred_at"],
+        p["deferred_by_party_id"],
+        "deferred_until",
+    )
+
+
+def _timed_state(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    status: str,
+    until: str,
+    at: str,
+    actor: str,
+    column: str,
+) -> None:
+    commitment_id = envelope["payload"]["commitment_id"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET status        = 'snoozed',
-               due_at        = ?,
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        f"""UPDATE commitments SET status = ?, {column} = ?, lifecycle_at = ?,
+                  lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
-            p["snoozed_until"],
+            status,
+            until,
+            at,
+            actor,
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, commitment_id),
+        ),
+    )
+
+
+def apply_commitment_blocked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """UPDATE commitments SET status = 'blocked', blocked_reason = ?,
+                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
+        (
+            p["reason"],
+            p["blocked_at"],
+            p["blocked_by_party_id"],
+            envelope["event_id"],
+            *_where_newer(envelope, p["commitment_id"]),
+        ),
+    )
+
+
+def apply_commitment_unblocked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """UPDATE commitments SET status = 'pending', blocked_reason = NULL,
+                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND status = 'blocked'
+               AND last_event_id < ?""",
+        (
+            p["unblocked_at"],
+            p["unblocked_by_party_id"],
+            envelope["event_id"],
+            *_where_newer(envelope, p["commitment_id"]),
         ),
     )
 
@@ -224,19 +306,30 @@ def apply_commitment_cancelled(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     p = envelope["payload"]
+    _terminal(
+        envelope, conn, "cancelled", p["cancelled_at"], p["cancelled_by_party_id"]
+    )
+
+
+def _terminal(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    status: str,
+    at: str,
+    actor: str,
+) -> None:
+    commitment_id = envelope["payload"]["commitment_id"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET status        = 'cancelled',
-               completed_at  = ?,
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        """UPDATE commitments SET status = ?, completed_at = ?, lifecycle_at = ?,
+                  lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
-            p["cancelled_at"],
+            status,
+            at,
+            at,
+            actor,
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, commitment_id),
         ),
     )
 
@@ -246,18 +339,15 @@ def apply_commitment_delegated(
 ) -> None:
     p = envelope["payload"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET status         = 'delegated',
-               owed_by_party  = ?,
-               last_event_id  = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        """UPDATE commitments SET status = 'delegated', owed_by_party = ?,
+                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["delegated_to_party_id"],
+            p["delegated_at"],
+            p["delegated_by_party_id"],
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, p["commitment_id"]),
         ),
     )
 
@@ -265,18 +355,14 @@ def apply_commitment_delegated(
 def apply_commitment_expired(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
-    # Distinct from dismissed: expiry = nobody acted. No completed_by.
     p = envelope["payload"]
     conn.execute(
-        """
-        UPDATE commitments
-           SET status        = 'cancelled',
-               last_event_id = ?
-         WHERE tenant_id = ? AND commitment_id = ?
-        """,
+        """UPDATE commitments SET status = 'cancelled', lifecycle_at = ?,
+                  lifecycle_actor = 'system:expiry', last_event_id = ?
+             WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
+            p["expired_at"],
             envelope["event_id"],
-            envelope["tenant_id"],
-            p["commitment_id"],
+            *_where_newer(envelope, p["commitment_id"]),
         ),
     )

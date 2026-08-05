@@ -1,88 +1,66 @@
 # Standing order: reminder_dispatch
 
-Per [D1] Corollary — workspace-prose program file, version-controlled.
-Bootstrap §8 (prompt 16) concatenates this file into `~/Chief/AGENTS.md`.
-
 ## Scope
 
-Per-tick scan (default every 15 minutes per [BUILD.md §L4
-reminder_dispatch]) for commitments whose `due_at` falls within the
-configured lookahead window (default 60 minutes). For each due
-commitment, composes an SMS-friendly reminder body via the
-`compose_reminder@v1` skill and emits `reminder.dispatched` v1.
-Per-commitment dedupe inline via the event log: a prior
-`reminder.dispatched` for the same `commitment_id` within
-`dedupe_window_minutes` (default 90) suppresses the current tick. Per
-[§1] 10c-iii grounding the cohort discipline is a literal clone of
-`morning_digest`'s shape with substitutions; no inheritance.
+Every 15 minutes, ask AdministrateMe for commitments due inside the configured
+lookahead window (60 minutes by default). For each eligible commitment, invoke
+`compose_reminder@v1`. AdministrateMe records the compatibility
+`reminder.dispatched` fact with `delivered=false` and the canonical typed chain:
+
+1. `notification.signal.raised`
+2. `notification.decision.made`
+3. `notification.delivery.result`
+
+The domain policy may route, suppress, hold, or retry. Only a route decision
+delegates a delivery attempt to OpenClaw. Only OpenClaw may emit the delivery
+result; AdministrateMe never claims delivery from a no-op callback.
 
 ## Triggers
 
-Scheduled (cron). Default schedule string `*/15 * * * *` per
-`bootstrap/openclaw/cron.yaml`. The proactive pack's
-`pipeline.yaml` carries `triggers: {schedule: "*/15 * * * *",
-proactive: true}` and NO `triggers.events` — the in-process
-`PipelineRunner` skips it; OpenClaw cron drives invocation.
+OpenClaw owns the schedule declared in `bootstrap/openclaw/cron.yaml`. The
+proactive pack has no event trigger and is never scheduled by the in-process
+`PipelineRunner`.
 
 ## Approval gate
 
-None. Reminder dispatch is a recurring routine, not a per-event ask.
-Outbound delivery routes through `outbound()` per [§6.14], which
-consults observation mode and records `observation.suppressed`
-(active) or `external.sent` (inactive) before any external send. The
-principal reviews suppressed-action logs before flipping observation
-off per [§7] operating rule 7 and [D22].
+Routine reminders require no per-message approval. Policy still enforces
+observation mode, profile quiet hours, scope, retry, and circuit state before
+returning a route decision.
 
 ## Escalation
 
-A composition miss — skill failure on the 7-tuple
-(`_SKILL_FAILURE_EXCEPTIONS` per [§7.7]), missing profile, missing
-recipient routing — is absorbed by the defensive default: emit
-`reminder.dispatched` with `composed_text=""`,
-`validation_failed=true`, `delivered=false`. NO `outbound()` is
-attempted on the sentinel path. Per-row failure does NOT abort the
-tick; the next due commitment is processed independently. The
-pipeline never raises into the bus.
+Composition or validation failures emit the non-delivered compatibility fact
+and continue the cohort. A missing approval, active observation window, quiet
+hours, expiry, or open delivery circuit produces a typed non-route decision;
+none is converted into an external send.
+
+## Policy and deduplication
+
+- Deduplicate a commitment inside `dedupe_window_minutes` (90 by default).
+- Honor per-member enablement, lookahead, dedupe, profile, quiet-hour, and
+  observation settings.
+- Missing approval produces `hold`; observation mode produces `suppress`;
+  quiet hours or `not_before` produce `retry`; three failed attempts open the
+  delivery circuit.
+- The signal and decision retain member scope, correlation, causation, and
+  commitment provenance.
 
 ## Execution steps
 
-Proactive pack at `packs/pipelines/reminder_dispatch/` per [BUILD.md
-§L4 reminder_dispatch]. Per-tick handler logic:
-
-1. Load due commitments via injected loader (PM-27 constructor
-   injection; default no-op returns `[]` per UT-14 carry-forward).
-   Filter to `due_at - now < lookahead_window_minutes`.
-2. For each candidate, dedupe inline:
-   `ctx.event_log.read_recent("reminder.dispatched", since=now -
-   dedupe_window_minutes)` — if a prior dispatch for the same
-   `commitment_id` is present, skip.
-3. Resolve recipient routing via injected profile loader; honor
-   per-member overrides (`reminders_enabled`,
-   `lookahead_window_minutes`, `dedupe_window_minutes`).
-4. Call `compose_reminder@v1` with the commitment payload and member
-   context; on failure (defensive default) carry the sentinel
-   `composed_text=""` / `validation_failed=true` into step 6.
-5. On valid composition call `outbound()` exactly once via the single
-   import site in `deliver()` per [§6.14]. Capture `delivered: bool`
-   from `OutboundResult.suppressed`.
-6. Emit `reminder.dispatched` v1 with `commitment_id`,
-   `owner_member_id`, `recipient_party_id`, `composed_text`,
-   `channel`, `due_at`, `delivered`, `validation_failed`,
-   optional `scheduled_send_at`. `causation_id=ctx.triggering_event_id`
-   per the 10c-i causation pattern.
+1. Load due commitments from the scoped commitment read model.
+2. Remove recent duplicates and opted-out members.
+3. Compose through the pinned OpenClaw `llm-task` skill seam.
+4. On validation failure, emit only the non-delivered compatibility sentinel
+   and continue with the next commitment.
+5. On success, persist signal and policy decision through the real EventSink.
+6. If the decision is `route`, OpenClaw performs the channel action and posts a
+   typed `notification.delivery.result` back through its authenticated plugin
+   seam. Suppressed, held, and retry decisions perform no channel action.
 
 ## What NOT to do
 
-- **Do NOT call `outbound()` on the sentinel path** (validation_failed
-  composition). Sentinel emits the event with `delivered=false`.
-- **Do NOT modify any projection.** Per [§7.3] / [D17], proactive
-  pipelines emit events; projections consume them. Dedupe is via
-  event-log lookup, NOT a `last_reminded_at` column.
-- **Do NOT import an LLM SDK.** Per [§8] / [D6], all skill calls go
-  through `ctx.run_skill_fn` which wraps OpenClaw's gateway.
-- **Do NOT raise into the bus on per-row skill failure.** The
-  `_SKILL_FAILURE_EXCEPTIONS` 7-tuple is absorbed in `compose()` and
-  the next candidate proceeds.
-- **Do NOT cross-feed other proactive pipelines.** A
-  `reminder.dispatched` does not flow into next-tick `morning_digest`
-  per [§6] 10c-iii out-of-scope.
+- Do not import provider SDKs or create an AdministrateMe scheduler.
+- Do not mutate projections directly.
+- Do not use `external.sent` as a speculative delivery receipt.
+- Do not expose reminder content across owner or visibility scope.
+- A per-row skill or delivery failure must not abort the remaining cohort.

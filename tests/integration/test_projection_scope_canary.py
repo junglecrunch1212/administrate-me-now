@@ -132,8 +132,7 @@ async def test_interactions_privileged_sensitivity_landed(
 
     conn = runner.connection("interactions")
     row = conn.execute(
-        "SELECT sensitivity, owner_scope FROM interactions "
-        "WHERE interaction_id = ?",
+        "SELECT sensitivity, owner_scope FROM interactions WHERE interaction_id = ?",
         (f"ix_{eid}",),
     ).fetchone()
     assert row["sensitivity"] == "privileged"

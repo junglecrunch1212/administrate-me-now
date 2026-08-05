@@ -60,8 +60,8 @@ parties-DB connection inside ``handle()`` and closes via context
 manager (10a connection-management note); the runner does NOT own
 per-pipeline DB connections.
 
-The five inlined helpers (`_classify_identifier`, `_load_config`,
-`_thresholds_for_member`, `_new_commitment_id`, `_emit_suppressed`)
+The inlined helpers (`_classify_identifier`, `_load_config`,
+`_thresholds_for_member`, `_commitment_id`, `_emit_suppressed`)
 are duplicated from ``commitment_extraction/handler.py`` rather than
 shared. Per `docs/02-split-memo-10b-ii.md` §10b-ii-β the no-shared-
 helper-yet stance holds for two pipelines; a future refactor extracts
@@ -70,8 +70,8 @@ them once a third pipeline needs them.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import secrets
 from pathlib import Path
 from typing import Any
 
@@ -88,7 +88,12 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import (
+    PipelineContext,
+    Triggers,
+    parties_connection,
+    skill_output,
+)
 from adminme.projections.parties.queries import find_party_by_identifier
 
 _log = logging.getLogger(__name__)
@@ -133,8 +138,9 @@ def _classify_identifier(payload: dict[str, Any]) -> tuple[str, str]:
     return kind, value_normalized
 
 
-def _new_commitment_id() -> str:
-    return f"cmt_{secrets.token_hex(11)}"
+def _commitment_id(source_event_id: str) -> str:
+    digest = hashlib.sha256(source_event_id.encode()).hexdigest()[:22]
+    return f"cmt_{digest}"
 
 
 def _load_config(pack_root: Path) -> dict[str, Any]:
@@ -149,8 +155,7 @@ def _load_config(pack_root: Path) -> dict[str, Any]:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"thank_you_detection config at {config_path} did not parse "
-            f"to a mapping"
+            f"thank_you_detection config at {config_path} did not parse to a mapping"
         )
     return data
 
@@ -183,9 +188,7 @@ class ThankYouDetectionPipeline:
     def __init__(self) -> None:
         self._config_override: dict[str, Any] | None = None
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Inbound-only thank-you detection.
 
         F-5 carry-forward: returns silently on any non-`messaging.received`
@@ -201,6 +204,23 @@ class ThankYouDetectionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        prior_by_causation = getattr(ctx.event_log, "get_by_causation", None)
+        if prior_by_causation is not None:
+            prior = await prior_by_causation(source_event_id)
+            if any(
+                item.get("source_adapter") == "thank_you_detection" for item in prior
+            ):
+                return
+        if event.get("sensitivity") == "privileged":
+            await self._emit_suppressed(
+                event=event,
+                ctx=ctx,
+                reason="privileged_input",
+                confidence=0.0,
+                threshold=float(config.get("min_confidence", 0.55)),
+                source_event_id=source_event_id,
+            )
+            return
 
         # 1. Defense-in-depth: parties_conn_factory missing → suppress.
         if ctx.parties_conn_factory is None:
@@ -226,7 +246,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        with ctx.parties_conn_factory() as conn:
+        with parties_connection(ctx.parties_conn_factory) as conn:
             sender_party = find_party_by_identifier(
                 conn,
                 ctx.session,
@@ -246,7 +266,12 @@ class ThankYouDetectionPipeline:
             return
 
         # 2. Receiving member.
-        receiving_member_id = str(payload.get("to_identifier", ""))
+        owner_scope = str(event.get("owner_scope", ""))
+        receiving_member_id = (
+            owner_scope.removeprefix("private:")
+            if owner_scope.startswith("private:")
+            else str(payload.get("to_identifier", ""))
+        )
         if not receiving_member_id:
             await self._emit_suppressed(
                 event=event,
@@ -273,13 +298,32 @@ class ThankYouDetectionPipeline:
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
+            triggering_event_id=source_event_id,
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
         )
         message_text = str(payload.get("body_text") or "")
         classify_inputs: dict[str, Any] = {
-            "message_text": message_text,
-            "sender_party_id": str(sender_party["party_id"]),
-            "receiving_member_id": receiving_member_id,
-            "thread_context": [],
+            "principal_member_id": receiving_member_id,
+            "party_summary": {
+                "party_id": str(sender_party["party_id"]),
+                "name": str(
+                    sender_party.get("display_name") or sender_party["party_id"]
+                ),
+                "tier": 3,
+                "tags": sorted(party_tags),
+            },
+            "interaction_context": {
+                "recent_messages": [
+                    {
+                        "from_member_or_party": str(sender_party["party_id"]),
+                        "text": message_text,
+                        "when": str(payload.get("received_at") or event["occurred_at"]),
+                    }
+                ],
+                "recent_events": [],
+            },
         }
 
         try:
@@ -288,8 +332,7 @@ class ThankYouDetectionPipeline:
             )
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
-                "thank_you_detection classify failure (%s); emitting "
-                "defensive default",
+                "thank_you_detection classify failure (%s); emitting defensive default",
                 type(exc).__name__,
             )
             await self._emit_suppressed(
@@ -302,11 +345,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        classify_output = (
-            classify_result.output
-            if hasattr(classify_result, "output")
-            else classify_result
-        )
+        classify_output = skill_output(classify_result)
         is_candidate = bool(classify_output.get("is_candidate", False))
         confidence = float(classify_output.get("confidence", 0.0))
         classify_reasons = list(classify_output.get("reasons", []))
@@ -346,8 +385,7 @@ class ThankYouDetectionPipeline:
             )
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
-                "thank_you_detection extract failure (%s); emitting "
-                "defensive default",
+                "thank_you_detection extract failure (%s); emitting defensive default",
                 type(exc).__name__,
             )
             await self._emit_suppressed(
@@ -360,11 +398,7 @@ class ThankYouDetectionPipeline:
             )
             return
 
-        extract_output = (
-            extract_result.output
-            if hasattr(extract_result, "output")
-            else extract_result
-        )
+        extract_output = skill_output(extract_result)
 
         # 7. Build & emit commitment.proposed with kind="other".
         strength = "confident" if confidence >= review_threshold else "weak"
@@ -372,12 +406,11 @@ class ThankYouDetectionPipeline:
         suggested_text = str(extract_output.get("suggested_text", ""))[:500]
 
         proposed_payload: dict[str, Any] = {
-            "commitment_id": _new_commitment_id(),
+            "commitment_id": _commitment_id(source_event_id),
             "kind": "other",
             "owed_by_member_id": receiving_member_id,
             "owed_to_party_id": str(
-                extract_output.get("recipient_party_id")
-                or sender_party["party_id"]
+                extract_output.get("recipient_party_id") or sender_party["party_id"]
             ),
             "text_summary": suggested_text or "(no summary extracted)",
             "urgency": str(extract_output.get("urgency", "this_week")),
@@ -388,11 +421,8 @@ class ThankYouDetectionPipeline:
             "classify_reasons": classify_reasons,
         }
 
-        # TODO(prompt-XX): dedupe against open thank-you commitments
-        # referencing this thread within dedupe_window_hours; currently
-        # always emits. Requires reading the `commitments` projection,
-        # which has its own seam considerations beyond this prompt's
-        # scope per docs/02-split-memo-10b-ii.md §10b-ii-β.
+        # Redelivery is idempotent by source event. Cross-message thread
+        # similarity is intentionally not guessed into a duplicate fact.
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -403,10 +433,11 @@ class ThankYouDetectionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=(f"thankyou:proposal:{source_event_id}"),
             payload=proposed_payload,
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -432,7 +463,8 @@ class ThankYouDetectionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=(f"thankyou:suppressed:{source_event_id}:{reason}"),
             payload={
                 "reason": reason,
                 "confidence": round(confidence, 4),
@@ -440,7 +472,7 @@ class ThankYouDetectionPipeline:
                 "source_event_id": source_event_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

@@ -124,8 +124,13 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.calls.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.calls)}"
 
 
 _FROZEN_NOW = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
@@ -139,7 +144,7 @@ def _ctx(
     """Build an AdapterContext with deterministic clock + correlation id."""
     fixed_now = now or _FROZEN_NOW
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-test",
         now_factory=lambda: fixed_now,
@@ -290,9 +295,7 @@ async def test_service_account_auth_emits_authenticated() -> None:
         resolved_credentials.append(op_ref)
         return {"type": "service_account", "client_email": "fake@fake"}
 
-    def fake_factory(
-        creds: dict[str, Any], scopes: list[str], subject: str
-    ) -> object:
+    def fake_factory(creds: dict[str, Any], scopes: list[str], subject: str) -> object:
         built_services.append((creds, scopes, subject))
         return _FakeGmailService()
 
@@ -495,16 +498,12 @@ async def test_cursor_advanced_emits_on_event_milestone() -> None:
     adapter = _seeded_adapter(service)
     # Pre-seed counter just below the milestone so the cycle's 2 new
     # events trips it (98 + 2 = 100, milestone is >=).
-    adapter._events_since_advance = (
-        adapter.CURSOR_MILESTONE_EVENTS - 2
-    )
+    adapter._events_since_advance = adapter.CURSOR_MILESTONE_EVENTS - 2
     event_log = _FakeEventLog()
 
     await adapter._run_poll_cycle(ctx=_ctx(event_log))
 
-    advances = [
-        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
-    ]
+    advances = [c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"]
     assert len(advances) == 1
     payload = advances[0]["payload"]
     assert payload["adapter_name"] == "messaging-gmail-api"
@@ -535,9 +534,7 @@ async def test_cursor_advanced_skipped_below_milestone() -> None:
 
     await adapter._run_poll_cycle(ctx=_ctx(event_log))
 
-    advances = [
-        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
-    ]
+    advances = [c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"]
     assert advances == []
     # Counter reflects the 2 emitted events.
     assert adapter._events_since_advance == 2
@@ -564,9 +561,7 @@ async def test_cursor_advanced_emits_on_time_milestone() -> None:
 
     await adapter._run_poll_cycle(ctx=_ctx(event_log))
 
-    advances = [
-        c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"
-    ]
+    advances = [c for c in event_log.calls if c["type"] == "adapter.cursor_advanced"]
     assert len(advances) == 1
 
 

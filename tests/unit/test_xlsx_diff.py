@@ -98,12 +98,8 @@ def test_editable_change_lands_in_updated() -> None:
 def test_derived_only_change_drops_to_dropped_edits() -> None:
     # ``created_at`` is in always_derived for Tasks. A change there is
     # non-editable → goes to dropped_edits, NOT updated.
-    sidecar = [
-        {"task_id": "t1", "title": "x", "created_at": "2026-01-01T00:00:00Z"}
-    ]
-    current = [
-        {"task_id": "t1", "title": "x", "created_at": "2026-04-25T00:00:00Z"}
-    ]
+    sidecar = [{"task_id": "t1", "title": "x", "created_at": "2026-01-01T00:00:00Z"}]
+    current = [{"task_id": "t1", "title": "x", "created_at": "2026-04-25T00:00:00Z"}]
     out = diff_sheet(current, sidecar, _tasks())
     assert out.added == []
     assert out.deleted == []

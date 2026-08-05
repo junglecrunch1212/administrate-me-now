@@ -117,7 +117,9 @@ def test_bridge_adapter_typealias_accepts_both_protocols() -> None:
     assert len(mixed) == 2
 
 
-def test_mock_cat_b_class_satisfies_state_mirror_bridge_adapter_isinstance_check() -> None:
+def test_mock_cat_b_class_satisfies_state_mirror_bridge_adapter_isinstance_check() -> (
+    None
+):
     """End-to-end Protocol pin: a Cat-B mock with ``family`` + the three
     methods passes the isinstance check WITHOUT inheriting from
     ``StateMirrorBridgeAdapter`` (Protocol = structural). This is the

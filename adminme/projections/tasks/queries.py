@@ -106,7 +106,7 @@ def in_status(
     return filter_rows(session, [dict(r) for r in rows])
 
 
-# TODO(prompt-10c): whatnow pipeline uses this for goal-DAG ranking
+# What-now uses this query for goal/dependency-aware ranking.
 def sub_tasks_of(
     conn: sqlcipher3.Connection,
     session: Session,

@@ -119,20 +119,23 @@ _INTEGRATION_FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _IntegrationEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion. Mirrors
-    the duck-typed contract :meth:`GoogleCalendarAdapter._append` reads
-    via ``getattr(ctx.event_log, "append_sync", ...)``."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _make_integration_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integration-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
@@ -143,7 +146,9 @@ class _IntegrationListRequest:
     """``events().list(...).execute()`` half of the fake Calendar service."""
 
     def __init__(
-        self, pages: list[dict[str, Any]], call_log: list[dict[str, Any]],
+        self,
+        pages: list[dict[str, Any]],
+        call_log: list[dict[str, Any]],
     ) -> None:
         self._pages = pages
         self._call_log = call_log
@@ -187,7 +192,8 @@ class _IntegrationCalendarService:
 
 
 def _make_adapter(
-    *, service: _IntegrationCalendarService | None = None,
+    *,
+    service: _IntegrationCalendarService | None = None,
 ) -> Any:
     """Construct a :class:`GoogleCalendarAdapter` skipping ``start()``.
 
@@ -253,28 +259,33 @@ def test_supervisor_write_capabilities_gate_through_loader() -> None:
     touched — the gate rejects the operation BEFORE the impl is
     dispatched."""
     adapter = _make_adapter()
-    assert GoogleCalendarAdapter.write_capabilities == ["create_event"]
+    assert GoogleCalendarAdapter.write_capabilities == [
+        "create_event",
+        "update_event",
+        "delete_event",
+        "respond_event",
+        "move_event",
+    ]
     assert hasattr(adapter, "apply_write")
     assert callable(adapter.apply_write)
 
     op = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="gcal-evt-1",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
         asyncio.run(adapter.apply_write(op))
 
-    # The defense-in-depth check inside ``_apply_write_impl`` also
-    # rejects ``delete_event`` directly (the gate would catch it first
-    # in production; this asserts the inner guard is wired correctly).
-    delete_op = WriteOperation(
-        kind="delete_event",
+    # A second unsupported operation remains blocked before the
+    # provider implementation is reached.
+    unsupported_op = WriteOperation(
+        kind="share_calendar",
         target_external_id="gcal-evt-2",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
-        asyncio.run(adapter.apply_write(delete_op))
+        asyncio.run(adapter.apply_write(unsupported_op))
 
 
 # ===========================================================================
@@ -301,14 +312,10 @@ def test_supervisor_inbound_poll_emits_calendar_event_added() -> None:
         "end": {"dateTime": "2026-05-18T16:00:00Z"},
         "location": "HQ Conference Room",
         "description": "Integration round-trip",
-        "attendees": [
-            {"email": "alice@example.test", "responseStatus": "accepted"}
-        ],
+        "attendees": [{"email": "alice@example.test", "responseStatus": "accepted"}],
         "updated": "2026-05-18T14:00:00Z",
     }
-    service = _IntegrationCalendarService(
-        list_pages=[{"items": [google_event]}]
-    )
+    service = _IntegrationCalendarService(list_pages=[{"items": [google_event]}])
     adapter = _make_adapter(service=service)
     event_log = _IntegrationEventLog()
     ctx = _make_integration_ctx(event_log)
@@ -317,9 +324,7 @@ def test_supervisor_inbound_poll_emits_calendar_event_added() -> None:
     emitted = asyncio.run(adapter._poll_once(ctx=ctx))
 
     assert emitted == 1
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     instance = CalendarEventAddedV1.model_validate(payload)

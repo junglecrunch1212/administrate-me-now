@@ -11,7 +11,7 @@ and branches credential resolution + emit dispatch + the
   - ``"central"`` (default — F-2 byte-for-byte preserved): existing
     constructor-config credential source; ``_sharing_model_value ==
     "shared_central"``; ``_append`` routes via
-    ``ctx.event_log.append_sync(...)``.
+    ``ctx.event_sink.write(...)``.
   - ``"bridge"``: ``_bridge_member_id`` overrides ``config["member_id"]``;
     ``_bridge_sink`` is required and is the emit destination;
     ``_sharing_model_value == "per_member_isolated"``; ``_append`` routes
@@ -43,9 +43,7 @@ from adminme.adapters.base import AdapterContext
 from adminme.events.envelope import EventEnvelope
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-REMINDERS_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+REMINDERS_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 
 
 def _load_apple_eventkit_module() -> Any:
@@ -71,13 +69,18 @@ _FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeEventLog:
-    """Captures synchronous append calls for the central path."""
+    """Captures typed asynchronous event-sink writes for the central path."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 class _FakeBridgeSink:
@@ -96,6 +99,14 @@ class _FakeBridgeSink:
 
         self.envelopes.append(envelope)
         return EmitResult(ok=True, event_id="evt-bridge-1", error=None)
+
+
+class _FailingBridgeSink(_FakeBridgeSink):
+    async def emit(self, envelope: EventEnvelope) -> Any:
+        from adminme_bridge.adapters.sinks import EmitResult
+
+        self.envelopes.append(envelope)
+        return EmitResult(ok=False, event_id=None, error="central ingest unavailable")
 
 
 def _make_adapter() -> Any:
@@ -130,7 +141,7 @@ def _make_ctx(
     if bridge_sink is not None:
         config["_bridge_sink"] = bridge_sink
     return AdapterContext(
-        event_log=event_log if event_log is not None else _FakeEventLog(),  # type: ignore[arg-type]
+        event_sink=event_log if event_log is not None else _FakeEventLog(),  # type: ignore[arg-type]
         config=config,
         correlation_id_factory=lambda: "corr-dual-dep",
         now_factory=lambda: _FROZEN_NOW,
@@ -262,7 +273,7 @@ def test_deployment_target_bridge_requires_member_id_string() -> None:
 
 
 def test_central_path_uses_event_log_append_for_emit() -> None:
-    """In central mode ``_append`` routes to ``ctx.event_log.append_sync``
+    """In central mode ``_append`` routes to ``ctx.event_sink.write``
     — the existing 11b-i / 11r-c shape preserved byte-for-byte (F-2)."""
     adapter = _make_adapter()
     event_log = _FakeEventLog()
@@ -270,11 +281,13 @@ def test_central_path_uses_event_log_append_for_emit() -> None:
     _start(adapter, ctx)
     event_log.calls.clear()  # drop the adapter.authenticated emit from start()
 
-    adapter._append(
-        ctx=ctx,
-        event_type="reminder.list_item.synced",
-        payload={"member_id": "member-central", "direction": "outbound"},
-        causation_id="evt-up-1",
+    asyncio.run(
+        adapter._append(
+            ctx=ctx,
+            event_type="reminder.list_item.synced",
+            payload={"member_id": "member-central", "direction": "outbound"},
+            causation_id="evt-up-1",
+        )
     )
     assert len(event_log.calls) == 1
     call = event_log.calls[0]
@@ -298,7 +311,7 @@ def test_bridge_path_uses_injected_sink_for_emit() -> None:
     sink.envelopes.clear()  # drop the adapter.authenticated emit from start()
 
     async def _drive_emit() -> None:
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="reminder.list_item.synced",
             payload={"member_id": "member-bridge-alice", "direction": "outbound"},
@@ -321,6 +334,27 @@ def test_bridge_path_uses_injected_sink_for_emit() -> None:
     assert envelope.owner_scope == "private:member-bridge-alice"
 
 
+def test_bridge_emit_failure_propagates_before_reminder_cursor_advances() -> None:
+    adapter = _make_adapter()
+    startup_sink = _FakeBridgeSink()
+    ctx = _make_ctx(
+        deployment_target="bridge",
+        bridge_member_id="member-bridge-failure",
+        bridge_sink=startup_sink,
+    )
+    _start(adapter, ctx)
+    adapter._bridge_sink = _FailingBridgeSink()
+
+    with pytest.raises(RuntimeError, match="central ingest unavailable"):
+        asyncio.run(
+            adapter._append(
+                ctx=ctx,
+                event_type="list_item.added",
+                payload={"member_id": "member-bridge-failure"},
+            )
+        )
+
+
 def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:
     """Memo 04 §2.2: bridge-side emit stamps a provisional
     ``private:<member_id>`` owner_scope. The central :3337 ingest router
@@ -337,7 +371,7 @@ def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:
     sink.envelopes.clear()
 
     async def _drive() -> None:
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="list_item.added",
             payload={"member_id": "member-bridge-carol"},
@@ -351,17 +385,14 @@ def test_bridge_path_emit_carries_provisional_private_owner_scope() -> None:
     assert sink.envelopes[0].visibility_scope == "private:member-bridge-carol"
 
 
-def test_bridge_path_does_not_touch_central_event_log() -> None:
-    """F-3 (HARD): bridge path is purely additive. ``ctx.event_log`` is
-    not consulted on the bridge branch — it is allowed to be ``None``
-    on the bridge runtime (the wrapper synthesizes it as such), and
-    ``_append`` MUST NOT crash on the absent appender attribute."""
+def test_bridge_path_does_not_invoke_central_writer() -> None:
+    """F-3: bridge transport leaves the injected central writer unused."""
     adapter = _make_adapter()
     sink = _FakeBridgeSink()
-    # event_log=None on the synthesized AdapterContext: bridge runtime
-    # has no local event log; emits go through the sink only.
+    event_sink = _FakeEventLog()
+    # A typed central sink remains present but bridge transport is authoritative.
     ctx = AdapterContext(
-        event_log=None,  # type: ignore[arg-type]
+        event_sink=event_sink,
         config={
             "deployment_target": "bridge",
             "_bridge_member_id": "member-bridge-dave",
@@ -374,7 +405,7 @@ def test_bridge_path_does_not_touch_central_event_log() -> None:
     sink.envelopes.clear()
 
     async def _drive() -> None:
-        adapter._append(
+        await adapter._append(
             ctx=ctx,
             event_type="list_item.added",
             payload={"member_id": "member-bridge-dave"},
@@ -383,8 +414,9 @@ def test_bridge_path_does_not_touch_central_event_log() -> None:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-    asyncio.run(_drive())  # MUST NOT raise AttributeError on event_log=None
+    asyncio.run(_drive())
     assert len(sink.envelopes) == 1
+    assert event_sink.calls == []
 
 
 # ===========================================================================
@@ -414,9 +446,7 @@ def test_dual_deployment_observation_suppressed_skips_all_emits_uniformly(
 
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     # ----- central deployment -----
     adapter_c = _make_adapter()

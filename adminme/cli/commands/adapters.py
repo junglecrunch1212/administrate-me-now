@@ -68,6 +68,7 @@ def _adapters_callback() -> None:
     ``scaffold`` siblings to ``list``.
     """
 
+
 # Default discovery root (cwd-relative). The operator typically invokes
 # the CLI from the repo root where ``packs/adapters/`` lives; the
 # ``--packs-root`` flag exists for testing and for non-repo installs.
@@ -434,6 +435,7 @@ _TEMPLATE_ROOT: Path = Path(__file__).parent / "adapters_scaffold" / "templates"
 # concrete, inspectable, and copy-paste-able.
 _PLACEHOLDER_NAME: str = "<NAME>"
 _PLACEHOLDER_CLASSNAME: str = "<CLASSNAME>"
+_PORTABLE_FILENAME_NAME: str = "__PACK_NAME__"
 
 # File extension marking a template that needs placeholder substitution.
 # Non-``.j2`` files (e.g. ``config.schema.json``) are copied verbatim.
@@ -483,8 +485,10 @@ def _substitute(content: str, name: str, classname: str) -> str:
     dependency, no templating-engine semantics. Substitutions are
     idempotent and order-independent (the two placeholders never overlap).
     """
-    return content.replace(_PLACEHOLDER_NAME, name).replace(
-        _PLACEHOLDER_CLASSNAME, classname
+    return (
+        content.replace(_PLACEHOLDER_NAME, name)
+        .replace(_PLACEHOLDER_CLASSNAME, classname)
+        .replace(_PORTABLE_FILENAME_NAME, name)
     )
 
 

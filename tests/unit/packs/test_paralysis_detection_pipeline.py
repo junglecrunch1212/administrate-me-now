@@ -23,10 +23,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "packs"
-    / "pipelines"
-    / "paralysis_detection"
+    Path(__file__).resolve().parents[3] / "packs" / "pipelines" / "paralysis_detection"
 )
 
 
@@ -62,7 +59,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -88,9 +85,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_run_skill(*a: Any, **kw: Any) -> Any:
         raise AssertionError(
@@ -101,6 +96,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
@@ -236,8 +232,9 @@ async def test_same_member_same_day_picks_same_template_across_calls() -> None:
     await pipeline.dispatch("member-a", "2026-05-05T15:00:00Z", _make_ctx(log_a))
     log_b = _FakeEventLog()
     await pipeline.dispatch("member-a", "2026-05-05T15:00:00Z", _make_ctx(log_b))
-    assert log_a.calls[0].envelope.payload["template_id"] == (
-        log_b.calls[0].envelope.payload["template_id"]
+    assert (
+        log_a.calls[0].envelope.payload["template_id"]
+        == (log_b.calls[0].envelope.payload["template_id"])
     )
 
 

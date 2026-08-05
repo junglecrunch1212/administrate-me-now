@@ -130,8 +130,7 @@ def check_event_schema_registration(
                         f"closest registered: {suggestions}."
                     ),
                     field_path=(
-                        f"capabilities[{cap_index}]."
-                        f"event_families[{family_index}]"
+                        f"capabilities[{cap_index}].event_families[{family_index}]"
                     ),
                 )
             )

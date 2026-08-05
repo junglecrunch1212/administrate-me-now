@@ -72,9 +72,7 @@ def test_fully_populated_programs_have_no_todo_markers() -> None:
     MUST NOT contain a TODO marker."""
     for name in sorted(FULLY_POPULATED_PROGRAMS):
         text = (PROGRAMS_DIR / f"{name}.md").read_text()
-        match = re.search(
-            r"## Execution steps\n(.*?)(?=\n## |\Z)", text, re.DOTALL
-        )
+        match = re.search(r"## Execution steps\n(.*?)(?=\n## |\Z)", text, re.DOTALL)
         assert match is not None, f"{name}.md: Execution steps not found"
         body = match.group(1)
         assert "TODO(" not in body, (
@@ -86,6 +84,4 @@ def test_no_remaining_stub_programs() -> None:
     """After 10c-iii commit 1 there are no stub program files: every
     EXPECTED_PROGRAMS entry is in FULLY_POPULATED_PROGRAMS."""
     stubs = EXPECTED_PROGRAMS - FULLY_POPULATED_PROGRAMS
-    assert stubs == set(), (
-        f"unexpected stub programs remain: {sorted(stubs)}"
-    )
+    assert stubs == set(), f"unexpected stub programs remain: {sorted(stubs)}"

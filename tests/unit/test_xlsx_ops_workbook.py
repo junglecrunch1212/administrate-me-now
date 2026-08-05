@@ -100,84 +100,147 @@ async def populated(tmp_path: Path):
 
     # Parties
     for i in range(2):
-        await log.append(_envelope("party.created", {
-            "party_id": f"p{i:03d}",
-            "kind": "person",
-            "display_name": f"Person{i}",
-            "sort_name": f"Person{i:03d}",
-        }))
+        await log.append(
+            _envelope(
+                "party.created",
+                {
+                    "party_id": f"p{i:03d}",
+                    "kind": "person",
+                    "display_name": f"Person{i}",
+                    "sort_name": f"Person{i:03d}",
+                },
+            )
+        )
     for i in range(2):
-        await log.append(_envelope("party.created", {
-            "party_id": f"org{i:03d}",
-            "kind": "organization",
-            "display_name": f"Org{i}",
-            "sort_name": f"Org{i:03d}",
-        }))
-    await log.append(_envelope("party.created", {
-        "party_id": "hh",
-        "kind": "household",
-        "display_name": "HH",
-        "sort_name": "HH",
-    }))
+        await log.append(
+            _envelope(
+                "party.created",
+                {
+                    "party_id": f"org{i:03d}",
+                    "kind": "organization",
+                    "display_name": f"Org{i}",
+                    "sort_name": f"Org{i:03d}",
+                },
+            )
+        )
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "hh",
+                "kind": "household",
+                "display_name": "HH",
+                "sort_name": "HH",
+            },
+        )
+    )
 
     # Tasks
-    await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "Mow lawn", "owner_member_id": "p000",
-        "due": "2026-04-26", "energy": "medium",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t2", "title": "Renew passport", "owner_member_id": "p001",
-        "due": "2026-05-10", "energy": "low",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t3", "title": "Schedule dentist", "owner_member_id": "p000",
-        "energy": "low",
-    }))
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "Mow lawn",
+                "owner_member_id": "p000",
+                "due": "2026-04-26",
+                "energy": "medium",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t2",
+                "title": "Renew passport",
+                "owner_member_id": "p001",
+                "due": "2026-05-10",
+                "energy": "low",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t3",
+                "title": "Schedule dentist",
+                "owner_member_id": "p000",
+                "energy": "low",
+            },
+        )
+    )
 
     # Commitments
-    await log.append(_envelope("commitment.proposed", {
-        "commitment_id": "c1",
-        "kind": "reply",
-        "owed_by_member_id": "p000",
-        "owed_to_party_id": "org000",
-        "text_summary": "reply to Org0 email",
-        "confidence": 0.9,
-        "strength": "confident",
-    }))
-    await log.append(_envelope("commitment.proposed", {
-        "commitment_id": "c2",
-        "kind": "task",
-        "owed_by_member_id": "p001",
-        "owed_to_party_id": "p000",
-        "text_summary": "pick up prescription",
-        "confidence": 0.5,
-        "strength": "weak",
-    }))
+    await log.append(
+        _envelope(
+            "commitment.proposed",
+            {
+                "commitment_id": "c1",
+                "kind": "reply",
+                "owed_by_member_id": "p000",
+                "owed_to_party_id": "org000",
+                "text_summary": "reply to Org0 email",
+                "confidence": 0.9,
+                "strength": "confident",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "commitment.proposed",
+            {
+                "commitment_id": "c2",
+                "kind": "task",
+                "owed_by_member_id": "p001",
+                "owed_to_party_id": "p000",
+                "text_summary": "pick up prescription",
+                "confidence": 0.5,
+                "strength": "weak",
+            },
+        )
+    )
 
     # Recurrences
-    await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r1",
-        "linked_kind": "household",
-        "linked_id": "hh",
-        "kind": "maintenance",
-        "rrule": "FREQ=MONTHLY;BYMONTHDAY=1",
-        "next_occurrence": "2026-05-01T09:00:00Z",
-    }))
-    await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r2",
-        "linked_kind": "party",
-        "linked_id": "p000",
-        "kind": "review",
-        "rrule": "FREQ=WEEKLY;BYDAY=MO",
-        "next_occurrence": "2026-04-27T08:00:00Z",
-    }))
+    await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r1",
+                "linked_kind": "household",
+                "linked_id": "hh",
+                "kind": "maintenance",
+                "rrule": "FREQ=MONTHLY;BYMONTHDAY=1",
+                "next_occurrence": "2026-05-01T09:00:00Z",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r2",
+                "linked_kind": "party",
+                "linked_id": "p000",
+                "kind": "review",
+                "rrule": "FREQ=WEEKLY;BYDAY=MO",
+                "next_occurrence": "2026-04-27T08:00:00Z",
+            },
+        )
+    )
 
     last_eid = await log.latest_event_id()
     assert last_eid is not None
     await bus.notify(last_eid)
     for name in [
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ]:
         await _wait_idle(bus, f"projection:{name}", timeout=10.0)
 
@@ -207,10 +270,7 @@ async def populated(tmp_path: Path):
 
 def _data_rows(ws: Worksheet) -> list[tuple]:
     """Return non-header data rows as tuples of cell values."""
-    return [
-        tuple(cell.value for cell in row)
-        for row in ws.iter_rows(min_row=2)
-    ]
+    return [tuple(cell.value for cell in row) for row in ws.iter_rows(min_row=2)]
 
 
 def _column_values(ws: Worksheet, header: str) -> list[Any]:
@@ -229,7 +289,11 @@ async def test_workbook_creates_file(populated: dict[str, Any]) -> None:
     assert path.stat().st_size > 0
     wb = load_workbook(str(path))
     assert set(wb.sheetnames) == {
-        "Tasks", "Recurrences", "Commitments", "People", "Metadata"
+        "Tasks",
+        "Recurrences",
+        "Commitments",
+        "People",
+        "Metadata",
     }
 
 
@@ -379,14 +443,18 @@ async def test_regenerate_idempotent_semantically(populated: dict[str, Any]) -> 
         assert _sheet_rows_equal(wb_a[name], wb_b[name]), f"mismatch in {name}"
     # Metadata: generated_at allowed to differ, but last_event_id_consumed
     # must match.
-    meta_a = dict(zip(
-        [c.value for c in wb_a["Metadata"]["A"][1:]],
-        [c.value for c in wb_a["Metadata"]["B"][1:]],
-    ))
-    meta_b = dict(zip(
-        [c.value for c in wb_b["Metadata"]["A"][1:]],
-        [c.value for c in wb_b["Metadata"]["B"][1:]],
-    ))
+    meta_a = dict(
+        zip(
+            [c.value for c in wb_a["Metadata"]["A"][1:]],
+            [c.value for c in wb_a["Metadata"]["B"][1:]],
+        )
+    )
+    meta_b = dict(
+        zip(
+            [c.value for c in wb_b["Metadata"]["A"][1:]],
+            [c.value for c in wb_b["Metadata"]["B"][1:]],
+        )
+    )
     assert meta_a["last_event_id_consumed"] == meta_b["last_event_id_consumed"]
     assert meta_a["tenant_id"] == meta_b["tenant_id"]
 
@@ -458,12 +526,26 @@ async def test_multi_tenant_isolation(tmp_path: Path) -> None:
     await runner_b.start()
 
     try:
-        eid_a = await log_a.append(_envelope("task.created", {
-            "task_id": "ta", "title": "tenant-a only",
-        }, tenant_id="tenant-a"))
-        eid_b = await log_b.append(_envelope("task.created", {
-            "task_id": "tb", "title": "tenant-b only",
-        }, tenant_id="tenant-b"))
+        eid_a = await log_a.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "ta",
+                    "title": "tenant-a only",
+                },
+                tenant_id="tenant-a",
+            )
+        )
+        eid_b = await log_b.append(
+            _envelope(
+                "task.created",
+                {
+                    "task_id": "tb",
+                    "title": "tenant-b only",
+                },
+                tenant_id="tenant-b",
+            )
+        )
         await bus_a.notify(eid_a)
         await bus_b.notify(eid_b)
 

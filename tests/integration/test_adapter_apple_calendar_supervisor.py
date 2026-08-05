@@ -115,22 +115,25 @@ _INTEGRATION_FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _IntegrationEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion.
-    Mirrors the duck-typed contract :meth:`AppleCalendarAdapter._append`
-    reads via ``getattr(ctx.event_log, "append_sync", ...)``."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _make_integration_ctx(
     event_log: _IntegrationEventLog,
 ) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integration-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
@@ -282,28 +285,32 @@ def test_supervisor_write_capabilities_gate_through_loader() -> None:
     NOT touched — the gate rejects the operation BEFORE the impl is
     dispatched."""
     adapter = _make_adapter()
-    assert AppleCalendarAdapter.write_capabilities == ["create_event"]
+    assert AppleCalendarAdapter.write_capabilities == [
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
+    ]
     assert hasattr(adapter, "apply_write")
     assert callable(adapter.apply_write)
 
     op = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="apple-evt-1",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
         asyncio.run(adapter.apply_write(op))
 
-    # The defense-in-depth check inside ``_apply_write_impl`` also
-    # rejects ``delete_event`` directly (the gate would catch it first
-    # in production; this asserts the inner guard is wired correctly).
-    delete_op = WriteOperation(
-        kind="delete_event",
+    # A second unsupported operation remains blocked before the
+    # provider implementation is reached.
+    unsupported_op = WriteOperation(
+        kind="share_calendar",
         target_external_id="apple-evt-2",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
-        asyncio.run(adapter.apply_write(delete_op))
+        asyncio.run(adapter.apply_write(unsupported_op))
 
 
 # ===========================================================================
@@ -343,9 +350,7 @@ def test_supervisor_inbound_poll_emits_calendar_event_added() -> None:
     emitted = asyncio.run(adapter._poll_once(ctx=ctx))
 
     assert emitted == 1
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     instance = CalendarEventAddedV1.model_validate(payload)
@@ -357,9 +362,7 @@ def test_supervisor_inbound_poll_emits_calendar_event_added() -> None:
     assert instance.end == "2026-05-20T16:00:00Z"
     assert instance.location == "HQ Conference Room"
     assert instance.body == "Integration round-trip"
-    assert instance.attendees == [
-        {"name": "Alice", "url": "mailto:alice@example.test"}
-    ]
+    assert instance.attendees == [{"name": "Alice", "url": "mailto:alice@example.test"}]
     # Re-poll on the same id is a no-op per the inbound dedupe gate
     # (F-3 of c2): _seen_inbound populated → no second emit.
     store._fetch_pages = [[apple_event]]

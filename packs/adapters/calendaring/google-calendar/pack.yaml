@@ -1,7 +1,7 @@
 pack:
   id: adapter:calendaring-google-calendar
   name: Google Calendar bidirectional adapter
-  version: 1.0.0
+  version: 2.0.0
   kind: adapter
   family: calendaring
   author: built-in
@@ -33,12 +33,16 @@ depends_on:
     - adapter.authenticated
     - adapter.cursor_advanced
     - calendar.event_added
+    - calendar.event_updated
+    - calendar.event_deleted
 
 events_emitted:
   - adapter.error
   - adapter.authenticated
   - adapter.cursor_advanced
   - calendar.event_added
+  - calendar.event_updated
+  - calendar.event_deleted
 
 config:
   schema: config.schema.json
@@ -54,11 +58,15 @@ config:
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [calendar.event_added]
+    event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted]
 write_capabilities:
   - create_event
+  - update_event
+  - delete_event
+  - respond_event
+  - move_event
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 observation_mode_required: true
 dedup_strategy:
-  kind: external_id
+  kind: provider_sync_token_etag

@@ -33,6 +33,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
 from adminme.lib.session import build_internal_session
@@ -120,7 +121,7 @@ async def test_task_completed_round_trip_emits_reward_ready(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(REWARD_PACK_ROOT)
     _stub_loaders(pack)
     runner.register(pack)
@@ -168,7 +169,7 @@ async def test_commitment_completed_round_trip_emits_reward_ready(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(REWARD_PACK_ROOT)
     _stub_loaders(pack)
     runner.register(pack)
@@ -219,7 +220,7 @@ async def test_malformed_source_event_does_not_emit_reward(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(REWARD_PACK_ROOT)
     _stub_loaders(pack)
     runner.register(pack)
@@ -242,16 +243,16 @@ async def test_malformed_source_event_does_not_emit_reward(
                 "completed_at": EventEnvelope.now_utc_iso(),
             },
         }
-        session = build_internal_session(
-            "pipeline_runner", "device", config.tenant_id
-        )
+        session = build_internal_session("pipeline_runner", "device", config.tenant_id)
 
         async def _no_skill(*a: Any, **kw: Any) -> Any:
             raise AssertionError("reward_dispatch must not call run_skill")
 
+        events = EventWriter(log, bus)
         ctx = PipelineContext(
             session=session,
             event_log=log,
+            event_sink=events,
             run_skill_fn=_no_skill,
             outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
             guarded_write=None,
@@ -275,9 +276,7 @@ async def test_malformed_source_event_does_not_emit_reward(
             )
         )
         await bus.notify(good_eid)
-        await _wait_for_checkpoint(
-            bus, "pipeline:pipeline:reward_dispatch", good_eid
-        )
+        await _wait_for_checkpoint(bus, "pipeline:pipeline:reward_dispatch", good_eid)
 
         all_events = await _read_all(log)
         rewards = [e for e in all_events if e["type"] == "reward.ready"]
@@ -285,9 +284,7 @@ async def test_malformed_source_event_does_not_emit_reward(
         assert len(rewards) == 1
         assert rewards[0]["causation_id"] == good_eid
         # And no event has the malformed event's id as causation.
-        from_bad = [
-            e for e in all_events if e.get("causation_id") == "bad-eid-001"
-        ]
+        from_bad = [e for e in all_events if e.get("causation_id") == "bad-eid-001"]
         assert from_bad == []
     finally:
         await runner.stop()
@@ -306,13 +303,10 @@ async def test_observation_mode_does_not_affect_reward_emit(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runtime_path = tmp_path / "config" / "runtime.yaml"
-    obs_mgr = ObservationManager(
-        event_log=log, runtime_config_path=runtime_path
-    )
-    runner = PipelineRunner(
-        bus, log, config, observation_manager=obs_mgr
-    )
+    obs_mgr = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
+    runner = PipelineRunner(bus, log, events, config, observation_manager=obs_mgr)
     pack = load_pipeline_pack(REWARD_PACK_ROOT)
     _stub_loaders(pack)
     runner.register(pack)

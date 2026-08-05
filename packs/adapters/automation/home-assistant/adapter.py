@@ -25,6 +25,7 @@ import subprocess
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.adapters.emission import write_adapter_event
 from adminme.lib.adapters import (
     ActionRequest,
     ActionResult,
@@ -55,12 +56,12 @@ def _default_token_resolver(op_ref: str) -> str:
         return "test-token-do-not-use-in-production"
     op_bin = shutil.which("op")
     if op_bin is None:
-        raise RuntimeError(
-            f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}"
-        )
+        raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
     proc = subprocess.run(
         [op_bin, "read", "--no-newline", op_ref],
-        check=True, capture_output=True, timeout=15,
+        check=True,
+        capture_output=True,
+        timeout=15,
     )
     return proc.stdout.decode("utf-8").strip()
 
@@ -197,7 +198,7 @@ class HomeAssistantAdapter(OutboundActionAdapter):
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
-        self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
         await self._poll_state_loop(ctx=ctx)
 
     async def stop(self) -> None:
@@ -227,11 +228,11 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             try:
                 await self._poll_states_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
-                severity, error_kind, retry_after_s = (
-                    self._classify_ha_error(exc)
-                )
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                severity, error_kind, retry_after_s = self._classify_ha_error(exc)
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
@@ -262,7 +263,7 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             prior = self._seen_states.get(entity_id)
             if prior is not None and prior == last_changed:
                 continue
-            self._emit_state_changed(ctx=ctx, state=state)
+            await self._emit_state_changed(ctx=ctx, state=state)
             self._seen_states[entity_id] = last_changed
             emitted += 1
         return emitted
@@ -284,18 +285,25 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             return []
         return [s for s in data if isinstance(s, dict)]
 
-    def _emit_state_changed(
-        self, *, ctx: AdapterContext, state: dict[str, Any],
+    async def _emit_state_changed(
+        self,
+        *,
+        ctx: AdapterContext,
+        state: dict[str, Any],
     ) -> None:
         """Map HA state dict onto ``HaStateChangedV1`` (c1 schema)."""
-        self._append(ctx=ctx, event_type="ha.state_changed", payload={
-            "entity_id": str(state.get("entity_id") or ""),
-            "state": str(state.get("state") or ""),
-            "attributes": dict(state.get("attributes") or {}),
-            "last_changed": str(state.get("last_changed") or ""),
-            "last_updated": str(state.get("last_updated") or ""),
-            "source": "home_assistant",
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="ha.state_changed",
+            payload={
+                "entity_id": str(state.get("entity_id") or ""),
+                "state": str(state.get("state") or ""),
+                "attributes": dict(state.get("attributes") or {}),
+                "last_changed": str(state.get("last_changed") or ""),
+                "last_updated": str(state.get("last_updated") or ""),
+                "source": "home_assistant",
+            },
+        )
 
     async def execute_action(self, request: ActionRequest) -> ActionResult:
         """Cat-E entry: POST /api/services/<domain>/<service>.
@@ -355,7 +363,7 @@ class HomeAssistantAdapter(OutboundActionAdapter):
                     },
                     _do_service_call,
                     manager=manager,
-                    event_log=event_log,
+                    event_sink=event_log,
                     target_channel="home_assistant",
                     target_identifier=f"{domain}.{service}",
                 )
@@ -367,15 +375,19 @@ class HomeAssistantAdapter(OutboundActionAdapter):
                         executed=False, external_id=None, suppressed=True
                     )
                 # Phase B success path.
-                self._emit_action_executed(request=request, domain=domain, service=service)
+                await self._emit_action_executed(
+                    request=request, domain=domain, service=service
+                )
                 return ActionResult(executed=True, external_id=None, suppressed=False)
             # Phase A: no seam slots; direct call + emit.
             await _do_service_call()
-            self._emit_action_executed(request=request, domain=domain, service=service)
+            await self._emit_action_executed(
+                request=request, domain=domain, service=service
+            )
             return ActionResult(executed=True, external_id=None, suppressed=False)
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             severity, error_kind, _retry = self._classify_ha_error(exc)
-            self._emit_action_failed(
+            await self._emit_action_failed(
                 request=request,
                 domain=domain,
                 service=service,
@@ -386,7 +398,11 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             raise
 
     def _action_payload(
-        self, *, request: ActionRequest, domain: str, service: str,
+        self,
+        *,
+        request: ActionRequest,
+        domain: str,
+        service: str,
     ) -> dict[str, Any]:
         """Common payload shape for action.executed / action.failed."""
         return {
@@ -395,8 +411,12 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             "service_data": dict(request.payload.get("service_data") or {}),
         }
 
-    def _emit_action_executed(
-        self, *, request: ActionRequest, domain: str, service: str,
+    async def _emit_action_executed(
+        self,
+        *,
+        request: ActionRequest,
+        domain: str,
+        service: str,
     ) -> None:
         """``action.executed@v1`` Cat-E success emission. ``external_id``
         is None — HA's service-call returns changed-state dicts, not a
@@ -404,52 +424,79 @@ class HomeAssistantAdapter(OutboundActionAdapter):
         ctx = self._ctx
         if ctx is None:
             return
-        self._append(ctx=ctx, event_type="action.executed", payload={
-            "action_kind": request.kind,
-            "target_external_id": request.target_external_id,
-            "payload": self._action_payload(
-                request=request, domain=domain, service=service,
-            ),
-            "external_id": None,
-            "executed_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "correlation_id": request.correlation_id,
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="action.executed",
+            payload={
+                "action_kind": request.kind,
+                "target_external_id": request.target_external_id,
+                "payload": self._action_payload(
+                    request=request,
+                    domain=domain,
+                    service=service,
+                ),
+                "external_id": None,
+                "executed_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "correlation_id": request.correlation_id,
+            },
+        )
 
-    def _emit_action_failed(
-        self, *, request: ActionRequest, domain: str, service: str,
-        error_message: str, severity: str, error_kind: str,
+    async def _emit_action_failed(
+        self,
+        *,
+        request: ActionRequest,
+        domain: str,
+        service: str,
+        error_message: str,
+        severity: str,
+        error_kind: str,
     ) -> None:
         """``action.failed@v1`` Cat-E error emission. ``severity`` drives
         the supervisor's backoff policy."""
         ctx = self._ctx
         if ctx is None:
             return
-        self._append(ctx=ctx, event_type="action.failed", payload={
-            "action_kind": request.kind,
-            "target_external_id": request.target_external_id,
-            "payload": self._action_payload(
-                request=request, domain=domain, service=service,
-            ),
-            "error_message": error_message[:2000],
-            "severity": severity,
-            "error_kind": error_kind,
-            "failed_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "correlation_id": request.correlation_id,
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="action.failed",
+            payload={
+                "action_kind": request.kind,
+                "target_external_id": request.target_external_id,
+                "payload": self._action_payload(
+                    request=request,
+                    domain=domain,
+                    service=service,
+                ),
+                "error_message": error_message[:2000],
+                "severity": severity,
+                "error_kind": error_kind,
+                "failed_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "correlation_id": request.correlation_id,
+            },
+        )
 
-    def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
         """``adapter.authenticated@v1``; carries op-ref, NEVER the secret."""
-        self._append(ctx=ctx, event_type="adapter.authenticated", payload={
-            "adapter_name": self.name,
-            "adapter_family": self.family,
-            "token_storage_ref": op_ref,
-            "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "scopes": [],
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="adapter.authenticated",
+            payload={
+                "adapter_name": self.name,
+                "adapter_family": self.family,
+                "token_storage_ref": op_ref,
+                "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scopes": [],
+            },
+        )
 
-    def _emit_error(
-        self, *, ctx: AdapterContext, severity: str, error_kind: str,
-        error_message: str, retry_after_s: int | None,
+    async def _emit_error(
+        self,
+        *,
+        ctx: AdapterContext,
+        severity: str,
+        error_kind: str,
+        error_message: str,
+        retry_after_s: int | None,
     ) -> None:
         """``adapter.error@v1`` — drives the supervisor's backoff."""
         payload: dict[str, Any] = {
@@ -462,32 +509,29 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             "occurred_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
-        self, *, ctx: AdapterContext, event_type: str,
-        payload: dict[str, Any], causation_id: str | None = None,
+    async def _append(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None = None,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
         try:
-            appender(**kwargs)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "home-assistant adapter failed to emit %s event", event_type
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
             )
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception("home-assistant adapter failed to emit %s event", event_type)
 
     @staticmethod
     def _classify_ha_error(
@@ -523,7 +567,12 @@ class HomeAssistantAdapter(OutboundActionAdapter):
         # httpx connect/timeout duck-typed by class-name suffix so this
         # module need not import httpx at load time.
         type_name = type(exc).__name__
-        if type_name in {"ConnectError", "TimeoutException", "ReadTimeout", "ConnectTimeout"}:
+        if type_name in {
+            "ConnectError",
+            "TimeoutException",
+            "ReadTimeout",
+            "ConnectTimeout",
+        }:
             return ("transient", "network", retry_after)
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return ("transient", "network", retry_after)

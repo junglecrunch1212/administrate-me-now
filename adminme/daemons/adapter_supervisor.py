@@ -2,9 +2,9 @@
 Adapter supervisor — async lifecycle manager for L1 standalone adapters.
 
 Per ADMINISTRATEME_BUILD.md §L1 and SYSTEM_INVARIANTS.md §7 (pipelines /
-daemons), §14 (APScheduler scope). Reads ``config/channels.yaml`` at
+daemons). Reads ``config/channels.yaml`` at
 startup, instantiates each configured adapter via a loader callable
-(PM-27: constructor-injected with a no-op default that returns ``[]``),
+(PM-27: constructor-injected; an empty loader represents no configured providers),
 spawns each as an ``asyncio.Task``, watches for crashes, and restarts
 with exponential backoff (1s, 2s, 4s, ..., capped at 300s; resets to 1s
 after 5+ minutes of uptime).
@@ -34,6 +34,8 @@ from typing import Any, Callable
 import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
+from adminme.events.envelope import EventEnvelope
+from adminme.lib.adapters import WriteOperation, WriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +55,12 @@ last restart, the backoff window resets to ``INITIAL_BACKOFF_S``."""
 
 AdapterLoader = Callable[[dict[str, Any]], list[Adapter]]
 """Callable that converts ``channels.yaml``'s parsed dict into adapter
-instances. PM-27: defaults to a no-op stub returning an empty list so
-the supervisor is constructible in tests without wiring real adapters;
-production injects the real loader at startup."""
+instances. The empty default is the truthful no-provider configuration;
+configured providers require an explicit production loader."""
 
 
-def _noop_loader(_config: dict[str, Any]) -> list[Adapter]:
-    """Default loader. Returns no adapters."""
+def _empty_loader(_config: dict[str, Any]) -> list[Adapter]:
+    """Return the explicit no-configured-provider adapter set."""
     return []
 
 
@@ -80,7 +81,7 @@ class AdapterSupervisor:
 
         sup = AdapterSupervisor(
             config_path=Path("config/channels.yaml"),
-            ctx_factory=lambda: AdapterContext(event_log=..., config={}, ...),
+            ctx_factory=lambda: AdapterContext(event_sink=..., config={}, ...),
             adapter_loader=load_my_adapters,
         )
         await sup.start()
@@ -93,17 +94,19 @@ class AdapterSupervisor:
         *,
         config_path: Path,
         ctx_factory: Callable[[], AdapterContext],
-        adapter_loader: AdapterLoader = _noop_loader,
+        adapter_loader: AdapterLoader = _empty_loader,
         clock: Callable[[], float] | None = None,
+        config_data: dict[str, Any] | None = None,
     ) -> None:
         self._config_path = config_path
         self._ctx_factory = ctx_factory
         self._loader = adapter_loader
         self._clock = clock or _monotonic
         self._managed: dict[str, _ManagedAdapter] = {}
-        self._config: dict[str, Any] = {}
+        self._config: dict[str, Any] = dict(config_data or {})
         self._http_server: asyncio.base_events.Server | None = None
         self._stopping = False
+        self._prepared = False
 
     # ------------------------------------------------------------------
     # config
@@ -125,12 +128,7 @@ class AdapterSupervisor:
     async def start(self) -> None:
         """Load config, instantiate adapters, spawn supervised tasks, and
         (optionally) start the /status HTTP endpoint."""
-        if not self._config:
-            self.load_config()
-
-        adapters = self._loader(self._config)
-        for adapter in adapters:
-            self._managed[adapter.name] = _ManagedAdapter(adapter=adapter)
+        self.prepare()
 
         for name, managed in self._managed.items():
             managed.task = asyncio.create_task(
@@ -143,6 +141,60 @@ class AdapterSupervisor:
             self._http_server = await asyncio.start_server(
                 self._handle_http, host=host, port=port
             )
+
+    def prepare(self) -> None:
+        """Load configured instances without starting provider I/O."""
+
+        if self._prepared:
+            return
+        if not self._config:
+            self.load_config()
+        for index, adapter in enumerate(self._loader(self._config)):
+            base = str(getattr(adapter, "instance_name", None) or adapter.name)
+            name = base if base not in self._managed else f"{base}:{index}"
+            self._managed[name] = _ManagedAdapter(adapter=adapter)
+        self._prepared = True
+
+    async def dispatch_write(
+        self,
+        *,
+        provider: str,
+        member_id: str,
+        provider_account_id: str,
+        operation: WriteOperation,
+    ) -> WriteResult:
+        """Route a typed command to exactly one matching provider instance."""
+
+        provider_names = {
+            "google_calendar": "calendaring-google-calendar",
+            "apple_calendar": "calendaring-apple-calendar",
+            "apple_reminders": "reminders-apple-eventkit",
+        }
+        expected_name = provider_names.get(provider)
+        candidates: list[Adapter] = []
+        for managed in self._managed.values():
+            adapter = managed.adapter
+            config = getattr(adapter, "_config", {})
+            if expected_name and getattr(adapter, "name", None) != expected_name:
+                continue
+            if config.get("member_id") not in (None, "", member_id):
+                continue
+            configured_account = config.get("provider_account_id") or config.get(
+                "subject_email"
+            )
+            if configured_account not in (None, "", provider_account_id):
+                continue
+            if callable(getattr(adapter, "apply_write", None)):
+                candidates.append(adapter)
+        if len(candidates) != 1:
+            raise LookupError(
+                f"external write route expected one {provider} adapter for "
+                f"{member_id}/{provider_account_id}, found {len(candidates)}"
+            )
+        result = await candidates[0].apply_write(operation)  # type: ignore[attr-defined]
+        if not result.applied and not result.suppressed:
+            raise RuntimeError("provider adapter is not ready to accept writes")
+        return result
 
     async def stop(self) -> None:
         """Stop the HTTP endpoint and request every managed adapter to
@@ -198,6 +250,7 @@ class AdapterSupervisor:
         adapter = managed.adapter
         while not self._stopping:
             ctx = self._ctx_factory()
+            self._bind_observation_seams(adapter, ctx)
             started_at = self._clock()
             managed.status.state = "starting"
             managed.status.started_at = datetime.now(timezone.utc)
@@ -220,8 +273,9 @@ class AdapterSupervisor:
                     "error_kind": "unknown",
                     "error_message": f"{type(exc).__name__}: {exc}",
                     "retry_after_s": int(managed.backoff_s),
-                    "occurred_at": datetime.now(timezone.utc)
-                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "occurred_at": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    ),
                 }
                 managed.status.last_error = error_payload
                 managed.status.state = "backoff"
@@ -233,7 +287,7 @@ class AdapterSupervisor:
                     type(exc).__name__,
                     managed.backoff_s,
                 )
-                self._emit_adapter_error(ctx, error_payload)
+                await self._emit_adapter_error(ctx, error_payload)
                 try:
                     await asyncio.sleep(managed.backoff_s)
                 except asyncio.CancelledError:
@@ -242,28 +296,51 @@ class AdapterSupervisor:
                 managed.backoff_s = min(managed.backoff_s * 2, MAX_BACKOFF_S)
         managed.status.state = "stopped"
 
-    def _emit_adapter_error(
+    @staticmethod
+    def _bind_observation_seams(adapter: Adapter, ctx: AdapterContext) -> None:
+        """Bind the shared outbound guard to adapters that expose its seam slots.
+
+        Adapter packs retain constructor injection for isolated tests, while the
+        supervisor is the production composition point.  Never replace an
+        explicitly injected seam; fill only missing slots from ``AdapterContext``.
+        """
+        bindings = {
+            "_observation_session": ctx.observation_session,
+            "_observation_manager": ctx.observation_manager,
+            "_observation_event_log": ctx.observation_event_sink,
+        }
+        for attribute, value in bindings.items():
+            if value is not None and getattr(adapter, attribute, None) is None:
+                setattr(adapter, attribute, value)
+
+    async def _emit_adapter_error(
         self, ctx: AdapterContext, payload: dict[str, Any]
     ) -> None:
-        """Append an ``adapter.error`` event via the context's event_log.
-
-        Best-effort: a failure here must not crash the supervisor (the
-        log may itself be down). Production wires a real EventLog;
-        tests inject a fake whose ``append`` records the call."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
+        """Write ``adapter.error`` through the one asynchronous EventSink."""
         try:
-            appender(
-                type="adapter.error",
-                schema_version=1,
-                payload=payload,
-                correlation_id=ctx.correlation_id_factory(),
+            correlation_id = ctx.correlation_id_factory()
+            await ctx.event_sink.write(
+                EventEnvelope(
+                    event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                    tenant_id=ctx.event_sink.tenant_id or "tenant-default",
+                    type="adapter.error",
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="adapter_supervisor",
+                    source_account_id=str(payload.get("adapter_name") or "system"),
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    sensitivity="normal",
+                    correlation_id=correlation_id,
+                    payload=payload,
+                ),
+                correlation_id=correlation_id,
             )
         except Exception:  # noqa: BLE001
-            logger.exception("supervisor failed to emit adapter.error for %s", payload.get("adapter_name"))
+            logger.exception(
+                "supervisor failed to emit adapter.error for %s",
+                payload.get("adapter_name"),
+            )
 
     async def _handle_http(
         self,
@@ -282,7 +359,11 @@ class AdapterSupervisor:
                 if line in (b"\r\n", b""):
                     break
             parts = request_line.split()
-            if len(parts) >= 2 and parts[0] == b"GET" and parts[1].startswith(b"/status"):
+            if (
+                len(parts) >= 2
+                and parts[0] == b"GET"
+                and parts[1].startswith(b"/status")
+            ):
                 body = json.dumps(self.snapshot()).encode("utf-8")
                 headers = (
                     b"HTTP/1.1 200 OK\r\n"
@@ -292,7 +373,9 @@ class AdapterSupervisor:
                 )
                 writer.write(headers + body)
             else:
-                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                writer.write(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
             await writer.drain()
         finally:
             writer.close()
@@ -313,7 +396,9 @@ def _status_to_dict(status: AdapterStatus) -> dict[str, Any]:
         "last_cursor_advance_at": status.last_cursor_advance_at.isoformat()
         if status.last_cursor_advance_at is not None
         else None,
-        "started_at": status.started_at.isoformat() if status.started_at is not None else None,
+        "started_at": status.started_at.isoformat()
+        if status.started_at is not None
+        else None,
         "restart_count": status.restart_count,
         "next_backoff_s": status.next_backoff_s,
     }
@@ -327,5 +412,3 @@ __all__ = [
     "MAX_BACKOFF_S",
     "UPTIME_RESET_S",
 ]
-
-

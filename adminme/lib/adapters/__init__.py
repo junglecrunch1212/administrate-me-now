@@ -32,6 +32,7 @@ from adminme.lib.adapters.communication_base import (
 from adminme.lib.adapters.external_state_mirror_base import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
+    ProviderConflictError,
     WriteCapabilityError,
     WriteOperation,
     WriteResult,
@@ -57,6 +58,7 @@ __all__ = [
     "OutboundActionAdapter",
     "OutboundMessage",
     "PersonalKnowledgeAdapter",
+    "ProviderConflictError",
     "SendResult",
     "WriteCapabilityError",
     "WriteOperation",

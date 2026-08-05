@@ -464,7 +464,9 @@ def test_fifteen_canonical_schemas_registered() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_correlation_and_causation_kwargs_override_envelope(log: EventLog) -> None:
+async def test_correlation_and_causation_kwargs_override_envelope(
+    log: EventLog,
+) -> None:
     parent = _envelope(
         "party.created",
         1,
@@ -491,9 +493,7 @@ async def test_correlation_and_causation_kwargs_override_envelope(log: EventLog)
             "primary_for_kind": True,
         },
     )
-    child_id = await log.append(
-        child, correlation_id="corr-1", causation_id=parent_id
-    )
+    child_id = await log.append(child, correlation_id="corr-1", causation_id=parent_id)
 
     fetched_child = await log.get(child_id)
     assert fetched_child is not None

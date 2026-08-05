@@ -92,45 +92,91 @@ async def main() -> None:
         await runner.start()
         try:
             for i in range(2):
-                await log.append(_env("party.created", {
-                    "party_id": f"p{i}", "kind": "person",
-                    "display_name": f"P{i}", "sort_name": f"P{i}",
-                }))
+                await log.append(
+                    _env(
+                        "party.created",
+                        {
+                            "party_id": f"p{i}",
+                            "kind": "person",
+                            "display_name": f"P{i}",
+                            "sort_name": f"P{i}",
+                        },
+                    )
+                )
             for i in range(3):
-                await log.append(_env("task.created", {
-                    "task_id": f"t{i}", "title": f"Task {i}",
-                }))
-            await log.append(_env("recurrence.added", {
-                "recurrence_id": "r1",
-                "linked_kind": "household",
-                "linked_id": "household",
-                "kind": "maintenance",
-                "rrule": "FREQ=MONTHLY",
-                "next_occurrence": "2026-05-01T09:00:00Z",
-            }))
-            await log.append(_env("account.added", {
-                "account_id": "a1", "display_name": "Checking",
-                "organization_party_id": "p0", "kind": "bank",
-                "status": "active", "attributes": {"last4": "1234"},
-            }))
-            await log.append(_env("money_flow.recorded", {
-                "flow_id": "fp1", "amount_minor": 1000, "currency": "USD",
-                "occurred_at": "2026-04-20T10:00:00Z",
-                "kind": "paid", "linked_account": "a1",
-                "source_adapter": "plaid",
-            }))
-            last = await log.append(_env("money_flow.manually_added", {
-                "flow_id": "fm1", "amount_minor": 4321, "currency": "USD",
-                "occurred_at": "2026-04-22T10:00:00Z",
-                "kind": "paid",
-                "category": "groceries",
-                "added_by_party_id": "p0",
-            }))
+                await log.append(
+                    _env(
+                        "task.created",
+                        {
+                            "task_id": f"t{i}",
+                            "title": f"Task {i}",
+                        },
+                    )
+                )
+            await log.append(
+                _env(
+                    "recurrence.added",
+                    {
+                        "recurrence_id": "r1",
+                        "linked_kind": "household",
+                        "linked_id": "household",
+                        "kind": "maintenance",
+                        "rrule": "FREQ=MONTHLY",
+                        "next_occurrence": "2026-05-01T09:00:00Z",
+                    },
+                )
+            )
+            await log.append(
+                _env(
+                    "account.added",
+                    {
+                        "account_id": "a1",
+                        "display_name": "Checking",
+                        "organization_party_id": "p0",
+                        "kind": "bank",
+                        "status": "active",
+                        "attributes": {"last4": "1234"},
+                    },
+                )
+            )
+            await log.append(
+                _env(
+                    "money_flow.recorded",
+                    {
+                        "flow_id": "fp1",
+                        "amount_minor": 1000,
+                        "currency": "USD",
+                        "occurred_at": "2026-04-20T10:00:00Z",
+                        "kind": "paid",
+                        "linked_account": "a1",
+                        "source_adapter": "plaid",
+                    },
+                )
+            )
+            last = await log.append(
+                _env(
+                    "money_flow.manually_added",
+                    {
+                        "flow_id": "fm1",
+                        "amount_minor": 4321,
+                        "currency": "USD",
+                        "occurred_at": "2026-04-22T10:00:00Z",
+                        "kind": "paid",
+                        "category": "groceries",
+                        "added_by_party_id": "p0",
+                    },
+                )
+            )
             assert last is not None
             await bus.notify(last)
             for name in (
-                "parties", "tasks", "commitments", "recurrences",
-                "calendars", "places_assets_accounts", "money",
+                "parties",
+                "tasks",
+                "commitments",
+                "recurrences",
+                "calendars",
+                "places_assets_accounts",
+                "money",
             ):
                 await _wait_idle(bus, f"projection:{name}")
 
@@ -143,9 +189,7 @@ async def main() -> None:
                 commitments_conn=runner.connection("commitments"),
                 recurrences_conn=runner.connection("recurrences"),
                 calendars_conn=runner.connection("calendars"),
-                places_assets_accounts_conn=runner.connection(
-                    "places_assets_accounts"
-                ),
+                places_assets_accounts_conn=runner.connection("places_assets_accounts"),
                 money_conn=runner.connection("money"),
             )
             forward = XlsxWorkbooksProjection(

@@ -43,7 +43,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -425,10 +424,14 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
-    def _snapshot(conn: sqlcipher3.Connection) -> tuple[list[Any], list[Any], list[Any]]:
+    def _snapshot(
+        conn: sqlcipher3.Connection,
+    ) -> tuple[list[Any], list[Any], list[Any]]:
         p = [tuple(r) for r in conn.execute("SELECT * FROM places ORDER BY place_id")]
         a = [tuple(r) for r in conn.execute("SELECT * FROM assets ORDER BY asset_id")]
-        ac = [tuple(r) for r in conn.execute("SELECT * FROM accounts ORDER BY account_id")]
+        ac = [
+            tuple(r) for r in conn.execute("SELECT * FROM accounts ORDER BY account_id")
+        ]
         return p, a, ac
 
     conn = runner.connection("places_assets_accounts")
@@ -503,8 +506,7 @@ async def test_accounts_renewing_before_orders_ascending(rig: dict[str, Any]) ->
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)
 
     conn = runner.connection("places_assets_accounts")
-    rows = accounts_renewing_before(conn, _S("tenant-a"), cutoff_iso="2026-06-15"
-    )
+    rows = accounts_renewing_before(conn, _S("tenant-a"), cutoff_iso="2026-06-15")
     # ac3 is cancelled — excluded. ac2 < ac4 < ac1 by next_renewal ascending.
     assert [r["account_id"] for r in rows] == ["ac2", "ac4", "ac1"]
 
@@ -522,9 +524,7 @@ async def test_list_assets_for_place(rig: dict[str, Any]) -> None:
         _envelope("asset.added", _asset_payload(asset_id="a2", linked_place="pl1"))
     )
     last = await log.append(
-        _envelope(
-            "asset.added", _asset_payload(asset_id="a3", linked_place="pl-other")
-        )
+        _envelope("asset.added", _asset_payload(asset_id="a3", linked_place="pl-other"))
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:places_assets_accounts", last)

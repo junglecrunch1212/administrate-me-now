@@ -1,21 +1,22 @@
 # Bootstrap wizard sections
 
-One Python file per wizard section. The nine sections per
-ADMINISTRATEME_BUILD.md §BOOTSTRAP WIZARD and SYSTEM_INVARIANTS.md §11:
+Gate 5 implements the ten constitutional sections in `bootstrap/wizard.py`.
+Each section records `not_started`, `in_progress`, `complete`, `failed`, or
+`rolled_back` in an AES-GCM encrypted journal. A completed section is a no-op
+when its version and input digest have not changed.
 
-1. Environment preflight (aborts on failure per §11 invariant 5)
-2. Name your assistant
-3. Household composition
-4. Assign profiles
-5. Assistant credentials
-6. Plaid
-7. Seed household data
-8. Channel pairing (installs skill packs + plugins + standing orders +
-   writes standing-order prose to `AGENTS.md` per DECISIONS.md §D1)
-9. Observation briefing (observation mode enabled by default per
-   SYSTEM_INVARIANTS.md §6 invariant 16 / §11 invariant 4)
+1. Environment and mutation-free preflight
+2. Assistant identity and persona/SOUL compilation
+3. Parties, Memberships, Relationships, and member roles
+4. Profile assignment and behavior preview
+5. Keychain/secure-provider credential references
+6. Plaid sandbox selection and Link state
+7. Household and CRM seed data, with Inbox follow-ups for skips
+8. Channels, shared tools, adapters, permissions, and launchd definitions
+9. Observation briefing, trust-period contract, and canonical proof
+10. Per-member Apple bridge enrollment, or an explicit non-Apple skip
 
-Resumable via encrypted `bootstrap-answers.yaml.enc` + the event log
-(§11 invariant 2). Idempotent on re-run (§11 invariant 3).
-
-Filled in by prompt 16.
+The credential-free `two-adult-one-child` fixture is reproducible process
+evidence; it is not a claim that any live provider or family Mac was mutated.
+Interactive use never asks for a secret: OAuth and macOS grants happen in
+their own provider/system windows, and the wizard stores references only.

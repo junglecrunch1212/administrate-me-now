@@ -1,5 +1,5 @@
 """
-Central :3337 bridge ingest product.
+Central :3330 `/api/bridge` ingest product.
 
 Per memo 04 §2.2 + [§6.19] + [D17] — the loopback (but tailscale-served)
 FastAPI service that bridges send canonical events to. Identity is bound

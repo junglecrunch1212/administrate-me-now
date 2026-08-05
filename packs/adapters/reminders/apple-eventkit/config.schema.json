@@ -20,6 +20,11 @@
       "minLength": 1,
       "description": "Household member who owns the EventKit grant for this adapter instance. Stamped onto every reminder.list_item.synced event so downstream consumers can owner-scope correctly."
     },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable alias for the member's iCloud Reminders account."
+    },
     "deployment_target": {
       "type": "string",
       "enum": ["central", "bridge"],
@@ -42,7 +47,7 @@
       "type": "integer",
       "minimum": 1,
       "default": 30,
-      "description": "Seconds between inbound EventKit fetch cycles. The supervisor's APScheduler cron is a 1-minute heartbeat; the in-process cadence here is the active polling cadence."
+      "description": "Seconds between inbound EventKit provider-watch cycles."
     },
     "outbound_poll_interval_s": {
       "type": "integer",
@@ -50,9 +55,14 @@
       "default": 30,
       "description": "Seconds between outbound EventKit write batches. The adapter drains queued upstream events (`reminder.dispatched` / `task.created` / `commitment.proposed`) at this cadence to minimize iCloud sync churn."
     },
+    "emit_schema_version": {
+      "const": 2,
+      "default": 2,
+      "description": "Emit the rich list/reminder contract including recurrence, geofences, completion timestamps, URL links, and date components."
+    },
     "sensitivity_floor": {
       "const": "normal",
-      "description": "Hardcoded constant per SYSTEM_INVARIANTS.md §6 invariant 10 — reminders adapters cannot be elevated to `\"privileged\"` via config (auto-elevation is a deliberate operator decision for a future prompt). JSON-schema validation rejects any other value."
+      "description": "Hardcoded constant per SYSTEM_INVARIANTS.md §6 invariant 10. Reminders adapters cannot be elevated to `\"privileged\"` through configuration; item privacy is enforced by the never-sync boundary."
     }
   }
 }

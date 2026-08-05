@@ -3,11 +3,11 @@
 -- Per ADMINISTRATEME_BUILD.md §3.10 and SYSTEM_INVARIANTS.md §6, §8, §13.8.
 --
 -- [§13.8] privileged content MUST NOT be embedded or stored in this index.
--- Handler filters at write time (belt); Session (prompt 08) enforces at
+-- Handler filters at write time (belt); Session enforces at
 -- read time (braces).
 -- [§8] AdministrateMe does not call embedding models directly. Vectors
--- in embedding.generated events are pre-computed by a separate embedding
--- daemon (future prompt) that calls OpenClaw's embedding endpoint.
+-- in embedding.generated events are supplied by an authorized domain indexing
+-- pipeline with source scope and provenance.
 --
 -- vec0 is a sqlite-vec virtual table; the sqlite-vec extension must be
 -- loaded at connection time (see VectorSearchProjection.on_connection_opened).
@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS embeddings_meta (
     sensitivity           TEXT NOT NULL
                           CHECK (sensitivity IN ('normal','sensitive','privileged')),
     source_text_sha256    TEXT NOT NULL,
+    owner_scope          TEXT NOT NULL,
+    visibility_scope     TEXT NOT NULL,
+    source_event_id      TEXT NOT NULL,
+    source_adapter       TEXT NOT NULL,
+    source_account_id    TEXT NOT NULL,
+    correlation_id       TEXT,
+    causation_id         TEXT,
     created_at_ms         INTEGER NOT NULL,
     last_event_id         TEXT NOT NULL,
     PRIMARY KEY (tenant_id, embedding_id)

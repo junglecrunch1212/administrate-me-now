@@ -60,21 +60,27 @@ DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS = _ns_mod.DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS
 
 
 def test_normal_reminder_passes() -> None:
-    assert passes_never_sync(
-        list_name="AdministrateMe Household",
-        title="Pick up milk",
-        notes=None,
-        member_role="adult",
-    ) is True
+    assert (
+        passes_never_sync(
+            list_name="AdministrateMe Household",
+            title="Pick up milk",
+            notes=None,
+            member_role="adult",
+        )
+        is True
+    )
 
 
 def test_normal_reminder_with_notes_passes() -> None:
-    assert passes_never_sync(
-        list_name="Family",
-        title="Pick up milk",
-        notes="2% only — Susan is dairy-sensitive",
-        member_role="adult",
-    ) is True
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="Pick up milk",
+            notes="2% only — Susan is dairy-sensitive",
+            member_role="adult",
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -89,37 +95,46 @@ def test_normal_reminder_with_notes_passes() -> None:
         "Work case files",  # canonical anti-vision fixture
         "Active Case Notes",
         "Client #4 — Discovery",
-        "WORK",   # case-insensitive
+        "WORK",  # case-insensitive
         "client",  # case-insensitive
     ],
 )
 def test_list_name_substring_blocks_sync(list_name: str) -> None:
-    assert passes_never_sync(
-        list_name=list_name,
-        title="Pick up milk",
-        notes=None,
-        member_role="adult",
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name=list_name,
+            title="Pick up milk",
+            notes=None,
+            member_role="adult",
+        )
+        is False
+    )
 
 
 def test_custom_list_name_substrings_replace_defaults() -> None:
     """When the caller passes their own ``never_sync_list_substrings``,
     the defaults are NOT additively applied — the caller's list is the
     full enforcement set."""
-    assert passes_never_sync(
-        list_name="Work",
-        title="Pick up milk",
-        notes=None,
-        member_role="adult",
-        never_sync_list_substrings=("Personal",),
-    ) is True
-    assert passes_never_sync(
-        list_name="Personal",
-        title="Pick up milk",
-        notes=None,
-        member_role="adult",
-        never_sync_list_substrings=("Personal",),
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="Work",
+            title="Pick up milk",
+            notes=None,
+            member_role="adult",
+            never_sync_list_substrings=("Personal",),
+        )
+        is True
+    )
+    assert (
+        passes_never_sync(
+            list_name="Personal",
+            title="Pick up milk",
+            notes=None,
+            member_role="adult",
+            never_sync_list_substrings=("Personal",),
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,49 +143,64 @@ def test_custom_list_name_substrings_replace_defaults() -> None:
 
 
 def test_private_tag_in_title_blocks_sync() -> None:
-    assert passes_never_sync(
-        list_name="Family",
-        title="#private — therapy appt",
-        notes=None,
-        member_role="adult",
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="#private — therapy appt",
+            notes=None,
+            member_role="adult",
+        )
+        is False
+    )
 
 
 def test_private_tag_in_notes_blocks_sync() -> None:
-    assert passes_never_sync(
-        list_name="Family",
-        title="Doctor",
-        notes="#private — not for shared dashboard",
-        member_role="adult",
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="Doctor",
+            notes="#private — not for shared dashboard",
+            member_role="adult",
+        )
+        is False
+    )
 
 
 def test_private_tag_case_insensitive() -> None:
-    assert passes_never_sync(
-        list_name="Family",
-        title="Doctor",
-        notes="#PRIVATE",
-        member_role="adult",
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="Doctor",
+            notes="#PRIVATE",
+            member_role="adult",
+        )
+        is False
+    )
 
 
 def test_custom_tag_substrings_replace_defaults() -> None:
     """Same contract as list substrings — caller's list fully replaces
     the defaults rather than additively extending them."""
-    assert passes_never_sync(
-        list_name="Family",
-        title="#private therapy",
-        notes=None,
-        member_role="adult",
-        never_sync_tag_substrings=("#secret",),
-    ) is True
-    assert passes_never_sync(
-        list_name="Family",
-        title="#secret — codeword",
-        notes=None,
-        member_role="adult",
-        never_sync_tag_substrings=("#secret",),
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="#private therapy",
+            notes=None,
+            member_role="adult",
+            never_sync_tag_substrings=("#secret",),
+        )
+        is True
+    )
+    assert (
+        passes_never_sync(
+            list_name="Family",
+            title="#secret — codeword",
+            notes=None,
+            member_role="adult",
+            never_sync_tag_substrings=("#secret",),
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -180,12 +210,15 @@ def test_custom_tag_substrings_replace_defaults() -> None:
 
 @pytest.mark.parametrize("role", ["child", "ambient"])
 def test_excluded_member_roles_block_sync(role: str) -> None:
-    assert passes_never_sync(
-        list_name="AdministrateMe Household",
-        title="Pick up milk",
-        notes=None,
-        member_role=role,
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="AdministrateMe Household",
+            title="Pick up milk",
+            notes=None,
+            member_role=role,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -195,12 +228,15 @@ def test_non_excluded_member_roles_pass(role: str) -> None:
     """Any role NOT in the excluded set passes the role check (the other
     rules may still block; here we keep the list + tag clean to isolate
     the role behavior)."""
-    assert passes_never_sync(
-        list_name="AdministrateMe Household",
-        title="Pick up milk",
-        notes=None,
-        member_role=role,
-    ) is True
+    assert (
+        passes_never_sync(
+            list_name="AdministrateMe Household",
+            title="Pick up milk",
+            notes=None,
+            member_role=role,
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -228,11 +264,14 @@ def test_module_constants_match_spec() -> None:
 
 
 def test_role_exclusion_short_circuits_empty_substring_lists() -> None:
-    assert passes_never_sync(
-        list_name="AdministrateMe Household",
-        title="Pick up milk",
-        notes=None,
-        member_role="child",
-        never_sync_list_substrings=(),
-        never_sync_tag_substrings=(),
-    ) is False
+    assert (
+        passes_never_sync(
+            list_name="AdministrateMe Household",
+            title="Pick up milk",
+            notes=None,
+            member_role="child",
+            never_sync_list_substrings=(),
+            never_sync_tag_substrings=(),
+        )
+        is False
+    )

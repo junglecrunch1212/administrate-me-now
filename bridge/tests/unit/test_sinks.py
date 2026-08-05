@@ -2,11 +2,11 @@
 
 Pins the BridgeEventSink contract + the two impls so 11b-ii-α-2 (and
 every future dual-deployment Cat-B adapter) can rely on the emit-pathway
-abstraction without re-deriving the SubmitResult / EventLog.append
+abstraction without re-deriving the transport / typed-writer
 unification (F-7).
 
 [§6.19] + memo 04 §2.2: production bridge emit always goes through
-``IngestClientBridgeSink`` → central :3337 ingest router so
+``IngestClientBridgeSink`` → central :3330 ingest namespace so
 ``owner_scope`` is stamped from Tailscale identity. F-8 pins that
 ``EventLogBridgeSink`` is for tests + central-deployment-fallback ONLY."""
 
@@ -15,9 +15,12 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, dataclass
 from typing import Any
 
+import pytest
+
 from adminme.events.envelope import EventEnvelope
 from adminme_bridge.adapters.sinks import (
     BridgeEventSink,
+    BridgeTransportEventSink,
     EmitResult,
     EventLogBridgeSink,
     IngestClientBridgeSink,
@@ -62,7 +65,7 @@ class _RecordingIngestClient:
 
 
 @dataclass
-class _RecordingEventLog:
+class _RecordingEventSink:
     """``EventLog.append`` stand-in — records kwargs and returns scripted id.
 
     If ``raise_on_append`` is set, raises it instead — used to pin the
@@ -75,7 +78,11 @@ class _RecordingEventLog:
     def __post_init__(self) -> None:
         self.calls = []
 
-    async def append(
+    @property
+    def tenant_id(self) -> str:
+        return "t1"
+
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -110,7 +117,9 @@ def test_emit_result_is_frozen_dataclass() -> None:
     raise AssertionError("EmitResult must be a frozen dataclass per F-7")
 
 
-async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_ok_case() -> None:
+async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_ok_case() -> (
+    None
+):
     """Production path: ``IngestClientBridgeSink`` wraps ``IngestClient.submit``
     and drops ``status_code`` at the boundary per F-7. ``ok=True`` round-trips
     to ``EmitResult(ok=True, event_id=<id>, error=None)``."""
@@ -131,7 +140,9 @@ async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_ok_ca
     assert client.calls[0]["tenant_id"] == "t1"
 
 
-async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_error_case() -> None:
+async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_error_case() -> (
+    None
+):
     """4xx / 5xx / transport failure: ``SubmitResult(ok=False, event_id=None,
     error=...)`` round-trips to ``EmitResult(ok=False, event_id=None,
     error=...)``. The status_code is dropped per F-7."""
@@ -151,30 +162,52 @@ async def test_ingest_client_bridge_sink_maps_submit_result_to_emit_result_error
     assert "server_error" in result.error
 
 
-async def test_event_log_bridge_sink_passes_correlation_and_causation_kwargs_per_d8() -> None:
+async def test_bridge_event_writer_adapts_transport_to_typed_event_sink() -> None:
+    client = _RecordingIngestClient(
+        result=SubmitResult(ok=True, event_id="ev_remote", status_code=202, error=None)
+    )
+    writer = BridgeTransportEventSink(IngestClientBridgeSink(client), tenant_id="t1")
+
+    assert writer.tenant_id == "t1"
+    assert await writer.write(_envelope()) == "ev_remote"
+
+
+async def test_bridge_event_writer_fails_when_transport_does_not_commit() -> None:
+    client = _RecordingIngestClient(
+        result=SubmitResult(ok=False, event_id=None, status_code=503, error="offline")
+    )
+    writer = BridgeTransportEventSink(IngestClientBridgeSink(client), tenant_id="t1")
+
+    with pytest.raises(RuntimeError, match="offline"):
+        await writer.write(_envelope())
+
+
+async def test_event_log_bridge_sink_passes_correlation_and_causation_kwargs_per_d8() -> (
+    None
+):
     """[D8] addition 2: correlation_id / causation_id are passed as explicit
     kwargs (never dict-squatted into the envelope). ``EventLogBridgeSink``
     forwards both from ``envelope.correlation_id`` / ``.causation_id``."""
-    log = _RecordingEventLog(event_id="ev_log_42")
-    sink = EventLogBridgeSink(log)  # type: ignore[arg-type]
+    event_sink = _RecordingEventSink(event_id="ev_log_42")
+    sink = EventLogBridgeSink(event_sink)  # type: ignore[arg-type]
     env = _envelope(correlation_id="cor-xyz", causation_id="cau-pqr")
     result = await sink.emit(env)
     assert result.ok is True
     assert result.event_id == "ev_log_42"
     assert result.error is None
-    assert log.calls is not None and len(log.calls) == 1
-    call = log.calls[0]
+    assert event_sink.calls is not None and len(event_sink.calls) == 1
+    call = event_sink.calls[0]
     assert call["envelope"] is env  # EventLog gets the Pydantic instance directly
     assert call["correlation_id"] == "cor-xyz"
     assert call["causation_id"] == "cau-pqr"
 
 
 async def test_event_log_bridge_sink_surfaces_exception_as_emit_result_error() -> None:
-    """F-7 boundary: ``EventLog.append`` raises on failure; ``EventLogBridgeSink``
+    """F-7 boundary: ``EventSink.write`` raises on failure; ``EventLogBridgeSink``
     catches and unifies the failure into ``EmitResult(ok=False, ...)`` so the
     adapter sees the same shape for both impls."""
-    log = _RecordingEventLog(raise_on_append=RuntimeError("db locked"))
-    sink = EventLogBridgeSink(log)  # type: ignore[arg-type]
+    event_sink = _RecordingEventSink(raise_on_append=RuntimeError("db locked"))
+    sink = EventLogBridgeSink(event_sink)  # type: ignore[arg-type]
     result = await sink.emit(_envelope())
     assert result.ok is False
     assert result.event_id is None
@@ -197,7 +230,7 @@ def test_bridge_event_sink_protocol_runtime_check_both_impls() -> None:
             result=SubmitResult(ok=True, event_id="x", status_code=202)
         )  # type: ignore[arg-type]
     )
-    log_sink = EventLogBridgeSink(_RecordingEventLog())  # type: ignore[arg-type]
+    log_sink = EventLogBridgeSink(_RecordingEventSink())  # type: ignore[arg-type]
     assert isinstance(ingest_sink, BridgeEventSink)
     assert isinstance(log_sink, BridgeEventSink)
     assert not isinstance(_NotASink(), BridgeEventSink)

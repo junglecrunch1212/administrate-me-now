@@ -58,9 +58,7 @@ class _FakeRemindersAdapter(ExternalStateMirrorAdapter):
     def status(self) -> AdapterStatus:
         return self._status
 
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         self.applied.append(operation)
         return WriteResult(applied=True, external_id="ext-1")
 
@@ -189,9 +187,7 @@ async def test_apply_write_rejects_undeclared_operation() -> None:
 
 async def test_apply_write_gate_enumerates_declared_caps_in_error() -> None:
     adapter = _FakeRemindersAdapter()
-    op = WriteOperation(
-        kind="rename_list", target_external_id="list-1", payload={}
-    )
+    op = WriteOperation(kind="rename_list", target_external_id="list-1", payload={})
     with pytest.raises(WriteCapabilityError) as excinfo:
         await adapter.apply_write(op)
     msg = str(excinfo.value)
@@ -260,6 +256,4 @@ def test_apply_write_is_concrete_async() -> None:
     """``apply_write`` is concrete on the base (centralized gate) and
     must remain async to compose with the subclass's
     ``_apply_write_impl``."""
-    assert inspect.iscoroutinefunction(
-        ExternalStateMirrorAdapter.apply_write
-    )
+    assert inspect.iscoroutinefunction(ExternalStateMirrorAdapter.apply_write)

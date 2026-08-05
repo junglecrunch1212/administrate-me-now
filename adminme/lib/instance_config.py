@@ -40,6 +40,7 @@ class InstanceConfig:
     event_log_path: Path
     bus_checkpoint_path: Path
     projection_checkpoint_path: Path
+    adapter_cursor_path: Path
 
     # Projections directory (one .db file per projection lives under here)
     projections_dir: Path
@@ -109,6 +110,7 @@ def load_instance_config(instance_dir: Path) -> InstanceConfig:
         event_log_path=instance_dir / "events" / "events.db",
         bus_checkpoint_path=instance_dir / "events" / "bus_checkpoints.db",
         projection_checkpoint_path=instance_dir / "projections" / "_checkpoints.db",
+        adapter_cursor_path=instance_dir / "events" / "adapter_cursors.db",
         projections_dir=instance_dir / "projections",
         packs_dir=instance_dir / "packs",
         raw_events_dir=instance_dir / "data" / "raw_events",

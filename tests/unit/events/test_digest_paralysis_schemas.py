@@ -127,9 +127,7 @@ def test_digest_composed_round_trips_through_envelope() -> None:
             "today_iso": "2026-05-05",
         },
     )
-    validated = registry.validate(
-        "digest.composed", 1, envelope.payload
-    )
+    validated = registry.validate("digest.composed", 1, envelope.payload)
     assert isinstance(validated, DigestComposedV1)
 
 
@@ -152,7 +150,5 @@ def test_paralysis_triggered_round_trips_through_envelope() -> None:
             "triggered_at": "2026-05-05T15:00:00Z",
         },
     )
-    validated = registry.validate(
-        "paralysis.triggered", 1, envelope.payload
-    )
+    validated = registry.validate("paralysis.triggered", 1, envelope.payload)
     assert isinstance(validated, ParalysisTriggeredV1)

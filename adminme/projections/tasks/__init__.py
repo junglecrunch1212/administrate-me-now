@@ -15,12 +15,15 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 1
+    version = 2
     subscribes_to = [
         "task.created",
         "task.completed",
         "task.updated",
         "task.deleted",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "calendar.event_outcome_recorded",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

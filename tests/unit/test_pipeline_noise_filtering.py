@@ -26,10 +26,7 @@ from adminme.lib.skill_runner import (
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "noise_filtering"
+    Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "noise_filtering"
 )
 
 
@@ -60,7 +57,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -85,6 +82,7 @@ def _make_ctx(event_log: Any, run_skill_fn: Any) -> PipelineContext:
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=run_skill_fn,
         outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
@@ -186,9 +184,7 @@ async def test_skill_success_emits_classified() -> None:
         assert inputs["source_channel"] == "gmail"
         assert inputs["from_identifier"] == "ada@example.com"
         assert inputs["from_party_known"] is False
-        return _make_skill_result(
-            classification="transactional", confidence=0.91
-        )
+        return _make_skill_result(classification="transactional", confidence=0.91)
 
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()

@@ -25,14 +25,10 @@ invocation.
 
 ## Approval gate
 
-None. The weekly CRM surface is a recurring routine, not a per-event
-ask. Outbound delivery routes through `outbound()` per [§6.14], which
-consults observation mode and records `observation.suppressed`
-(active) or `external.sent` (inactive) before any external send. The
-principal reviews suppressed-action logs before flipping observation
-off per [§7] operating rule 7 and [D22]. The per-member opt-in default
-is `crm_proactive_enabled=false` — silence is the default, surfacing
-is the explicit override.
+None. The weekly CRM surface is a recurring routine, not a per-event ask.
+AdministrateMe persists the notification signal and policy decision; OpenClaw
+owns the send and reports its outcome. The per-member opt-in default is
+`crm_proactive_enabled=false` — silence is the default.
 
 ## Escalation
 
@@ -40,7 +36,7 @@ A composition miss — skill failure on the 7-tuple
 (`_SKILL_FAILURE_EXCEPTIONS` per [§7.7]), empty surfaced-party list,
 missing member profile — is absorbed by the defensive default: emit
 `crm.surfaced` with `composed_text=""`, `validation_failed=true`,
-`delivered=false`. NO `outbound()` is attempted on the sentinel path.
+`delivered=false`. No notification is raised on the sentinel path.
 Per-row failure does NOT abort the tick; the next opt-in member is
 processed independently. The pipeline never raises into the bus.
 
@@ -49,9 +45,9 @@ processed independently. The pipeline never raises into the bus.
 Proactive pack at `packs/pipelines/crm_surface/` per [BUILD.md §L4
 crm_surface]. Per-tick handler logic:
 
-1. Load opt-in members + stale-party rows via injected loader (PM-27
-   constructor injection; default no-op returns `[]` per UT-14
-   carry-forward). Each row carries `member_id`, `gap_kind`, and up to
+1. Load opt-in members + stale-party rows from the scoped parties read model.
+   Constructor injection supplies deterministic fixtures in isolated tests.
+   Each row carries `member_id`, `gap_kind`, and up to
    `max_surfaced_per_week` party ids by gap type, computed against
    the configured `threshold_days` (default 90).
 2. Honor per-member overrides: `crm_proactive_enabled` (default
@@ -60,9 +56,8 @@ crm_surface]. Per-tick handler logic:
    `compose_crm_surface@v1` with the row payload; on failure
    (defensive default) carry the sentinel
    `composed_text=""` / `validation_failed=true` into step 5.
-4. On valid composition call `outbound()` exactly once via the single
-   import site in `deliver()` per [§6.14]. Capture `delivered: bool`
-   from `OutboundResult.suppressed`.
+4. On valid composition persist one typed notification signal and policy
+   decision. OpenClaw sends only a route decision and reports the outcome.
 5. Emit `crm.surfaced` v1 with `member_id`, `surfaced_party_ids`,
    `gap_kind`, `composed_text`, `channel`, `week_of_date`,
    `delivered`, `validation_failed`.
@@ -71,8 +66,9 @@ crm_surface]. Per-tick handler logic:
 
 ## What NOT to do
 
-- **Do NOT call `outbound()` on the sentinel path.** Sentinel emits
+- **Do NOT raise a notification on the sentinel path.** Sentinel emits
   the event with `delivered=false`.
+- **Do NOT claim delivery before `notification.delivery.result`.**
 - **Do NOT modify any projection.** Per [§7.3] / [D17], proactive
   pipelines emit events; projections consume them. The `parties`
   projection's stale-contact computation is read-only here.

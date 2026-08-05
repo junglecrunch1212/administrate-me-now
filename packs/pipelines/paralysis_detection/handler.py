@@ -18,20 +18,11 @@ Pre-conditions per [BUILD.md §1300]: zero completions in prior 2
 hours AND energy level ≤ low AND now within member's fog window.
 Any miss → defensive skip (no event emits, no error raises).
 
-v1 surface is inbox-only per [BUILD.md §1302] ("inbox + optional
-outbound"); the optional-outbound branch is deferred to a future
-per-profile-config-aware prompt. **paralysis_detection does NOT call
-``outbound()`` in v1.** Tests assert this absence.
+The surface is a scoped inbox/activity event, not an external notification.
 
-Constructor-injection loaders per PM-27 (mirroring 10c-i's
-reward_dispatch shape): real loader modules don't exist on main yet,
-so the pack ships with no-op defaults that exercise the
-defensive-skip paths. Tests inject fakes; future bootstrap wiring
-or a runner-side seam injects real loaders. The ``energy_loader``
-returns ``dict | None`` per [BUILD.md §1299]; the
-``adminme_energy_states`` projection is not yet on main, so the
-default loader returns ``None`` and the pre-condition check fails
-defensively.
+Constructor-injection loaders preserve deterministic read-model boundaries.
+The ``energy_loader`` returns ``dict | None`` per [BUILD.md §1299]; absent
+energy evidence fails the pre-condition closed.
 """
 
 from __future__ import annotations
@@ -79,9 +70,7 @@ def _now_hhmm(now_iso: str) -> str:
     return ""
 
 
-def _within_fog_window(
-    now_hhmm: str, fog_window: list[str] | None
-) -> bool:
+def _within_fog_window(now_hhmm: str, fog_window: list[str] | None) -> bool:
     """Fog window is [start_hhmm, end_hhmm] inclusive. Defensive
     default: if the window is missing or malformed, treat as
     out-of-window."""
@@ -131,15 +120,11 @@ class ParalysisDetectionPipeline:
     ) -> None:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
         self._persona_loader: PersonaLoader = persona_loader or (lambda: None)
-        self._tasks_loader: TasksLoader = tasks_loader or (
-            lambda _mid, _now: []
-        )
+        self._tasks_loader: TasksLoader = tasks_loader or (lambda _mid, _now: [])
         self._commitments_loader: CommitmentsLoader = commitments_loader or (
             lambda _mid, _now: []
         )
-        self._energy_loader: EnergyLoader = energy_loader or (
-            lambda _mid: None
-        )
+        self._energy_loader: EnergyLoader = energy_loader or (lambda _mid: None)
 
     def check_preconditions(
         self,
@@ -227,7 +212,7 @@ class ParalysisDetectionPipeline:
                 "triggered_at": triggered_at,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -264,9 +249,7 @@ class ParalysisDetectionPipeline:
             triggering_event=triggering_event,
         )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and is exercised in tests by

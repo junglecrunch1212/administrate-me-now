@@ -21,4 +21,7 @@ six pack kinds — each with its own subdirectory here:
   activation. 4 built-in: `poopsy`, `butler_classic`, `friendly_robot`,
   `quiet_assistant`.
 
-Filled in by subsequent prompts.
+Gate 6 supplies all five built-in profiles and four built-in personas as
+versioned, data-only packs. `adminme.extensions.ExtensionCatalog` validates,
+stages, tests, activates, and rolls them back. These extensions cannot contain
+authority, credentials, tenant identity, or model-routing configuration.

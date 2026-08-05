@@ -6,9 +6,9 @@ column gets ``cell.protection = Protection(locked=True)``. Sheets tagged
 ``[read-only]`` lock every cell; sheets tagged ``[bidirectional-shape]``
 lock only derived columns.
 
-Sheet-level protection is enabled with a placeholder password — real
-secret flow lands in bootstrap (prompt 16). This prompt uses
-``adminme-placeholder`` everywhere.
+Sheet-level protection uses a fixed editing token. XLSX sheet protection is an
+interface guard, not encryption or authentication; data confidentiality comes
+from instance filesystem permissions and the encrypted source event log.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Iterable
 from openpyxl.styles import Font, Protection
 from openpyxl.worksheet.worksheet import Worksheet
 
-SHEET_PASSWORD_PLACEHOLDER = "adminme-placeholder"
+SHEET_PROTECTION_TOKEN = "adminme-derived-fields"
 
 
 def write_header_row(ws: Worksheet, headers: list[str]) -> None:
@@ -57,7 +57,7 @@ def apply_sheet_protection(ws: Worksheet, *, readonly: bool) -> None:
     Excel honors cell-level locked settings.
     """
     ws.protection.sheet = True
-    ws.protection.password = SHEET_PASSWORD_PLACEHOLDER
+    ws.protection.password = SHEET_PROTECTION_TOKEN
     # When readonly, also mark column/row insert-disallow at sheet level.
     if readonly:
         ws.protection.insertColumns = True

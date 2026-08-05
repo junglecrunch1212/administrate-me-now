@@ -23,10 +23,7 @@ from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "packs"
-    / "pipelines"
-    / "morning_digest"
+    Path(__file__).resolve().parents[3] / "packs" / "pipelines" / "morning_digest"
 )
 
 
@@ -63,7 +60,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -105,9 +102,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         if skill_raises is not None:
@@ -123,6 +118,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -181,12 +177,15 @@ async def test_defensive_default_with_all_no_op_loaders_emits_sentinel() -> None
     body_text → validation guard rejects → sentinel emits."""
     log = _FakeEventLog()
     pipeline = MorningDigestPipeline()
-    ctx = _make_ctx(log, skill_outputs={
-        "body_text": "",
-        "claimed_event_ids": [],
-        "validation_failed": True,
-        "reasons": ["skill_failure_defensive_default"],
-    })
+    ctx = _make_ctx(
+        log,
+        skill_outputs={
+            "body_text": "",
+            "claimed_event_ids": [],
+            "validation_failed": True,
+            "reasons": ["skill_failure_defensive_default"],
+        },
+    )
     await pipeline.dispatch("member-a", "2026-05-05", ctx)
     assert len(log.calls) == 1
     env = log.calls[0].envelope
@@ -215,10 +214,7 @@ async def test_skill_failure_emits_sentinel_no_outbound() -> None:
     assert digest_events[0].envelope.payload["delivered"] is False
     assert digest_events[0].envelope.payload["body_text"] == SENTINEL_BODY
     # No observation events on the sentinel path.
-    assert all(
-        c.envelope.type == "digest.composed"
-        for c in log.calls
-    )
+    assert all(c.envelope.type == "digest.composed" for c in log.calls)
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +305,12 @@ async def test_validation_guard_passes_with_only_real_ids() -> None:
     env = digest_events[0].envelope
     assert env.payload["validation_failed"] is False
     assert env.payload["body_text"].startswith("Today: standup")
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
+    assert len(signals) == len(decisions) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +319,10 @@ async def test_validation_guard_passes_with_only_real_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound_but_emits_digest() -> None:
-    """Observation mode active → outbound() suppressed → digest.composed
-    emits with delivered=false; observation.suppressed lands in the log."""
+async def test_observation_mode_active_suppresses_notification_but_emits_digest() -> (
+    None
+):
+    """Observation mode produces a suppress decision and no fake delivery."""
     log = _FakeEventLog()
     pipeline = _build_pipeline_with_seeded_state()
     ctx = _make_ctx(
@@ -338,10 +340,12 @@ async def test_observation_mode_active_suppresses_outbound_but_emits_digest() ->
     assert len(digest_events) == 1
     assert digest_events[0].envelope.payload["delivered"] is False
     assert digest_events[0].envelope.payload["validation_failed"] is False
-    suppressed_events = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
     ]
-    assert len(suppressed_events) == 1
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
+    assert decisions[0].envelope.payload["reasons"] == ["observation_mode_active"]
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +354,7 @@ async def test_observation_mode_active_suppresses_outbound_but_emits_digest() ->
 
 
 @pytest.mark.asyncio
-async def test_happy_path_emits_external_sent_and_digest_composed() -> None:
+async def test_happy_path_emits_notification_intent_and_digest_composed() -> None:
     log = _FakeEventLog()
     pipeline = _build_pipeline_with_seeded_state()
     ctx = _make_ctx(
@@ -364,11 +368,17 @@ async def test_happy_path_emits_external_sent_and_digest_composed() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("member-a", "2026-05-05", ctx)
-    sent_events = [c for c in log.calls if c.envelope.type == "external.sent"]
+    signal_events = [
+        c for c in log.calls if c.envelope.type == "notification.signal.raised"
+    ]
+    decision_events = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
+    ]
     digest_events = [c for c in log.calls if c.envelope.type == "digest.composed"]
-    assert len(sent_events) == 1
+    assert len(signal_events) == len(decision_events) == 1
     assert len(digest_events) == 1
-    assert digest_events[0].envelope.payload["delivered"] is True
+    assert digest_events[0].envelope.payload["delivered"] is False
+    assert signal_events[0].envelope.payload["category"] == "digest"
 
 
 # ---------------------------------------------------------------------------

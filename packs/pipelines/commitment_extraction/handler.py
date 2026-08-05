@@ -35,8 +35,8 @@ per-pipeline DB connections.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import secrets
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,12 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import (
+    PipelineContext,
+    Triggers,
+    parties_connection,
+    skill_output,
+)
 from adminme.projections.parties.queries import find_party_by_identifier
 
 _log = logging.getLogger(__name__)
@@ -103,8 +108,8 @@ def _classify_identifier(payload: dict[str, Any]) -> tuple[str, str]:
     return kind, value_normalized
 
 
-def _new_commitment_id() -> str:
-    return f"cmt_{secrets.token_hex(11)}"
+def _commitment_id(source_event_id: str) -> str:
+    return f"cmt_{hashlib.sha256(source_event_id.encode()).hexdigest()[:22]}"
 
 
 def _load_config(pack_root: Path) -> dict[str, Any]:
@@ -119,8 +124,7 @@ def _load_config(pack_root: Path) -> dict[str, Any]:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"commitment_extraction config at {config_path} did not parse "
-            f"to a mapping"
+            f"commitment_extraction config at {config_path} did not parse to a mapping"
         )
     return data
 
@@ -143,9 +147,7 @@ def _thresholds_for_member(
 class CommitmentExtractionPipeline:
     pack_id: str = "pipeline:commitment_extraction"
     version: str = "4.2.0"
-    triggers: Triggers = {
-        "events": ["messaging.received", "messaging.sent"]
-    }
+    triggers: Triggers = {"events": ["messaging.received", "messaging.sent"]}
 
     # `_PACK_ROOT` is set at module import for the in-pack default config
     # lookup; tests that want a custom config patch ``self._config_override``
@@ -155,9 +157,7 @@ class CommitmentExtractionPipeline:
     def __init__(self) -> None:
         self._config_override: dict[str, Any] | None = None
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in ("messaging.received", "messaging.sent"):
             return
@@ -165,6 +165,30 @@ class CommitmentExtractionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        prior_by_causation = getattr(ctx.event_log, "get_by_causation", None)
+        if prior_by_causation is not None:
+            prior = await prior_by_causation(source_event_id)
+            if any(
+                item.get("source_adapter") == "commitment_extraction" for item in prior
+            ):
+                return
+        proposal_key = f"commitment:proposal:{source_event_id}"
+        idempotency_lookup = getattr(ctx.event_log, "get_by_idempotency", None)
+        if idempotency_lookup is not None and await idempotency_lookup(
+            event["tenant_id"], proposal_key
+        ):
+            return
+
+        if event.get("sensitivity") == "privileged":
+            await self._emit_suppressed(
+                event=event,
+                ctx=ctx,
+                reason="privileged_input",
+                confidence=0.0,
+                threshold=float(config.get("min_confidence", 0.55)),
+                source_event_id=source_event_id,
+            )
+            return
 
         # 1. Sender resolution. Outbound (`messaging.sent`) does not
         # carry `from_identifier` — treat as unresolvable and suppress
@@ -193,7 +217,7 @@ class CommitmentExtractionPipeline:
             )
             return
 
-        with ctx.parties_conn_factory() as conn:
+        with parties_connection(ctx.parties_conn_factory) as conn:
             sender_party = find_party_by_identifier(
                 conn,
                 ctx.session,
@@ -217,11 +241,14 @@ class CommitmentExtractionPipeline:
             return
 
         # 2. Receiving member. The receiving member id rides on the
-        # event's `to_identifier`; v1 of this pipeline treats it as a
-        # member identifier directly. Real routing-owner resolution
-        # lands in a future prompt with a router-table seam — for now,
-        # if `to_identifier` is empty, suppress.
-        receiving_member_id = str(payload.get("to_identifier", ""))
+        # private owner scope is authoritative; legacy shared events fall back
+        # to the normalized `to_identifier`. If neither exists, suppress.
+        owner_scope = str(event.get("owner_scope", ""))
+        receiving_member_id = (
+            owner_scope.removeprefix("private:")
+            if owner_scope.startswith("private:")
+            else str(payload.get("to_identifier", ""))
+        )
         if not receiving_member_id:
             await self._emit_suppressed(
                 event=event,
@@ -253,6 +280,10 @@ class CommitmentExtractionPipeline:
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
+            triggering_event_id=source_event_id,
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
         )
         message_text = str(payload.get("body_text") or "")
         classify_inputs: dict[str, Any] = {
@@ -282,15 +313,14 @@ class CommitmentExtractionPipeline:
             )
             return
 
-        classify_output = (
-            classify_result.output
-            if hasattr(classify_result, "output")
-            else classify_result
-        )
+        classify_output = skill_output(classify_result)
         confidence = float(classify_output.get("confidence", 0.0))
         classify_reasons = list(classify_output.get("reasons", []))
 
-        if confidence < min_confidence:
+        if (
+            not bool(classify_output.get("is_candidate", False))
+            or confidence < min_confidence
+        ):
             await self._emit_suppressed(
                 event=event,
                 ctx=ctx,
@@ -329,11 +359,7 @@ class CommitmentExtractionPipeline:
             )
             return
 
-        extract_output = (
-            extract_result.output
-            if hasattr(extract_result, "output")
-            else extract_result
-        )
+        extract_output = skill_output(extract_result)
 
         # 7. Build & emit commitment.proposed.
         strength = "confident" if confidence >= review_threshold else "weak"
@@ -341,14 +367,13 @@ class CommitmentExtractionPipeline:
         message_preview = message_text[:240] if message_text else None
 
         proposed_payload: dict[str, Any] = {
-            "commitment_id": _new_commitment_id(),
+            "commitment_id": _commitment_id(source_event_id),
             "kind": str(extract_output.get("kind", "other")),
             "owed_by_member_id": str(
                 extract_output.get("owed_by_member_id") or receiving_member_id
             ),
             "owed_to_party_id": str(
-                extract_output.get("owed_to_party_id")
-                or sender_party["party_id"]
+                extract_output.get("owed_to_party_id") or sender_party["party_id"]
             ),
             "text_summary": str(extract_output.get("text_summary", ""))[:500]
             or "(no summary extracted)",
@@ -356,16 +381,13 @@ class CommitmentExtractionPipeline:
             "urgency": str(extract_output.get("urgency", "this_week")),
             "confidence": confidence,
             "strength": strength,
-            "source_interaction_id": payload.get("thread_id"),
+            "source_interaction_id": f"ix_{source_event_id}",
             "source_message_preview": message_preview,
             "classify_reasons": classify_reasons,
         }
 
-        # TODO(prompt-XX): dedupe against open commitments referencing
-        # this thread within dedupe_window_hours; currently always
-        # emits. Requires reading the `commitments` projection, which
-        # has its own seam considerations beyond this prompt's scope
-        # per docs/02-split-memo-10b-ii.md §10b-ii-α.
+        # Redelivery is idempotent by source event. Cross-message thread
+        # similarity is intentionally not guessed into a duplicate fact.
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -376,10 +398,11 @@ class CommitmentExtractionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=proposal_key,
             payload=proposed_payload,
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -405,7 +428,8 @@ class CommitmentExtractionPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=(f"commitment:suppressed:{source_event_id}:{reason}"),
             payload={
                 "reason": reason,
                 "confidence": round(confidence, 4),
@@ -413,7 +437,7 @@ class CommitmentExtractionPipeline:
                 "source_event_id": source_event_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

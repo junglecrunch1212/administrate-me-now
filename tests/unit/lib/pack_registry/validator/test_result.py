@@ -43,9 +43,7 @@ def test_validation_finding_default_field_path_is_none() -> None:
 def test_validation_result_severity_buckets_split_findings_correctly() -> None:
     err = ValidationFinding(severity="error", check="a", message="m1")
     warn = ValidationFinding(severity="warning", check="b", message="m2")
-    advisory = ValidationFinding(
-        severity="advisory", check="c", message="m3"
-    )
+    advisory = ValidationFinding(severity="advisory", check="c", message="m3")
     result = ValidationResult(
         pack_dir=Path("/tmp/some-pack"),
         findings=(err, warn, advisory),
@@ -59,9 +57,7 @@ def test_validation_result_has_errors_true_when_any_error_finding() -> None:
     result = ValidationResult(
         pack_dir=Path("/tmp/p"),
         findings=(
-            ValidationFinding(
-                severity="advisory", check="a", message="m"
-            ),
+            ValidationFinding(severity="advisory", check="a", message="m"),
             ValidationFinding(severity="error", check="b", message="m"),
         ),
     )
@@ -72,12 +68,8 @@ def test_validation_result_has_errors_false_when_only_warnings_and_advisories() 
     result = ValidationResult(
         pack_dir=Path("/tmp/p"),
         findings=(
-            ValidationFinding(
-                severity="warning", check="a", message="m"
-            ),
-            ValidationFinding(
-                severity="advisory", check="b", message="m"
-            ),
+            ValidationFinding(severity="warning", check="a", message="m"),
+            ValidationFinding(severity="advisory", check="b", message="m"),
         ),
     )
     assert result.has_errors() is False

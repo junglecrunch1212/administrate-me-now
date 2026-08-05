@@ -32,9 +32,39 @@ HEADERS: list[str] = [
     "confidence",
     "strength",
     "source_summary",
+    "source_skill",
+    "owner_scope",
+    "visibility_scope",
+    "sensitivity",
+    "proposed_at",
+    "confirmed_at",
+    "confirmed_by",
+    "completed_at",
+    "blocked_reason",
+    "deferred_until",
+    "lifecycle_at",
+    "lifecycle_actor",
+    "last_event_id",
 ]
 
-DERIVED_COLUMNS: set[str] = {"confidence", "strength", "source_summary"}
+DERIVED_COLUMNS: set[str] = {
+    "confidence",
+    "strength",
+    "source_summary",
+    "source_skill",
+    "owner_scope",
+    "visibility_scope",
+    "sensitivity",
+    "proposed_at",
+    "confirmed_at",
+    "confirmed_by",
+    "completed_at",
+    "blocked_reason",
+    "deferred_until",
+    "lifecycle_at",
+    "lifecycle_actor",
+    "last_event_id",
+}
 
 
 def build(
@@ -49,7 +79,11 @@ def build(
     rows = ctx.commitments_conn.execute(
         """
         SELECT commitment_id, owed_by_party, owed_to_party, kind,
-               description, due_at, status, confidence, source_interaction_id
+               description, due_at, status, confidence, source_interaction_id,
+               source_skill, owner_scope, visibility_scope, sensitivity,
+               proposed_at, confirmed_at, confirmed_by, completed_at,
+               blocked_reason, deferred_until, lifecycle_at, lifecycle_actor,
+               last_event_id
           FROM commitments
          WHERE tenant_id = ?
          ORDER BY proposed_at ASC, commitment_id ASC
@@ -80,6 +114,19 @@ def build(
             confidence,
             strength,
             row["source_interaction_id"],
+            row["source_skill"],
+            row["owner_scope"],
+            row["visibility_scope"],
+            row["sensitivity"],
+            row["proposed_at"],
+            row["confirmed_at"],
+            row["confirmed_by"],
+            row["completed_at"],
+            row["blocked_reason"],
+            row["deferred_until"],
+            row["lifecycle_at"],
+            row["lifecycle_actor"],
+            row["last_event_id"],
         ]
         for col_idx, value in enumerate(values, start=1):
             ws.cell(row=i, column=col_idx, value=value)

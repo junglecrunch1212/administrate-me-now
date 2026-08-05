@@ -23,6 +23,7 @@ from openpyxl import load_workbook
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -82,6 +83,7 @@ async def rig(tmp_path: Path):
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -93,61 +95,105 @@ async def rig(tmp_path: Path):
     await runner.start()
 
     # Seed: 1 person, 1 task, 1 recurrence, 1 commitment, 1 account + 2 money flows.
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "Person One", "sort_name": "Person One",
-    }))
-    await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "first task",
-    }))
-    await log.append(_envelope("commitment.proposed", {
-        "commitment_id": "c1",
-        "kind": "reply",
-        "owed_by_member_id": "p1",
-        "owed_to_party_id": "p1",
-        "text_summary": "say hi",
-        "confidence": 0.9,
-        "strength": "confident",
-    }))
-    await log.append(_envelope("recurrence.added", {
-        "recurrence_id": "r1",
-        "linked_kind": "party",
-        "linked_id": "p1",
-        "kind": "checkin",
-        "rrule": "FREQ=WEEKLY",
-        "next_occurrence": "2026-05-01T09:00:00Z",
-    }))
-    await log.append(_envelope("account.added", {
-        "account_id": "a1", "display_name": "Checking",
-        "organization_party_id": "p1",
-        "kind": "bank",
-        "status": "active",
-        "attributes": {"last4": "1234"},
-    }))
-    await log.append(_envelope("money_flow.recorded", {
-        "flow_id": "f1",
-        "amount_minor": 1234,
-        "currency": "USD",
-        "occurred_at": "2026-04-20T10:00:00Z",
-        "kind": "paid",
-        "linked_account": "a1",
-        "source_adapter": "plaid",
-    }))
-    last = await log.append(_envelope("money_flow.manually_added", {
-        "flow_id": "f2",
-        "amount_minor": 4321,
-        "currency": "USD",
-        "occurred_at": "2026-04-21T10:00:00Z",
-        "kind": "paid",
-        "category": "groceries",
-        "notes": "test note",
-        "added_by_party_id": "p1",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Person One",
+                "sort_name": "Person One",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "first task",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "commitment.proposed",
+            {
+                "commitment_id": "c1",
+                "kind": "reply",
+                "owed_by_member_id": "p1",
+                "owed_to_party_id": "p1",
+                "text_summary": "say hi",
+                "confidence": 0.9,
+                "strength": "confident",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "recurrence.added",
+            {
+                "recurrence_id": "r1",
+                "linked_kind": "party",
+                "linked_id": "p1",
+                "kind": "checkin",
+                "rrule": "FREQ=WEEKLY",
+                "next_occurrence": "2026-05-01T09:00:00Z",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "account.added",
+            {
+                "account_id": "a1",
+                "display_name": "Checking",
+                "organization_party_id": "p1",
+                "kind": "bank",
+                "status": "active",
+                "attributes": {"last4": "1234"},
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.recorded",
+            {
+                "flow_id": "f1",
+                "amount_minor": 1234,
+                "currency": "USD",
+                "occurred_at": "2026-04-20T10:00:00Z",
+                "kind": "paid",
+                "linked_account": "a1",
+                "source_adapter": "plaid",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.manually_added",
+            {
+                "flow_id": "f2",
+                "amount_minor": 4321,
+                "currency": "USD",
+                "occurred_at": "2026-04-21T10:00:00Z",
+                "kind": "paid",
+                "category": "groceries",
+                "notes": "test note",
+                "added_by_party_id": "p1",
+            },
+        )
+    )
     assert last is not None
     await bus.notify(last)
     for name in (
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ):
         await _wait_idle(bus, f"projection:{name}")
 
@@ -160,11 +206,17 @@ async def rig(tmp_path: Path):
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    projection = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.1)
+    projection = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.1
+    )
     try:
         yield {
-            "config": config, "log": log, "bus": bus, "runner": runner,
-            "ctx": ctx, "projection": projection,
+            "config": config,
+            "log": log,
+            "bus": bus,
+            "runner": runner,
+            "ctx": ctx,
+            "projection": projection,
         }
     finally:
         await runner.stop()
@@ -227,8 +279,7 @@ async def test_finance_raw_data_sidecar_matches_workbook_rows(
         all_rows = list(ws.iter_rows(values_only=True))
         headers = [str(h) if h is not None else "" for h in all_rows[0]]
         expected = [
-            {headers[i]: raw[i] for i in range(len(headers))}
-            for raw in all_rows[1:]
+            {headers[i]: raw[i] for i in range(len(headers))} for raw in all_rows[1:]
         ]
     finally:
         wb.close()

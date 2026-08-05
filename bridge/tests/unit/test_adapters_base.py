@@ -85,7 +85,9 @@ def test_bridge_context_is_frozen_dataclass_with_required_fields() -> None:
         "correlation_id_factory",
         "now_factory",
         "sink",
+        "tenant_id",
     }
+    assert ctx.tenant_id == "tenant-default"
 
 
 def test_bridge_context_construction_with_optional_sink() -> None:
@@ -110,11 +112,11 @@ def test_bridge_context_construction_with_optional_sink() -> None:
     # Explicit sink kwarg → carried on the context. EventLogBridgeSink
     # is used here because it's the cheapest impl to construct in a
     # unit test (no IngestClient HTTP wiring).
-    class _NoopLog:
-        async def append(self, envelope: object, **kwargs: object) -> str:
+    class _NoopSink:
+        async def write(self, envelope: object, **kwargs: object) -> str:
             return "ev_x"
 
-    sink = EventLogBridgeSink(_NoopLog())  # type: ignore[arg-type]
+    sink = EventLogBridgeSink(_NoopSink())  # type: ignore[arg-type]
     ctx_with_sink = BridgeContext(
         member_id="m1",
         ingest_client=object(),  # type: ignore[arg-type]
@@ -140,7 +142,9 @@ def test_bridge_context_field_order_preserves_positional_arg_compatibility() -> 
         "correlation_id_factory",
         "now_factory",
     ]
-    assert field_order[-1] == "sink"
+    # Gate 6 appends tenant_id after sink, preserving the fifth positional
+    # argument for callers that already supplied an explicit sink.
+    assert field_order[4:] == ["sink", "tenant_id"]
     # And constructable via positional args (no `sink` supplied).
     ctx = BridgeContext(
         "m1",

@@ -28,34 +28,40 @@ import sqlcipher3
 
 _log = logging.getLogger(__name__)
 
-_UPDATABLE_PLACE_COLUMNS = frozenset({
-    "display_name",
-    "kind",
-    "address_json",
-    "geo_lat",
-    "geo_lon",
-    "attributes_json",
-})
+_UPDATABLE_PLACE_COLUMNS = frozenset(
+    {
+        "display_name",
+        "kind",
+        "address_json",
+        "geo_lat",
+        "geo_lon",
+        "attributes_json",
+    }
+)
 
-_UPDATABLE_ASSET_COLUMNS = frozenset({
-    "display_name",
-    "kind",
-    "linked_place",
-    "attributes_json",
-})
+_UPDATABLE_ASSET_COLUMNS = frozenset(
+    {
+        "display_name",
+        "kind",
+        "linked_place",
+        "attributes_json",
+    }
+)
 
-_UPDATABLE_ACCOUNT_COLUMNS = frozenset({
-    "display_name",
-    "organization",
-    "kind",
-    "status",
-    "billing_rrule",
-    "next_renewal",
-    "login_vault_ref",
-    "linked_asset",
-    "linked_place",
-    "attributes_json",
-})
+_UPDATABLE_ACCOUNT_COLUMNS = frozenset(
+    {
+        "display_name",
+        "organization",
+        "kind",
+        "status",
+        "billing_rrule",
+        "next_renewal",
+        "login_vault_ref",
+        "linked_asset",
+        "linked_place",
+        "attributes_json",
+    }
+)
 
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
@@ -82,9 +88,7 @@ def _json_dump(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
 
-def apply_place_added(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_place_added(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     conn.execute(
         """
@@ -122,9 +126,7 @@ def apply_place_added(
     )
 
 
-def apply_place_updated(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_place_updated(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     updates: dict[str, Any] = dict(p.get("field_updates") or {})
     if "attributes" in updates and "attributes_json" not in updates:
@@ -144,9 +146,7 @@ def apply_place_updated(
     )
 
 
-def apply_asset_added(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_asset_added(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     conn.execute(
         """
@@ -180,9 +180,7 @@ def apply_asset_added(
     )
 
 
-def apply_asset_updated(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_asset_updated(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     updates: dict[str, Any] = dict(p.get("field_updates") or {})
     if "attributes" in updates and "attributes_json" not in updates:
@@ -200,9 +198,7 @@ def apply_asset_updated(
     )
 
 
-def apply_account_added(
-    envelope: dict[str, Any], conn: sqlcipher3.Connection
-) -> None:
+def apply_account_added(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
     conn.execute(
         """

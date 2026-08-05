@@ -12,6 +12,7 @@ from adminme_bridge.adapters.base import (
 )
 from adminme_bridge.adapters.sinks import (
     BridgeEventSink,
+    BridgeTransportEventSink,
     EmitResult,
     EventLogBridgeSink,
     IngestClientBridgeSink,
@@ -23,6 +24,7 @@ __all__ = [
     "BridgeAdapter",
     "BridgeContext",
     "BridgeEventSink",
+    "BridgeTransportEventSink",
     "EmitResult",
     "EventLogBridgeSink",
     "IngestClientBridgeSink",

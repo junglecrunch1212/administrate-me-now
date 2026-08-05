@@ -43,7 +43,7 @@ class EchoEmitterPipeline:
                 "delivery_status": "sent",
             },
         )
-        emitted_id = await ctx.event_log.append(
+        emitted_id = await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

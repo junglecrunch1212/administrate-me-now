@@ -69,9 +69,7 @@ def test_classname_for_handles_hyphenated_and_underscored_names() -> None:
 # ---------- Layer 1: env var ----------
 
 
-def test_scaffold_refuses_when_env_var_missing(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_scaffold_refuses_when_env_var_missing(monkeypatch, tmp_path: Path) -> None:
     """Layer 1 of the [D20] gate — ADMINME_DEVELOPER_MODE must be ``1``."""
     monkeypatch.delenv("ADMINME_DEVELOPER_MODE", raising=False)
     result = runner.invoke(
@@ -87,7 +85,10 @@ def test_scaffold_refuses_when_env_var_missing(
         ],
     )
     assert result.exit_code == SCAFFOLD_EXIT_ENV_MISSING
-    assert "developer mode not enabled" in result.stderr or "developer mode not enabled" in result.stdout
+    assert (
+        "developer mode not enabled" in result.stderr
+        or "developer mode not enabled" in result.stdout
+    )
 
 
 def test_scaffold_refuses_when_env_var_is_not_exactly_one(
@@ -113,9 +114,7 @@ def test_scaffold_refuses_when_env_var_is_not_exactly_one(
 # ---------- Layer 2: --allow-scaffold flag ----------
 
 
-def test_scaffold_refuses_when_allow_flag_missing(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_scaffold_refuses_when_allow_flag_missing(monkeypatch, tmp_path: Path) -> None:
     """Layer 2 — the awkward-to-type --allow-scaffold flag is mandatory."""
     monkeypatch.setenv("ADMINME_DEVELOPER_MODE", "1")
     result = runner.invoke(
@@ -135,9 +134,7 @@ def test_scaffold_refuses_when_allow_flag_missing(
 # ---------- Layer 3: interactive confirm ----------
 
 
-def test_scaffold_refuses_when_confirm_declined(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_scaffold_refuses_when_confirm_declined(monkeypatch, tmp_path: Path) -> None:
     """Layer 3 — typer.confirm declined exits 5."""
     monkeypatch.setenv("ADMINME_DEVELOPER_MODE", "1")
     result = runner.invoke(
@@ -188,7 +185,9 @@ def _scaffold_and_validate(
     assert name in test_files[0].name
 
     validation = validate_adapter_pack(output)
-    assert not validation.has_errors(), [f for f in validation.findings if f.severity == "error"]
+    assert not validation.has_errors(), [
+        f for f in validation.findings if f.severity == "error"
+    ]
     return output
 
 
@@ -219,7 +218,9 @@ def test_scaffold_cat_e_central_happy_path(monkeypatch, tmp_path: Path) -> None:
 def test_scaffold_substitutes_name_and_classname_in_adapter_py(
     monkeypatch, tmp_path: Path
 ) -> None:
-    pack_dir = _scaffold_and_validate(monkeypatch, tmp_path, "Cat-C", "central", "subst-test")
+    pack_dir = _scaffold_and_validate(
+        monkeypatch, tmp_path, "Cat-C", "central", "subst-test"
+    )
     adapter_src = (pack_dir / "adapter.py").read_text(encoding="utf-8")
     assert "SubstTestAdapter" in adapter_src
     assert "subst-test" in adapter_src
@@ -228,7 +229,9 @@ def test_scaffold_substitutes_name_and_classname_in_adapter_py(
     assert "<CLASSNAME>" not in adapter_src
 
 
-def test_scaffold_refuses_unknown_kind_at_typer_layer(monkeypatch, tmp_path: Path) -> None:
+def test_scaffold_refuses_unknown_kind_at_typer_layer(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Typer's Enum binding rejects unknown kinds before the gate runs."""
     monkeypatch.setenv("ADMINME_DEVELOPER_MODE", "1")
     result = runner.invoke(

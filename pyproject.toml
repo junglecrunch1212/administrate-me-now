@@ -20,43 +20,42 @@ python = "^3.11"
 
 # L2: event log + crypto
 pydantic = ">=2.6"
-sqlalchemy = ">=2.0"
-alembic = "*"
-sqlcipher3-binary = "*"
+sqlcipher3 = "0.6.2"
 sqlite-vec = "*"
 cryptography = "*"
 keyring = "*"
 
 # L3: projections + xlsx
 openpyxl = "*"
-pandas = "*"
+python-dateutil = "*"
 
 # L4: pipelines — HTTP to OpenClaw's skill runner (no provider SDKs; see §8)
 httpx = "*"
-apscheduler = ">=3.10"
 watchdog = "*"
 jsonschema = ">=4.21"
+websockets = ">=15,<16"
 
 # L5: products + CLI + wizard
 fastapi = ">=0.110"
 uvicorn = "*"
 typer = ">=0.12"
 rich = "*"
-textual = "*"
 
-# Adapters: built-in integrations that AdministrateMe owns directly
-plaid-python = "*"
+# Retained live Google adapters. Other optional providers remain disabled and
+# use deterministic provider-boundary fixtures until their production loader
+# is explicitly activated.
 google-api-python-client = "*"
 google-auth = "*"
-msgraph-sdk = "*"
-caldav = "*"
-vobject = "*"
+
+# Member-bridge EventKit transport. Poetry evaluates the marker so central
+# Linux/Windows development never attempts to install PyObjC.
+pyobjc-framework-EventKit = { version = "*", markers = "sys_platform == 'darwin'" }
+pyobjc-framework-CoreLocation = { version = "*", markers = "sys_platform == 'darwin'" }
+pyobjc-framework-Quartz = { version = "*", markers = "sys_platform == 'darwin'" }
 
 # Shared utilities
-authlib = "*"
-python-dotenv = "*"
-structlog = "*"
 pyyaml = "*"
+tzdata = "*"
 
 [tool.poetry.group.llm]
 optional = true
@@ -69,6 +68,7 @@ optional = true
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
+pip-audit = "2.10.1"
 ruff = "*"
 mypy = "*"
 pyright = "*"
@@ -91,6 +91,9 @@ markers = [
 
 [tool.mypy]
 python_version = "3.11"
+
+[tool.ruff.lint.per-file-ignores]
+"docs/reference/plaid/python-sdk-plaid_api.py" = ["F401"]
 
 [[tool.mypy.overrides]]
 module = ["sqlcipher3", "sqlcipher3.*"]

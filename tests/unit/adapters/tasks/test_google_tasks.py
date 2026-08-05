@@ -61,9 +61,7 @@ from adminme.lib.adapters import (
 from adminme.lib.observation import OutboundResult
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-GOOGLE_TASKS_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "tasks" / "google-tasks"
-)
+GOOGLE_TASKS_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "tasks" / "google-tasks"
 
 
 def _load_google_tasks_adapter_module() -> Any:
@@ -90,18 +88,23 @@ _FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-gtasks-test",
         now_factory=lambda: _FROZEN_NOW,
@@ -112,9 +115,7 @@ class _FakeHttpResponse:
     """httplib2-style mapping with a ``status`` attribute, sufficient for
     :meth:`GoogleTasksAdapter._classify_tasks_error`."""
 
-    def __init__(
-        self, *, status: int, headers: dict[str, str] | None = None
-    ) -> None:
+    def __init__(self, *, status: int, headers: dict[str, str] | None = None) -> None:
         self.status = status
         self._headers = {k.lower(): v for k, v in (headers or {}).items()}
 
@@ -128,9 +129,7 @@ class _FakeHttpError(Exception):
     """Duck-type for ``googleapiclient.errors.HttpError`` — the classifier
     reads ``.resp.status`` and ``.resp.get('Retry-After')``."""
 
-    def __init__(
-        self, resp: _FakeHttpResponse, content: bytes = b""
-    ) -> None:
+    def __init__(self, resp: _FakeHttpResponse, content: bytes = b"") -> None:
         super().__init__(f"HTTP {resp.status}")
         self.resp = resp
         self.content = content
@@ -335,9 +334,7 @@ async def test_apply_write_dispatches_to_impl_on_declared_kind() -> None:
 
     async def _recording_impl(operation: WriteOperation) -> WriteResult:
         captured.append(operation)
-        return WriteResult(
-            applied=True, external_id="gtask-recorded", suppressed=False
-        )
+        return WriteResult(applied=True, external_id="gtask-recorded", suppressed=False)
 
     adapter._apply_write_impl = _recording_impl  # type: ignore[method-assign]
 
@@ -374,9 +371,7 @@ async def test_apply_write_routes_through_observation_outbound(
     namespace; monkeypatching THAT name records the wrap without needing
     real session / manager / event-log instances. The Phase A path
     leaves the seams unset and bypasses the wrap (see the next test)."""
-    service = _FakeTasksService(
-        insert_response={"id": "gtask-wrapped-001"}
-    )
+    service = _FakeTasksService(insert_response={"id": "gtask-wrapped-001"})
     session_sentinel = object()
     manager_sentinel = object()
     obs_log_sentinel = object()
@@ -396,7 +391,7 @@ async def test_apply_write_routes_through_observation_outbound(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str = "unknown",
         target_identifier: str = "unknown",
     ) -> OutboundResult:
@@ -406,7 +401,7 @@ async def test_apply_write_routes_through_observation_outbound(
                 "action": action,
                 "payload": dict(payload),
                 "manager": manager,
-                "event_log": event_log,
+                "event_log": event_sink,
                 "target_channel": target_channel,
                 "target_identifier": target_identifier,
             }
@@ -473,9 +468,7 @@ async def test_apply_write_observation_suppressed_returns_unapplied(
         # contract per [§6.13/§6.16] is "did not perform the side effect."
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     op = WriteOperation(
         kind="create_task",
@@ -501,9 +494,7 @@ async def test_apply_write_direct_call_when_seams_unset_returns_applied() -> Non
     ``service.tasks().insert(...)``. The 11r-c / 11a / 11b-iii Phase-A-
     conditional pattern. ``WriteResult(applied=True, ...)`` returns with
     the Google task id."""
-    service = _FakeTasksService(
-        insert_response={"id": "gtask-direct-001"}
-    )
+    service = _FakeTasksService(insert_response={"id": "gtask-direct-001"})
     adapter = _make_adapter(service=service)  # seams default to None
 
     op = WriteOperation(
@@ -647,9 +638,7 @@ async def test_poll_once_emits_list_item_added_on_first_observation() -> None:
     emitted = await adapter._poll_once(ctx=ctx)
 
     assert emitted == 1
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
     assert added_calls[0]["schema_version"] == 1
     assert added_calls[0]["payload"]["item_external_id"] == "gtask-inbound-001"
@@ -667,9 +656,7 @@ async def test_poll_once_skips_already_seen_task_id() -> None:
     )
     # The fake returns the same page on both calls (list_pages exhausts
     # → empty page on second call; we want the same item twice instead).
-    service = _FakeTasksService(
-        list_pages=[{"items": [task]}, {"items": [task]}]
-    )
+    service = _FakeTasksService(list_pages=[{"items": [task]}, {"items": [task]}])
     adapter = _make_adapter(service=service)
     event_log = _FakeEventLog()
     ctx = _seed_ctx(adapter, event_log)
@@ -679,9 +666,7 @@ async def test_poll_once_skips_already_seen_task_id() -> None:
 
     assert first == 1
     assert second == 0  # already seen → not re-emitted
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
 
 
@@ -714,9 +699,7 @@ async def test_poll_emit_payload_validates_against_list_item_added_v1() -> None:
 
     await adapter._poll_once(ctx=ctx)
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     payload = added_call["payload"]
     # Round-trip via strict validation — any extra field would raise
     # pydantic.ValidationError under ``extra="forbid"``.
@@ -752,9 +735,7 @@ async def test_poll_emit_priority_defaults_to_medium_per_F7() -> None:
 
     await adapter._poll_once(ctx=ctx)
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
     assert added_call["payload"]["priority"] == 5
 
 
@@ -778,9 +759,7 @@ async def test_poll_emit_completed_derives_from_task_status() -> None:
         status="completed",
         updated="2026-05-18T11:01:00.000Z",
     )
-    service = _FakeTasksService(
-        list_pages=[{"items": [task_open, task_done]}]
-    )
+    service = _FakeTasksService(list_pages=[{"items": [task_open, task_done]}])
     adapter = _make_adapter(service=service)
     event_log = _FakeEventLog()
     ctx = _seed_ctx(adapter, event_log)
@@ -808,9 +787,7 @@ async def test_apply_write_create_task_body_shape() -> None:
     operation payload's ``tasklist_id`` (falling back to the adapter's
     config when the payload omits it). Pins the Google Tasks v1 API
     surface contract the parent draft §1 item 2 anchors."""
-    service = _FakeTasksService(
-        insert_response={"id": "gtask-body-001"}
-    )
+    service = _FakeTasksService(insert_response={"id": "gtask-body-001"})
     adapter = _make_adapter(service=service)
 
     op = WriteOperation(

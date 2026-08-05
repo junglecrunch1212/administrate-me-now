@@ -15,6 +15,12 @@
       "minLength": 1,
       "description": "Household member whose EventKit grant this adapter uses. Drives the central-pack's owner_member_id sharing discriminator on the future calendar projection."
     },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable alias for the member's iCloud/local EventKit account."
+    },
+    "calendar_name": { "type": "string" },
     "deployment_target": {
       "type": "string",
       "enum": ["central", "bridge"],
@@ -27,6 +33,9 @@
       "default": 30,
       "description": "Forward-looking window (days from now) for the EKEventStore predicate. Defaults to 30; tune up for long-horizon planning."
     },
+    "sync_lookback_days": { "type": "integer", "minimum": 1, "default": 90 },
+    "sync_lookahead_days": { "type": "integer", "minimum": 1, "default": 730 },
+    "emit_schema_version": { "const": 2, "default": 2 },
     "poll_interval_s": {
       "type": "integer",
       "minimum": 10,

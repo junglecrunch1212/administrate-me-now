@@ -12,25 +12,20 @@ commitment / task id in the skill's `claimed_event_ids` is verified
 against the gather payload post-composition. Any fabrication zeroes
 the message with the sentinel "No morning brief available; underlying
 data changed." On the sentinel path: `digest.composed` emits with
-`validation_failed=true` and `delivered=false`; `outbound()` is NOT
-called.
+`validation_failed=true` and `delivered=false`; no notification intent
+is raised.
 
-The single `outbound()` call site is `deliver()` per [§6.14].
-Observation mode short-circuits delivery transparently (the bus
-records `observation.suppressed`); on suppression `delivered=false`.
+Successful composition raises the canonical notification signal and policy
+decision events. OpenClaw owns the external delivery attempt, and
+`digest.composed.delivered` remains false until a separate
+`notification.delivery.result` proves delivery.
 
-Constructor-injection loaders per PM-27 (mirroring 10c-i's
-reward_dispatch shape): real loader modules don't exist on main yet,
-so the pack ships with no-op defaults that exercise the
-defensive-default sentinel paths. Tests inject fakes; future bootstrap
-wiring or a runner-side seam injects real loaders.
+Constructor-injection loaders preserve deterministic provider boundaries.
+The composition root supplies projection/profile loaders; isolated tests may
+inject deterministic fakes.
 
-Scope notes:
-- This pack does NOT introduce real on-disk profile / persona /
-  projection-loader modules — UT-14 carry-forward.
-- Per-profile `delivery_channel` resolution happens at the call site
-  (or via config.yaml in a future bootstrap §3 prompt); v1 hardcodes
-  the channel string in `deliver()`.
+Per-profile formatting and quiet-hour behavior are resolved from the active
+profile pack without embedding tenant identity in platform code.
 """
 
 from __future__ import annotations
@@ -50,6 +45,7 @@ from adminme.lib.skill_runner import (
     SkillSensitivityRefused,
 )
 from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.notifications import notification_time, raise_and_decide
 
 _log = logging.getLogger(__name__)
 
@@ -91,7 +87,9 @@ def _coerce_profile_format(profile: dict[str, Any] | None) -> str:
 def _ids_from(items: list[dict[str, Any]] | None) -> set[str]:
     if not items:
         return set()
-    return {str(item["id"]) for item in items if isinstance(item, dict) and "id" in item}
+    return {
+        str(item["id"]) for item in items if isinstance(item, dict) and "id" in item
+    }
 
 
 class MorningDigestPipeline:
@@ -125,9 +123,7 @@ class MorningDigestPipeline:
             lambda _mid, _today: []
         )
 
-    async def gather(
-        self, member_id: str, today_iso: str
-    ) -> dict[str, Any]:
+    async def gather(self, member_id: str, today_iso: str) -> dict[str, Any]:
         """Aggregate projection state into a single payload. Loaders are
         synchronous callables; real on-disk loaders will likely become
         thin wrappers around `asyncio.to_thread(...)` per [D14]."""
@@ -174,9 +170,7 @@ class MorningDigestPipeline:
             "reward_stats": gather_result["reward_stats"],
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_morning_digest", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_morning_digest", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "morning_digest: compose skill failed (%s); "
@@ -215,50 +209,56 @@ class MorningDigestPipeline:
                 return False
         return True
 
-    def _resolve_delivery_channel(
-        self, profile: dict[str, Any] | None
-    ) -> str:
+    def _resolve_delivery_channel(self, profile: dict[str, Any] | None) -> str:
         if isinstance(profile, dict):
             channel = profile.get("delivery_channel")
             if isinstance(channel, str) and channel:
                 return channel
         return DEFAULT_DELIVERY_CHANNEL
 
-    async def deliver(
+    async def route_notification(
         self,
         ctx: PipelineContext,
         member_id: str,
         body_text: str,
-        channel: str,
-    ) -> bool:
-        """Single `outbound()` call site per [§6.14]. Returns True when
-        the bus recorded `external.sent`, False on suppression. The
-        outbound action_fn is a no-op in v1 (the real channel-transport
-        adapter wires in via a future per-channel adapter prompt)."""
-        if ctx.observation_manager is None:
-            _log.info(
-                "morning_digest: no observation_manager wired; "
-                "treating as observation-mode-active (default-on for "
-                "proactive pipelines per [BUILD.md §98])"
-            )
-            return False
+        today_iso: str,
+        profile: dict[str, Any] | None,
+        triggering_event: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist notification intent and policy; never send externally."""
 
-        async def _no_op_send() -> None:
-            return None
-
-        from adminme.lib.observation import outbound
-
-        result = await outbound(
-            ctx.session,
-            "digest_send",
-            {"member_id": member_id, "body_text": body_text},
-            _no_op_send,
-            manager=ctx.observation_manager,
-            event_log=ctx.event_log,
-            target_channel=channel,
-            target_identifier=member_id,
+        observation_active = True
+        if ctx.observation_manager is not None:
+            observation_active = await ctx.observation_manager.is_active()
+        now = notification_time(triggering_event)
+        signal = {
+            "signal_id": f"digest:{member_id}:{today_iso}",
+            "member_id": member_id,
+            "category": "digest",
+            "urgency": "normal",
+            "title": "Morning brief",
+            "body": body_text,
+            "preferred_channels": ["openclaw"],
+            "requires_approval": False,
+            "not_before": None,
+            "expires_at": None,
+            "related_kind": "digest",
+            "related_id": today_iso,
+        }
+        _signal_id, _decision_id, decision = await raise_and_decide(
+            ctx.event_sink,
+            signal,
+            tenant_id=ctx.session.tenant_id,
+            owner_scope=f"private:{member_id}",
+            visibility_scope=f"private:{member_id}",
+            sensitivity="normal",
+            profile=profile,
+            now=now,
+            observation_active=observation_active,
+            approval_granted=False,
+            correlation_id=ctx.correlation_id,
         )
-        return not result.suppressed
+        return decision
 
     async def _emit_digest_composed(
         self,
@@ -301,7 +301,7 @@ class MorningDigestPipeline:
                 "today_iso": today_iso,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -314,10 +314,11 @@ class MorningDigestPipeline:
         ctx: PipelineContext,
         triggering_event: dict[str, Any] | None = None,
     ) -> None:
-        """Drive one digest cycle for one member. Used by the proactive
-        driver (cron / OpenClaw standing orders) in production and by
-        tests directly. Idempotence + once-per-dispatch outbound() are
-        guaranteed by the caller (one cron tick = one dispatch)."""
+        """Drive one OpenClaw standing-order cycle for one member.
+
+        A successful cycle persists exactly one notification intent; delivery
+        remains an OpenClaw responsibility.
+        """
         gather_result = await self.gather(member_id, today_iso)
         profile_format = gather_result["profile_format"]
         composed = await self.compose(ctx, gather_result)
@@ -348,22 +349,26 @@ class MorningDigestPipeline:
             return
 
         body_text = composed["body_text"]
-        channel = self._resolve_delivery_channel(gather_result.get("profile"))
-        delivered = await self.deliver(ctx, member_id, body_text, channel)
+        await self.route_notification(
+            ctx,
+            member_id,
+            body_text,
+            today_iso,
+            gather_result.get("profile"),
+            triggering_event,
+        )
         await self._emit_digest_composed(
             ctx,
             member_id=member_id,
             body_text=body_text,
             profile_format=profile_format,
             validation_failed=False,
-            delivered=delivered,
+            delivered=False,
             today_iso=today_iso,
             triggering_event=triggering_event,
         )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner (the runner skips
         on absence of `triggers.events` per `runner.py:131-138`); this

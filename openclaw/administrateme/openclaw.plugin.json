@@ -1,0 +1,169 @@
+{
+  "id": "administrateme",
+  "name": "AdministrateMe",
+  "description": "Authorized household state and action seam for AdministrateMe v2.",
+  "version": "2.0.0-gate7",
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "adminme-now",
+      "adminme-inbox",
+      "adminme-done",
+      "adminme-defer",
+      "adminme-snooze",
+      "adminme-block",
+      "adminme-unblock"
+    ]
+  },
+  "commandAliases": [
+    { "name": "adminme-now", "kind": "runtime-slash" },
+    { "name": "adminme-inbox", "kind": "runtime-slash" },
+    { "name": "adminme-done", "kind": "runtime-slash" },
+    { "name": "adminme-defer", "kind": "runtime-slash" },
+    { "name": "adminme-snooze", "kind": "runtime-slash" },
+    { "name": "adminme-block", "kind": "runtime-slash" },
+    { "name": "adminme-unblock", "kind": "runtime-slash" }
+  ],
+  "contracts": {
+    "tools": [
+      "administrateme_state",
+      "administrateme_what_now",
+      "administrateme_action",
+      "administrateme_review",
+      "administrateme_lifecycle",
+      "administrateme_correct",
+      "administrateme_skill",
+      "administrateme_notification_result",
+      "administrateme_standing_order"
+    ]
+  },
+  "toolMetadata": {
+    "administrateme_action": { "optional": true },
+    "administrateme_review": { "optional": true },
+    "administrateme_lifecycle": { "optional": true },
+    "administrateme_correct": { "optional": true },
+    "administrateme_skill": { "optional": true },
+    "administrateme_notification_result": { "optional": true },
+    "administrateme_standing_order": { "optional": true }
+  },
+  "dashboard": {
+    "dataBindings": [
+      {
+        "id": "today.activity",
+        "method": "administrateme.dashboard.today",
+        "description": "Scope-filtered Today ranking and recent household activity."
+      },
+      {
+        "id": "inbox.review",
+        "method": "administrateme.dashboard.inbox",
+        "description": "Scope-filtered inbox and commitment review queue."
+      },
+      {
+        "id": "crm.people",
+        "method": "administrateme.dashboard.people",
+        "description": "Scope-filtered CRM people and interaction context."
+      },
+      {
+        "id": "capture.knowledge",
+        "method": "administrateme.dashboard.knowledge",
+        "description": "Authorized knowledge, artifact, and list read surface."
+      },
+      {
+        "id": "finance.recent",
+        "method": "administrateme.dashboard.finance",
+        "description": "Scope-filtered household finance evidence."
+      },
+      {
+        "id": "calendar.week",
+        "method": "administrateme.dashboard.calendar",
+        "description": "Privacy-filtered calendar week."
+      },
+      {
+        "id": "scoreboard.rhythm",
+        "method": "administrateme.dashboard.scoreboard",
+        "description": "Profile-aware household progress and reward state."
+      },
+      {
+        "id": "settings.domain",
+        "method": "administrateme.dashboard.settings",
+        "description": "Capability, observation, workbook, and member-chat health."
+      },
+      {
+        "id": "capability.health",
+        "method": "administrateme.dashboard.health",
+        "description": "AdministrateMe capability and degraded-state health."
+      }
+    ],
+    "actionVerbs": [
+      {
+        "id": "review",
+        "method": "administrateme.dashboard.review",
+        "description": "Approve, dismiss, or edit one authorized commitment proposal.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestId", "action", "commitmentId", "expectedLastEventId"],
+          "properties": {
+            "requestId": { "type": "string", "minLength": 1 },
+            "action": { "enum": ["approve", "dismiss", "edit"] },
+            "commitmentId": { "type": "string", "minLength": 1 },
+            "expectedLastEventId": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" },
+            "dueAt": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      {
+        "id": "lifecycle",
+        "method": "administrateme.dashboard.lifecycle",
+        "description": "Apply one authorized task or commitment lifecycle outcome.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestId", "itemKind", "itemId", "action", "expectedLastEventId"],
+          "properties": {
+            "requestId": { "type": "string", "minLength": 1 },
+            "itemKind": { "enum": ["task", "commitment"] },
+            "itemId": { "type": "string", "minLength": 1 },
+            "action": { "enum": ["complete", "defer", "snooze", "block", "unblock"] },
+            "expectedLastEventId": { "type": "string", "minLength": 1 },
+            "until": { "type": "string" },
+            "reason": { "type": "string" },
+            "note": { "type": "string" }
+          }
+        }
+      }
+    ]
+  },
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "pattern": "^http://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]{1,5})?$"
+      },
+      "sharedSecretEnv": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{2,80}$"
+      },
+      "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 30000 },
+      "bridgeEnabled": { "type": "boolean" },
+      "bridgeChannels": {
+        "type": "array",
+        "maxItems": 20,
+        "items": { "type": "string", "minLength": 1 }
+      },
+      "bridgeEventKinds": {
+        "type": "array",
+        "maxItems": 3,
+        "items": {
+          "enum": ["commitment_candidate", "household_action", "delivery_outcome"]
+        }
+      },
+      "modelSessionPrefix": { "type": "string", "minLength": 1, "maxLength": 80 }
+    }
+  }
+}

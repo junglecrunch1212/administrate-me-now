@@ -12,7 +12,7 @@
 -- SQLite cannot enforce FKs across separate projection DBs. Integrity is
 -- preserved by upstream pipelines per [§2.3].
 --
--- # TODO(prompt-10c): whatnow pipeline traverses goal_ref DAG for ranking
+-- what-now traverses goal_ref/dependency data during deterministic ranking.
 
 CREATE TABLE IF NOT EXISTS tasks (
     task_id           TEXT NOT NULL,

@@ -36,7 +36,6 @@ def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
         return {
             "kind": "other",
             "confidence": 0.0,
-            "reasons": list(raw.get("reasons", []))
-            + [f"rejected_kind:{kind!r}"],
+            "reasons": list(raw.get("reasons", [])) + [f"rejected_kind:{kind!r}"],
         }
     return raw

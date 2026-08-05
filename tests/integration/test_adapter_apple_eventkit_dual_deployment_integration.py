@@ -49,7 +49,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 import pytest
@@ -57,13 +57,15 @@ import yaml
 
 import adminme.events.schemas.bridge  # noqa: F401  — registers bridge.enrolled@v1
 from adminme.events.envelope import EventEnvelope
+from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.pack_registry.validator import validate_adapter_pack
 from adminme.products.bridge.app import create_app
 from adminme.products.bridge.auth import DictMemberIdResolver
-from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
-from adminme_bridge.adapters.sinks import EmitResult, IngestClientBridgeSink
+from adminme_bridge.adapters.base import AdapterStatus
+from adminme_bridge.adapters.sinks import EmitResult
 from adminme_bridge.config import BridgeConfig
 from adminme_bridge.connector_packs import reminders_apple_eventkit_bridge
 from adminme_bridge.connector_packs.reminders_apple_eventkit_bridge import (
@@ -82,9 +84,7 @@ from adminme_bridge.packs import (
 TEST_KEY = b"D" * 32
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CENTRAL_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
-)
+CENTRAL_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "reminders" / "apple-eventkit"
 BRIDGE_PACK_DIR = (
     REPO_ROOT
     / "bridge"
@@ -144,7 +144,9 @@ def test_bridge_supervisor_loads_apple_eventkit_bridge_connector_pack(
 # ===========================================================================
 
 
-def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_target_central() -> None:
+def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_target_central() -> (
+    None
+):
     """F-2 regression: the central pack still loads cleanly through the
     validator, the central ``AppleEventKitAdapter`` constructs with the
     pre-α-2 config shape (no ``deployment_target`` key), and
@@ -195,12 +197,17 @@ def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_ta
         def __init__(self) -> None:
             self.calls: list[dict[str, Any]] = []
 
-        def append_sync(self, **kwargs: Any) -> None:
-            self.calls.append(kwargs)
+        @property
+        def tenant_id(self) -> str:
+            return "tenant-test"
+
+        async def write(self, envelope: Any, **_kwargs: Any) -> str:
+            self.calls.append(envelope.model_dump())
+            return f"event-{len(self.calls)}"
 
     event_log = _FakeEventLog()
     ctx = AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},  # no deployment_target → default "central"
         correlation_id_factory=lambda: "corr-regression",
         now_factory=lambda: datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc),
@@ -211,7 +218,7 @@ def test_central_supervisor_loads_apple_eventkit_pack_with_default_deployment_ta
     # No bridge sink ever wired — central path doesn't consult one.
     assert adapter._bridge_sink is None
     # adapter.authenticated landed in the local fake event log via the
-    # central append_sync path (NOT routed through any bridge sink) —
+    # central typed event-sink path (NOT routed through any bridge sink) —
     # this is the byte-for-byte preserved 11b-i / 11r-c emit shape.
     auth = [c for c in event_log.calls if c.get("type") == "adapter.authenticated"]
     assert len(auth) == 1
@@ -303,14 +310,16 @@ async def central_rig(tmp_path: Path):
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    await bus.start()
     app = create_app()
-    app.state.event_log = log
-    app.state.member_id_resolver = DictMemberIdResolver(
-        {"m1@example.ts.net": "m1"}
-    )
+    app.state.event_sink = EventWriter(log, bus)
+    app.state.member_id_resolver = DictMemberIdResolver({"m1@example.ts.net": "m1"})
     app.state.ingest_count = 0
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://central") as http:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://central"
+    ) as http:
         ingest = IngestClient(
             central_endpoint_url="http://central",
             tailscale_identity_header="m1@example.ts.net",
@@ -319,6 +328,7 @@ async def central_rig(tmp_path: Path):
         try:
             yield {"log": log, "ingest": ingest}
         finally:
+            await bus.stop()
             await log.close()
 
 
@@ -384,7 +394,9 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     log: EventLog = central_rig["log"]
     ingest: IngestClient = central_rig["ingest"]
 
-    wrapper = AppleEventKitBridgeAdapter()
+    wrapper = AppleEventKitBridgeAdapter(
+        internal_config={"target_list_identifier": "test-list"}
+    )
     supervisor = BridgeSupervisor(
         config=_bridge_config(),
         ingest_client=ingest,
@@ -394,7 +406,7 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     # Yield until the wrapper's internal-stub emit-and-return finishes.
     captured: list[_StubInternalEmitsBridgeEnrolledOnStart] = []
     for _ in range(100):
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
         internal = getattr(wrapper, "_internal", None)
         if internal is not None and getattr(internal, "emit_result", None) is not None:
             captured.append(internal)
@@ -418,9 +430,7 @@ async def test_bridge_wrapper_emits_via_ingest_client_sink_to_central_ingest_rou
     # is the Tailscale-derived value, NOT a wrapper-controlled one.
     assert stored["owner_scope"] == "private:m1"
     assert stored["source_adapter"] == "reminders-apple-eventkit"
-    assert stored["payload"]["adapters_active"] == [
-        "reminders-apple-eventkit"
-    ]
+    assert stored["payload"]["adapters_active"] == ["reminders-apple-eventkit"]
 
 
 def test_apple_eventkit_bridge_connector_pack_module_exports_wrapper() -> None:

@@ -34,7 +34,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -163,16 +162,14 @@ async def test_rebuild_equivalence(rig: dict[str, Any]) -> None:
 
     conn = runner.connection("artifacts")
     pre = [
-        tuple(r)
-        for r in conn.execute("SELECT * FROM artifacts ORDER BY artifact_id")
+        tuple(r) for r in conn.execute("SELECT * FROM artifacts ORDER BY artifact_id")
     ]
 
     await runner.rebuild("artifacts")
 
     conn = runner.connection("artifacts")
     post = [
-        tuple(r)
-        for r in conn.execute("SELECT * FROM artifacts ORDER BY artifact_id")
+        tuple(r) for r in conn.execute("SELECT * FROM artifacts ORDER BY artifact_id")
     ]
     assert pre == post
 

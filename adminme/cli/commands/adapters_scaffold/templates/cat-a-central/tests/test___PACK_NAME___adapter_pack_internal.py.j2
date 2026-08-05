@@ -1,0 +1,15 @@
+"""Pack-internal tests for the ``<NAME>`` Cat-A messaging adapter."""
+
+from __future__ import annotations
+
+from <NAME>.adapter import <CLASSNAME>
+
+
+def test_<NAME>_adapter_declares_pack_name() -> None:
+    assert <CLASSNAME>.name == "<NAME>"
+
+
+def test_<NAME>_adapter_inherits_communication_base() -> None:
+    from adminme.lib.adapters import CommunicationAdapter
+
+    assert issubclass(<CLASSNAME>, CommunicationAdapter)

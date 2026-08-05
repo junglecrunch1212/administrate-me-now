@@ -52,3 +52,12 @@ class Projection(ABC):
         projections that need extension loading (sqlite-vec's vec0) or
         PRAGMAs beyond the defaults."""
         return None
+
+    def migrate_schema(self, conn: Any) -> None:
+        """Optional additive migration hook called after ``schema.sql``.
+
+        Projection databases are disposable, but a normal runtime upgrade
+        must still open an existing projection safely before an operator
+        chooses to rebuild it.
+        """
+        return None

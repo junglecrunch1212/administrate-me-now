@@ -44,8 +44,28 @@ def open_for_member(
         SELECT * FROM commitments
          WHERE tenant_id = ?
            AND owed_by_party = ?
-           AND status IN ('pending', 'snoozed')
+           AND status IN ('pending', 'snoozed', 'deferred', 'blocked')
          ORDER BY due_at ASC, proposed_at DESC
+        """,
+        (session.tenant_id, member_party_id),
+    ).fetchall()
+    return filter_rows(session, [dict(r) for r in rows])
+
+
+def active_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_party_id: str,
+) -> list[dict[str, Any]]:
+    """Confirmed obligations for the deterministic what-now ranking."""
+    rows = conn.execute(
+        """
+        SELECT * FROM commitments
+         WHERE tenant_id = ? AND owed_by_party = ?
+           AND confirmed_at IS NOT NULL
+           AND status IN ('pending', 'snoozed', 'deferred', 'blocked')
+         ORDER BY due_at ASC, proposed_at ASC, commitment_id ASC
         """,
         (session.tenant_id, member_party_id),
     ).fetchall()

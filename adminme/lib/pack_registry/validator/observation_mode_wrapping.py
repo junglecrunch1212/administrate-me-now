@@ -101,8 +101,7 @@ def _method_calls_outbound(
     if not direct and not module:
         return False
     return any(
-        isinstance(node, ast.Call)
-        and _call_targets_outbound(node, direct, module)
+        isinstance(node, ast.Call) and _call_targets_outbound(node, direct, module)
         for node in ast.walk(method)
     )
 
@@ -134,7 +133,12 @@ def check_observation_mode_wrapping(
 
     class_def = _find_adapter_class(tree)
     if class_def is None:
-        return [_finding("error", f"adapter.py at {adapter_py} declares no public top-level class.")]
+        return [
+            _finding(
+                "error",
+                f"adapter.py at {adapter_py} declares no public top-level class.",
+            )
+        ]
 
     findings: list[ValidationFinding] = []
     methods_by_name: dict[str, ast.AsyncFunctionDef | ast.FunctionDef] = {

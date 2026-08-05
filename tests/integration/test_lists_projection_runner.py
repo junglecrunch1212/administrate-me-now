@@ -135,8 +135,17 @@ def test_lists_projection_registered_in_runner() -> None:
     # registry seam so a future refactor cannot silently rename them.
     instance = ListsProjection()
     assert instance.name == "lists"
-    assert instance.version == 1
-    assert list(instance.subscribes_to) == ["list_item.added"]
+    assert instance.version == 2
+    assert list(instance.subscribes_to) == [
+        "list.created",
+        "list.updated",
+        "list.deleted",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "list_item.deleted",
+    ]
     assert instance.schema_path.name == "schema.sql"
 
 
@@ -223,11 +232,15 @@ async def test_rebuild_produces_identical_state(rig: dict[str, Any]) -> None:
     await _wait_idle(bus, "projection:lists")
 
     pre = _snapshot(runner.connection("lists"))
-    pre_last_event_id = runner.connection("lists").execute(
-        "SELECT last_event_id FROM list_items "
-        "WHERE list_external_id = ? AND item_external_id = ?",
-        ("list-A", "i1"),
-    ).fetchone()["last_event_id"]
+    pre_last_event_id = (
+        runner.connection("lists")
+        .execute(
+            "SELECT last_event_id FROM list_items "
+            "WHERE list_external_id = ? AND item_external_id = ?",
+            ("list-A", "i1"),
+        )
+        .fetchone()["last_event_id"]
+    )
     assert pre_last_event_id == eid_last
     # 3 distinct composite-PK rows survive the duplicate-id replay.
     assert len(pre) == 3
@@ -235,10 +248,14 @@ async def test_rebuild_produces_identical_state(rig: dict[str, Any]) -> None:
     await runner.rebuild("lists")
 
     post = _snapshot(runner.connection("lists"))
-    post_last_event_id = runner.connection("lists").execute(
-        "SELECT last_event_id FROM list_items "
-        "WHERE list_external_id = ? AND item_external_id = ?",
-        ("list-A", "i1"),
-    ).fetchone()["last_event_id"]
+    post_last_event_id = (
+        runner.connection("lists")
+        .execute(
+            "SELECT last_event_id FROM list_items "
+            "WHERE list_external_id = ? AND item_external_id = ?",
+            ("list-A", "i1"),
+        )
+        .fetchone()["last_event_id"]
+    )
     assert pre == post
     assert post_last_event_id == eid_last

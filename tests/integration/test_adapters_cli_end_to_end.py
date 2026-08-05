@@ -37,9 +37,7 @@ from adminme.cli.main import app as main_app
 runner = CliRunner()
 
 
-def _scaffold(
-    tmp_path: Path, kind: str, runtime: str, name: str
-) -> Path:
+def _scaffold(tmp_path: Path, kind: str, runtime: str, name: str) -> Path:
     """Invoke ``adminme adapters scaffold <kind> <runtime>`` end-to-end.
 
     Returns the resolved output directory so the caller can pass it to

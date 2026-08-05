@@ -102,7 +102,9 @@ def test_class_missing_handle_raises(tmp_path: Path) -> None:
         "    triggers = {'events': ['messaging.received']}\n"
         "    # no async handle method\n"
     )
-    with pytest.raises(PipelinePackLoadError, match="does not implement Pipeline protocol"):
+    with pytest.raises(
+        PipelinePackLoadError, match="does not implement Pipeline protocol"
+    ):
         load_pipeline_pack(tmp_path)
 
 

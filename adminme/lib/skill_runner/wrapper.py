@@ -12,7 +12,7 @@ Public surface:
 - `SkillContext` — frozen dataclass carrying Session + correlation +
   observation/dry-run flags.
 - `SkillResult` — output + provider + token/cost provenance + duration.
-- `set_default_event_log(log)` — module-level injection used by service
+- `set_default_event_sink(events)` — module-level injection used by service
   start (08b's outbound() uses the same pattern).
 - Four exceptions: `SkillInputInvalid`, `SkillSensitivityRefused`,
   `SkillScopeInsufficient`, `OpenClawResponseMalformed`.
@@ -41,7 +41,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner.pack_loader import LoadedPack, load_pack
 
 if TYPE_CHECKING:
-    from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.session import Session
 
 _log = logging.getLogger(__name__)
@@ -75,12 +75,11 @@ class OpenClawResponseMalformed(Exception):
 
 
 class OpenClawUnreachable(Exception):
-    """Every provider in `provider_preferences` returned 5xx / network
-    failure."""
+    """OpenClaw could not complete its single routed invocation."""
 
 
 class OpenClawTimeout(Exception):
-    """Every provider in `provider_preferences` timed out."""
+    """OpenClaw's single routed invocation timed out."""
 
 
 class SkillHandlerError(Exception):
@@ -105,6 +104,10 @@ class SkillContext:
     correlation_id: str | None = None
     observation_mode_active: bool = False
     dry_run: bool = False
+    triggering_event_id: str | None = None
+    owner_scope: str = "shared:household"
+    visibility_scope: str = "shared:household"
+    sensitivity: str = "normal"
 
 
 @dataclass(frozen=True)
@@ -123,15 +126,15 @@ class SkillResult:
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_EVENT_LOG: "EventLog | None" = None
+_DEFAULT_EVENT_SINK: "EventSink | None" = None
 
 
-def set_default_event_log(log: "EventLog") -> None:
-    """Wire the module-level event log used by `run_skill()` when no
+def set_default_event_sink(events: "EventSink | None") -> None:
+    """Wire the module-level event sink used by `run_skill()` when no
     per-call override is supplied. Bootstrap §7 calls this at service
     start; tests inject a per-test log via `_runtime`."""
-    global _DEFAULT_EVENT_LOG
-    _DEFAULT_EVENT_LOG = log
+    global _DEFAULT_EVENT_SINK
+    _DEFAULT_EVENT_SINK = events
 
 
 @dataclass(frozen=True)
@@ -139,10 +142,11 @@ class _Runtime:
     """Test-injectable bundle. Production callers do not construct this
     directly; production wiring lives in bootstrap."""
 
-    event_log: "EventLog"
+    event_sink: "EventSink"
     raw_events_dir: Path
     httpx_client_factory: Any = None  # callable() -> httpx.AsyncClient | None
     gateway_url: str = OPENCLAW_GATEWAY_URL
+    event_log: Any = None
 
 
 _RUNTIME_OVERRIDE: _Runtime | None = None
@@ -156,10 +160,10 @@ def _set_runtime_for_tests(runtime: _Runtime | None) -> None:
 def _resolve_runtime() -> _Runtime:
     if _RUNTIME_OVERRIDE is not None:
         return _RUNTIME_OVERRIDE
-    if _DEFAULT_EVENT_LOG is None:
+    if _DEFAULT_EVENT_SINK is None:
         raise RuntimeError(
-            "skill_runner: no default EventLog configured; "
-            "call set_default_event_log(...) at service start"
+            "skill_runner: no default EventSink configured; "
+            "call set_default_event_sink(...) at service start"
         )
     # Production resolves raw_events_dir via InstanceConfig at bootstrap.
     # If we land here without an override AND no instance dir, surface
@@ -171,7 +175,7 @@ def _resolve_runtime() -> _Runtime:
             "raw_events_dir per [§15]"
         )
     return _Runtime(
-        event_log=_DEFAULT_EVENT_LOG,
+        event_sink=_DEFAULT_EVENT_SINK,
         raw_events_dir=Path(instance_dir) / "data" / "raw_events",
     )
 
@@ -192,6 +196,8 @@ def _build_envelope(
     schema_version: int,
     payload: dict,
     actor_identity: str,
+    owner_scope: str = "shared:household",
+    visibility_scope: str = "shared:household",
     sensitivity: str = "normal",
 ) -> EventEnvelope:
     now_iso = EventEnvelope.now_utc_iso()
@@ -204,8 +210,8 @@ def _build_envelope(
         recorded_at=now_iso,
         source_adapter="skill_runner",
         source_account_id="system",
-        owner_scope="shared:household",
-        visibility_scope="shared:household",
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
         sensitivity=sensitivity,  # type: ignore[arg-type]
         actor_identity=actor_identity,
         payload=payload,
@@ -238,8 +244,15 @@ async def _emit_failed(
             "duration_ms_until_failure": duration_ms,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    if ctx.triggering_event_id:
+        envelope.idempotency_key = (
+            f"skill:failed:{ctx.triggering_event_id}:{pack_id_str}:{failure_class}"
+        )
+    await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
 async def _emit_suppressed(
@@ -264,8 +277,15 @@ async def _emit_suppressed(
             "correlation_id": correlation,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    if ctx.triggering_event_id:
+        envelope.idempotency_key = (
+            f"skill:suppressed:{ctx.triggering_event_id}:{pack_id_str}:{reason}"
+        )
+    await runtime.event_sink.write(envelope, correlation_id=correlation)
 
 
 async def _emit_recorded(
@@ -301,8 +321,20 @@ async def _emit_recorded(
             "duration_ms": duration_ms,
         },
         actor_identity=ctx.session.auth_member_id,
+        owner_scope=ctx.owner_scope,
+        visibility_scope=ctx.visibility_scope,
+        sensitivity=ctx.sensitivity,
     )
-    await runtime.event_log.append(envelope, correlation_id=correlation)
+    envelope.idempotency_key = (
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        if ctx.triggering_event_id
+        else None
+    )
+    await runtime.event_sink.write(
+        envelope,
+        correlation_id=correlation,
+        causation_id=ctx.triggering_event_id,
+    )
 
 
 def _spill_inputs_if_large(
@@ -354,32 +386,22 @@ class _OpenClawCallOutcome:
     output_tokens: int | None = None
     cost_usd: float | None = None
     error_detail: str = ""
-
-
-def _split_provider_model(provider_model: str) -> tuple[str, str]:
-    if "/" not in provider_model:
-        return provider_model, ""
-    provider, model = provider_model.split("/", 1)
-    return provider, model
+    provider_model: str | None = None
 
 
 def _build_request_body(
     *,
     pack: LoadedPack,
     inputs: dict,
-    provider_model: str,
     session_key: str,
 ) -> dict:
     """Translate pack manifest → llm-task tool args per [ADR-0002]."""
     fm = pack.skill_frontmatter
-    provider, model = _split_provider_model(provider_model)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
     args: dict[str, Any] = {
         "prompt": pack.prompt_template,
         "input": inputs,
         "schema": pack.output_schema,
-        "provider": provider,
-        "model": model,
         "maxTokens": int(fm.get("max_tokens", 800)),
         "timeoutMs": timeout_seconds * 1000,
         "temperature": float(fm.get("temperature", 0.0)),
@@ -418,7 +440,11 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         )
     # llm-task returns details.json containing the parsed JSON per
     # docs/reference/openclaw/tools/llm-task.md.
-    parsed = result.get("details", {}).get("json") if isinstance(result.get("details"), dict) else None
+    parsed = (
+        result.get("details", {}).get("json")
+        if isinstance(result.get("details"), dict)
+        else None
+    )
     # Allow callers / mocks to put the parsed object at result.json directly
     # for simplicity (the reference llm-task docs show details.json but the
     # Lobster example collapses it). Try both.
@@ -437,9 +463,20 @@ def _parse_openclaw_response(payload: Any) -> _OpenClawCallOutcome:
         kind="ok",
         raw_result=parsed,
         invocation_id=invocation_id if isinstance(invocation_id, str) else None,
-        input_tokens=result.get("tokens_in") if isinstance(result.get("tokens_in"), int) else None,
-        output_tokens=result.get("tokens_out") if isinstance(result.get("tokens_out"), int) else None,
-        cost_usd=result.get("cost_usd") if isinstance(result.get("cost_usd"), (int, float)) else None,
+        input_tokens=result.get("tokens_in")
+        if isinstance(result.get("tokens_in"), int)
+        else None,
+        output_tokens=result.get("tokens_out")
+        if isinstance(result.get("tokens_out"), int)
+        else None,
+        cost_usd=result.get("cost_usd")
+        if isinstance(result.get("cost_usd"), (int, float))
+        else None,
+        provider_model=(
+            f"{result.get('provider')}/{result.get('model')}"
+            if result.get("provider") and result.get("model")
+            else None
+        ),
     )
 
 
@@ -514,15 +551,77 @@ async def run_skill(
     ctx: SkillContext,
     *,
     input_sensitivities: dict[str, str] | None = None,
+    _runtime: _Runtime | None = None,
 ) -> SkillResult:
     """Validate + invoke an OpenClaw skill. See module docstring."""
-    runtime = _resolve_runtime()
+    runtime = _runtime or _resolve_runtime()
 
     # Step 1 — load pack.
-    pack = load_pack(Path(skill_id) if Path(skill_id).is_absolute() else _resolve_pack_root(skill_id))
+    pack = load_pack(
+        Path(skill_id) if Path(skill_id).is_absolute() else _resolve_pack_root(skill_id)
+    )
     pack_id_str = pack.pack_id
     pack_version = pack.version
     fm = pack.skill_frontmatter
+
+    idempotency_key = (
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        if ctx.triggering_event_id
+        else None
+    )
+    if idempotency_key and runtime.event_log is not None:
+        prior = await runtime.event_log.get_by_idempotency(
+            ctx.session.tenant_id, idempotency_key
+        )
+        if prior is not None:
+            payload = prior["payload"]
+            return SkillResult(
+                output=dict(payload["outputs"]),
+                openclaw_invocation_id=payload.get("openclaw_invocation_id"),
+                provider=str(payload["provider"]),
+                input_tokens=payload.get("input_tokens"),
+                output_tokens=payload.get("output_tokens"),
+                cost_usd=payload.get("cost_usd"),
+                duration_ms=int(payload["duration_ms"]),
+            )
+        related = await runtime.event_log.get_by_causation(ctx.triggering_event_id)
+        prior_terminal = next(
+            (
+                event
+                for event in reversed(related)
+                if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
+                and event["payload"].get("skill_name") == pack_id_str
+            ),
+            None,
+        )
+        if prior_terminal is not None:
+            payload = prior_terminal["payload"]
+            if prior_terminal["type"] == "skill.call.suppressed":
+                defensive_default = fm.get("on_failure") or {}
+                return SkillResult(
+                    output=(
+                        defensive_default if isinstance(defensive_default, dict) else {}
+                    ),
+                    openclaw_invocation_id=None,
+                    provider="suppressed",
+                    input_tokens=None,
+                    output_tokens=None,
+                    cost_usd=None,
+                    duration_ms=0,
+                )
+            failure_class = str(payload.get("failure_class") or "")
+            error_detail = str(payload.get("error_detail") or failure_class)
+            error_type: type[Exception] = {
+                "input_invalid": SkillInputInvalid,
+                "sensitivity_refused": SkillSensitivityRefused,
+                "scope_insufficient": SkillScopeInsufficient,
+                "openclaw_malformed_response": OpenClawResponseMalformed,
+                "openclaw_timeout": OpenClawTimeout,
+                "openclaw_unreachable": OpenClawUnreachable,
+                "handler_raised": SkillHandlerError,
+                "output_invalid": SkillOutputInvalid,
+            }.get(failure_class, OpenClawUnreachable)
+            raise error_type(error_detail)
 
     # Step 2 — input validation.
     try:
@@ -558,9 +657,7 @@ async def run_skill(
                 provider_attempted=None,
                 duration_ms=0,
             )
-            raise SkillSensitivityRefused(
-                "skill refuses privileged inputs"
-            )
+            raise SkillSensitivityRefused("skill refuses privileged inputs")
 
     # Step 4 — scope check.
     required_scopes = list(fm.get("context_scopes_required") or [])
@@ -577,9 +674,7 @@ async def run_skill(
             provider_attempted=None,
             duration_ms=0,
         )
-        raise SkillScopeInsufficient(
-            f"session missing required scopes: {missing}"
-        )
+        raise SkillScopeInsufficient(f"session missing required scopes: {missing}")
 
     # Step 5 — observation / dry-run short-circuit.
     outbound_affecting = bool(fm.get("outbound_affecting", False))
@@ -608,96 +703,53 @@ async def run_skill(
             duration_ms=0,
         )
 
-    # Step 6 — POST to OpenClaw, iterating provider_preferences.
-    provider_preferences = list(fm.get("provider_preferences") or [])
-    if not provider_preferences:
-        await _emit_failed(
-            runtime,
-            ctx,
-            pack_id_str=pack_id_str,
-            pack_version=pack_version,
-            failure_class="openclaw_unreachable",
-            error_detail="pack manifest declares no provider_preferences",
-            provider_attempted=None,
-            duration_ms=0,
-        )
-        raise OpenClawUnreachable("pack manifest declares no provider_preferences")
-
+    # Step 6: one POST; OpenClaw owns provider/model routing and fallback.
     token = _resolve_gateway_token(ctx.session)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
     session_key = _derive_session_key(ctx)
     started_at = time.perf_counter()
 
-    last_outcome: _OpenClawCallOutcome | None = None
-    successful: _OpenClawCallOutcome | None = None
-    chosen_provider = ""
-    for provider_model in provider_preferences:
-        body = _build_request_body(
-            pack=pack,
-            inputs=inputs,
-            provider_model=provider_model,
-            session_key=session_key,
-        )
-        outcome = await _post_one_provider(
-            runtime=runtime,
-            body=body,
-            token=token,
-            timeout_seconds=timeout_seconds,
-        )
-        last_outcome = outcome
-        if outcome.kind == "ok":
-            successful = outcome
-            chosen_provider = provider_model
-            break
-        if outcome.kind == "malformed":
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            await _emit_failed(
-                runtime,
-                ctx,
-                pack_id_str=pack_id_str,
-                pack_version=pack_version,
-                failure_class="openclaw_malformed_response",
-                error_detail=outcome.error_detail,
-                provider_attempted=provider_model,
-                duration_ms=duration_ms,
-            )
-            raise OpenClawResponseMalformed(outcome.error_detail)
-        if outcome.kind == "deterministic_4xx":
-            duration_ms = int((time.perf_counter() - started_at) * 1000)
-            await _emit_failed(
-                runtime,
-                ctx,
-                pack_id_str=pack_id_str,
-                pack_version=pack_version,
-                failure_class="openclaw_unreachable",
-                error_detail=outcome.error_detail,
-                provider_attempted=provider_model,
-                duration_ms=duration_ms,
-            )
-            raise OpenClawUnreachable(outcome.error_detail)
-        # transient or timeout — try next provider
-    if successful is None:
+    body = _build_request_body(pack=pack, inputs=inputs, session_key=session_key)
+    outcome = await _post_one_provider(
+        runtime=runtime,
+        body=body,
+        token=token,
+        timeout_seconds=timeout_seconds,
+    )
+    chosen_provider = outcome.provider_model or "openclaw-routed"
+    if outcome.kind == "malformed":
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        last = last_outcome or _OpenClawCallOutcome(kind="transient", error_detail="no providers attempted")
-        if last.kind == "timeout":
-            failure_class = "openclaw_timeout"
-            exc_cls: type[Exception] = OpenClawTimeout
-        else:
-            failure_class = "openclaw_unreachable"
-            exc_cls = OpenClawUnreachable
+        await _emit_failed(
+            runtime,
+            ctx,
+            pack_id_str=pack_id_str,
+            pack_version=pack_version,
+            failure_class="openclaw_malformed_response",
+            error_detail=outcome.error_detail,
+            provider_attempted=None,
+            duration_ms=duration_ms,
+        )
+        raise OpenClawResponseMalformed(outcome.error_detail)
+    if outcome.kind != "ok":
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        failure_class = (
+            "openclaw_timeout" if outcome.kind == "timeout" else "openclaw_unreachable"
+        )
+        exc_cls: type[Exception] = (
+            OpenClawTimeout if outcome.kind == "timeout" else OpenClawUnreachable
+        )
         await _emit_failed(
             runtime,
             ctx,
             pack_id_str=pack_id_str,
             pack_version=pack_version,
             failure_class=failure_class,
-            error_detail=last.error_detail,
-            provider_attempted=provider_preferences[-1] if provider_preferences else None,
+            error_detail=outcome.error_detail,
+            provider_attempted=None,
             duration_ms=duration_ms,
         )
-        raise exc_cls(last.error_detail)
-
-    raw_response = successful.raw_result
+        raise exc_cls(outcome.error_detail)
+    raw_response = outcome.raw_result
 
     # Step 7 — optional handler.post_process.
     if pack.handler_post_process is not None:
@@ -755,23 +807,23 @@ async def run_skill(
         ctx,
         pack_id_str=pack_id_str,
         pack_version=pack_version,
-        invocation_id=successful.invocation_id,
+        invocation_id=outcome.invocation_id,
         inputs_payload=inputs_payload,
         outputs=processed,
         provider=chosen_provider,
-        input_tokens=successful.input_tokens,
-        output_tokens=successful.output_tokens,
-        cost_usd=successful.cost_usd,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        cost_usd=outcome.cost_usd,
         duration_ms=duration_ms,
     )
 
     return SkillResult(
         output=processed,
-        openclaw_invocation_id=successful.invocation_id,
+        openclaw_invocation_id=outcome.invocation_id,
         provider=chosen_provider,
-        input_tokens=successful.input_tokens,
-        output_tokens=successful.output_tokens,
-        cost_usd=successful.cost_usd,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        cost_usd=outcome.cost_usd,
         duration_ms=duration_ms,
     )
 
@@ -825,8 +877,8 @@ def _max_sensitivity(values: Any) -> str:
 def _derive_session_key(ctx: SkillContext) -> str:
     """OpenClaw `sessionKey` derived from the AdministrateMe Session.
 
-    For 09a we mint a stable per-session key from auth_member + dm_scope.
-    The wizard prompt 16 will replace this with the configured main key.
+    The tenant, authenticated member, and DM scope form a stable isolation key;
+    no tenant identity or provider credential is embedded in platform code.
     """
     sess = ctx.session
     return f"adminme:{sess.tenant_id}:{sess.auth_member_id}:{sess.dm_scope}"
@@ -845,5 +897,5 @@ __all__ = [
     "SkillScopeInsufficient",
     "SkillSensitivityRefused",
     "run_skill",
-    "set_default_event_log",
+    "set_default_event_sink",
 ]

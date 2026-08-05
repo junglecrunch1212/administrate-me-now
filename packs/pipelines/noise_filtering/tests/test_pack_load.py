@@ -15,7 +15,7 @@ def test_pack_loads_cleanly() -> None:
     pack = load_pipeline_pack(PACK_ROOT)
     assert pack.pack_id == "pipeline:noise_filtering"
     assert pack.version == "1.0.0"
-    assert pack.triggers["events"] == [
+    assert pack.triggers.get("events") == [
         "messaging.received",
         "telephony.sms_received",
     ]

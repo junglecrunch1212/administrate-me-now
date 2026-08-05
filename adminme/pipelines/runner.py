@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventSink
 from adminme.lib.governance import GuardedWrite
 from adminme.lib.instance_config import InstanceConfig
 from adminme.lib.observation import ObservationManager, outbound
@@ -72,18 +73,26 @@ class PipelineRunner:
         self,
         bus: EventBus,
         event_log: EventLog,
+        event_sink: EventSink,
         instance_config: InstanceConfig,
         *,
         observation_manager: ObservationManager | None = None,
         guarded_write: GuardedWrite | None = None,
         parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None,
+        run_skill_fn: Callable[..., Awaitable[Any]] | None = None,
+        profile_loader: Callable[[str], dict[str, Any] | None] | None = None,
+        persona_loader: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
+        self._events = event_sink
         self._config = instance_config
         self._observation_manager = observation_manager
         self._guarded_write = guarded_write
         self._parties_conn_factory = parties_conn_factory
+        self._run_skill_fn = run_skill_fn or run_skill
+        self._profile_loader = profile_loader
+        self._persona_loader = persona_loader
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -126,6 +135,7 @@ class PipelineRunner:
             for manifest in sorted(root.rglob("pipeline.yaml")):
                 pack_root = manifest.parent
                 pack = await asyncio.to_thread(load_pipeline_pack, pack_root)
+                self._wire_data_extensions(pack)
                 events = pack.triggers.get("events") if pack.triggers else None
                 if not events:
                     # Proactive (schedule / proactive) pipelines are
@@ -141,10 +151,27 @@ class PipelineRunner:
                     continue
                 self.register(pack)
 
+    def _wire_data_extensions(self, pack: LoadedPipelinePack) -> None:
+        """Inject data readers into legacy pack constructors at composition time.
+
+        The packs remain independently testable with explicit fakes, while the
+        production runner no longer leaves their default ``None`` loaders in
+        place.
+        """
+
+        if self._profile_loader is not None and hasattr(
+            pack.instance, "_profile_loader"
+        ):
+            setattr(pack.instance, "_profile_loader", self._profile_loader)
+        if self._persona_loader is not None and hasattr(
+            pack.instance, "_persona_loader"
+        ):
+            setattr(pack.instance, "_persona_loader", self._persona_loader)
+
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
-    async def start(self) -> None:
+    async def start(self, *, start_bus: bool = True) -> None:
         """Subscribe each reactive pack to the bus, then start the bus
         if it isn't already running. Subscriptions must be registered
         before ``bus.start()`` per [§1.10]."""
@@ -160,7 +187,8 @@ class PipelineRunner:
             self._bus.subscribe(subscriber_id, types, self._make_callback(pack))
         # `EventBus.start()` is a no-op if already running, so this is
         # safe for both test and production wiring orderings.
-        await self._bus.start()
+        if start_bus:
+            await self._bus.start()
 
     async def stop(self) -> None:
         """No-op; bus shutdown is owned by the bus's own ``stop()``.
@@ -208,7 +236,8 @@ class PipelineRunner:
             ctx = PipelineContext(
                 session=session,
                 event_log=self._log,
-                run_skill_fn=run_skill,
+                event_sink=self._events,
+                run_skill_fn=self._run_skill_fn,
                 outbound_fn=outbound,
                 guarded_write=self._guarded_write,
                 observation_manager=self._observation_manager,

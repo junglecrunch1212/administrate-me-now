@@ -37,7 +37,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -119,7 +118,8 @@ async def test_calendar_event_added_inserts_row(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", eid)
 
     conn = runner.connection("calendars")
-    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
+    row = by_source(
+        conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["summary"] == "Dentist"
@@ -147,7 +147,8 @@ async def test_duplicate_added_upserts_to_single_row(rig: dict[str, Any]) -> Non
         ("tenant-a", "google", "ext-1"),
     ).fetchone()[0]
     assert count == 1
-    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
+    row = by_source(
+        conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["summary"] == "Dentist rescheduled"
@@ -180,7 +181,8 @@ async def test_calendar_event_updated_applies_field_updates(
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
+    row = by_source(
+        conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is not None
     assert row["location"] == "Uptown clinic"
@@ -217,16 +219,15 @@ async def test_calendar_event_deleted_removes_row(rig: dict[str, Any]) -> None:
     assert before == 1
     assert after == 0
     conn = runner.connection("calendars")
-    row = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
+    row = by_source(
+        conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
     )
     assert row is None
 
 
 def _current_count(rig: dict[str, Any]) -> int:
     conn = rig["runner"].connection("calendars")
-    return int(
-        conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0]
-    )
+    return int(conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0])
 
 
 async def test_today_filters_by_member_and_window(rig: dict[str, Any]) -> None:
@@ -268,7 +269,10 @@ async def test_today_filters_by_member_and_window(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    rows = today(conn, _S("tenant-a"), member_party_id="m1",
+    rows = today(
+        conn,
+        _S("tenant-a"),
+        member_party_id="m1",
         today_iso="2026-04-25T00:00:00Z",
         tz_name="UTC",
     )
@@ -318,7 +322,10 @@ async def test_busy_slots_merges_events_and_availability(
     )
     conn.commit()
 
-    slots = busy_slots(conn, _S("tenant-a"), member_party_id="m1",
+    slots = busy_slots(
+        conn,
+        _S("tenant-a"),
+        member_party_id="m1",
         range_start_iso="2026-04-25T00:00:00Z",
         range_end_iso="2026-04-25T23:59:59Z",
     )
@@ -394,9 +401,7 @@ async def test_rebuild_after_add_update_delete_sequence(
             "SELECT * FROM calendar_events ORDER BY external_uid"
         ).fetchall()
     ]
-    pre_count = int(
-        conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0]
-    )
+    pre_count = int(conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0])
     # 10 + 5 - 5 = 10 rows.
     assert pre_count == 10
 
@@ -409,9 +414,7 @@ async def test_rebuild_after_add_update_delete_sequence(
             "SELECT * FROM calendar_events ORDER BY external_uid"
         ).fetchall()
     ]
-    post_count = int(
-        conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0]
-    )
+    post_count = int(conn.execute("SELECT count(*) FROM calendar_events").fetchone()[0])
     assert post_count == 10
     assert pre == post
 
@@ -439,10 +442,8 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
     conn = runner.connection("calendars")
-    a = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1"
-    )
-    b = by_source(conn, _S("tenant-b"), calendar_source="google", external_uid="ext-1"
-    )
+    a = by_source(conn, _S("tenant-a"), calendar_source="google", external_uid="ext-1")
+    b = by_source(conn, _S("tenant-b"), calendar_source="google", external_uid="ext-1")
     assert a is not None and a["summary"] == "A-event"
     assert b is not None and b["summary"] == "B-event"
 

@@ -29,6 +29,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.skill_runner import OpenClawTimeout, SkillResult
 from adminme.pipelines import invalidate_cache, load_pipeline_pack
@@ -98,7 +99,7 @@ async def test_identity_resolution_emits_party_created_for_unknown_sender(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(IDENTITY_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -122,17 +123,11 @@ async def test_identity_resolution_emits_party_created_for_unknown_sender(
         )
 
         all_events = await _read_all(log)
-        derived = [
-            e
-            for e in all_events
-            if e.get("causation_id") == triggering_eid
-        ]
+        derived = [e for e in all_events if e.get("causation_id") == triggering_eid]
         types = sorted(e["type"] for e in derived)
         assert types == ["identifier.added", "party.created"]
         for e in derived:
-            assert e["correlation_id"] is None or isinstance(
-                e["correlation_id"], str
-            )
+            assert e["correlation_id"] is None or isinstance(e["correlation_id"], str)
         # party.created and identifier.added share a party_id
         party = next(e for e in derived if e["type"] == "party.created")
         ident = next(e for e in derived if e["type"] == "identifier.added")
@@ -150,7 +145,7 @@ async def test_identity_resolution_skips_messaging_sent(tmp_path: Path) -> None:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(IDENTITY_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -191,9 +186,7 @@ async def test_identity_resolution_skips_messaging_sent(tmp_path: Path) -> None:
 
         all_events = await _read_all(log)
         # Nothing should have been derived from the messaging.sent event.
-        derived_from_sent = [
-            e for e in all_events if e.get("causation_id") == sent_eid
-        ]
+        derived_from_sent = [e for e in all_events if e.get("causation_id") == sent_eid]
         assert derived_from_sent == []
         # The follow-up SMS DOES produce a party.created + identifier.added
         # (sender unknown). That confirms the subscriber is healthy.
@@ -210,9 +203,7 @@ async def test_identity_resolution_skips_messaging_sent(tmp_path: Path) -> None:
 async def test_noise_filtering_emits_classified_with_stubbed_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def stub_run_skill(
-        skill_id: str, inputs: dict, ctx: Any
-    ) -> SkillResult:
+    async def stub_run_skill(skill_id: str, inputs: dict, ctx: Any) -> SkillResult:
         return SkillResult(
             output={
                 "classification": "transactional",
@@ -227,16 +218,14 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
             duration_ms=42,
         )
 
-    monkeypatch.setattr(
-        "adminme.pipelines.runner.run_skill", stub_run_skill
-    )
+    monkeypatch.setattr("adminme.pipelines.runner.run_skill", stub_run_skill)
 
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(NOISE_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -262,9 +251,7 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
         )
 
         all_events = await _read_all(log)
-        classified = [
-            e for e in all_events if e["type"] == "messaging.classified"
-        ]
+        classified = [e for e in all_events if e["type"] == "messaging.classified"]
         assert len(classified) == 1
         e = classified[0]
         assert e["causation_id"] == triggering_eid
@@ -282,21 +269,17 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
 async def test_noise_filtering_skill_failure_lands_defensive_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def stub_run_skill(
-        skill_id: str, inputs: dict, ctx: Any
-    ) -> SkillResult:
+    async def stub_run_skill(skill_id: str, inputs: dict, ctx: Any) -> SkillResult:
         raise OpenClawTimeout("openclaw stub timeout")
 
-    monkeypatch.setattr(
-        "adminme.pipelines.runner.run_skill", stub_run_skill
-    )
+    monkeypatch.setattr("adminme.pipelines.runner.run_skill", stub_run_skill)
 
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     pack = load_pipeline_pack(NOISE_PACK_ROOT)
     runner.register(pack)
     await runner.start()
@@ -321,9 +304,7 @@ async def test_noise_filtering_skill_failure_lands_defensive_default(
         )
 
         all_events = await _read_all(log)
-        classified = [
-            e for e in all_events if e["type"] == "messaging.classified"
-        ]
+        classified = [e for e in all_events if e["type"] == "messaging.classified"]
         assert len(classified) == 1
         e = classified[0]
         assert e["causation_id"] == triggering_eid

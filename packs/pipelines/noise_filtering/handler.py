@@ -34,7 +34,7 @@ from adminme.lib.skill_runner import (
     SkillInputInvalid,
     SkillOutputInvalid,
 )
-from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.pipelines.base import PipelineContext, Triggers, skill_output
 
 _log = logging.getLogger(__name__)
 
@@ -78,18 +78,16 @@ def _extract_text_and_inputs(
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
     version: str = "1.0.0"
-    triggers: Triggers = {
-        "events": ["messaging.received", "telephony.sms_received"]
-    }
+    triggers: Triggers = {"events": ["messaging.received", "telephony.sms_received"]}
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in (
             "messaging.received",
             "telephony.sms_received",
         ):
+            return
+        if event.get("sensitivity") == "privileged":
             return
 
         payload = event.get("payload") or {}
@@ -102,6 +100,10 @@ class NoiseFilteringPipeline:
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
+            triggering_event_id=str(source_event_id),
+            owner_scope=event["owner_scope"],
+            visibility_scope=event["visibility_scope"],
+            sensitivity=event.get("sensitivity", "normal"),
         )
 
         try:
@@ -126,7 +128,7 @@ class NoiseFilteringPipeline:
             )
             return
 
-        output = result.output if hasattr(result, "output") else result
+        output = skill_output(result)
         classification = str(output.get("classification", DEFAULT_CLASSIFICATION))
         confidence = float(output.get("confidence", 0.0))
         await self._emit_classified(
@@ -156,7 +158,8 @@ class NoiseFilteringPipeline:
             source_account_id="pipeline",
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=f"messaging:classified:{source_event_id}",
             payload={
                 "source_event_id": source_event_id,
                 "classification": classification,
@@ -165,7 +168,7 @@ class NoiseFilteringPipeline:
                 "skill_version": SKILL_VERSION,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
 
 from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
 from adminme_bridge.config import BridgeConfig
-from adminme_bridge.main import BridgeSupervisor, _run_until_signal
+from adminme_bridge.main import BridgeSupervisor, _run_until_signal, configured_packs
+from adminme_bridge.packs import PackLoadError
 
 
 class _FakeIngestClient:
@@ -90,9 +92,38 @@ class _RecordingStateMirrorAdapter:
 def _config() -> BridgeConfig:
     return BridgeConfig(
         member_id="m1",
-        central_endpoint="http://127.0.0.1:3337",
+        central_endpoint="http://127.0.0.1:3330",
         tailscale_identity="m1@example.ts.net",
     )
+
+
+def test_configured_builtin_knowledge_packs_are_real_and_opt_in(
+    tmp_path: Path,
+) -> None:
+    config = BridgeConfig(
+        member_id="m1",
+        tenant_id="tenant-one",
+        central_endpoint="http://127.0.0.1:3330",
+        tailscale_identity="m1@example.ts.net",
+        packs_dir=str(tmp_path / "installed-packs"),
+        enabled_packs=[
+            "knowledge-apple-notes",
+            "knowledge-apple-voice-memos",
+            "knowledge-obsidian",
+        ],
+    )
+    handles = configured_packs(config)
+    assert [handle.name for handle in handles] == config.enabled_packs
+    supervisor = BridgeSupervisor(
+        config=config,
+        ingest_client=_FakeIngestClient(),  # type: ignore[arg-type]
+        packs=handles,
+    )
+    assert [adapter.name for adapter in supervisor.adapters] == config.enabled_packs
+
+    config.enabled_packs = ["not-a-real-pack"]
+    with pytest.raises(PackLoadError, match="not found"):
+        configured_packs(config)
 
 
 async def test_supervisor_start_dispatches_into_adapter_start() -> None:
@@ -188,7 +219,9 @@ async def test_bridge_supervisor_accepts_mock_state_mirror_adapter() -> None:
     assert cat_b.stopped is True
 
 
-async def test_bridge_supervisor_start_dispatches_to_both_cat_d_and_cat_b_adapters_in_one_run() -> None:
+async def test_bridge_supervisor_start_dispatches_to_both_cat_d_and_cat_b_adapters_in_one_run() -> (
+    None
+):
     """The on-ramp's primary win: a single supervisor instance hosts BOTH a
     Cat-D :class:`KnowledgeAdapter` and a Cat-B :class:`StateMirrorBridgeAdapter`
     in one run. The start loop dispatches to each adapter's ``start(ctx=...)``

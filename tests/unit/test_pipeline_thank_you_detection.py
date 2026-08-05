@@ -30,10 +30,7 @@ from adminme.lib.skill_runner import (
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "thank_you_detection"
+    Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "thank_you_detection"
 )
 PARTIES_SCHEMA = (
     Path(__file__).resolve().parents[2]
@@ -73,7 +70,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -106,7 +103,7 @@ def _build_parties_db(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlcipher3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlcipher3.Row
-    conn.execute(f"PRAGMA key = \"{_key_pragma()}\"")
+    conn.execute(f'PRAGMA key = "{_key_pragma()}"')
     conn.execute("PRAGMA journal_mode=WAL")
     schema = PARTIES_SCHEMA.read_text(encoding="utf-8")
     conn.executescript(schema)
@@ -144,7 +141,7 @@ def _build_parties_db(
 def _open_parties_conn(db_path: Path) -> sqlcipher3.Connection:
     conn = sqlcipher3.connect(str(db_path), isolation_level=None)
     conn.row_factory = sqlcipher3.Row
-    conn.execute(f"PRAGMA key = \"{_key_pragma()}\"")
+    conn.execute(f'PRAGMA key = "{_key_pragma()}"')
     return conn
 
 
@@ -176,6 +173,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=run_skill_fn,
         outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
@@ -319,9 +317,7 @@ async def test_above_review_threshold_emits_proposed_confident(
             return _classify_result(confidence=0.85)
         return _extract_result()
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -354,9 +350,7 @@ async def test_between_min_and_review_emits_proposed_weak(
             return _classify_result(confidence=0.62)
         return _extract_result()
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -379,9 +373,7 @@ async def test_is_candidate_false_emits_suppressed(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         return _classify_result(confidence=0.95, is_candidate=False)
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -402,9 +394,7 @@ async def test_below_min_threshold_emits_suppressed(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         return _classify_result(confidence=0.30, is_candidate=True)
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -434,9 +424,7 @@ async def test_messaging_sent_returns_silently(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         raise AssertionError("skill must not be called for outbound events")
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_sent_event(), ctx)
@@ -464,14 +452,10 @@ async def test_unresolvable_sender_emits_suppressed(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         raise AssertionError("skill must not be called when sender unknown")
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
-    await pipeline.handle(
-        _messaging_received_event(from_id="unknown@example.com"), ctx
-    )
+    await pipeline.handle(_messaging_received_event(from_id="unknown@example.com"), ctx)
 
     assert len(log.calls) == 1
     envelope = log.calls[0].envelope
@@ -507,14 +491,10 @@ async def test_skip_party_tag_returns_silently(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         raise AssertionError("skill must not be called for skipped tags")
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
-    event = _messaging_received_event(
-        party_tags=["privileged", "opposing_counsel"]
-    )
+    event = _messaging_received_event(party_tags=["privileged", "opposing_counsel"])
     await pipeline.handle(event, ctx)
     assert log.calls == []
 
@@ -532,9 +512,7 @@ async def test_classify_timeout_emits_suppressed(tmp_path: Path) -> None:
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
         raise OpenClawTimeout("openclaw stub timeout")
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -559,9 +537,7 @@ async def test_extract_failure_emits_suppressed(tmp_path: Path) -> None:
             return _classify_result(confidence=0.85)
         raise OpenClawTimeout("extract timed out")
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)
@@ -592,9 +568,7 @@ async def test_per_member_override_lowers_threshold(tmp_path: Path) -> None:
             return _classify_result(confidence=0.45)
         return _extract_result()
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = {
         **_DEFAULT_CONFIG,
@@ -602,9 +576,7 @@ async def test_per_member_override_lowers_threshold(tmp_path: Path) -> None:
             "member_alpha": {"min_confidence": 0.40, "review_threshold": 0.70}
         },
     }
-    await pipeline.handle(
-        _messaging_received_event(to_id="member_alpha"), ctx
-    )
+    await pipeline.handle(_messaging_received_event(to_id="member_alpha"), ctx)
 
     assert len(log.calls) == 1
     envelope = log.calls[0].envelope
@@ -630,17 +602,13 @@ async def test_per_member_override_disables_via_high_threshold(
         # impossibly-high override.
         return _classify_result(confidence=0.99)
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = {
         **_DEFAULT_CONFIG,
         "per_member_overrides": {"member_omega": {"min_confidence": 1.1}},
     }
-    await pipeline.handle(
-        _messaging_received_event(to_id="member_omega"), ctx
-    )
+    await pipeline.handle(_messaging_received_event(to_id="member_omega"), ctx)
 
     assert len(log.calls) == 1
     envelope = log.calls[0].envelope
@@ -673,9 +641,7 @@ async def test_classify_output_without_urgency_when_is_candidate_false(
             include_urgency_fields=False,
         )
 
-    ctx = _make_ctx(
-        log, stub_run_skill, parties_factory=_make_factory(db_path)
-    )
+    ctx = _make_ctx(log, stub_run_skill, parties_factory=_make_factory(db_path))
     pipeline = ThankYouDetectionPipeline()
     pipeline._config_override = dict(_DEFAULT_CONFIG)
     await pipeline.handle(_messaging_received_event(), ctx)

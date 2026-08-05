@@ -1,0 +1,578 @@
+{
+  "status": "PASS",
+  "count": 68,
+  "assertions": [
+    {
+      "interaction_id": "01",
+      "assertion_id": "01-carousel-active",
+      "description": "carousel mode is initially active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "01",
+      "assertion_id": "01-compressed-active",
+      "description": "compressed mode becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "01",
+      "assertion_id": "01-compressed-populated",
+      "description": "compressed mode renders a decision queue",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "01",
+      "assertion_id": "01-child-page",
+      "description": "child mode activates the scoreboard page",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "01",
+      "assertion_id": "01-child-chrome",
+      "description": "child mode applies full-bleed scoreboard chrome",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "02",
+      "assertion_id": "02-task-complete",
+      "description": "task checkbox enters done state",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "02",
+      "assertion_id": "02-reward-visible",
+      "description": "task completion renders a reward toast",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "02",
+      "assertion_id": "02-reward-tier",
+      "description": "reward toast reports the deterministic tier with task provenance",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "03",
+      "assertion_id": "03-observation-initial",
+      "description": "observation banner is initially visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "03",
+      "assertion_id": "03-observation-off",
+      "description": "settings toggle hides observation banner",
+      "status": "PASS",
+      "actual": false,
+      "expected": false
+    },
+    {
+      "interaction_id": "03",
+      "assertion_id": "03-observation-on",
+      "description": "settings toggle restores observation banner",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "03",
+      "assertion_id": "03-observation-shift",
+      "description": "capture bar shifts below the active banner",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-captured-to-list",
+      "description": "grocery prefix routes to the declared destination",
+      "status": "PASS",
+      "actual": "Captured to list",
+      "expected": "Captured to list"
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-grocery-cleared",
+      "description": "quick-capture input clears after submission",
+      "status": "PASS",
+      "actual": "",
+      "expected": ""
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-captured-to-task",
+      "description": "call prefix routes to the declared destination",
+      "status": "PASS",
+      "actual": "Captured to task",
+      "expected": "Captured to task"
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-call-cleared",
+      "description": "quick-capture input clears after submission",
+      "status": "PASS",
+      "actual": "",
+      "expected": ""
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-captured-to-capture",
+      "description": "idea prefix routes to the declared destination",
+      "status": "PASS",
+      "actual": "Captured to capture",
+      "expected": "Captured to capture"
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-idea-cleared",
+      "description": "quick-capture input clears after submission",
+      "status": "PASS",
+      "actual": "",
+      "expected": ""
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-captured-to-recipe",
+      "description": "recipe prefix routes to the declared destination",
+      "status": "PASS",
+      "actual": "Captured to recipe",
+      "expected": "Captured to recipe"
+    },
+    {
+      "interaction_id": "04",
+      "assertion_id": "04-recipe-cleared",
+      "description": "quick-capture input clears after submission",
+      "status": "PASS",
+      "actual": "",
+      "expected": ""
+    },
+    {
+      "interaction_id": "05",
+      "assertion_id": "05-party-active",
+      "description": "clicked CRM party remains selected",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "05",
+      "assertion_id": "05-party-name",
+      "description": "party detail matches the clicked party",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "05",
+      "assertion_id": "05-party-sections",
+      "description": "party detail renders identifiers, cadence, relationships, and interactions",
+      "status": "PASS",
+      "actual": [
+        "IDENTIFIERS",
+        "STATS & CADENCE",
+        "RELATIONSHIPS",
+        "RECENT INTERACTIONS"
+      ],
+      "expected": [
+        "IDENTIFIERS",
+        "STATS & CADENCE",
+        "RELATIONSHIPS",
+        "RECENT INTERACTIONS"
+      ]
+    },
+    {
+      "interaction_id": "06",
+      "assertion_id": "06-slide-out-class",
+      "description": "approved proposal enters slide-out state",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "06",
+      "assertion_id": "06-approval-toast",
+      "description": "approval renders a commitment confirmation toast",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "06",
+      "assertion_id": "06-card-removed",
+      "description": "approved proposal is removed after slide-out",
+      "status": "PASS",
+      "actual": 8,
+      "expected": 8
+    },
+    {
+      "interaction_id": "07",
+      "assertion_id": "07-private-count",
+      "description": "calendar renders every declared privileged block",
+      "status": "PASS",
+      "actual": 3,
+      "expected": 3
+    },
+    {
+      "interaction_id": "07",
+      "assertion_id": "07-private-titles",
+      "description": "privileged titles are redacted to busy",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "07",
+      "assertion_id": "07-private-subtitles",
+      "description": "privileged blocks expose only the privileged marker",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "08",
+      "assertion_id": "08-chore-complete",
+      "description": "unfinished child chore becomes complete",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "08",
+      "assertion_id": "08-star-increment",
+      "description": "child completion increments today's stars",
+      "status": "PASS",
+      "actual": 4,
+      "expected": 4
+    },
+    {
+      "interaction_id": "08",
+      "assertion_id": "08-child-reward",
+      "description": "child completion renders the warm reward",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "09",
+      "assertion_id": "09-selector-change",
+      "description": "view-as selector changes to the second principal",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "09",
+      "assertion_id": "09-greeting-change",
+      "description": "view-as changes the Today greeting",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "09",
+      "assertion_id": "09-profile-mode",
+      "description": "second-principal view activates compressed mode",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "10",
+      "assertion_id": "10-rate-toast",
+      "description": "demo control renders the rate-limit toast",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "10",
+      "assertion_id": "10-rate-details",
+      "description": "rate-limit toast includes retry and limiter provenance",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "11",
+      "assertion_id": "11-degraded-on",
+      "description": "demo control reveals the degraded banner",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "11",
+      "assertion_id": "11-double-shift",
+      "description": "capture bar shifts below both active banners",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "11",
+      "assertion_id": "11-degraded-off",
+      "description": "second activation hides the degraded banner",
+      "status": "PASS",
+      "actual": false,
+      "expected": false
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-pane-inventory",
+      "description": "settings navigation exposes every named pane",
+      "status": "PASS",
+      "actual": [
+        "observation",
+        "persona",
+        "members",
+        "plaid",
+        "reminders",
+        "packs",
+        "governance",
+        "demo"
+      ],
+      "expected": [
+        "observation",
+        "persona",
+        "members",
+        "plaid",
+        "reminders",
+        "packs",
+        "governance",
+        "demo"
+      ]
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-observation-nav",
+      "description": "observation navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-observation-pane",
+      "description": "observation pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-observation-single",
+      "description": "observation is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-persona-nav",
+      "description": "persona navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-persona-pane",
+      "description": "persona pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-persona-single",
+      "description": "persona is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-members-nav",
+      "description": "members navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-members-pane",
+      "description": "members pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-members-single",
+      "description": "members is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-plaid-nav",
+      "description": "plaid navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-plaid-pane",
+      "description": "plaid pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-plaid-single",
+      "description": "plaid is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-reminders-nav",
+      "description": "reminders navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-reminders-pane",
+      "description": "reminders pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-reminders-single",
+      "description": "reminders is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-packs-nav",
+      "description": "packs navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-packs-pane",
+      "description": "packs pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-packs-single",
+      "description": "packs is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-governance-nav",
+      "description": "governance navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-governance-pane",
+      "description": "governance pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-governance-single",
+      "description": "governance is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-demo-nav",
+      "description": "demo navigation item becomes active",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-demo-pane",
+      "description": "demo pane becomes visible",
+      "status": "PASS",
+      "actual": true,
+      "expected": true
+    },
+    {
+      "interaction_id": "12",
+      "assertion_id": "12-demo-single",
+      "description": "demo is the sole active settings pane",
+      "status": "PASS",
+      "actual": 1,
+      "expected": 1
+    },
+    {
+      "interaction_id": "run",
+      "assertion_id": "run-console-errors",
+      "description": "reference emits no JavaScript console errors",
+      "status": "PASS",
+      "actual": 0,
+      "expected": 0
+    },
+    {
+      "interaction_id": "run",
+      "assertion_id": "run-page-errors",
+      "description": "reference emits no uncaught page errors",
+      "status": "PASS",
+      "actual": 0,
+      "expected": 0
+    },
+    {
+      "interaction_id": "run",
+      "assertion_id": "run-request-failures",
+      "description": "reference emits no failed resource requests",
+      "status": "PASS",
+      "actual": 0,
+      "expected": 0
+    }
+  ]
+}

@@ -16,10 +16,8 @@
 -- The CHECK constraint catches accidental writes. Real defense is the
 -- adapter that emits account.added.
 --
--- place_associations and asset_owners ship here with their schemas so
--- prompt 07b's xlsx does not have to migrate later, but they are not
--- populated by this prompt's handlers — dedicated event types will land
--- in a future prompt.
+-- place_associations and asset_owners are retained compatibility tables.
+-- No product capability advertises mutations for them in Gate 6.
 
 CREATE TABLE IF NOT EXISTS places (
     place_id          TEXT NOT NULL,

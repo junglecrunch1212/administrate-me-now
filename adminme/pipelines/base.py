@@ -22,7 +22,8 @@ dispatched event and calls ``handle()``.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     import sqlcipher3
 
     from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.governance import GuardedWrite
     from adminme.lib.observation import ObservationManager
     from adminme.lib.session import Session
@@ -76,13 +78,36 @@ class PipelineContext:
 
     session: "Session"
     event_log: "EventLog"
-    run_skill_fn: Callable[..., Awaitable["SkillResult"]]
+    event_sink: "EventSink"
+    run_skill_fn: Callable[..., Awaitable["SkillResult | dict[str, Any]"]]
     outbound_fn: Callable[..., Awaitable[Any]]
     guarded_write: "GuardedWrite | None"
     observation_manager: "ObservationManager | None"
     triggering_event_id: str
     correlation_id: str | None
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
+
+
+def skill_output(result: Any) -> dict[str, Any]:
+    """Normalize the production ``SkillResult`` and dictionary test seam."""
+    output = getattr(result, "output", result)
+    if not isinstance(output, dict):
+        raise TypeError("skill results must contain an object output")
+    return output
+
+
+@contextmanager
+def parties_connection(factory: Callable[[], Any]) -> Iterator[Any]:
+    """Open either the production connection or an existing context seam."""
+    candidate = factory()
+    if hasattr(candidate, "__enter__") and hasattr(candidate, "__exit__"):
+        with candidate as conn:
+            yield conn
+        return
+    try:
+        yield candidate
+    finally:
+        candidate.close()
 
 
 @runtime_checkable
@@ -102,4 +127,5 @@ __all__ = [
     "PipelineContext",
     "PipelinePackLoadError",
     "Triggers",
+    "parties_connection",
 ]

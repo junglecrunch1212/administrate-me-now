@@ -18,6 +18,7 @@ from adminme.lib.pack_registry import AdapterManifest, Capability
 
 # ---------- AdapterManifest: minimal + maximal shape ----------
 
+
 def test_minimal_adapter_manifest_defaults() -> None:
     manifest = AdapterManifest()
     assert manifest.capabilities == []
@@ -65,6 +66,7 @@ def test_maximal_adapter_manifest_round_trip() -> None:
 
 # ---------- Capability: kind / runtime enums + extra=forbid ----------
 
+
 @pytest.mark.parametrize("kind", ["Cat-A", "Cat-B", "Cat-C", "Cat-D", "Cat-E"])
 def test_capability_accepts_each_canonical_kind(kind: str) -> None:
     cap = Capability(kind=kind, runtime="central")  # type: ignore[arg-type]
@@ -76,9 +78,7 @@ def test_capability_rejects_unknown_kind() -> None:
         Capability(kind="Cat-F", runtime="central")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize(
-    "runtime", ["central", "bridge", "dual", "plugin"]
-)
+@pytest.mark.parametrize("runtime", ["central", "bridge", "dual", "plugin"])
 def test_capability_accepts_each_canonical_runtime(runtime: str) -> None:
     cap = Capability(kind="Cat-A", runtime=runtime)  # type: ignore[arg-type]
     assert cap.runtime == runtime
@@ -98,12 +98,11 @@ def test_capability_extra_field_forbidden() -> None:
 
 def test_adapter_manifest_extra_field_forbidden() -> None:
     with pytest.raises(ValidationError):
-        AdapterManifest.model_validate(
-            {"capabilities": [], "unknown_extension": True}
-        )
+        AdapterManifest.model_validate({"capabilities": [], "unknown_extension": True})
 
 
 # ---------- Multi-capability shape per [PM-35] ----------
+
 
 def test_multi_capability_cat_d_plus_cat_b_per_pm_35() -> None:
     """Apple Notes-checklists shape: Cat-D notes + Cat-B checklist state."""
@@ -129,6 +128,7 @@ def test_multi_capability_cat_d_plus_cat_b_per_pm_35() -> None:
 
 
 # ---------- Asymmetric write_capabilities per UT-27 ----------
+
 
 def test_write_capabilities_empty_allowed_for_read_only_shape() -> None:
     """Cat-A / Cat-C / Cat-D adapters have no write_capabilities."""
@@ -156,6 +156,7 @@ def test_write_capabilities_is_per_operation_list_not_boolean() -> None:
 
 
 # ---------- resolve_effective_sensitivity per [§6 invariant 10] ----------
+
 
 def test_resolve_returns_pack_default_when_override_absent() -> None:
     manifest = AdapterManifest.model_validate(
@@ -211,6 +212,7 @@ def test_resolve_index_out_of_range_raises() -> None:
 
 
 # ---------- Backward-compat: legacy fields ignored at model level ----------
+
 
 def test_capabilities_default_empty_for_legacy_v1_shape() -> None:
     """Parser feeds only extension fields; an empty payload yields []."""

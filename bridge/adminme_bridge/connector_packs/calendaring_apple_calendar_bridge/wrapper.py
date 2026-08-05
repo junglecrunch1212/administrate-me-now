@@ -16,12 +16,12 @@ exists solely to:
   (b) synthesize a central :class:`AdapterContext` from the bridge's
       :class:`BridgeContext` — the two context types are structurally
       distinct (``BridgeContext`` carries ``ingest_client``/``sink``;
-      ``AdapterContext`` carries ``event_log``/``config``);
+      ``AdapterContext`` carries the typed ``event_sink``/``config``);
   (c) inject an :class:`IngestClientBridgeSink` (α-1) into the
       synthesized ``AdapterContext`` config under ``_bridge_sink`` so
       the central adapter's bridge-mode emit path
       (``deployment_target == "bridge"``) lands envelopes at the bridge
-      sink → central :3337 ingest router → event log, with
+      sink → central :3330 ingest namespace → event log, with
       ``owner_scope`` stamped from Tailscale identity per [§6.19] /
       memo 04 §2.2;
   (d) forward ``stop()`` / ``status()`` to the internal adapter,
@@ -41,8 +41,13 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext
+from adminme.lib.adapters import WriteOperation
 from adminme_bridge.adapters.base import AdapterStatus, BridgeContext
-from adminme_bridge.adapters.sinks import BridgeEventSink, IngestClientBridgeSink
+from adminme_bridge.adapters.sinks import (
+    BridgeEventSink,
+    BridgeTransportEventSink,
+    IngestClientBridgeSink,
+)
 
 
 # The central pack lives under ``packs/adapters/calendaring/apple-calendar/``
@@ -66,31 +71,13 @@ def _load_central_adapter_class() -> Any:
     cached = sys.modules.get(module_name)
     if cached is not None:
         return cached.AppleCalendarAdapter
-    spec = importlib.util.spec_from_file_location(
-        module_name, _CENTRAL_ADAPTER_PATH
-    )
+    spec = importlib.util.spec_from_file_location(module_name, _CENTRAL_ADAPTER_PATH)
     if spec is None or spec.loader is None:  # pragma: no cover — defensive
-        raise ImportError(
-            f"failed to spec central adapter at {_CENTRAL_ADAPTER_PATH}"
-        )
+        raise ImportError(f"failed to spec central adapter at {_CENTRAL_ADAPTER_PATH}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module.AppleCalendarAdapter
-
-
-# Default config for the internal AppleCalendarAdapter constructor when
-# the bridge supervisor invokes the wrapper with no explicit pack-config.
-# 11c-ii's instantiate-from-PackHandle hook will wire ``PackHandle.config``
-# through; for now the wrapper substitutes minimal-bootstrap defaults so
-# the central adapter's start() validation passes. ``calendar_identifier``
-# is set during the per-member bootstrap §16-§10 enrollment wizard and
-# normally overridden via ``internal_config``; the placeholder satisfies
-# the central adapter's non-empty-string check on start().
-_DEFAULT_BRIDGE_INTERNAL_CONFIG: dict[str, Any] = {
-    "calendar_identifier": "bridge:pending-bootstrap-calendar",
-    "sensitivity_floor": "normal",
-}
 
 
 class AppleCalendarBridgeAdapter:
@@ -102,19 +89,19 @@ class AppleCalendarBridgeAdapter:
     """
 
     family: ClassVar[Literal["calendaring"]] = "calendaring"
+    provider: ClassVar[str] = "apple_calendar"
 
     def __init__(
         self,
         *,
         internal_config: dict[str, Any] | None = None,
     ) -> None:
+        if not internal_config or not internal_config.get("calendar_identifier"):
+            raise ValueError("calendar bridge requires pack_config.calendar_identifier")
         # The internal central adapter is constructed lazily on first
         # start() so importing this module never requires the central
-        # pack to be on sys.path at import time (11c-ii will wire
-        # PackHandle.config through; today's default is the placeholder).
-        self._internal_config: dict[str, Any] = dict(
-            internal_config or _DEFAULT_BRIDGE_INTERNAL_CONFIG
-        )
+        # pack to be on sys.path at import time.
+        self._internal_config: dict[str, Any] = dict(internal_config)
         self._internal: Any = None
         self._bridge_status: AdapterStatus = AdapterStatus()
 
@@ -139,15 +126,16 @@ class AppleCalendarBridgeAdapter:
         # emit scope.
         internal_config: dict[str, Any] = dict(self._internal_config)
         internal_config["member_id"] = ctx.member_id
+        internal_config["tenant_id"] = ctx.tenant_id
+        internal_config.setdefault("provider_account_id", ctx.member_id)
+        internal_config.setdefault("emit_schema_version", 2)
 
         internal = AppleCalendarAdapter(config=internal_config)
         self._internal = internal
 
-        # Synthesize a central AdapterContext. event_log=None is
-        # intentional on the bridge path — the central adapter's
-        # _append() routes through _bridge_sink when
-        # deployment_target=="bridge" (see adapter.py
-        # _append_via_bridge_sink). ``config`` carries the bridge-only
+        # Synthesize a complete central AdapterContext. Bridge transport is
+        # adapted to the typed EventSink while _bridge_sink preserves the
+        # existing dual-deployment transport branch. ``config`` carries the bridge-only
         # discriminators in addition to the constructor config so
         # ctx.config["member_id"] / ["calendar_identifier"] reads
         # remain consistent across emit-site call shapes.
@@ -158,7 +146,10 @@ class AppleCalendarBridgeAdapter:
             "_bridge_sink": sink,
         }
         synthesized: AdapterContext = AdapterContext(
-            event_log=None,  # type: ignore[arg-type]
+            event_sink=BridgeTransportEventSink(
+                sink,
+                tenant_id=str(internal_config.get("tenant_id") or "default"),
+            ),
             config=synthesized_config,
             correlation_id_factory=ctx.correlation_id_factory,
             now_factory=ctx.now_factory,
@@ -170,6 +161,23 @@ class AppleCalendarBridgeAdapter:
         """Forward to the internal adapter (no-op if never started)."""
         if self._internal is not None:
             await self._internal.stop()
+
+    async def apply_write(
+        self,
+        operation: str,
+        payload: dict[str, Any],
+        target_external_id: str | None = None,
+    ) -> dict[str, Any]:
+        if self._internal is None:
+            raise RuntimeError("Apple Calendar adapter has not finished starting")
+        result = await self._internal.apply_write(
+            WriteOperation(operation, target_external_id, payload)
+        )
+        return {
+            "applied": result.applied,
+            "external_id": result.external_id,
+            "suppressed": result.suppressed,
+        }
 
     def status(self) -> AdapterStatus:
         """Return a bridge :class:`AdapterStatus`, translating from the

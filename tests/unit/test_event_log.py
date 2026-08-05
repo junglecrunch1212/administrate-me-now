@@ -23,6 +23,7 @@ from adminme.events.log import (
     AppendValidationError,
     CursorNotFound,
     EventLog,
+    IdempotencyConflict,
     new_correlation_id,
 )
 from adminme.events.registry import registry
@@ -52,6 +53,7 @@ def _event(
     correlation_id: str | None = None,
     event_at_ms: int | None = None,
     event_id: str = "",
+    idempotency_key: str | None = None,
 ) -> EventEnvelope:
     return EventEnvelope(
         event_id=event_id,
@@ -65,6 +67,7 @@ def _event(
         owner_scope=owner_scope,
         visibility_scope=owner_scope,
         correlation_id=correlation_id,
+        idempotency_key=idempotency_key,
         payload={"i": i},
     )
 
@@ -125,6 +128,27 @@ async def test_append_batch_atomic(log: EventLog) -> None:
     assert await log.count() == 100
     for ev in await _collect(log):
         assert ev["event_id"] in ids
+
+
+async def test_idempotency_key_returns_original_committed_event(log: EventLog) -> None:
+    first = await log.append(_event(1, idempotency_key="request:one"))
+    duplicate = await log.append(_event(1, idempotency_key="request:one"))
+    assert duplicate == first
+    assert await log.count() == 1
+    stored = await log.get_by_idempotency("tenant-a", "request:one")
+    assert stored is not None and stored["event_id"] == first
+
+
+async def test_idempotency_key_rejects_different_event_family(log: EventLog) -> None:
+    await log.append(_event(1, type="foo", idempotency_key="request:conflict"))
+    with pytest.raises(IdempotencyConflict):
+        await log.append(_event(1, type="bar", idempotency_key="request:conflict"))
+
+
+async def test_idempotency_key_rejects_different_payload(log: EventLog) -> None:
+    await log.append(_event(1, idempotency_key="request:payload-conflict"))
+    with pytest.raises(IdempotencyConflict):
+        await log.append(_event(2, idempotency_key="request:payload-conflict"))
 
 
 async def test_get_by_correlation(log: EventLog) -> None:
@@ -203,8 +227,7 @@ async def test_encryption_rejects_bad_key(tmp_path: Path) -> None:
 
 async def test_event_ids_unique_within_same_ms(log: EventLog) -> None:
     ids = [
-        await log.append(_event(i, event_at_ms=1_700_000_000_000))
-        for i in range(200)
+        await log.append(_event(i, event_at_ms=1_700_000_000_000)) for i in range(200)
     ]
     assert len(set(ids)) == len(ids)
     # all still sortable

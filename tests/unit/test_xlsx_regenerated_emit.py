@@ -17,6 +17,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
@@ -72,6 +73,7 @@ async def rig(tmp_path: Path):
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runner = ProjectionRunner(bus, log, config, encryption_key=TEST_KEY)
     runner.register(PartiesProjection())
     runner.register(TasksProjection())
@@ -83,18 +85,36 @@ async def rig(tmp_path: Path):
     await runner.start()
 
     # A trivial fixture so sheets have data.
-    await log.append(_envelope("party.created", {
-        "party_id": "p1", "kind": "person",
-        "display_name": "A", "sort_name": "A",
-    }))
-    last = await log.append(_envelope("task.created", {
-        "task_id": "t1", "title": "t",
-    }))
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "A",
+                "sort_name": "A",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "task.created",
+            {
+                "task_id": "t1",
+                "title": "t",
+            },
+        )
+    )
     assert last is not None
     await bus.notify(last)
     for name in [
-        "parties", "tasks", "commitments", "recurrences", "calendars",
-        "places_assets_accounts", "money",
+        "parties",
+        "tasks",
+        "commitments",
+        "recurrences",
+        "calendars",
+        "places_assets_accounts",
+        "money",
     ]:
         await _wait_idle(bus, f"projection:{name}")
 
@@ -107,11 +127,17 @@ async def rig(tmp_path: Path):
         places_assets_accounts_conn=runner.connection("places_assets_accounts"),
         money_conn=runner.connection("money"),
     )
-    projection = XlsxWorkbooksProjection(config, ctx, event_log=log, debounce_s=0.1)
+    projection = XlsxWorkbooksProjection(
+        config, ctx, event_log=log, event_sink=events, debounce_s=0.1
+    )
     try:
         yield {
-            "config": config, "log": log, "bus": bus, "runner": runner,
-            "ctx": ctx, "projection": projection,
+            "config": config,
+            "log": log,
+            "bus": bus,
+            "runner": runner,
+            "ctx": ctx,
+            "projection": projection,
         }
     finally:
         await runner.stop()
@@ -143,7 +169,11 @@ async def test_regenerate_emits_xlsx_regenerated(rig: dict[str, Any]) -> None:
     payload = evt["payload"]
     assert payload["workbook_name"] == OPS_WORKBOOK_NAME
     assert payload["sheets_regenerated"] == [
-        "Tasks", "Recurrences", "Commitments", "People", "Metadata"
+        "Tasks",
+        "Recurrences",
+        "Commitments",
+        "People",
+        "Metadata",
     ]
     assert payload["duration_ms"] >= 0
     assert isinstance(payload["last_event_id_consumed"], str)
@@ -158,9 +188,7 @@ async def test_regenerate_finance_emits_finance_name(rig: dict[str, Any]) -> Non
     evt = await _latest_xlsx_event(log)
     assert evt is not None
     assert evt["payload"]["workbook_name"] == FINANCE_WORKBOOK_NAME
-    assert evt["payload"]["sheets_regenerated"] == [
-        "Raw Data", "Accounts", "Metadata"
-    ]
+    assert evt["payload"]["sheets_regenerated"] == ["Raw Data", "Accounts", "Metadata"]
 
 
 async def test_regenerate_duration_ms_sensible(rig: dict[str, Any]) -> None:

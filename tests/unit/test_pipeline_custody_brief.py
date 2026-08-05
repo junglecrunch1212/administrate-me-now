@@ -29,10 +29,7 @@ from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "custody_brief"
+    Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "custody_brief"
 )
 
 
@@ -63,7 +60,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -106,9 +103,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
     raises_for = skill_raises_for or set()
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
@@ -128,6 +123,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -196,9 +192,7 @@ async def test_emit_on_member_with_coparent_relationship() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("2026-05-16", ctx)
-    briefs = [
-        c for c in log.calls if c.envelope.type == "custody_brief.composed"
-    ]
+    briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert len(briefs) == 1
     env = briefs[0].envelope
     assert env.payload["member_id"] == "member-a"
@@ -206,7 +200,10 @@ async def test_emit_on_member_with_coparent_relationship() -> None:
     assert env.payload["child_member_ids"] == ["child-1"]
     assert env.payload["brief_date"] == "2026-05-16"
     assert env.payload["validation_failed"] is False
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
+    assert signals[0].envelope.sensitivity == "sensitive"
 
 
 @pytest.mark.asyncio
@@ -269,9 +266,7 @@ async def test_emit_with_empty_calendar_still_composes() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("2026-05-16", ctx)
-    briefs = [
-        c for c in log.calls if c.envelope.type == "custody_brief.composed"
-    ]
+    briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert len(briefs) == 1
     env = briefs[0].envelope
     assert env.payload["validation_failed"] is False
@@ -279,7 +274,7 @@ async def test_emit_with_empty_calendar_still_composes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound() -> None:
+async def test_observation_mode_active_suppresses_notification() -> None:
     log = _FakeEventLog()
     pipeline = _seeded_pipeline()
     ctx = _make_ctx(
@@ -293,15 +288,14 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
         observation_manager=_FakeObservationManager(active=True),
     )
     await pipeline.dispatch("2026-05-16", ctx)
-    briefs = [
-        c for c in log.calls if c.envelope.type == "custody_brief.composed"
-    ]
+    briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert len(briefs) == 1
     assert briefs[0].envelope.payload["delivered"] is False
-    suppressed = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
     ]
-    assert len(suppressed) == 1
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
 
 
 @pytest.mark.asyncio
@@ -325,15 +319,15 @@ async def test_per_row_skill_failure_does_not_abort_tick() -> None:
         observation_manager=_FakeObservationManager(active=False),
     )
     await pipeline.dispatch("2026-05-16", ctx)
-    briefs = [
-        c for c in log.calls if c.envelope.type == "custody_brief.composed"
-    ]
+    briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert len(briefs) == 2
     by_member = {c.envelope.payload["member_id"]: c for c in briefs}
     assert by_member["member-a"].envelope.payload["validation_failed"] is True
     assert by_member["member-a"].envelope.payload["delivered"] is False
     assert by_member["member-b"].envelope.payload["validation_failed"] is False
-    assert by_member["member-b"].envelope.payload["delivered"] is True
+    assert by_member["member-b"].envelope.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
 
 
 @pytest.mark.asyncio
@@ -353,9 +347,7 @@ async def test_causation_and_correlation_propagate() -> None:
         observation_manager=_FakeObservationManager(active=True),
     )
     await pipeline.dispatch("2026-05-16", ctx)
-    briefs = [
-        c for c in log.calls if c.envelope.type == "custody_brief.composed"
-    ]
+    briefs = [c for c in log.calls if c.envelope.type == "custody_brief.composed"]
     assert briefs[0].correlation_id == "corr-XYZ"
     assert briefs[0].causation_id == "tick-trigger-eid"
 

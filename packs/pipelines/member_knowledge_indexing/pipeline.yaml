@@ -1,0 +1,23 @@
+pack:
+  id: pipeline:member_knowledge_indexing
+  name: Member knowledge domain indexing
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.11"
+  entrypoint: handler.py
+  class: MemberKnowledgeIndexingPipeline
+triggers:
+  events:
+    - member_knowledge.note_added
+    - member_knowledge.note_updated
+    - member_knowledge.note_corrected
+depends_on:
+  skills: []
+  projections:
+    - member_knowledge
+    - vector_search
+events_emitted:
+  - embedding.generated
+  - member_knowledge.index_skipped

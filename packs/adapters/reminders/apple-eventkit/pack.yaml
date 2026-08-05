@@ -16,7 +16,7 @@ deployment_targets: [central, bridge]
 pack:
   id: adapter:reminders-apple-eventkit
   name: Apple Reminders bidirectional adapter
-  version: 1.0.0
+  version: 2.0.0
   kind: adapter
   family: reminders
   author: built-in
@@ -36,19 +36,15 @@ pack:
 # before the loader runs.
 sensitivity_floor: normal
 
-# Trigger model. The supervisor's APScheduler entry fires at this cron
-# cadence, but the active polling is enforced INSIDE the adapter via two
-# 30s loops (inbound poll + outbound write) per BUILD.md APPLE REMINDERS
-# BIDIRECTIONAL §"Polling cadence" + §"Outbound write cadence". The cron
-# is a heartbeat the supervisor can use to detect a wedged adapter; the
-# adapter's in-process cadence is the real cadence.
+# Trigger model. The adapter owns provider synchronization through two
+# 30-second watcher loops (inbound poll and outbound mirror write). This is
+# not an AdministrateMe product scheduler.
 triggers:
   kind: external_poll
-  schedule: "*/1 * * * *"
+  poll_interval_seconds: 30
   description: |
-    1-minute cron heartbeat; the adapter enforces 30s in-process polls
-    (inbound) and 30s in-process write batches (outbound) internally per
-    BUILD.md APPLE REMINDERS BIDIRECTIONAL.
+    The adapter enforces 30-second inbound polls and outbound mirror-write
+    batches internally.
 
 # Event types the adapter emits or consumes. The three cross-cutting
 # `adapter.*` schemas come from prompt 11a c1
@@ -76,6 +72,14 @@ events_emitted:
   - adapter.authenticated
   - adapter.cursor_advanced
   - reminder.list_item.synced
+  - list.created
+  - list.updated
+  - list.deleted
+  - list_item.added
+  - list_item.updated
+  - list_item.completed
+  - list_item.uncompleted
+  - list_item.deleted
 
 # Config schema reference. The supervisor's loader validates each
 # adapter entry from channels.yaml against this schema before
@@ -111,10 +115,18 @@ documentation:
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [reminder.list_item.synced]
+    event_families: [reminder.list_item.synced, list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
 write_capabilities:
   - create_reminder
+  - update_reminder
+  - delete_reminder
+  - complete_reminder
+  - uncomplete_reminder
+  - move_reminder
+  - create_list
+  - update_list
+  - delete_list
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 dedup_strategy:
-  kind: external_id
+  kind: calendar_item_identifier_last_modified

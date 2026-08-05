@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "gate": 7,
+  "status": "PASS",
+  "generated_at": "2026-08-04T14:53:09.751Z",
+  "branch": "codex/administrateme-v2-runtime",
+  "commit_resolution": "git rev-parse HEAD after the Gate 7 evidence commit",
+  "pull_request": "https://github.com/junglecrunch1212/administrate-me-now/pull/248",
+  "openclaw": {
+    "version": "2026.7.2",
+    "commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
+    "protocol": 4
+  },
+  "verification": {
+    "python_full": {
+      "passed": 1276,
+      "skipped": 3,
+      "status": "PASS"
+    },
+    "gate7_focused": {
+      "passed": 6,
+      "status": "PASS"
+    },
+    "ruff": "PASS",
+    "mypy": {
+      "files": 178,
+      "status": "PASS"
+    },
+    "pyright": {
+      "errors": 0,
+      "warnings": 0,
+      "status": "PASS"
+    },
+    "openclaw_plugin": {
+      "tests_passed": 12,
+      "contract": "PASS",
+      "typecheck": "PASS",
+      "build": "PASS",
+      "production_vulnerabilities": 0,
+      "pack_dry_run": "PASS"
+    },
+    "python_package": {
+      "poetry_check": "PASS_WITH_DEPRECATION_WARNINGS",
+      "wheel": "PASS",
+      "sdist": "PASS"
+    },
+    "invariants": "PASS",
+    "console_reference": {
+      "interactions_passed": 12,
+      "interactions_total": 12,
+      "dom_assertions_passed": 68,
+      "dom_assertions_total": 68,
+      "status": "PASS"
+    },
+    "visual": {
+      "report": "docs/refactor/evidence/gate-7/visual/visual-results.json",
+      "checks_passed": 78,
+      "checks_total": 78,
+      "screenshots": 18,
+      "unexpected_console_errors": 0,
+      "page_errors": 0,
+      "request_failures": 0,
+      "status": "PASS"
+    }
+  },
+  "human_action": "Review and merge draft PR 248; no credential or deployment action is required for Gate 7."
+}

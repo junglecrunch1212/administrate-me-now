@@ -13,6 +13,7 @@ import pytest
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.pipelines import invalidate_cache, load_pipeline_pack
 from adminme.pipelines.runner import PipelineRunner
@@ -48,7 +49,7 @@ async def test_runner_discover_skips_paralysis_detection(tmp_path: Path) -> None
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     try:
         await runner.discover(
             builtin_root=PACK_ROOT.parent.parent / "pipelines" / "paralysis_detection",

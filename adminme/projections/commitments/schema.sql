@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS commitments (
     kind                  TEXT NOT NULL,
     description           TEXT NOT NULL,
     due_at                TEXT,
-    status                TEXT NOT NULL,          -- pending | snoozed | done | cancelled | delegated
+    status                TEXT NOT NULL,          -- pending | snoozed | deferred | blocked | done | cancelled | delegated
     confidence            REAL,
     source_interaction_id TEXT,                   -- REFERENCES interactions(interaction_id)
     source_skill          TEXT,
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS commitments (
     confirmed_at          TEXT,
     confirmed_by          TEXT,                   -- REFERENCES parties(party_id)
     completed_at          TEXT,
+    blocked_reason        TEXT,
+    deferred_until        TEXT,
+    lifecycle_at          TEXT,
+    lifecycle_actor       TEXT,
     owner_scope           TEXT NOT NULL,
     visibility_scope      TEXT NOT NULL,
     sensitivity           TEXT NOT NULL DEFAULT 'normal'

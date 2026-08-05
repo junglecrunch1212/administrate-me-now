@@ -1,0 +1,169 @@
+{
+  "status": "PASS",
+  "count": 12,
+  "passed": 12,
+  "failed": 0,
+  "interactions": [
+    {
+      "id": "01",
+      "name": "carousel, compressed, and child modes",
+      "status": "PASS",
+      "assertion_ids": [
+        "01-carousel-active",
+        "01-compressed-active",
+        "01-compressed-populated",
+        "01-child-page",
+        "01-child-chrome"
+      ],
+      "error": null
+    },
+    {
+      "id": "02",
+      "name": "reward toast",
+      "status": "PASS",
+      "assertion_ids": [
+        "02-task-complete",
+        "02-reward-visible",
+        "02-reward-tier"
+      ],
+      "error": null
+    },
+    {
+      "id": "03",
+      "name": "observation banner",
+      "status": "PASS",
+      "assertion_ids": [
+        "03-observation-initial",
+        "03-observation-off",
+        "03-observation-on",
+        "03-observation-shift"
+      ],
+      "error": null
+    },
+    {
+      "id": "04",
+      "name": "quick-capture prefix routing",
+      "status": "PASS",
+      "assertion_ids": [
+        "04-captured-to-list",
+        "04-grocery-cleared",
+        "04-captured-to-task",
+        "04-call-cleared",
+        "04-captured-to-capture",
+        "04-idea-cleared",
+        "04-captured-to-recipe",
+        "04-recipe-cleared"
+      ],
+      "error": null
+    },
+    {
+      "id": "05",
+      "name": "CRM party detail",
+      "status": "PASS",
+      "assertion_ids": [
+        "05-party-active",
+        "05-party-name",
+        "05-party-sections"
+      ],
+      "error": null
+    },
+    {
+      "id": "06",
+      "name": "Inbox approval and slide-out",
+      "status": "PASS",
+      "assertion_ids": [
+        "06-slide-out-class",
+        "06-approval-toast",
+        "06-card-removed"
+      ],
+      "error": null
+    },
+    {
+      "id": "07",
+      "name": "calendar privacy redaction",
+      "status": "PASS",
+      "assertion_ids": [
+        "07-private-count",
+        "07-private-titles",
+        "07-private-subtitles"
+      ],
+      "error": null
+    },
+    {
+      "id": "08",
+      "name": "child scoreboard",
+      "status": "PASS",
+      "assertion_ids": [
+        "08-chore-complete",
+        "08-star-increment",
+        "08-child-reward"
+      ],
+      "error": null
+    },
+    {
+      "id": "09",
+      "name": "view-as selector",
+      "status": "PASS",
+      "assertion_ids": [
+        "09-selector-change",
+        "09-greeting-change",
+        "09-profile-mode"
+      ],
+      "error": null
+    },
+    {
+      "id": "10",
+      "name": "rate-limit toast",
+      "status": "PASS",
+      "assertion_ids": [
+        "10-rate-toast",
+        "10-rate-details"
+      ],
+      "error": null
+    },
+    {
+      "id": "11",
+      "name": "degraded-mode banner",
+      "status": "PASS",
+      "assertion_ids": [
+        "11-degraded-on",
+        "11-double-shift",
+        "11-degraded-off"
+      ],
+      "error": null
+    },
+    {
+      "id": "12",
+      "name": "all named Settings panes",
+      "status": "PASS",
+      "assertion_ids": [
+        "12-pane-inventory",
+        "12-observation-nav",
+        "12-observation-pane",
+        "12-observation-single",
+        "12-persona-nav",
+        "12-persona-pane",
+        "12-persona-single",
+        "12-members-nav",
+        "12-members-pane",
+        "12-members-single",
+        "12-plaid-nav",
+        "12-plaid-pane",
+        "12-plaid-single",
+        "12-reminders-nav",
+        "12-reminders-pane",
+        "12-reminders-single",
+        "12-packs-nav",
+        "12-packs-pane",
+        "12-packs-single",
+        "12-governance-nav",
+        "12-governance-pane",
+        "12-governance-single",
+        "12-demo-nav",
+        "12-demo-pane",
+        "12-demo-single"
+      ],
+      "error": null
+    }
+  ]
+}

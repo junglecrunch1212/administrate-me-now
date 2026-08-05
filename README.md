@@ -1,75 +1,95 @@
 # AdministrateMe
 
-A household chief-of-staff platform built on OpenClaw. Event-sourced, projection-based, multi-member, privacy-aware.
+AdministrateMe is a private household chief-of-staff system built on OpenClaw.
+It keeps one encrypted event history, derives thirteen household views, and
+gives each member only the information and actions their role permits.
 
-## If you're the operator (James)
+## Start here: reviewed Mac installation
 
-Start with **`ADMINISTRATEME_FIELD_MANUAL.md`** — the non-coder's guide to running this system. Chapter 1 is the most important.
+If you will run the household Mac, do not improvise from source files. Use only
+a reviewed commit merged to `main`, then follow the parallel wizard read-along
+in [`docs/operations/MAC-MINI-SETUP-READ-ALONG.md`](docs/operations/MAC-MINI-SETUP-READ-ALONG.md)
+from top to bottom. The family Mac is a deployment machine, never an
+experimentation machine.
 
-When you're ready to start the build, open `prompts/PROMPT_SEQUENCE.md` and follow it.
+Before touching the family Mac, a reviewer should prove the credential-free
+install on a disposable Apple-silicon Mac:
 
-## If you're Claude Code about to execute a prompt
+```bash
+./bootstrap/install.sh --fixture two-adult-one-child \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe Lab" \
+  --expected-commit "$APPROVED_SHA"
+./bootstrap/doctor.sh \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
+```
 
-Read the universal preamble at the bottom of `prompts/PROMPT_SEQUENCE.md` first. Then read the specific prompt you've been handed. Then do the work.
+`--dry-run` is reserved for the isolated test harness and is refused in an
+operator installation. Expected result: JSON with `"status": "healthy"`,
+observation mode active, and no live-provider claim. This rehearsal uses fake `.invalid` identities and
+does not contact a household account.
 
-## Constitutional reference (read first, cite in every commit)
+For the later reviewed installation, the stable operator commands are:
 
-Every phase prompt (02–19) treats the files below as binding. If code being
-written would violate one, stop and flag it.
+```bash
+./bootstrap/install.sh --expected-commit "$APPROVED_SHA"
+./bootstrap/status.sh
+./bootstrap/doctor.sh
+./bootstrap/backup.sh
+./bootstrap/stop.sh
+./bootstrap/start.sh
+./bootstrap/activate-openclaw.sh
+./bootstrap/bridge-status.sh
+```
 
-- [`docs/SYSTEM_INVARIANTS.md`](docs/SYSTEM_INVARIANTS.md) — 15 numbered
-  sections of cross-cutting invariants + 8 proposed invariants resolved in
-  DECISIONS.md. Cite as `[§N]`.
-- [`docs/DECISIONS.md`](docs/DECISIONS.md) — append-only resolutions to
-  SYSTEM_INVARIANTS.md §16 ambiguities + additional decisions (Hearth,
-  platform versions, skill-pack shape, doc versioning). Cite as `[DN]`.
-- [`docs/architecture-summary.md`](docs/architecture-summary.md) — the
-  five-layer model, OpenClaw fit, event log, 11 projections, 17 pipelines,
-  security + privacy, 6 pack kinds, console, Python product APIs, bootstrap.
-  Cite as `[arch §N]`.
-- [`docs/openclaw-cheatsheet.md`](docs/openclaw-cheatsheet.md) — 8 Q&As on
-  OpenClaw's skill / slash / standing-order / plugin surfaces. Cite as
-  `[cheatsheet Qn]`.
-- [`docs/reference/_manifest.yaml`](docs/reference/_manifest.yaml) — git-
-  commit-pinned manifest of mirrored external docs (OpenClaw, Plaid,
-  BlueBubbles, Google APIs, Textual, SQLCipher, etc.). Cite external docs
-  from the local mirror under `docs/reference/<section>/`, never via
-  WebFetch.
+Never paste an API key, Gateway token, password, OAuth code, or provider
+credential into the member portal, a browser form, a GitHub issue, a support
+bundle, or this repository. Provider credentials are configured server-side in
+OpenClaw; AdministrateMe encryption and backup keys live in macOS Keychain.
 
-## The documents in this repo
+## What is included
 
-### Specification (read as reference material)
+- One Python runtime and one native OpenClaw plugin; OpenClaw owns assistant
+  chat, conversational memory, model routing, retries, and scheduling.
+- Six product functions, thirteen projections, six reactive pipelines, two
+  bidirectional workbooks, five profiles, four personas, and five adapter
+  categories.
+- An adult member portal with isolated OpenClaw chat, child/shared-screen
+  restrictions, and private temporary quest views that cannot execute code or
+  change household truth merely by changing a view.
+- Rerunnable macOS bootstrap, Doctor, start/stop/status, encrypted backup,
+  authenticated restore, guarded upgrade, rollback, exact-source OpenClaw
+  provenance, owned cron reconciliation, and revocable per-member bridge
+  enrollment.
 
-- **`ADMINISTRATEME_BUILD.md`** — the canonical build specification (3,500+ lines). Everything you build has authority here.
-- **`ADMINISTRATEME_CONSOLE_PATTERNS.md`** — 12 patterns for the Node console layer.
-- **`ADMINISTRATEME_CONSOLE_REFERENCE.html`** — interactive visual/interaction design reference.
-- **`ADMINISTRATEME_DIAGRAMS.md`** — 10 architectural diagrams with ASCII art.
-- **`ADMINISTRATEME_REFERENCE_EXAMPLES.md`** — 7 worked examples (adapter, pipeline, skill pack, projection, event, profile, persona).
+## Credential-free developer demonstration
 
-### Operator guide
+From a locked development checkout:
 
-- **`ADMINISTRATEME_FIELD_MANUAL.md`** — 10-chapter guide for running this system as a non-coder with a family to serve.
+```bash
+PYTHONPATH=bridge poetry run python -m adminme.cli.main demo canonical-message
+```
 
-### Build prompts
+The demo starts a temporary encrypted production composition, sends a
+credential-free message through the real communications route, produces a
+private proposal for independent approval, and exits. It opens no provider
+connection.
 
-- **`prompts/PROMPT_SEQUENCE.md`** — overview, dependency graph, universal preamble.
-- **`prompts/00-*` through `prompts/19-*`** — 33 prompts covering every phase of the build.
-- **`prompts/diagnostics/d01-*` through `d08-*`** — 8 failure-mode recovery prompts.
+## Verification and architecture
 
-## The two-phase build model
+The release aggregate on supported macOS is:
 
-**Phase A** (Claude Code, this repo): generate all application code, the bootstrap wizard, the CLI, the mirrored external documentation. Claude Code works entirely within Anthropic's sandbox against this GitHub repo. No Mac Mini. No live OpenClaw. No real credentials.
+```bash
+bash scripts/acceptance/release-candidate.sh
+```
 
-**Phase B** (operator, the Mac Mini): install OpenClaw + BlueBubbles + Tailscale + 1Password CLI on the Mac Mini. Clone this repo. Run `./bootstrap/install.sh`. Wizard walks you through nine sections. At the end, the instance is live.
+The executable contract and final evidence are in
+[`docs/refactor/ACCEPTANCE-CONTRACT.md`](docs/refactor/ACCEPTANCE-CONTRACT.md)
+and
+[`docs/refactor/FINAL-VALIDATION-REPORT.md`](docs/refactor/FINAL-VALIDATION-REPORT.md).
+The governing architecture remains in `AGENTS.md`, `docs/SYSTEM_INVARIANTS.md`,
+`docs/DECISIONS.md`, and `docs/refactor/ADR/`.
 
-See `ADMINISTRATEME_FIELD_MANUAL.md` chapter 4 for Phase B setup.
-
-## Timeline estimate
-
-- Phase A: ~93-123 hours of Claude Code work, spread across ~2-4 weeks of Saturday sessions.
-- Phase B: ~2-4 hours once all credentials are at hand.
-- Observation period after Phase B: 7 days before the family actually uses the system.
-
-## Status
-
-🟡 In progress — Phase A build prompts ready; code generation not yet started.
+Live Gmail, Apple, Plaid, Home Assistant, Tailscale, model-provider, and macOS
+privacy grants are intentionally excluded from credential-free test evidence.
+Their exact post-merge activation boundary is documented in the first-Mac
+guide and [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md).

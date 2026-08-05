@@ -103,6 +103,36 @@ def relationships_of(
     return filter_rows(session, [dict(r) for r in rows])
 
 
+def identifiers_of(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    party_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM identifiers WHERE tenant_id = ? AND party_id = ? "
+        "ORDER BY primary_for_kind DESC, kind ASC, identifier_id ASC",
+        (session.tenant_id, party_id),
+    ).fetchall()
+    # Identifier rows inherit the visibility decision of the already-authorized
+    # Party detail route; values are never exposed for a party the caller cannot read.
+    return [dict(row) for row in rows]
+
+
+def memberships_of(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    party_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM memberships WHERE tenant_id = ? AND party_id = ? "
+        "ORDER BY started_at DESC, membership_id ASC",
+        (session.tenant_id, party_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def all_parties(
     conn: sqlcipher3.Connection,
     session: Session,

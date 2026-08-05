@@ -24,12 +24,10 @@ with ``direction="outbound"`` and ``causation_id`` set to the upstream
 event id — round-trip traceability per BUILD.md APPLE REMINDERS
 BIDIRECTIONAL §"Outbound write cadence".
 
-The inbound poll (c3) fetches reminders via ``fetch_reminders`` every
-30s, applies the never-sync filter at the iCloud boundary, dedupes by
-``remind_id`` against a constructor-injected resolver (the ``reminders``
-projection slice in production; a permissive ``None``-returner in tests
-and Phase A when the projection's writer pipeline is still deferred —
-see prompt 11c §3 deferred-watch). Genuinely-new or modified reminders
+The inbound watcher fetches reminders via ``fetch_reminders`` every 30s,
+applies the never-sync filter at the iCloud boundary, and dedupes by
+``remind_id`` against a constructor-injected resolver backed by the lists
+projection in production. Genuinely-new or modified reminders
 emit ``reminder.list_item.synced`` with ``direction="inbound"`` and
 ``causation_id=None`` (iCloud is the source — no AdministrateMe event
 triggered the emission, so there's no upstream id to chain). Cursor
@@ -55,8 +53,8 @@ financial adapter.
 Per ``[§8.2, D6]``: no LLM SDK import in this module. Channel
 transport is OpenClaw's job [§8 invariant 3]; this adapter only emits
 typed events. ``[§7.3, D17]``: adapters never write projections. The
-``reminders`` projection slice is READ-ONLY from c3's inbound dedupe
-predicate; the writer pipeline ships in a future prompt.
+``lists`` projection slice is READ-ONLY from the inbound dedupe predicate;
+event-driven projection handlers own writes.
 """
 
 # [§8.2, D6] no LLM SDK imports under packs/adapters/ — channel
@@ -79,6 +77,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.adapters.emission import write_adapter_event
 from adminme.events.envelope import EventEnvelope
 from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
     ListItemAddedV1,
@@ -88,6 +87,7 @@ from adminme.events.schemas.lists import (  # noqa: F401  [§D7, D18]
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
+    ProviderConflictError,
     WriteCapabilityError,
     WriteOperation,
     WriteResult,
@@ -135,6 +135,7 @@ DEFAULT_NEVER_SYNC_TAG_SUBSTRINGS: tuple[str, ...] = tuple(
 EKEventStoreLike: Any = _shim_mod.EKEventStoreLike
 EKReminderLike: Any = _shim_mod.EKReminderLike
 NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
+default_event_store: Any = _shim_mod.default_event_store
 
 
 # OS-level token-storage reference. EventKit access is granted at the OS
@@ -142,7 +143,7 @@ NoopEKEventStore: Any = _shim_mod.NoopEKEventStore
 # per docs/reference/apple-eventkit/access.md; no 1Password secret is
 # involved (unlike Gmail's service-account JSON or Plaid's item access
 # token). The string is recorded on ``adapter.authenticated`` for audit.
-_OS_TOKEN_STORAGE_REF = "os://reminders-permission"
+_OS_TOKEN_STORAGE_REF = "op://local-system/reminders/permission"
 
 _DEFAULT_INBOUND_INTERVAL_S = 30
 _DEFAULT_OUTBOUND_INTERVAL_S = 30
@@ -194,7 +195,7 @@ def _noop_ek_event_store_factory() -> Any:
     """PM-27 default factory. Returns a ``NoopEKEventStore`` that raises
     on every operation — surfaces missing-factory bugs loudly instead of
     silently no-op-ing writes."""
-    return NoopEKEventStore()
+    return default_event_store()
 
 
 def _default_member_role_resolver(_member_id: str) -> str:
@@ -238,8 +239,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     Class attributes satisfy the ``Adapter`` Protocol's required fields.
     ``sensitivity_floor`` is hardcoded ``"normal"`` per [§6 invariant
     10]; any config attempt to set ``"privileged"`` raises at
-    construction. Reminders adapters cannot auto-elevate — that's a
-    deliberate operator decision for a future prompt; finer-grained
+    construction. Reminders adapters cannot auto-elevate; finer-grained
     item-level privacy lives in the never-sync predicate, not the floor.
 
     The supervisor instantiates one of these per Reminders entry in
@@ -251,12 +251,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # [§6 invariant 10, D11 (Reminders posture)]: sensitivity floor
     # hardcoded at the class level. Reminders adapters cannot be
     # ELEVATED to ``privileged`` via config — adapters never
-    # auto-elevate; that's a deliberate operator decision for a future
-    # prompt. JSON-schema rejects most malformed inputs at load time;
+    # auto-elevate. JSON-schema rejects most malformed inputs at load time;
     # ``__init__`` is the defense-in-depth runtime check.
     name: ClassVar[str] = "reminders-apple-eventkit"
-    family: ClassVar[Literal["reminders", "calendaring", "contacts"]] = "reminders"
-    version: ClassVar[str] = "1.0.0"
+    family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = (
+        "reminders"
+    )
+    version: ClassVar[str] = "2.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
@@ -268,7 +269,17 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         {
             "kind": "Cat-B",
             "runtime": "central",
-            "event_families": ["reminder.list_item.synced"],
+            "event_families": [
+                "reminder.list_item.synced",
+                "list.created",
+                "list.updated",
+                "list.deleted",
+                "list_item.added",
+                "list_item.updated",
+                "list_item.completed",
+                "list_item.uncompleted",
+                "list_item.deleted",
+            ],
         }
     ]
 
@@ -277,25 +288,29 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ``delete_reminder`` are out of scope per memo 08 §5 (inheritance +
     # manifest only, not a rewrite); declaring them without method
     # presence would fail ``write_capabilities_check``.
-    write_capabilities: ClassVar[list[str]] = ["create_reminder"]
+    write_capabilities: ClassVar[list[str]] = [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
 
     # [memo 05 §2.5, PM-35] projection-row column distinguishing
-    # per-member vs shared rows on the future ``lists`` / ``reminders``
-    # projection (Cohort D 11f). Single-deployment central in 11r-c.
+    # per-member vs shared rows on the ``lists`` projection.
     sharing_model_discriminator: ClassVar[str] = "owner_member_id"
 
     PACK_ID: str = "adapter:reminders-apple-eventkit"
 
     OUTBOUND_INTERVAL_S: int = _DEFAULT_OUTBOUND_INTERVAL_S
-    """In-process outbound write cadence. ``pack.yaml``'s ``*/1 * * * *``
-    cron is a heartbeat; the 30s sub-cadence is the active outbound
-    rate per BUILD.md APPLE REMINDERS BIDIRECTIONAL §"Outbound write
-    cadence"."""
+    """Provider-watch outbound cadence declared by the pack manifest."""
 
     INBOUND_INTERVAL_S: int = _DEFAULT_INBOUND_INTERVAL_S
-    """In-process inbound poll cadence (c3). Same rationale as the
-    outbound: pack.yaml's cron is a heartbeat, the 30s sub-cadence is
-    the active polling rate per §"Polling cadence"."""
+    """Provider-watch inbound polling cadence."""
 
     CURSOR_MILESTONE_EVENTS: int = 100
     CURSOR_MILESTONE_INTERVAL_S: int = 300
@@ -325,8 +340,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # [§6 invariant 10] re-assert the class-level floor against the
         # resolved config. Reminders does NOT allow raising to
         # ``privileged`` via config (unlike Gmail) because adapter-level
-        # elevation would be a deliberate operator decision for a
-        # future prompt — finer-grained item-level privacy lives in the
+        # elevation is prohibited; finer-grained item-level privacy lives in the
         # never-sync predicate, not the floor.
         configured_floor = self._config.get("sensitivity_floor", "normal")
         if configured_floor != "normal":
@@ -381,6 +395,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # the legacy ``reminder.list_item.synced@v1`` dedupe path
         # continues to consult ``_seen_inbound`` byte-for-byte.
         self._inbound_snapshots: dict[str, dict[str, Any]] = {}
+        self._known_inbound_ids: set[str] = set()
+        self._known_lists: dict[str, dict[str, Any]] = {}
+        self._initial_sync_complete = False
 
         # Cursor-advance milestone state. Mirrors Gmail's and Plaid's
         # pattern: count emissions since last advance + track wall-clock
@@ -451,17 +468,15 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # for downstream projection annotation (schemas are
         # ``extra="forbid"`` — no payload modification per §1).
         self._sharing_model_value = (
-            "per_member_isolated"
-            if deployment_target == "bridge"
-            else "shared_central"
+            "per_member_isolated" if deployment_target == "bridge" else "shared_central"
         )
 
         if deployment_target == "bridge":
             # [§1.4, A-3, memo 04 §2.2] Wrapper synthesizes ctx.config
             # with the per-member Apple ID identity + injected sink.
-            bridge_member_id = ctx.config.get(
-                "_bridge_member_id"
-            ) or ctx.config.get("member_id")
+            bridge_member_id = ctx.config.get("_bridge_member_id") or ctx.config.get(
+                "member_id"
+            )
             if not isinstance(bridge_member_id, str) or not bridge_member_id:
                 raise ValueError(
                     "bridge deployment requires ctx.config['_bridge_member_id'] "
@@ -497,14 +512,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         # [D7] adapter.authenticated registered at v1 in
         # adminme/events/schemas/adapters.py. [D8] correlation_id is
         # minted by the supervisor-provided factory.
-        self._emit_authenticated(ctx=ctx)
+        await self._emit_authenticated(ctx=ctx)
 
         self._outbound_task = asyncio.create_task(self._outbound_poll(ctx=ctx))
         self._inbound_task = asyncio.create_task(self._inbound_poll(ctx=ctx))
         try:
-            await asyncio.gather(
-                self._outbound_task, self._inbound_task
-            )
+            await asyncio.gather(self._outbound_task, self._inbound_task)
         except asyncio.CancelledError:
             return
 
@@ -571,7 +584,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 await self._drain_outbound_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
-                self._emit_error(
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -711,7 +724,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "sync_cycle_id": sync_cycle_id,
         }
         causation_id = str(upstream.get("id") or "") or None
-        self._append(
+        await self._append(
             ctx=ctx,
             event_type="reminder.list_item.synced",
             payload=payload,
@@ -740,7 +753,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "last_modified_at": _to_iso(now),
             "sync_cycle_id": sync_cycle_id,
         }
-        self._append(
+        await self._append(
             ctx=ctx,
             event_type="list_item.added",
             payload=list_item_added_payload,
@@ -752,9 +765,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ExternalStateMirrorAdapter ABC — Cat-B abstract method
     # implementations per prompt 11r-c §7 c2 / [UT-27] / [§6.20].
     # ------------------------------------------------------------------
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """Per-operation write implementation. Invoked by
         :meth:`apply_write` only after the [UT-27] capability gate
         passes — the gate guarantees ``operation.kind`` is in
@@ -774,13 +785,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         ``external_id`` on save; ``applied=False`` + ``suppressed=True``
         on observation-mode suppression.
         """
-        if operation.kind != "create_reminder":  # defense-in-depth
+        if operation.kind not in self.write_capabilities:
             # [UT-27]: the apply_write gate should have caught this.
             # If we got here, write_capabilities and this dispatch are
             # out of sync — surface loudly rather than silently no-op.
             raise WriteCapabilityError(
-                f"AppleEventKitAdapter._apply_write_impl received "
-                f"undeclared kind={operation.kind!r}"
+                f"unsupported Apple Reminders operation {operation.kind!r}"
             )
 
         ek_store = self._ek_store
@@ -790,14 +800,71 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             # start(). Honest no-op rather than a crash.
             return WriteResult(applied=False, external_id=None, suppressed=False)
 
-        payload = operation.payload
-        reminder = ek_store.build_reminder(
-            list_identifier=str(payload["target_list_id"]),
-            title=str(payload["title"]),
-            notes=payload.get("notes"),
-            due_at=payload.get("due_at"),
-            priority=payload["priority"],
+        payload = dict(operation.payload)
+        if (
+            not payload.get("url")
+            and payload.get("linked_item_kind") in {"task", "commitment"}
+            and payload.get("linked_item_id")
+        ):
+            payload["url"] = (
+                f"adminme://{payload['linked_item_kind']}/{payload['linked_item_id']}"
+            )
+        reminder: Any = None
+        external_id: str | None = None
+        target_list_id = str(
+            payload.get("target_list_id")
+            or payload.get("list_external_id")
+            or self._config.get("target_list_identifier")
+            or ""
         )
+        if operation.kind == "create_reminder":
+            reminder = ek_store.build_reminder(
+                list_identifier=target_list_id,
+                title=str(payload["title"]),
+                notes=payload.get("notes"),
+                due_at=payload.get("due_at"),
+                priority=int(payload.get("priority") or 0),
+            )
+            if hasattr(ek_store, "update_reminder"):
+                reminder = ek_store.update_reminder(reminder, payload=payload)
+        elif operation.kind not in {"create_list", "update_list", "delete_list"}:
+            target_id = str(
+                operation.target_external_id or payload.get("item_external_id") or ""
+            )
+            reminder = ek_store.reminder_with_identifier(target_id)
+            if reminder is None:
+                raise LookupError(f"EventKit reminder not found: {target_id}")
+            expected_revision = payload.get("expected_provider_revision")
+            actual_modified = getattr(reminder, "last_modified_at", None)
+            actual_revision = (
+                _to_iso(actual_modified)
+                if isinstance(actual_modified, datetime)
+                else None
+            )
+            if (
+                expected_revision
+                and actual_revision
+                and str(expected_revision) != actual_revision
+            ):
+                raise ProviderConflictError(
+                    f"Apple Reminder {target_id} changed ({actual_revision})"
+                )
+            changes = dict(payload)
+            if operation.kind == "complete_reminder":
+                changes["completed"] = True
+                now = (
+                    self._ctx.now_factory()
+                    if self._ctx is not None
+                    else datetime.now(timezone.utc)
+                )
+                changes.setdefault("completion_at", _to_iso(now))
+            elif operation.kind == "uncomplete_reminder":
+                changes["completed"] = False
+                changes["completion_at"] = None
+            elif operation.kind == "move_reminder":
+                changes["target_list_id"] = str(payload["destination_list_id"])
+            if operation.kind != "delete_reminder":
+                reminder = ek_store.update_reminder(reminder, payload=changes)
 
         # [§6.20] observation-mode wrap. The 11-β validator's
         # ``observation_mode_wrapping`` AST-walk finds the call site;
@@ -812,39 +879,54 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             # — ``commit=True`` flushes immediately rather than batching
             # for a later ``commit()`` call. Each outbound write is its
             # own transaction so iCloud sync churn stays per-reminder.
-            ek_store.save(reminder, commit=True)
+            nonlocal external_id
+            if operation.kind == "create_list":
+                external_id = ek_store.create_list(
+                    name=str(payload["list_name"]), color=payload.get("color")
+                )
+            elif operation.kind == "update_list":
+                ek_store.update_list(
+                    target_list_id,
+                    name=payload.get("list_name"),
+                    color=payload.get("color"),
+                )
+                external_id = target_list_id
+            elif operation.kind == "delete_list":
+                ek_store.delete_list(target_list_id)
+                external_id = target_list_id
+            elif operation.kind == "delete_reminder":
+                ek_store.remove(reminder, commit=True)
+                external_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
+            else:
+                ek_store.save(reminder, commit=True)
+                external_id = str(getattr(reminder, "calendarItemIdentifier", "") or "")
 
         if session is not None and manager is not None and event_log is not None:
             outbound_result = await observation_outbound(
                 session,
-                "reminders.create_reminder",
+                f"reminders.{operation.kind}",
                 {
                     "member_id": str(payload.get("member_id", "")),
-                    "list_identifier": str(payload["target_list_id"]),
+                    "list_identifier": target_list_id,
                     "list_name": str(payload.get("target_list_name", "")),
-                    "title": str(payload["title"]),
-                    "priority": payload["priority"],
+                    "title": str(payload.get("title") or ""),
+                    "priority": int(payload.get("priority") or 0),
                 },
                 _do_save,
                 manager=manager,
-                event_log=event_log,
+                event_sink=event_log,
                 target_channel="reminders-apple-eventkit",
-                target_identifier=str(payload["target_list_id"]),
+                target_identifier=target_list_id,
             )
             if outbound_result.suppressed:
-                return WriteResult(
-                    applied=False, external_id=None, suppressed=True
-                )
+                return WriteResult(applied=False, external_id=None, suppressed=True)
         else:
             # Phase A — seams unset; the existing production save path
             # is preserved byte-for-byte.
             await _do_save()
 
-        remind_id = str(
-            getattr(reminder, "calendarItemIdentifier", "") or ""
-        )
         return WriteResult(
-            applied=True, external_id=remind_id or None, suppressed=False
+            applied=True, external_id=external_id or None, suppressed=False
         )
 
     async def _on_external_change(self, envelope: ChangeEnvelope) -> None:
@@ -901,7 +983,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             completed=bool(payload.get("completed", False)),
             last_modified_at=last_modified_at,
         )
-        self._emit_inbound_synced(
+        await self._emit_inbound_synced(
             ctx=ctx, reminder=synthetic, sync_cycle_id=sync_cycle_id
         )
 
@@ -955,11 +1037,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 return None
             urgency = str(payload.get("urgency") or "this_week")
             preview = payload.get("source_message_preview")
-            notes = (
-                preview[:2000]
-                if isinstance(preview, str) and preview
-                else None
-            )
+            notes = preview[:2000] if isinstance(preview, str) and preview else None
             return {
                 "member_id": owner,
                 "title": summary[:500],
@@ -992,10 +1070,10 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             ):
                 return
             try:
-                self._inbound_poll_once(ctx=ctx)
+                await self._inbound_poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind = _classify_eventkit_error(exc)
-                self._emit_error(
+                await self._emit_error(
                     ctx=ctx,
                     severity=severity,
                     error_kind=error_kind,
@@ -1012,7 +1090,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             except asyncio.CancelledError:
                 return
 
-    def _inbound_poll_once(self, *, ctx: AdapterContext) -> int:
+    async def _inbound_poll_once(self, *, ctx: AdapterContext) -> int:
         """Run one inbound cycle. Returns the count of
         ``reminder.list_item.synced`` events emitted (i.e., post never-
         sync filter + dedupe). One ``sync_cycle_id`` covers every
@@ -1025,17 +1103,112 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         if self._ek_store is None:
             return 0
         sync_cycle_id = _next_sync_cycle_id()
+        if int(self._config.get("emit_schema_version", 1)) >= 2:
+            await self._sync_lists(ctx=ctx)
         reminders = self._fetch_reminders_filtered()
+        observed_ids = {
+            str(getattr(reminder, "calendarItemIdentifier", "") or "")
+            for reminder in reminders
+        }
         emitted = 0
         for rem in reminders:
             if not self._is_new_or_modified(rem):
                 continue
-            self._emit_inbound_synced(
+            await self._emit_inbound_synced(
                 ctx=ctx, reminder=rem, sync_cycle_id=sync_cycle_id
             )
             emitted += 1
-        self._maybe_emit_inbound_cursor_advance(ctx=ctx)
+        if (
+            self._initial_sync_complete
+            and int(self._config.get("emit_schema_version", 1)) >= 2
+        ):
+            for missing_id in self._known_inbound_ids - observed_ids:
+                await self._append(
+                    ctx=ctx,
+                    event_type="list_item.deleted",
+                    schema_version=2,
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": str(
+                            self._config.get("provider_account_id")
+                            or self._config["member_id"]
+                        ),
+                        "list_external_id": str(
+                            self._inbound_snapshots.get(missing_id, {}).get(
+                                "list_external_id"
+                            )
+                            or self._config["target_list_identifier"]
+                        ),
+                        "item_external_id": missing_id,
+                        "deleted_at": ctx.now_factory().isoformat(),
+                        "sync_cycle_id": sync_cycle_id,
+                    },
+                )
+                self._inbound_snapshots.pop(missing_id, None)
+                self._seen_inbound.pop(missing_id, None)
+                emitted += 1
+        self._known_inbound_ids = observed_ids
+        self._initial_sync_complete = True
+        await self._maybe_emit_inbound_cursor_advance(ctx=ctx)
         return emitted
+
+    async def _sync_lists(self, *, ctx: AdapterContext) -> None:
+        """Mirror every EventKit reminder list, including empty lists."""
+
+        ek_store = self._ek_store
+        if ek_store is None or not hasattr(ek_store, "fetch_lists"):
+            return
+        current: dict[str, dict[str, Any]] = {}
+        provider_account_id = str(
+            self._config.get("provider_account_id") or self._config["member_id"]
+        )
+        for native_list in ek_store.fetch_lists():
+            list_id = str(
+                getattr(native_list, "calendarIdentifier", None)
+                or getattr(native_list, "calendar_identifier", None)
+                or ""
+            )
+            if not list_id:
+                continue
+            snapshot = {
+                "list_name": str(getattr(native_list, "title", None) or list_id),
+                "color": getattr(native_list, "color", None),
+                "is_default": bool(getattr(native_list, "is_default", False)),
+            }
+            current[list_id] = snapshot
+            if self._known_lists.get(list_id) != snapshot:
+                await self._append(
+                    ctx=ctx,
+                    event_type=(
+                        "list.updated"
+                        if list_id in self._known_lists
+                        else "list.created"
+                    ),
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": provider_account_id,
+                        "list_external_id": list_id,
+                        **snapshot,
+                        "provider_revision": None,
+                        "changed_at": _to_iso(ctx.now_factory()),
+                    },
+                )
+        if self._initial_sync_complete:
+            for missing_id in set(self._known_lists) - set(current):
+                await self._append(
+                    ctx=ctx,
+                    event_type="list.deleted",
+                    payload={
+                        "member_id": str(self._config["member_id"]),
+                        "provider": "apple_reminders",
+                        "provider_account_id": provider_account_id,
+                        "list_external_id": missing_id,
+                        "deleted_at": _to_iso(ctx.now_factory()),
+                    },
+                )
+        self._known_lists = current
 
     def _fetch_reminders_filtered(self) -> list[Any]:
         """Fetch every reminder across non-never-sync lists and apply
@@ -1099,7 +1272,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             return False
         return current_lmod > prior_lmod
 
-    def _emit_inbound_synced(
+    async def _emit_inbound_synced(
         self,
         *,
         ctx: AdapterContext,
@@ -1144,9 +1317,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             priority = 0
         completed = bool(getattr(reminder, "completed", False))
         lmod = getattr(reminder, "last_modified_at", None)
-        emit_lmod: datetime = (
-            lmod if isinstance(lmod, datetime) else ctx.now_factory()
-        )
+        emit_lmod: datetime = lmod if isinstance(lmod, datetime) else ctx.now_factory()
 
         payload: dict[str, Any] = {
             "member_id": member_id,
@@ -1164,7 +1335,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         }
         # [Causation invariant] inbound has no upstream AdministrateMe
         # event — iCloud is the source — so causation_id is left unset.
-        self._append(
+        await self._append(
             ctx=ctx, event_type="reminder.list_item.synced", payload=payload
         )
 
@@ -1200,6 +1371,12 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             and completed
         ):
             new_event_type = "list_item.completed"
+        elif (
+            prior_snapshot is not None
+            and prior_snapshot.get("completed") is True
+            and not completed
+        ):
+            new_event_type = "list_item.uncompleted"
         else:
             new_event_type = "list_item.updated"
             field_updates: dict[str, Any] = {}
@@ -1223,12 +1400,65 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                             diff_field
                         )
             new_list_item_payload["field_updates"] = field_updates
-        self._append(
-            ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
-        )
+        schema_version = int(self._config.get("emit_schema_version", 1))
+        if schema_version >= 2:
+            due_components = getattr(reminder, "due_components", None)
+            start_components = getattr(reminder, "start_components", None)
+            completion_date = getattr(reminder, "completion_date", None)
+            url = getattr(reminder, "url", None)
+            linked_kind: str | None = None
+            linked_id: str | None = None
+            if isinstance(url, str) and url.startswith("adminme://"):
+                parts = url.removeprefix("adminme://").split("/", 1)
+                if len(parts) == 2 and parts[0] in {"task", "commitment"}:
+                    linked_kind, linked_id = parts
+            rich_payload: dict[str, Any] = {
+                "member_id": member_id,
+                "provider": "apple_reminders",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id") or member_id
+                ),
+                "list_external_id": list_id,
+                "item_external_id": remind_id,
+                "list_name": list_name,
+                "list_color": None,
+                "title": title[:1000],
+                "notes": notes,
+                "url": url,
+                "priority": int(raw_priority or 0),
+                "completed": completed,
+                "completion_at": _maybe_iso(completion_date),
+                "start": start_components,
+                "due": due_components,
+                "alarms": list(getattr(reminder, "alarms", None) or []),
+                "recurrence_rules": list(
+                    getattr(reminder, "recurrence_rules", None) or []
+                ),
+                "flagged": None,
+                "tags": None,
+                "parent_external_id": None,
+                "sort_order": None,
+                "linked_item_kind": linked_kind,
+                "linked_item_id": linked_id,
+                "completion_policy": "mirror" if linked_id else "manual",
+                "provider_revision": _to_iso(emit_lmod),
+                "last_modified_at": _to_iso(emit_lmod),
+                "sync_cycle_id": sync_cycle_id,
+            }
+            await self._append(
+                ctx=ctx,
+                event_type=new_event_type,
+                payload=rich_payload,
+                schema_version=2 if new_event_type != "list_item.uncompleted" else 1,
+            )
+        else:
+            await self._append(
+                ctx=ctx, event_type=new_event_type, payload=new_list_item_payload
+            )
 
         self._seen_inbound[remind_id] = emit_lmod
         self._inbound_snapshots[remind_id] = {
+            "list_external_id": list_id,
             "title": title[:500],
             "notes": notes,
             "due_at": _maybe_iso(due_at),
@@ -1241,9 +1471,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             self._inbound_cursors[list_id] = emit_lmod
         self._events_since_inbound_advance += 1
 
-    def _maybe_emit_inbound_cursor_advance(
-        self, *, ctx: AdapterContext
-    ) -> None:
+    async def _maybe_emit_inbound_cursor_advance(self, *, ctx: AdapterContext) -> None:
         """Emit ``adapter.cursor_advanced`` v1 only on milestone.
         Gated on whichever fires first: 100 emissions since the last
         advance OR 5 minutes of wall clock since the last advance with
@@ -1267,13 +1495,13 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         )
         if not (events_threshold or time_threshold):
             return
-        cursor_value = json.dumps(
-            {
-                lid: _to_iso(ts)
-                for lid, ts in sorted(self._inbound_cursors.items())
-            },
-            sort_keys=True,
-        ) or "{}"
+        cursor_value = (
+            json.dumps(
+                {lid: _to_iso(ts) for lid, ts in sorted(self._inbound_cursors.items())},
+                sort_keys=True,
+            )
+            or "{}"
+        )
         payload = {
             "adapter_name": self.name,
             "adapter_family": self.family,
@@ -1282,7 +1510,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "events_since_last": events,
             "advanced_at": _to_iso(now),
         }
-        self._append(
+        await self._append(
             ctx=ctx, event_type="adapter.cursor_advanced", payload=payload
         )
         self._events_since_inbound_advance = 0
@@ -1292,7 +1520,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
     # ------------------------------------------------------------------
     # emission helpers (mirror gmail / plaid patterns)
     # ------------------------------------------------------------------
-    def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext) -> None:
         """Append ``adapter.authenticated`` v1. Carries the OS-level
         permission reference instead of a 1Password op:// ref — EventKit
         access is granted at the OS level, no secret to store."""
@@ -1303,11 +1531,9 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "authenticated_at": _to_iso(ctx.now_factory()),
             "scopes": ["reminders:read", "reminders:write"],
         }
-        self._append(
-            ctx=ctx, event_type="adapter.authenticated", payload=payload
-        )
+        await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
 
-    def _emit_error(
+    async def _emit_error(
         self,
         *,
         ctx: AdapterContext,
@@ -1329,20 +1555,18 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             "occurred_at": _to_iso(ctx.now_factory()),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
+    async def _append(
         self,
         *,
         ctx: AdapterContext,
         event_type: str,
         payload: dict[str, Any],
         causation_id: str | None = None,
+        schema_version: int = 1,
     ) -> None:
-        """Best-effort append. Mirrors the supervisor's duck-typed
-        contract: any object with ``append_sync(...)`` or ``append(...)``
-        works, and a failure on emit must not crash the adapter — the
-        log itself may be down.
+        """Write through the typed event sink before advancing local sync state.
 
         α-2 dual-deployment branch: ``deployment_target=="bridge"``
         dispatches through the wrapper-injected ``BridgeEventSink``
@@ -1350,49 +1574,41 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         the observation-mode gate upstream of every emit site is
         unchanged, so suppressed writes skip ALL emits uniformly."""
         if self._deployment_target == "bridge":  # [§D18, memo 04 §2.2]
-            self._append_via_bridge_sink(
+            await self._append_via_bridge_sink(
                 ctx=ctx,
                 event_type=event_type,
                 payload=payload,
                 causation_id=causation_id,
+                schema_version=schema_version,
             )
             return
 
-        # ----- central path (byte-for-byte preserved from 11b-i / 11r-c) -----
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
+        await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            schema_version=schema_version,
         )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
-        try:
-            appender(**kwargs)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "reminders adapter failed to emit %s event", event_type
-            )
 
-    def _append_via_bridge_sink(
+    async def _append_via_bridge_sink(
         self,
         *,
         ctx: AdapterContext,
         event_type: str,
         payload: dict[str, Any],
         causation_id: str | None,
+        schema_version: int = 1,
     ) -> None:
         """Bridge-deployment emit path. Build an ``EventEnvelope`` and
         schedule ``sink.emit(envelope)`` on the running event loop —
         ``_append`` is sync and called from both async + sync sites, so
         a fire-and-forget task keeps the call shape symmetric with the
         central path. Memo 04 §2.2: provisional ``private:<member_id>``
-        scopes are re-stamped by the central :3337 router from
+        scopes are re-stamped by the central :3330 router from
         Tailscale identity post-receipt."""
         sink = self._bridge_sink
         if sink is None:
@@ -1406,7 +1622,7 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             event_at_ms=int(now.timestamp() * 1000),
             tenant_id=str(self._config.get("tenant_id") or "default"),
             type=event_type,
-            schema_version=1,
+            schema_version=schema_version,
             occurred_at=_to_iso(now),
             recorded_at="",
             source_adapter=self.name,
@@ -1418,30 +1634,16 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
             causation_id=causation_id,
             payload=payload,
         )
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _log.exception(
-                "reminders adapter bridge emit skipped — no running event "
-                "loop (type=%s)",
-                event_type,
-            )
-            return
-        loop.create_task(self._dispatch_bridge_emit(envelope))
+        await self._dispatch_bridge_emit(envelope)
 
     async def _dispatch_bridge_emit(self, envelope: EventEnvelope) -> None:
-        """Best-effort sink dispatch — symmetric with the central path's
-        exception swallow so a sink-side failure doesn't crash the loop."""
+        """Require a durable central-ingest acknowledgement before returning."""
         sink = self._bridge_sink
         if sink is None:
-            return
-        try:
-            await sink.emit(envelope)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "reminders adapter bridge sink emit failed for %s",
-                envelope.type,
-            )
+            raise RuntimeError("Apple Reminders bridge sink is not configured")
+        result = await sink.emit(envelope)
+        if not result.ok or result.event_id is None:
+            raise RuntimeError(result.error or "Apple Reminders bridge emit failed")
 
 
 # ----------------------------------------------------------------------

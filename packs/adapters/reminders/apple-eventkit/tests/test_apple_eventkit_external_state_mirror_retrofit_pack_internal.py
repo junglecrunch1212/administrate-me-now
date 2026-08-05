@@ -88,12 +88,26 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     manifest_entry = manifest.capabilities[0]
     assert cls_entry["kind"] == manifest_entry.kind == "Cat-B"
     assert cls_entry["runtime"] == manifest_entry.runtime == "central"
-    assert cls_entry["event_families"] == manifest_entry.event_families == [
-        "reminder.list_item.synced"
-    ]
+    assert (
+        cls_entry["event_families"]
+        == manifest_entry.event_families
+        == [
+            "reminder.list_item.synced",
+            "list.created",
+            "list.updated",
+            "list.deleted",
+            "list_item.added",
+            "list_item.updated",
+            "list_item.completed",
+            "list_item.uncompleted",
+            "list_item.deleted",
+        ]
+    )
 
 
-def test_pack_yaml_round_trips_through_parse_adapter_manifest_with_write_capabilities() -> None:
+def test_pack_yaml_round_trips_through_parse_adapter_manifest_with_write_capabilities() -> (
+    None
+):
     """The retrofit's manifest extension fields populate the
     :class:`AdapterManifest` model per memo 05 §3.1.
     ``write_capabilities`` is the asymmetric Cat-B / Cat-E surface per
@@ -113,12 +127,24 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest_with_write_capabil
     assert manifest.capabilities[0].kind == "Cat-B"
     assert manifest.sensitivity_default == "normal"
     assert manifest.sharing_model_discriminator == "owner_member_id"
-    assert manifest.dedup_strategy == {"kind": "external_id"}
+    assert manifest.dedup_strategy == {"kind": "calendar_item_identifier_last_modified"}
     assert manifest.observation_mode_required is False
-    assert manifest.write_capabilities == ["create_reminder"]
+    assert manifest.write_capabilities == [
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
 
 
-def test_six_validator_checks_return_zero_errors_and_no_advisory_pending_retrofit() -> None:
+def test_six_validator_checks_return_zero_errors_and_no_advisory_pending_retrofit() -> (
+    None
+):
     """The 11-β validator runs six checks per memo 05 §3.4
     (capability_runtime_coherence, event_schema_registration,
     projection_subscription_compatibility, base_class_conformance,

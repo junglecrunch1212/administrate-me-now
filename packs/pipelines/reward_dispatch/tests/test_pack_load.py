@@ -15,7 +15,7 @@ def test_pack_loads_cleanly() -> None:
     pack = load_pipeline_pack(PACK_ROOT)
     assert pack.pack_id == "pipeline:reward_dispatch"
     assert pack.version == "1.0.0"
-    assert pack.triggers["events"] == ["task.completed", "commitment.completed"]
+    assert pack.triggers.get("events") == ["task.completed", "commitment.completed"]
     assert "reward.ready" in pack.events_emitted
     assert isinstance(pack.instance, Pipeline)
 
@@ -26,6 +26,4 @@ def test_pack_handler_exposes_runtime_class() -> None:
     cls = type(pack.instance)
     assert cls.__name__ == "RewardDispatchPipeline"
     assert cls.pack_id == "pipeline:reward_dispatch"
-    assert cls.triggers == {
-        "events": ["task.completed", "commitment.completed"]
-    }
+    assert cls.triggers == {"events": ["task.completed", "commitment.completed"]}

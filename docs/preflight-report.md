@@ -70,7 +70,7 @@ NOT checked in this prompt. Listed as reminders for Phase B:
 - Plaid / Google / Apple credentials available to operator
 - FileVault enabled
 - LibreOffice (for xlsx round-trip projection surface)
-- SQLCipher — no system packages needed; AdministrateMe uses `sqlcipher3-binary` (pypi wheel that bundles SQLCipher), so no `libsqlcipher-dev` / `brew install sqlcipher` required on the Mac Mini either.
+- SQLCipher — no system packages needed; AdministrateMe uses the locked cross-platform `sqlcipher3==0.6.2` wheel, so no `libsqlcipher-dev` / `brew install sqlcipher` is required on the Mac mini.
 
 See `ADMINISTRATEME_FIELD_MANUAL.md` chapter 4 for the operator's setup checklist.
 

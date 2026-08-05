@@ -62,9 +62,7 @@ from adminme.lib.adapters import (
 from adminme.lib.observation import OutboundResult
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-HA_PACK_DIR = (
-    REPO_ROOT / "packs" / "adapters" / "automation" / "home-assistant"
-)
+HA_PACK_DIR = REPO_ROOT / "packs" / "adapters" / "automation" / "home-assistant"
 
 
 def _load_home_assistant_adapter_module() -> Any:
@@ -90,18 +88,23 @@ _FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-ha-test",
         now_factory=lambda: _FROZEN_NOW,
@@ -314,9 +317,7 @@ async def test_poll_states_once_emits_ha_state_changed_on_first_observation() ->
     emitted = await adapter._poll_states_once(ctx=ctx)
 
     assert emitted == 1
-    state_changes = [
-        c for c in event_log.calls if c["type"] == "ha.state_changed"
-    ]
+    state_changes = [c for c in event_log.calls if c["type"] == "ha.state_changed"]
     assert len(state_changes) == 1
     assert state_changes[0]["schema_version"] == 1
     assert state_changes[0]["payload"]["entity_id"] == "light.kitchen"
@@ -330,7 +331,8 @@ async def test_poll_states_once_skips_seen_entity_with_unchanged_last_changed() 
     the load-bearing invariant: without it every poll cycle would
     re-emit every entity, drowning downstream consumers."""
     state = _state(
-        entity_id="switch.porch", state="off",
+        entity_id="switch.porch",
+        state="off",
         last_changed="2026-05-18T10:00:00+00:00",
     )
     client = _FakeAsyncClient(
@@ -345,9 +347,7 @@ async def test_poll_states_once_skips_seen_entity_with_unchanged_last_changed() 
 
     assert first == 1
     assert second == 0
-    state_changes = [
-        c for c in event_log.calls if c["type"] == "ha.state_changed"
-    ]
+    state_changes = [c for c in event_log.calls if c["type"] == "ha.state_changed"]
     assert len(state_changes) == 1
 
 
@@ -374,9 +374,7 @@ async def test_poll_states_emit_payload_validates_against_ha_state_changed_v1() 
 
     await adapter._poll_states_once(ctx=ctx)
 
-    state_call = next(
-        c for c in event_log.calls if c["type"] == "ha.state_changed"
-    )
+    state_call = next(c for c in event_log.calls if c["type"] == "ha.state_changed")
     payload = state_call["payload"]
     instance = HaStateChangedV1.model_validate(payload)
     assert instance.entity_id == "climate.bedroom"
@@ -384,12 +382,8 @@ async def test_poll_states_emit_payload_validates_against_ha_state_changed_v1() 
     assert instance.attributes["current_temperature"] == 18.5
     assert instance.attributes["target_temperature"] == 21.0
     assert instance.source == "home_assistant"
-    assert instance.last_changed == datetime(
-        2026, 5, 18, 9, 30, 0, tzinfo=timezone.utc
-    )
-    assert instance.last_updated == datetime(
-        2026, 5, 18, 9, 30, 5, tzinfo=timezone.utc
-    )
+    assert instance.last_changed == datetime(2026, 5, 18, 9, 30, 0, tzinfo=timezone.utc)
+    assert instance.last_updated == datetime(2026, 5, 18, 9, 30, 5, tzinfo=timezone.utc)
 
 
 # ===========================================================================
@@ -497,19 +491,21 @@ async def test_execute_action_routes_through_observation_outbound_when_seams_pop
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str = "unknown",
         target_identifier: str = "unknown",
     ) -> OutboundResult:
-        captured.append({
-            "session": session,
-            "action": action,
-            "payload": dict(payload),
-            "manager": manager,
-            "event_log": event_log,
-            "target_channel": target_channel,
-            "target_identifier": target_identifier,
-        })
+        captured.append(
+            {
+                "session": session,
+                "action": action,
+                "payload": dict(payload),
+                "manager": manager,
+                "event_log": event_sink,
+                "target_channel": target_channel,
+                "target_identifier": target_identifier,
+            }
+        )
         # Observation mode INACTIVE: actually call through so the fake
         # POST registers on the client mock.
         result = await action_fn()
@@ -577,9 +573,7 @@ async def test_execute_action_observation_suppressed_returns_unapplied(
     ) -> OutboundResult:
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     request = ActionRequest(
         kind="ha.service_call",
@@ -597,12 +591,8 @@ async def test_execute_action_observation_suppressed_returns_unapplied(
     assert result.external_id is None
     assert result.suppressed is True
     # F-3: NEITHER action.executed NOR action.failed emitted on suppress.
-    executed_calls = [
-        c for c in event_log.calls if c["type"] == "action.executed"
-    ]
-    failed_calls = [
-        c for c in event_log.calls if c["type"] == "action.failed"
-    ]
+    executed_calls = [c for c in event_log.calls if c["type"] == "action.executed"]
+    failed_calls = [c for c in event_log.calls if c["type"] == "action.failed"]
     assert executed_calls == []
     assert failed_calls == []
     # The wrapped POST was NOT invoked.
@@ -638,9 +628,7 @@ async def test_execute_action_direct_call_when_seams_unset_returns_applied() -> 
     assert result.executed is True
     assert result.suppressed is False
     assert len(client.post_calls) == 1
-    executed_calls = [
-        c for c in event_log.calls if c["type"] == "action.executed"
-    ]
+    executed_calls = [c for c in event_log.calls if c["type"] == "action.executed"]
     assert len(executed_calls) == 1
     payload = executed_calls[0]["payload"]
     assert payload["action_kind"] == "ha.service_call"
@@ -654,7 +642,9 @@ async def test_execute_action_direct_call_when_seams_unset_returns_applied() -> 
 # ===========================================================================
 
 
-async def test_execute_action_4xx_auth_failure_classifies_fatal_emits_action_failed() -> None:
+async def test_execute_action_4xx_auth_failure_classifies_fatal_emits_action_failed() -> (
+    None
+):
     """A 401 from the HA REST POST classifies as ``fatal`` /
     ``auth_failed``, emits exactly one ``action.failed@v1`` event, AND
     re-raises so the supervisor's backoff handles retry. Mirrors the
@@ -678,9 +668,7 @@ async def test_execute_action_4xx_auth_failure_classifies_fatal_emits_action_fai
     with pytest.raises(_FakeHttpStatusError):
         await adapter.execute_action(request)
 
-    failed_calls = [
-        c for c in event_log.calls if c["type"] == "action.failed"
-    ]
+    failed_calls = [c for c in event_log.calls if c["type"] == "action.failed"]
     assert len(failed_calls) == 1
     payload = failed_calls[0]["payload"]
     assert payload["severity"] == "fatal"
@@ -712,9 +700,7 @@ async def test_execute_action_5xx_classifies_transient_emits_action_failed() -> 
     with pytest.raises(_FakeHttpStatusError):
         await adapter.execute_action(request)
 
-    failed_calls = [
-        c for c in event_log.calls if c["type"] == "action.failed"
-    ]
+    failed_calls = [c for c in event_log.calls if c["type"] == "action.failed"]
     assert len(failed_calls) == 1
     payload = failed_calls[0]["payload"]
     assert payload["severity"] == "transient"
@@ -747,16 +733,16 @@ async def test_execute_action_429_classifies_rate_limited_transient() -> None:
     with pytest.raises(_FakeHttpStatusError):
         await adapter.execute_action(request)
 
-    failed_calls = [
-        c for c in event_log.calls if c["type"] == "action.failed"
-    ]
+    failed_calls = [c for c in event_log.calls if c["type"] == "action.failed"]
     assert len(failed_calls) == 1
     payload = failed_calls[0]["payload"]
     assert payload["severity"] == "transient"
     assert payload["error_kind"] == "rate_limited"
 
 
-async def test_execute_action_failed_payload_validates_against_action_failed_v1() -> None:
+async def test_execute_action_failed_payload_validates_against_action_failed_v1() -> (
+    None
+):
     """The emitted ``action.failed@v1`` payload validates byte-for-byte
     against the c1 :class:`ActionFailedV1` Pydantic model.
     ``extra="forbid"`` on the model means any drift introducing a new
@@ -781,9 +767,7 @@ async def test_execute_action_failed_payload_validates_against_action_failed_v1(
     with pytest.raises(_FakeHttpStatusError):
         await adapter.execute_action(request)
 
-    failed_call = next(
-        c for c in event_log.calls if c["type"] == "action.failed"
-    )
+    failed_call = next(c for c in event_log.calls if c["type"] == "action.failed")
     payload = failed_call["payload"]
     instance = ActionFailedV1.model_validate(payload)
     assert instance.action_kind == "ha.service_call"

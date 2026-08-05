@@ -88,9 +88,7 @@ from adminme.lib.adapters import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GOOGLE_TASKS_PACK_ROOT = (
-    REPO_ROOT / "packs" / "adapters" / "tasks" / "google-tasks"
-)
+GOOGLE_TASKS_PACK_ROOT = REPO_ROOT / "packs" / "adapters" / "tasks" / "google-tasks"
 
 
 def _load_google_tasks_module() -> Any:
@@ -120,20 +118,23 @@ _INTEGRATION_FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _IntegrationEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion. Mirrors
-    the duck-typed contract :meth:`GoogleTasksAdapter._append` reads
-    via ``getattr(ctx.event_log, "append_sync", ...)``."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _make_integration_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integration-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
@@ -144,7 +145,9 @@ class _IntegrationListRequest:
     """``tasks().list(...).execute()`` half of the fake Tasks service."""
 
     def __init__(
-        self, pages: list[dict[str, Any]], call_log: list[dict[str, Any]],
+        self,
+        pages: list[dict[str, Any]],
+        call_log: list[dict[str, Any]],
     ) -> None:
         self._pages = pages
         self._call_log = call_log
@@ -188,7 +191,8 @@ class _IntegrationTasksService:
 
 
 def _make_adapter(
-    *, service: _IntegrationTasksService | None = None,
+    *,
+    service: _IntegrationTasksService | None = None,
 ) -> Any:
     """Construct a :class:`GoogleTasksAdapter` skipping ``start()``.
 
@@ -306,9 +310,7 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
         "status": "needsAction",
         "updated": "2026-05-18T14:00:00.000Z",
     }
-    service = _IntegrationTasksService(
-        list_pages=[{"items": [google_task]}]
-    )
+    service = _IntegrationTasksService(list_pages=[{"items": [google_task]}])
     adapter = _make_adapter(service=service)
     event_log = _IntegrationEventLog()
     ctx = _make_integration_ctx(event_log)
@@ -317,9 +319,7 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
     emitted = asyncio.run(adapter._poll_once(ctx=ctx))
 
     assert emitted == 1
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     instance = ListItemAddedV1.model_validate(payload)
@@ -338,7 +338,5 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
     service._list_pages = [{"items": [google_task]}]
     emitted_second = asyncio.run(adapter._poll_once(ctx=ctx))
     assert emitted_second == 0
-    added_calls_after = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls_after = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls_after) == 1

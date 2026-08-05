@@ -31,8 +31,13 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 class _RecordingAdapter:
@@ -85,7 +90,7 @@ class _CrashThenStableAdapter:
 def _make_ctx_factory(event_log: _FakeEventLog) -> Any:
     def _factory() -> AdapterContext:
         return AdapterContext(
-            event_log=event_log,  # type: ignore[arg-type]
+            event_sink=event_log,  # type: ignore[arg-type]
             config={},
             correlation_id_factory=lambda: "corr-test",
             now_factory=lambda: datetime(2026, 5, 16, tzinfo=timezone.utc),
@@ -184,9 +189,7 @@ async def test_supervisor_restarts_on_crash_with_backoff(
         sleeps.append(seconds)
         await real_sleep(0)
 
-    monkeypatch.setattr(
-        "adminme.daemons.adapter_supervisor.asyncio.sleep", _fast_sleep
-    )
+    monkeypatch.setattr("adminme.daemons.adapter_supervisor.asyncio.sleep", _fast_sleep)
 
     event_log = _FakeEventLog()
     adapter = _CrashThenStableAdapter()

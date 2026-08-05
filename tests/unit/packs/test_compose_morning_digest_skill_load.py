@@ -15,10 +15,7 @@ from pathlib import Path
 from adminme.lib.skill_runner.pack_loader import invalidate_cache, load_pack
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "packs"
-    / "skills"
-    / "compose_morning_digest"
+    Path(__file__).resolve().parents[3] / "packs" / "skills" / "compose_morning_digest"
 )
 
 

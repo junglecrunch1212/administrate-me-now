@@ -32,12 +32,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner import OpenClawTimeout
 from adminme.pipelines.base import PipelineContext
 
-PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "crm_surface"
-)
+PACK_ROOT = Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "crm_surface"
 
 
 def _import_handler_module() -> Any:
@@ -67,7 +62,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -110,9 +105,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
     raises_for = skill_raises_for or set()
 
     async def stub_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
@@ -132,6 +125,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -205,7 +199,10 @@ async def test_emit_on_opt_in_member_with_stale_parties() -> None:
     assert env.payload["surfaced_party_ids"] == ["party-1", "party-2"]
     assert env.payload["gap_kind"] == "stale_contact"
     assert env.payload["validation_failed"] is False
-    assert env.payload["delivered"] is True
+    assert env.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
+    assert signals[0].envelope.payload["category"] == "relationship"
 
 
 @pytest.mark.asyncio
@@ -244,10 +241,7 @@ async def test_no_emit_with_no_stale_parties() -> None:
 async def test_clamp_at_max_surfaced_per_week() -> None:
     """Loader returns 8 parties; max_surfaced_per_week=3 clamps to 3."""
     log = _FakeEventLog()
-    many = [
-        {"party_id": f"party-{i}", "gap_kind": "stale_contact"}
-        for i in range(8)
-    ]
+    many = [{"party_id": f"party-{i}", "gap_kind": "stale_contact"} for i in range(8)]
     pipeline = _seeded_pipeline(targets=[_target(parties=many)])
     ctx = _make_ctx(
         log,
@@ -270,7 +264,7 @@ async def test_clamp_at_max_surfaced_per_week() -> None:
 
 
 @pytest.mark.asyncio
-async def test_observation_mode_active_suppresses_outbound() -> None:
+async def test_observation_mode_active_suppresses_notification() -> None:
     log = _FakeEventLog()
     pipeline = _seeded_pipeline()
     ctx = _make_ctx(
@@ -287,10 +281,11 @@ async def test_observation_mode_active_suppresses_outbound() -> None:
     surfaced = [c for c in log.calls if c.envelope.type == "crm.surfaced"]
     assert len(surfaced) == 1
     assert surfaced[0].envelope.payload["delivered"] is False
-    suppressed = [
-        c for c in log.calls if c.envelope.type == "observation.suppressed"
+    decisions = [
+        c for c in log.calls if c.envelope.type == "notification.decision.made"
     ]
-    assert len(suppressed) == 1
+    assert len(decisions) == 1
+    assert decisions[0].envelope.payload["decision"] == "suppress"
 
 
 @pytest.mark.asyncio
@@ -328,7 +323,9 @@ async def test_per_row_skill_failure_does_not_abort_tick() -> None:
     assert by_member["member-a"].envelope.payload["validation_failed"] is True
     assert by_member["member-a"].envelope.payload["delivered"] is False
     assert by_member["member-b"].envelope.payload["validation_failed"] is False
-    assert by_member["member-b"].envelope.payload["delivered"] is True
+    assert by_member["member-b"].envelope.payload["delivered"] is False
+    signals = [c for c in log.calls if c.envelope.type == "notification.signal.raised"]
+    assert len(signals) == 1
 
 
 @pytest.mark.asyncio

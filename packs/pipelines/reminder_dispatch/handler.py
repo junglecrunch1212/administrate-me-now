@@ -9,21 +9,16 @@ tests via fakes) — there is no bus subscription.
 
 Clones `MorningDigestPipeline`'s shape per [§1] 10c-iii grounding: a
 structural `Pipeline`-Protocol class with `pack_id`/`version`/`triggers`
-attrs, constructor-injection loaders per PM-27 with no-op defaults,
-single-site `outbound()` call from `deliver()` per [§6.14], defensive
+attrs, constructor-injection loaders per PM-27, typed notification intent and
+policy events with delivery delegated to OpenClaw, and a defensive
 `_SKILL_FAILURE_EXCEPTIONS` catch on the same 7-tuple as
 `morning_digest`, sentinel emit on skill failure / validation failure
-with `validation_failed=True` + `delivered=False` and no `outbound()`
-call.
+with `validation_failed=True` + `delivered=False` and no notification.
 
 Dedupe pattern: a `recent_reminders_loader` callable returns the set of
 `commitment_id`s with a `reminder.dispatched` event within the
-configured `dedupe_window_minutes`. The v1 default is a no-op
-returning an empty set; future bootstrap wiring injects an
-`EventLog.read_since`-backed loader (the on-main read surface is
-async-iterator-shaped per `adminme/events/log.py:376`, so the
-loader-callable wraps that read into a synchronous set lookup for the
-pipeline's per-tick filter).
+configured `dedupe_window_minutes`. Runtime composition supplies an
+event-log-backed loader; deterministic tests may inject a recorded set.
 
 Per-member opt-in: a `member_override_loader` returns the
 `per_member_overrides[member_id]` dict (or None). When
@@ -35,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from adminme.events.envelope import EventEnvelope
@@ -48,6 +43,7 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
+from adminme.notifications import raise_and_decide
 from adminme.pipelines.base import PipelineContext, Triggers
 
 _log = logging.getLogger(__name__)
@@ -110,14 +106,14 @@ class ReminderDispatchPipeline:
         member_override_loader: MemberOverrideLoader | None = None,
     ) -> None:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
-        self._commitments_due_loader: CommitmentsDueLoader = (
-            commitments_due_loader or (lambda _now, _look: [])
+        self._commitments_due_loader: CommitmentsDueLoader = commitments_due_loader or (
+            lambda _now, _look: []
         )
         self._recent_reminders_loader: RecentRemindersLoader = (
             recent_reminders_loader or (lambda _now, _ded: set())
         )
-        self._member_override_loader: MemberOverrideLoader = (
-            member_override_loader or (lambda _mid: None)
+        self._member_override_loader: MemberOverrideLoader = member_override_loader or (
+            lambda _mid: None
         )
 
     async def gather(
@@ -126,9 +122,7 @@ class ReminderDispatchPipeline:
         lookahead_minutes: int,
         dedupe_minutes: int,
     ) -> dict[str, Any]:
-        commitments = list(
-            self._commitments_due_loader(now_iso, lookahead_minutes)
-        )
+        commitments = list(self._commitments_due_loader(now_iso, lookahead_minutes))
         recent_ids = set(self._recent_reminders_loader(now_iso, dedupe_minutes))
         return {
             "now_iso": now_iso,
@@ -158,9 +152,7 @@ class ReminderDispatchPipeline:
             "notes": commitment.get("notes"),
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_reminder", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_reminder", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "reminder_dispatch: compose skill failed (%s); "
@@ -203,38 +195,50 @@ class ReminderDispatchPipeline:
             return suggested
         return DEFAULT_DELIVERY_CHANNEL
 
-    async def deliver(
+    async def route_notification(
         self,
         ctx: PipelineContext,
+        commitment_id: str,
+        owner_member_id: str,
         recipient_party_id: str,
+        due_at_iso: str,
         body_text: str,
-        channel: str,
-    ) -> bool:
-        """Single `outbound()` call site per [§6.14]. Returns True when
-        the bus recorded `external.sent`, False on suppression."""
-        if ctx.observation_manager is None:
-            _log.info(
-                "reminder_dispatch: no observation_manager wired; "
-                "treating as observation-mode-active per [D22]"
-            )
-            return False
+        profile: dict[str, Any] | None,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Persist intent and policy; OpenClaw owns the delivery attempt."""
 
-        async def _no_op_send() -> None:
-            return None
-
-        from adminme.lib.observation import outbound
-
-        result = await outbound(
-            ctx.session,
-            "reminder_send",
-            {"recipient_party_id": recipient_party_id, "body_text": body_text},
-            _no_op_send,
-            manager=ctx.observation_manager,
-            event_log=ctx.event_log,
-            target_channel=channel,
-            target_identifier=recipient_party_id,
+        observation_active = True
+        if ctx.observation_manager is not None:
+            observation_active = await ctx.observation_manager.is_active()
+        signal = {
+            "signal_id": f"reminder:{commitment_id}:{due_at_iso}",
+            "member_id": owner_member_id,
+            "category": "reminder",
+            "urgency": "normal",
+            "title": "Commitment reminder",
+            "body": body_text,
+            "preferred_channels": ["openclaw"],
+            "requires_approval": False,
+            "not_before": None,
+            "expires_at": None,
+            "related_kind": "commitment",
+            "related_id": commitment_id,
+        }
+        _signal_event_id, _decision_event_id, decision = await raise_and_decide(
+            ctx.event_sink,
+            signal,
+            tenant_id=ctx.session.tenant_id,
+            owner_scope=f"private:{owner_member_id}",
+            visibility_scope=f"private:{owner_member_id}",
+            sensitivity="normal",
+            profile=profile,
+            now=now,
+            observation_active=observation_active,
+            approval_granted=False,
+            correlation_id=ctx.correlation_id,
         )
-        return not result.suppressed
+        return decision
 
     async def _emit_reminder_dispatched(
         self,
@@ -281,7 +285,7 @@ class ReminderDispatchPipeline:
                 "validation_failed": validation_failed,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -291,6 +295,7 @@ class ReminderDispatchPipeline:
         self,
         commitment: dict[str, Any],
         ctx: PipelineContext,
+        decision_now: datetime,
         triggering_event: dict[str, Any] | None = None,
     ) -> None:
         """Drive one reminder for one commitment. Per-commitment skill
@@ -339,8 +344,15 @@ class ReminderDispatchPipeline:
         channel = self._resolve_delivery_channel(
             profile, composed.get("suggested_channel")
         )
-        delivered = await self.deliver(
-            ctx, recipient_party_id, composed_text, channel
+        await self.route_notification(
+            ctx,
+            commitment_id,
+            owner_member_id,
+            recipient_party_id,
+            due_at_iso,
+            composed_text,
+            profile,
+            decision_now,
         )
         await self._emit_reminder_dispatched(
             ctx,
@@ -351,7 +363,8 @@ class ReminderDispatchPipeline:
             channel=channel,
             due_at_iso=due_at_iso,
             validation_failed=False,
-            delivered=delivered,
+            # Delivery is confirmed only by notification.delivery.result.
+            delivered=False,
             triggering_event=triggering_event,
         )
 
@@ -366,9 +379,11 @@ class ReminderDispatchPipeline:
         """Drive one tick: load commitments due within lookahead,
         filter out dedupe-hits and opt-outs, dispatch each surviving
         commitment via dispatch_one()."""
-        gather_result = await self.gather(
-            now_iso, lookahead_minutes, dedupe_minutes
-        )
+        gather_result = await self.gather(now_iso, lookahead_minutes, dedupe_minutes)
+        decision_now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        if decision_now.tzinfo is None:
+            decision_now = decision_now.replace(tzinfo=timezone.utc)
+        decision_now = decision_now.astimezone(timezone.utc)
         recent_ids: set[str] = gather_result["recent_reminder_commitment_ids"]
         for commitment in gather_result["commitments"]:
             commitment_id = commitment.get("commitment_id")
@@ -387,12 +402,13 @@ class ReminderDispatchPipeline:
                 if override.get("reminders_enabled") is False:
                     continue
             await self.dispatch_one(
-                commitment, ctx, triggering_event=triggering_event
+                commitment,
+                ctx,
+                decision_now,
+                triggering_event=triggering_event,
             )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and exercised in tests by

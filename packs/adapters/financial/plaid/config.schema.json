@@ -57,10 +57,11 @@
       "default": 90,
       "description": "Adapter-side dedupe window for inbound webhook duplicates (Plaid may re-deliver). Defaults to 90 minutes."
     },
-    "backstop_poll_cron": {
-      "type": "string",
-      "default": "0 4 * * *",
-      "description": "APScheduler cron expression for the daily backstop poll. Webhooks are primary; this is the safety net for silent webhook drops."
+    "backstop_poll_interval_s": {
+      "type": "number",
+      "minimum": 1,
+      "default": 86400,
+      "description": "Provider-watcher recovery interval in seconds. Webhooks remain primary."
     }
   }
 }

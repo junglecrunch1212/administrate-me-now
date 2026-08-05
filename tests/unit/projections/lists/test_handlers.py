@@ -78,7 +78,9 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _row(conn: sqlite3.Connection, *, list_eid: str, item_eid: str) -> sqlite3.Row | None:
+def _row(
+    conn: sqlite3.Connection, *, list_eid: str, item_eid: str
+) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT * FROM list_items
@@ -174,9 +176,7 @@ def test_apply_list_item_added_completed_bool_coerces_to_integer() -> None:
 
 def test_apply_list_item_added_optional_notes_due_at_null_handling() -> None:
     conn = _conn()
-    handlers.apply_event(
-        _envelope(payload=_payload(notes=None, due_at=None)), conn
-    )
+    handlers.apply_event(_envelope(payload=_payload(notes=None, due_at=None)), conn)
     row = _row(conn, list_eid="list-A", item_eid="item-1")
     assert row is not None
     assert row["notes"] is None
@@ -240,14 +240,18 @@ def test_apply_list_item_added_distinct_items_within_list_distinct_rows() -> Non
     handlers.apply_event(
         _envelope(
             event_id="evt-1",
-            payload=_payload(list_external_id="list-A", item_external_id="i1", title="Milk"),
+            payload=_payload(
+                list_external_id="list-A", item_external_id="i1", title="Milk"
+            ),
         ),
         conn,
     )
     handlers.apply_event(
         _envelope(
             event_id="evt-2",
-            payload=_payload(list_external_id="list-A", item_external_id="i2", title="Eggs"),
+            payload=_payload(
+                list_external_id="list-A", item_external_id="i2", title="Eggs"
+            ),
         ),
         conn,
     )

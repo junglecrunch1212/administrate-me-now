@@ -95,9 +95,7 @@ class AdapterManifest(BaseModel):
     sharing_model_discriminator: str | None = None
     dedup_strategy: dict[str, Any] | None = None
 
-    def resolve_effective_sensitivity(
-        self, capability_index: int
-    ) -> SensitivityLevel:
+    def resolve_effective_sensitivity(self, capability_index: int) -> SensitivityLevel:
         """Resolve the effective sensitivity for one capability.
 
         Returns the per-capability override if it is at least as strict

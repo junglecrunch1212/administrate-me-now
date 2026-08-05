@@ -55,10 +55,7 @@ def test_happy_path_all_declared_families_are_registered() -> None:
     registry = _registry(
         ["messaging.received", "messaging.sent", "calendar.event_added"]
     )
-    assert (
-        check_event_schema_registration(manifest, registry=registry)
-        == []
-    )
+    assert check_event_schema_registration(manifest, registry=registry) == []
 
 
 def test_unknown_family_yields_error_with_correct_field_path() -> None:
@@ -76,16 +73,11 @@ def test_unknown_family_yields_error_with_correct_field_path() -> None:
     registry = _registry(
         ["messaging.received", "messaging.sent", "messaging.classified"]
     )
-    findings = check_event_schema_registration(
-        manifest, registry=registry
-    )
+    findings = check_event_schema_registration(manifest, registry=registry)
     assert len(findings) == 1
     assert findings[0].severity == "error"
     assert findings[0].check == "event_schema_registration"
-    assert (
-        findings[0].field_path
-        == "capabilities[0].event_families[1]"
-    )
+    assert findings[0].field_path == "capabilities[0].event_families[1]"
     assert "msg.received" in findings[0].message
 
 
@@ -110,9 +102,7 @@ def test_unknown_family_message_includes_three_suggestions_by_prefix() -> None:
             "artifact.received",
         ]
     )
-    findings = check_event_schema_registration(
-        manifest, registry=registry
-    )
+    findings = check_event_schema_registration(manifest, registry=registry)
     assert len(findings) == 1
     message = findings[0].message
     # All three messaging-prefixed candidates should appear before
@@ -135,10 +125,7 @@ def test_empty_event_families_in_capability_skips_check() -> None:
         }
     )
     registry = _registry(["messaging.received"])
-    assert (
-        check_event_schema_registration(manifest, registry=registry)
-        == []
-    )
+    assert check_event_schema_registration(manifest, registry=registry) == []
 
 
 def test_accepts_alternate_registered_event_families_method_name() -> None:
@@ -157,10 +144,7 @@ def test_accepts_alternate_registered_event_families_method_name() -> None:
         }
     )
     registry = _FakeRegistryAlt(_names=["messaging.received"])
-    assert (
-        check_event_schema_registration(manifest, registry=registry)
-        == []
-    )
+    assert check_event_schema_registration(manifest, registry=registry) == []
 
 
 def test_default_registry_loads_on_main_schemas_and_passes_for_known_family() -> None:

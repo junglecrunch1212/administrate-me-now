@@ -59,13 +59,13 @@ def _find_adapter_class(tree: ast.Module) -> ast.ClassDef | None:
 
 def _inherited_abcs(class_def: ast.ClassDef) -> list[str]:
     return [
-        name
-        for base in class_def.bases
-        if (name := _base_name(base)) in _ABC_NAMES
+        name for base in class_def.bases if (name := _base_name(base)) in _ABC_NAMES
     ]
 
 
-def _finding(severity: str, message: str, field_path: str | None = None) -> ValidationFinding:
+def _finding(
+    severity: str, message: str, field_path: str | None = None
+) -> ValidationFinding:
     return ValidationFinding(
         severity=severity,  # type: ignore[arg-type]
         check=_CHECK_NAME,

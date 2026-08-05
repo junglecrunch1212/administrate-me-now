@@ -16,18 +16,15 @@ available; underlying data changed."
 
 ## Triggers
 
-Scheduled per member (cron). The cron entry in
-`bootstrap/openclaw/cron.yaml` ships with placeholder schedule
-`0 7 * * *`; bootstrap §8 substitutes per-member configured wake times
-at install time.
+Scheduled per member by OpenClaw. The versioned `0 7 * * *` installation
+default is replaced by a configured member wake time when present.
 
 ## Approval gate
 
-None. The digest is a recurring routine, not a per-event ask. Outbound
-delivery routes through `outbound()` per [§6.14], which consults
-observation mode and records `observation.suppressed` or
-`external.sent`. The principal reviews suppressed-action logs before
-flipping observation off per [§7] operating rule 7.
+None. The digest is a recurring routine, not a per-event ask. AdministrateMe
+persists `notification.signal.raised` and `notification.decision.made`;
+OpenClaw sends only a `route` decision and reports the actual outcome through
+`administrateme_notification_result`.
 
 ## Escalation
 
@@ -53,8 +50,9 @@ Proactive pack at `packs/pipelines/morning_digest/` with
 4. Validation guard: every id in the skill's `claimed_event_ids`
    MUST appear in the gather payload. Any miss → sentinel path
    (emit `digest.composed` with sentinel body, `validation_failed=true`,
-   `delivered=false`; DO NOT call outbound).
-5. Otherwise call `outbound()` exactly once with the composed body.
+`delivered=false`; do not raise a notification).
+5. Otherwise raise one typed notification signal and policy decision. OpenClaw
+   owns the external send and delivery-result callback.
 6. Emit `digest.composed` v1 with `member_id`, `body_text`,
    `profile_format`, `validation_failed`, `delivered`, `today_iso`.
 
@@ -62,6 +60,7 @@ Proactive pack at `packs/pipelines/morning_digest/` with
 
 - **Do NOT skip the validation guard.** Any claimed id absent from the
   gather payload zeroes the message per [BUILD.md §1289].
-- **Do NOT call `outbound()` on the sentinel path.**
+- **Do NOT raise a notification on the sentinel path.**
+- **Do NOT claim delivery before `notification.delivery.result`.**
 - **Do NOT modify any projection.** Per [§7.3], pipelines emit events;
   projections consume them.

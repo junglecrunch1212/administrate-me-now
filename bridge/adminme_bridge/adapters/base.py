@@ -52,15 +52,16 @@ class BridgeContext:
     ``ingest_client`` is preserved for 11c-i backward compatibility; new code
     should use ``sink`` (a ``BridgeEventSink``) which abstracts the emit pathway
     over the production HTTP path and the test/central-fallback EventLog path
-    (see ``adminme_bridge.adapters.sinks``). F-3: ``sink`` is added at the END
-    of the field list as an optional with default ``None`` to preserve
-    positional-arg compatibility with the 11c-i constructor shape."""
+    (see ``adminme_bridge.adapters.sinks``). ``sink`` remains the fifth field
+    for positional compatibility; Gate 6 appends optional ``tenant_id`` after
+    it so the central tenant is explicit without rebinding older callers."""
 
     member_id: str
     ingest_client: IngestClient
     correlation_id_factory: Callable[[], str]
     now_factory: Callable[[], datetime]
     sink: "BridgeEventSink | None" = None
+    tenant_id: str = "tenant-default"
 
 
 @runtime_checkable

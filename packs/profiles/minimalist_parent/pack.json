@@ -1,0 +1,17 @@
+{
+  "id": "minimalist_parent",
+  "kind": "profile",
+  "version": "1.0.0",
+  "label": "Minimal parent view",
+  "profile_format": "minimal",
+  "behavior": {
+    "available_minutes": 20,
+    "current_energy": "medium",
+    "preferred_contexts": ["family", "home"],
+    "quiet_hours": {"start": 20, "end": 7},
+    "nudge_penalty": 50,
+    "recent_outcome_bias": 0
+  },
+  "reward_distribution": {"done": 0.9, "warm": 0.1, "delight": 0.0, "jackpot": 0.0},
+  "delivery_channel": "openclaw"
+}

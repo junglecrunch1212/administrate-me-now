@@ -80,18 +80,23 @@ _FROZEN_NOW = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-apple-cal-test",
         now_factory=lambda: _FROZEN_NOW,
@@ -314,8 +319,13 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     only; ``update_event`` / ``delete_event`` are out of scope per §6 and
     intentionally NOT declared. A declared-but-not-implemented kind would
     fail the validator's method-presence rule per memo 05 §3.4."""
-    assert AppleCalendarAdapter.write_capabilities == ["create_event"]
-    assert len(AppleCalendarAdapter.write_capabilities) == 1
+    assert AppleCalendarAdapter.write_capabilities == [
+        "create_event",
+        "update_event",
+        "delete_event",
+        "move_event",
+    ]
+    assert len(AppleCalendarAdapter.write_capabilities) == 4
 
 
 def test_sharing_model_discriminator_is_owner_member_id() -> None:
@@ -339,7 +349,7 @@ async def test_apply_write_gate_raises_on_undeclared_kind() -> None:
     deferred to a later split)."""
     adapter = _make_adapter()
     operation = WriteOperation(
-        kind="update_event",
+        kind="share_calendar",
         target_external_id="apple-evt-1",
         payload={},
     )
@@ -418,7 +428,7 @@ async def test_apply_write_routes_through_observation_outbound(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str = "unknown",
         target_identifier: str = "unknown",
     ) -> OutboundResult:
@@ -428,7 +438,7 @@ async def test_apply_write_routes_through_observation_outbound(
                 "action": action,
                 "payload": dict(payload),
                 "manager": manager,
-                "event_log": event_log,
+                "event_log": event_sink,
                 "target_channel": target_channel,
                 "target_identifier": target_identifier,
             }
@@ -495,9 +505,7 @@ async def test_apply_write_observation_suppressed_returns_unapplied(
         # contract per [§6.13/§6.16] is "did not perform the side effect."
         return OutboundResult(suppressed=True, result=None)
 
-    monkeypatch.setattr(
-        _adapter_mod, "observation_outbound", _suppressing_outbound
-    )
+    monkeypatch.setattr(_adapter_mod, "observation_outbound", _suppressing_outbound)
 
     op = WriteOperation(
         kind="create_event",
@@ -644,9 +652,7 @@ async def test_poll_once_emits_calendar_event_added_on_first_observation() -> No
     emitted = await adapter._poll_once(ctx=ctx)
 
     assert emitted == 1
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
     assert len(added_calls) == 1
     assert added_calls[0]["schema_version"] == 1
     assert added_calls[0]["payload"]["external_event_id"] == "apple-evt-inbound-001"
@@ -671,9 +677,7 @@ async def test_poll_once_skips_already_seen_event_identifier() -> None:
 
     assert first == 1
     assert second == 0  # already seen → not re-emitted
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "calendar.event_added"]
     assert len(added_calls) == 1
 
 
@@ -702,9 +706,7 @@ async def test_poll_emit_payload_validates_against_calendar_event_added_v1() -> 
 
     await adapter._poll_once(ctx=ctx)
 
-    added_call = next(
-        c for c in event_log.calls if c["type"] == "calendar.event_added"
-    )
+    added_call = next(c for c in event_log.calls if c["type"] == "calendar.event_added")
     payload = added_call["payload"]
     # Round-trip via strict validation — any extra field would raise
     # pydantic.ValidationError under ``extra="forbid"``.
@@ -717,9 +719,7 @@ async def test_poll_emit_payload_validates_against_calendar_event_added_v1() -> 
     assert instance.end == "2026-05-20T16:00:00Z"
     assert instance.location == "HQ Conference Room"
     assert instance.body == "Quarterly review"
-    assert instance.attendees == [
-        {"name": "Alice", "url": "mailto:alice@example.test"}
-    ]
+    assert instance.attendees == [{"name": "Alice", "url": "mailto:alice@example.test"}]
 
 
 async def test_poll_fetch_uses_window_from_config_now() -> None:

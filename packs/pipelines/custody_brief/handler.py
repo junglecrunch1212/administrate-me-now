@@ -21,8 +21,9 @@ with two intentional shape choices:
 Empty next-day calendar still composes (handoff timing + allergen
 notes are load-bearing); per [§8] C3 unit case.
 
-Constructor-injection loaders per PM-27: real loader modules don't
-exist on main yet (UT-14 carry-forward). Tests inject fakes.
+Successful composition raises a private, sensitive notification signal and
+policy decision. OpenClaw owns delivery and reports the outcome separately;
+constructor-injection keeps projection/provider boundaries deterministic.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from adminme.lib.skill_runner import (
     SkillSensitivityRefused,
 )
 from adminme.pipelines.base import PipelineContext, Triggers
+from adminme.notifications import notification_time, raise_and_decide
 
 _log = logging.getLogger(__name__)
 
@@ -94,8 +96,8 @@ class CustodyBriefPipeline:
         self._coparent_targets_loader: CoparentTargetsLoader = (
             coparent_targets_loader or (lambda _brief_date: [])
         )
-        self._member_override_loader: MemberOverrideLoader = (
-            member_override_loader or (lambda _mid: None)
+        self._member_override_loader: MemberOverrideLoader = member_override_loader or (
+            lambda _mid: None
         )
 
     async def gather(
@@ -130,9 +132,7 @@ class CustodyBriefPipeline:
             "medication_notes": medication_notes,
         }
         try:
-            result = await ctx.run_skill_fn(
-                "compose_custody_brief", skill_inputs, ctx
-            )
+            result = await ctx.run_skill_fn("compose_custody_brief", skill_inputs, ctx)
         except _SKILL_FAILURE_EXCEPTIONS as exc:
             _log.warning(
                 "custody_brief: compose skill failed (%s); emitting "
@@ -174,37 +174,49 @@ class CustodyBriefPipeline:
             return suggested
         return DEFAULT_DELIVERY_CHANNEL
 
-    async def deliver(
+    async def route_notification(
         self,
         ctx: PipelineContext,
         member_id: str,
         body_text: str,
-        channel: str,
-    ) -> bool:
-        """Single `outbound()` call site per [§6.14]."""
-        if ctx.observation_manager is None:
-            _log.info(
-                "custody_brief: no observation_manager wired; treating "
-                "as observation-mode-active per [D22]"
-            )
-            return False
+        brief_date: str,
+        profile: dict[str, Any] | None,
+        triggering_event: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist notification intent and policy; never send externally."""
 
-        async def _no_op_send() -> None:
-            return None
-
-        from adminme.lib.observation import outbound
-
-        result = await outbound(
-            ctx.session,
-            "custody_brief_send",
-            {"member_id": member_id, "body_text": body_text},
-            _no_op_send,
-            manager=ctx.observation_manager,
-            event_log=ctx.event_log,
-            target_channel=channel,
-            target_identifier=member_id,
+        observation_active = True
+        if ctx.observation_manager is not None:
+            observation_active = await ctx.observation_manager.is_active()
+        now = notification_time(triggering_event)
+        signal = {
+            "signal_id": f"custody-brief:{member_id}:{brief_date}",
+            "member_id": member_id,
+            "category": "relationship",
+            "urgency": "normal",
+            "title": "Custody brief",
+            "body": body_text,
+            "preferred_channels": ["openclaw"],
+            "requires_approval": False,
+            "not_before": None,
+            "expires_at": None,
+            "related_kind": "custody_brief",
+            "related_id": brief_date,
+        }
+        _signal_id, _decision_id, decision = await raise_and_decide(
+            ctx.event_sink,
+            signal,
+            tenant_id=ctx.session.tenant_id,
+            owner_scope=f"private:{member_id}",
+            visibility_scope=f"private:{member_id}",
+            sensitivity="sensitive",
+            profile=profile,
+            now=now,
+            observation_active=observation_active,
+            approval_granted=False,
+            correlation_id=ctx.correlation_id,
         )
-        return not result.suppressed
+        return decision
 
     async def _emit_custody_brief_composed(
         self,
@@ -251,7 +263,7 @@ class CustodyBriefPipeline:
                 "validation_failed": validation_failed,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
@@ -270,9 +282,7 @@ class CustodyBriefPipeline:
         coparent_member_id = target.get("coparent_member_id")
         if not isinstance(coparent_member_id, str) or not coparent_member_id:
             return
-        child_member_ids = [
-            str(c) for c in (target.get("child_member_ids") or []) if c
-        ]
+        child_member_ids = [str(c) for c in (target.get("child_member_ids") or []) if c]
         if not child_member_ids:
             return
 
@@ -325,7 +335,14 @@ class CustodyBriefPipeline:
         channel = self._resolve_delivery_channel(
             profile, composed.get("suggested_channel")
         )
-        delivered = await self.deliver(ctx, member_id, composed_text, channel)
+        await self.route_notification(
+            ctx,
+            member_id,
+            composed_text,
+            brief_date,
+            profile,
+            triggering_event,
+        )
         await self._emit_custody_brief_composed(
             ctx,
             member_id=member_id,
@@ -335,7 +352,7 @@ class CustodyBriefPipeline:
             channel=channel,
             brief_date=brief_date,
             validation_failed=False,
-            delivered=delivered,
+            delivered=False,
             triggering_event=triggering_event,
         )
 
@@ -365,9 +382,7 @@ class CustodyBriefPipeline:
                 triggering_event=triggering_event,
             )
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         """Pipeline protocol entrypoint. Proactive packs are not
         currently dispatched by the in-process runner; this method is
         provided for protocol compliance and is exercised in tests by

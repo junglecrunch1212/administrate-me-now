@@ -3,13 +3,32 @@
   "title": "Google Calendar adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["service_account_key_ref", "calendar_id", "user_email"],
+  "required": ["calendar_id", "member_id", "provider_account_id"],
+  "oneOf": [
+    { "required": ["oauth_credentials_ref"] },
+    { "required": ["service_account_key_ref", "user_email"] }
+  ],
   "properties": {
     "service_account_key_ref": {
       "type": "string",
       "pattern": "^op://[^/]+/[^/]+/[^/]+$",
       "description": "1Password reference to the service-account JSON (op://<vault>/<item>/<field>). NEVER a raw secret per ADMINISTRATEME_BUILD.md §L1."
     },
+    "oauth_credentials_ref": {
+      "type": "string",
+      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "description": "1Password reference to installed-app OAuth JSON containing client_id, client_secret, and refresh_token. Configure one independently authorized instance for each member account."
+    },
+    "member_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable AdministrateMe alias for this member's Google account; usually the Google email address."
+    },
+    "calendar_name": { "type": "string" },
     "calendar_id": {
       "type": "string",
       "minLength": 1,
@@ -26,6 +45,8 @@
       "default": 60,
       "description": "In-process inbound-poll cadence in seconds. Defaults to 60s; pack.yaml's cron is a heartbeat the supervisor uses to detect a wedged adapter."
     },
+    "sync_lookback_days": { "type": "integer", "minimum": 1, "default": 90 },
+    "sync_lookahead_days": { "type": "integer", "minimum": 1, "default": 730 },
     "sensitivity_floor": {
       "type": "string",
       "enum": ["normal", "privileged"],

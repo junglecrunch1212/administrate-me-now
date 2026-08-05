@@ -160,7 +160,9 @@ def test_owner_scope_immutable_declared_final() -> None:
         f"_owner_scope_immutable must be Final, got origin={origin!r}"
     )
     args = typing.get_args(final_anno)
-    assert args == (bool,), f"_owner_scope_immutable args expected (bool,), got {args!r}"
+    assert args == (bool,), (
+        f"_owner_scope_immutable args expected (bool,), got {args!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +176,7 @@ def test_personal_knowledge_adapter_has_no_write_methods() -> None:
     forbidden = {"send", "apply_write", "execute_action", "write_capabilities"}
     public_surface = set(vars(PersonalKnowledgeAdapter).keys())
     overlap = forbidden & public_surface
-    assert not overlap, (
-        f"Cat-D ABC must not declare write surface; found: {overlap!r}"
-    )
+    assert not overlap, f"Cat-D ABC must not declare write surface; found: {overlap!r}"
 
 
 # ---------------------------------------------------------------------------

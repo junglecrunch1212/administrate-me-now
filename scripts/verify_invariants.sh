@@ -77,7 +77,7 @@ hardcoded=$(grep -rnE "(~/\.adminme|'/\.adminme|\"/\.adminme)" \
     || true)
 if [ -n "$hardcoded" ]; then
     report "[§15] / [D15] hardcoded instance path:"
-    echo "$hardcoded" | sed 's/^/    /'
+    printf '%s\n' "$hardcoded" | awk '{print "    " $0}'
 fi
 
 # ─── [§12.4]: no tenant identity in platform code ────────────────────────
@@ -96,7 +96,7 @@ tenant_hits=$(grep -rniE "\b(james|laura|charlie|stice|morningside)\b" adminme/ 
     || true)
 if [ -n "$tenant_hits" ]; then
     report "[§12.4] tenant identity in platform code:"
-    echo "$tenant_hits" | sed 's/^/    /'
+    printf '%s\n' "$tenant_hits" | awk '{print "    " $0}'
 fi
 
 # ─── [§2.2]: projections emit only allowed system events ────────────────
@@ -139,7 +139,7 @@ if [ -n "$emit_files" ]; then
             || true)
         if [ -n "$bad_types" ]; then
             report "[§2.2] projection emitting non-allowed event type in $f:"
-            echo "$bad_types" | sed 's/^/    /'
+            printf '%s\n' "$bad_types" | awk '{print "    " $0}'
         fi
     done <<< "$emit_files"
 fi
@@ -153,15 +153,14 @@ fi
 # call run_skill() and never construct skill.call.* envelopes themselves.
 
 SKILL_EMITS='skill\.call\.recorded|skill\.call\.failed|skill\.call\.suppressed'
-SKILL_EMIT_FILE="adminme/lib/skill_runner/wrapper.py"
 
 skill_violations=$(grep -rnE "type\s*=\s*\"($SKILL_EMITS)\"" \
     adminme/ --include='*.py' 2>/dev/null \
-    | grep -v "^${SKILL_EMIT_FILE}:" \
+    | grep -vE "^adminme/+lib/skill_runner/wrapper\.py:" \
     || true)
 if [ -n "$skill_violations" ]; then
     report "[§7]/[ADR-0002] skill.call.* emitted outside skill_runner wrapper:"
-    echo "$skill_violations" | sed 's/^/    /'
+    printf '%s\n' "$skill_violations" | awk '{print "    " $0}'
 fi
 
 # ─── Pipeline → projection direct writes ────────────────────────────────

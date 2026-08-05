@@ -156,40 +156,56 @@ async def test_identifier_unique_constraint(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
 
     await log.append(
-        _envelope("party.created", {
-            "party_id": "p1", "kind": "person",
-            "display_name": "Ada", "sort_name": "Ada",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
+            },
+        )
     )
     await log.append(
-        _envelope("party.created", {
-            "party_id": "p2", "kind": "person",
-            "display_name": "Grace", "sort_name": "Grace",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p2",
+                "kind": "person",
+                "display_name": "Grace",
+                "sort_name": "Grace",
+            },
+        )
     )
     await log.append(
-        _envelope("identifier.added", {
-            "identifier_id": "i1",
-            "party_id": "p1",
-            "kind": "email",
-            "value": "a@example.com",
-            "value_normalized": "a@example.com",
-            "verified": False,
-            "primary_for_kind": True,
-        })
+        _envelope(
+            "identifier.added",
+            {
+                "identifier_id": "i1",
+                "party_id": "p1",
+                "kind": "email",
+                "value": "a@example.com",
+                "value_normalized": "a@example.com",
+                "verified": False,
+                "primary_for_kind": True,
+            },
+        )
     )
     # Second identifier claims the same normalized value for a different party —
     # merge-candidate guard drops it.
     last = await log.append(
-        _envelope("identifier.added", {
-            "identifier_id": "i2",
-            "party_id": "p2",
-            "kind": "email",
-            "value": "a@example.com",
-            "value_normalized": "a@example.com",
-            "verified": False,
-            "primary_for_kind": True,
-        })
+        _envelope(
+            "identifier.added",
+            {
+                "identifier_id": "i2",
+                "party_id": "p2",
+                "kind": "email",
+                "value": "a@example.com",
+                "value_normalized": "a@example.com",
+                "verified": False,
+                "primary_for_kind": True,
+            },
+        )
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:parties", last)
@@ -209,38 +225,59 @@ async def test_membership_roundtrip(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
 
     await log.append(
-        _envelope("party.created", {
-            "party_id": "hh", "kind": "household",
-            "display_name": "Household A", "sort_name": "Household A",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "hh",
+                "kind": "household",
+                "display_name": "Household A",
+                "sort_name": "Household A",
+            },
+        )
     )
     await log.append(
-        _envelope("party.created", {
-            "party_id": "m1", "kind": "person",
-            "display_name": "Ada", "sort_name": "Ada",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "m1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
+            },
+        )
     )
     await log.append(
-        _envelope("party.created", {
-            "party_id": "m2", "kind": "person",
-            "display_name": "Grace", "sort_name": "Grace",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "m2",
+                "kind": "person",
+                "display_name": "Grace",
+                "sort_name": "Grace",
+            },
+        )
     )
     await log.append(
-        _envelope("membership.added", {
-            "membership_id": "mem1",
-            "party_id": "m1",
-            "parent_party_id": "hh",
-            "role": "principal",
-        })
+        _envelope(
+            "membership.added",
+            {
+                "membership_id": "mem1",
+                "party_id": "m1",
+                "parent_party_id": "hh",
+                "role": "principal",
+            },
+        )
     )
     last = await log.append(
-        _envelope("membership.added", {
-            "membership_id": "mem2",
-            "party_id": "m2",
-            "parent_party_id": "hh",
-            "role": "principal",
-        })
+        _envelope(
+            "membership.added",
+            {
+                "membership_id": "mem2",
+                "party_id": "m2",
+                "parent_party_id": "hh",
+                "role": "principal",
+            },
+        )
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:parties", last)
@@ -257,19 +294,27 @@ async def test_relationship_mutual_visible_from_both_sides(rig: dict[str, Any]) 
 
     for pid, name in [("p1", "Ada"), ("p2", "Grace")]:
         await log.append(
-            _envelope("party.created", {
-                "party_id": pid, "kind": "person",
-                "display_name": name, "sort_name": name,
-            })
+            _envelope(
+                "party.created",
+                {
+                    "party_id": pid,
+                    "kind": "person",
+                    "display_name": name,
+                    "sort_name": name,
+                },
+            )
         )
     last = await log.append(
-        _envelope("relationship.added", {
-            "relationship_id": "r1",
-            "party_a": "p1",
-            "party_b": "p2",
-            "label": "sibling",
-            "direction": "mutual",
-        })
+        _envelope(
+            "relationship.added",
+            {
+                "relationship_id": "r1",
+                "party_a": "p1",
+                "party_b": "p2",
+                "label": "sibling",
+                "direction": "mutual",
+            },
+        )
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:parties", last)
@@ -287,27 +332,36 @@ async def test_find_party_by_identifier(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
 
     await log.append(
-        _envelope("party.created", {
-            "party_id": "p1", "kind": "person",
-            "display_name": "Ada", "sort_name": "Ada",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
+            },
+        )
     )
     last = await log.append(
-        _envelope("identifier.added", {
-            "identifier_id": "i1",
-            "party_id": "p1",
-            "kind": "email",
-            "value": "Ada@Example.com",
-            "value_normalized": "ada@example.com",
-            "verified": True,
-            "primary_for_kind": True,
-        })
+        _envelope(
+            "identifier.added",
+            {
+                "identifier_id": "i1",
+                "party_id": "p1",
+                "kind": "email",
+                "value": "Ada@Example.com",
+                "value_normalized": "ada@example.com",
+                "verified": True,
+                "primary_for_kind": True,
+            },
+        )
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:parties", last)
 
     conn = runner.connection("parties")
-    party = find_party_by_identifier(conn, _S("tenant-a"), kind="email", value_normalized="ada@example.com"
+    party = find_party_by_identifier(
+        conn, _S("tenant-a"), kind="email", value_normalized="ada@example.com"
     )
     assert party is not None and party["party_id"] == "p1"
 
@@ -320,22 +374,30 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
     # Populate a deterministic corpus.
     for i in range(10):
         await log.append(
-            _envelope("party.created", {
-                "party_id": f"p{i}", "kind": "person",
-                "display_name": f"Name{i}", "sort_name": f"Name{i:02d}",
-            })
+            _envelope(
+                "party.created",
+                {
+                    "party_id": f"p{i}",
+                    "kind": "person",
+                    "display_name": f"Name{i}",
+                    "sort_name": f"Name{i:02d}",
+                },
+            )
         )
     for i in range(10):
         await log.append(
-            _envelope("identifier.added", {
-                "identifier_id": f"id{i}",
-                "party_id": f"p{i}",
-                "kind": "email",
-                "value": f"p{i}@example.com",
-                "value_normalized": f"p{i}@example.com",
-                "verified": False,
-                "primary_for_kind": True,
-            })
+            _envelope(
+                "identifier.added",
+                {
+                    "identifier_id": f"id{i}",
+                    "party_id": f"p{i}",
+                    "kind": "email",
+                    "value": f"p{i}@example.com",
+                    "value_normalized": f"p{i}@example.com",
+                    "verified": False,
+                    "primary_for_kind": True,
+                },
+            )
         )
     last = await log.latest_event_id()
     assert last is not None
@@ -344,9 +406,7 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
 
     conn = runner.connection("parties")
     pre = {
-        "parties": conn.execute(
-            "SELECT * FROM parties ORDER BY party_id"
-        ).fetchall(),
+        "parties": conn.execute("SELECT * FROM parties ORDER BY party_id").fetchall(),
         "identifiers": conn.execute(
             "SELECT * FROM identifiers ORDER BY identifier_id"
         ).fetchall(),
@@ -357,9 +417,7 @@ async def test_rebuild_produces_equivalent_state(rig: dict[str, Any]) -> None:
 
     conn = runner.connection("parties")
     post = {
-        "parties": conn.execute(
-            "SELECT * FROM parties ORDER BY party_id"
-        ).fetchall(),
+        "parties": conn.execute("SELECT * FROM parties ORDER BY party_id").fetchall(),
         "identifiers": conn.execute(
             "SELECT * FROM identifiers ORDER BY identifier_id"
         ).fetchall(),
@@ -374,10 +432,15 @@ async def test_unsubscribed_event_ignored(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
 
     await log.append(
-        _envelope("party.created", {
-            "party_id": "p1", "kind": "person",
-            "display_name": "Ada", "sort_name": "Ada",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
+            },
+        )
     )
     # Append an event the parties projection does not subscribe to.
     last = await log.append(
@@ -415,8 +478,10 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
         _envelope(
             "party.created",
             {
-                "party_id": "p1", "kind": "person",
-                "display_name": "Ada", "sort_name": "Ada",
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
             },
             tenant_id="tenant-a",
         )
@@ -425,8 +490,10 @@ async def test_tenant_isolation(rig: dict[str, Any]) -> None:
         _envelope(
             "party.created",
             {
-                "party_id": "p1", "kind": "person",
-                "display_name": "Ada's Twin", "sort_name": "Ada",
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada's Twin",
+                "sort_name": "Ada",
             },
             tenant_id="tenant-b",
         )
@@ -453,16 +520,26 @@ async def test_all_parties_filters_by_kind(rig: dict[str, Any]) -> None:
     runner = rig["runner"]
 
     await log.append(
-        _envelope("party.created", {
-            "party_id": "p1", "kind": "person",
-            "display_name": "Ada", "sort_name": "Ada",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "p1",
+                "kind": "person",
+                "display_name": "Ada",
+                "sort_name": "Ada",
+            },
+        )
     )
     last = await log.append(
-        _envelope("party.created", {
-            "party_id": "org1", "kind": "organization",
-            "display_name": "ACME", "sort_name": "ACME",
-        })
+        _envelope(
+            "party.created",
+            {
+                "party_id": "org1",
+                "kind": "organization",
+                "display_name": "ACME",
+                "sort_name": "ACME",
+            },
+        )
     )
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:parties", last)

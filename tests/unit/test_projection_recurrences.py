@@ -37,7 +37,6 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     return build_internal_session("test_actor", "principal", tenant_id)
 
 
-
 @pytest.fixture
 async def rig(tmp_path: Path):
     instance_dir = tmp_path / "instance"
@@ -251,8 +250,7 @@ async def test_due_within_filters_cutoff(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:recurrences", last)
 
     conn = runner.connection("recurrences")
-    rows = due_within(conn, _S("tenant-a"), days=30, as_of_iso="2026-04-24T00:00:00Z"
-    )
+    rows = due_within(conn, _S("tenant-a"), days=30, as_of_iso="2026-04-24T00:00:00Z")
     assert {r["recurrence_id"] for r in rows} == {"soon"}
 
 
@@ -264,7 +262,9 @@ async def test_for_member_includes_household(rig: dict[str, Any]) -> None:
     await log.append(
         _envelope(
             "recurrence.added",
-            _daily_payload(recurrence_id="rec-hh", linked_kind="household", linked_id="hh"),
+            _daily_payload(
+                recurrence_id="rec-hh", linked_kind="household", linked_id="hh"
+            ),
         )
     )
     await log.append(
@@ -413,13 +413,17 @@ async def test_all_active_orders_by_next(rig: dict[str, Any]) -> None:
     await log.append(
         _envelope(
             "recurrence.added",
-            _daily_payload(recurrence_id="rec-late", next_occurrence="2026-06-01T00:00:00Z"),
+            _daily_payload(
+                recurrence_id="rec-late", next_occurrence="2026-06-01T00:00:00Z"
+            ),
         )
     )
     last = await log.append(
         _envelope(
             "recurrence.added",
-            _daily_payload(recurrence_id="rec-soon", next_occurrence="2026-04-25T00:00:00Z"),
+            _daily_payload(
+                recurrence_id="rec-soon", next_occurrence="2026-04-25T00:00:00Z"
+            ),
         )
     )
     await bus.notify(last)
@@ -455,8 +459,7 @@ async def test_scope_canary_privileged_drops_for_non_owner(
     assert row is None
 
     raw = conn.execute(
-        "SELECT count(*) FROM recurrences WHERE tenant_id = ? "
-        "AND recurrence_id = ?",
+        "SELECT count(*) FROM recurrences WHERE tenant_id = ? AND recurrence_id = ?",
         ("tenant-a", "rec-priv"),
     ).fetchone()
     assert raw[0] == 1

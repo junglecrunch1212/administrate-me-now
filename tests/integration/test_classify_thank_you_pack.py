@@ -19,8 +19,10 @@ import httpx
 import pytest
 import yaml
 
+from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.events.registry import ensure_autoloaded
+from adminme.events.writer import EventSink, EventWriter
 from adminme.lib.session import Session
 from adminme.lib.skill_runner.pack_loader import invalidate_cache, load_pack
 from adminme.lib.skill_runner.wrapper import (
@@ -81,7 +83,7 @@ class _MockTransport(httpx.MockTransport):
 
 
 def _runtime_for(
-    event_log: EventLog,
+    event_sink: EventSink,
     tmp_path: Path,
     *,
     transport: httpx.MockTransport,
@@ -93,7 +95,7 @@ def _runtime_for(
         return httpx.AsyncClient(transport=transport, timeout=10.0)
 
     return _Runtime(
-        event_log=event_log,
+        event_sink=event_sink,
         raw_events_dir=raw_dir,
         httpx_client_factory=client_factory,
     )
@@ -164,15 +166,16 @@ async def _run_fixture(
 ) -> SkillResult:
     fixture = _load_fixture(fixture_name)
     transport = _MockTransport(_ok_responder(_gateway_response_from_fixture(fixture)))
-    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    bus = EventBus(event_log, tmp_path / "bus.db")
+    await bus.start()
+    runtime = _runtime_for(EventWriter(event_log, bus), tmp_path, transport=transport)
     _set_runtime_for_tests(runtime)
     try:
         ctx = SkillContext(session=_session())
-        result = await run_skill(
-            "classify_thank_you_candidate", fixture["input"], ctx
-        )
+        result = await run_skill("classify_thank_you_candidate", fixture["input"], ctx)
     finally:
         _set_runtime_for_tests(None)
+        await bus.stop()
 
     assert isinstance(result, SkillResult)
     _assert_matches_expected(result.output, fixture)

@@ -6,7 +6,9 @@ Per ADMINISTRATEME_BUILD.md §3.10 and SYSTEM_INVARIANTS.md §6.3, §8, §13.8.
 Uses sqlite-vec's vec0 virtual table (with an ``embeddings_meta`` sidecar)
 to answer nearest-neighbor queries over interaction summaries, artifact
 extracted_text, and party notes. Vectors are pre-computed by a separate
-embedding daemon (future prompt); this projection stores and queries only.
+domain indexing pipeline. Gate 6 supplies a deterministic local fixture
+embedding path, rejects privileged content, and preserves owner/provenance
+filters. OpenClaw conversation memory is never indexed here.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from adminme.projections.vector_search import handlers
 
 class VectorSearchProjection(Projection):
     name = "vector_search"
-    version = 1
+    version = 2
     subscribes_to = ["embedding.generated"]
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -35,6 +37,27 @@ class VectorSearchProjection(Projection):
 
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         handlers.apply_event(envelope, conn)
+
+    def migrate_schema(self, conn: Any) -> None:
+        """Add provenance/scope columns to a pre-Gate-6 disposable index."""
+
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(embeddings_meta)")
+        }
+        additions = {
+            "owner_scope": "TEXT NOT NULL DEFAULT 'shared:household'",
+            "visibility_scope": "TEXT NOT NULL DEFAULT 'shared:household'",
+            "source_event_id": "TEXT NOT NULL DEFAULT 'legacy'",
+            "source_adapter": "TEXT NOT NULL DEFAULT 'unknown:legacy'",
+            "source_account_id": "TEXT NOT NULL DEFAULT 'legacy'",
+            "correlation_id": "TEXT",
+            "causation_id": "TEXT",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                conn.execute(
+                    f"ALTER TABLE embeddings_meta ADD COLUMN {name} {declaration}"
+                )
 
 
 __all__ = ["VectorSearchProjection"]

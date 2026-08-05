@@ -18,8 +18,7 @@ def test_pack_loads_cleanly() -> None:
     assert loaded.version == "2.0.0"
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
-        "anthropic/claude-haiku-4-5"
-        in loaded.skill_frontmatter["provider_preferences"]
+        "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]
     )
     assert loaded.handler_post_process is not None
     assert loaded.output_schema["properties"]["classification"]["enum"] == [

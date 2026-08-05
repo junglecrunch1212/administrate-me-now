@@ -1,0 +1,97 @@
+name: macOS bootstrap contract
+
+on:
+  pull_request:
+    paths:
+      - "bootstrap/**"
+      - "adminme/**"
+      - "openclaw/administrateme/**"
+      - "scripts/acceptance/**"
+      - "scripts/verify_invariants.sh"
+      - "tests/acceptance/test_macos_bootstrap_operations.py"
+      - "tests/unit/bootstrap/**"
+      - ".github/workflows/macos-bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  credential-free-rehearsal:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      ADMINME_TEST_MODE: "1"
+      PYTHONPATH: bridge
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record Apple architecture and validate architecture gates
+        run: |
+          uname -a
+          python3 <<'PY'
+          from pathlib import Path
+          from bootstrap.preflight import PreflightFailure, run_preflight
+
+          try:
+              run_preflight(
+                  Path("/tmp/never-created-adminme"),
+                  system="Darwin",
+                  machine="x86_64",
+                  macos_version="14.0",
+                  require_dependencies=False,
+                  check_filevault=False,
+              )
+          except PreflightFailure:
+              pass
+          else:
+              raise SystemExit("wrong architecture did not fail")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: |
+            openclaw/administrateme/package-lock.json
+            tools/console-reference-harness/package-lock.json
+
+      - name: Install exact locked Python environment
+        run: |
+          python -m pip install "poetry==2.2.1"
+          poetry install --with dev --sync --no-interaction
+
+      - name: Validate shell entrypoints
+        run: |
+          brew install shellcheck
+          shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
+          bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
+
+      - name: Validate the exact native plugin contract
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+
+      - name: Build and verify the exact reviewed OpenClaw source
+        run: bash scripts/acceptance/openclaw-source-install.sh
+
+      - name: Credential-free clean install and recovery rehearsal
+        run: |
+          poetry run ./scripts/acceptance/clean-install.sh
+          poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh
+          poetry run ./scripts/acceptance/backup-restore.sh
+
+      - name: Static checks and secret-safe tree
+        run: |
+          poetry run ruff check bootstrap tests/unit/bootstrap tests/acceptance/test_macos_bootstrap_operations.py
+          poetry run mypy bootstrap --no-error-summary
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Whole-repository release-candidate suite
+        run: bash scripts/acceptance/release-candidate.sh

@@ -1,6 +1,6 @@
 """Handler-direct unit tests for identity_resolution.
 
-Construct a fake PipelineContext and capture event_log.append calls,
+Construct a fake PipelineContext and capture typed event-sink writes,
 exercising _classify_identifier (helper) and the three branches of
 ``handle()``: outbound-skip, miss-with-empty-candidates (party.created
 + identifier.added), miss-with-above-threshold-candidate
@@ -21,10 +21,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[2]
-    / "packs"
-    / "pipelines"
-    / "identity_resolution"
+    Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "identity_resolution"
 )
 
 
@@ -57,7 +54,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -85,6 +82,7 @@ def _make_ctx(event_log: Any) -> PipelineContext:
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
@@ -151,9 +149,7 @@ def test_imessage_classification() -> None:
     event = _messaging_received_event(
         source_channel="imessage_adminme", from_id="Ada@me.COM"
     )
-    _, kind, value_normalized = _classify_identifier(
-        event["type"], event["payload"]
-    )
+    _, kind, value_normalized = _classify_identifier(event["type"], event["payload"])
     assert kind == "imessage_handle"
     assert value_normalized == "ada@me.com"
 
@@ -220,9 +216,7 @@ async def test_above_threshold_emits_merge_suggested() -> None:
     ]
     log = _FakeEventLog()
     ctx = _make_ctx(log)
-    pipeline = IdentityResolutionPipeline(
-        candidate_loader=lambda kind: candidates
-    )
+    pipeline = IdentityResolutionPipeline(candidate_loader=lambda kind: candidates)
     event = _messaging_received_event(
         source_channel="gmail", from_id="augustus@example.com"
     )
@@ -247,14 +241,10 @@ async def test_above_threshold_emits_merge_suggested() -> None:
 @pytest.mark.asyncio
 async def test_below_threshold_emits_party_created() -> None:
     # Different local-part lengths → score below 0.85.
-    candidates = [
-        {"party_id": "party_existing", "value_normalized": "bob@example.com"}
-    ]
+    candidates = [{"party_id": "party_existing", "value_normalized": "bob@example.com"}]
     log = _FakeEventLog()
     ctx = _make_ctx(log)
-    pipeline = IdentityResolutionPipeline(
-        candidate_loader=lambda kind: candidates
-    )
+    pipeline = IdentityResolutionPipeline(candidate_loader=lambda kind: candidates)
     event = _messaging_received_event(
         source_channel="gmail", from_id="alice@example.com"
     )
@@ -266,16 +256,10 @@ async def test_below_threshold_emits_party_created() -> None:
 
 @pytest.mark.asyncio
 async def test_exact_match_returns_without_emit() -> None:
-    candidates = [
-        {"party_id": "party_existing", "value_normalized": "ada@example.com"}
-    ]
+    candidates = [{"party_id": "party_existing", "value_normalized": "ada@example.com"}]
     log = _FakeEventLog()
     ctx = _make_ctx(log)
-    pipeline = IdentityResolutionPipeline(
-        candidate_loader=lambda kind: candidates
-    )
-    event = _messaging_received_event(
-        source_channel="gmail", from_id="ada@example.com"
-    )
+    pipeline = IdentityResolutionPipeline(candidate_loader=lambda kind: candidates)
+    event = _messaging_received_event(source_channel="gmail", from_id="ada@example.com")
     await pipeline.handle(event, ctx)
     assert log.calls == []

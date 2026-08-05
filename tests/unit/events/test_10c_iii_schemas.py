@@ -262,9 +262,7 @@ def test_reminder_dispatched_round_trips_through_envelope() -> None:
             "validation_failed": False,
         },
     )
-    validated = registry.validate(
-        "reminder.dispatched", 1, envelope.payload
-    )
+    validated = registry.validate("reminder.dispatched", 1, envelope.payload)
     assert isinstance(validated, ReminderDispatchedV1)
 
 
@@ -291,9 +289,7 @@ def test_crm_surfaced_round_trips_through_envelope() -> None:
             "validation_failed": False,
         },
     )
-    validated = registry.validate(
-        "crm.surfaced", 1, envelope.payload
-    )
+    validated = registry.validate("crm.surfaced", 1, envelope.payload)
     assert isinstance(validated, CrmSurfacedV1)
 
 
@@ -320,7 +316,5 @@ def test_custody_brief_composed_round_trips_through_envelope() -> None:
             "validation_failed": False,
         },
     )
-    validated = registry.validate(
-        "custody_brief.composed", 1, envelope.payload
-    )
+    validated = registry.validate("custody_brief.composed", 1, envelope.payload)
     assert isinstance(validated, CustodyBriefComposedV1)

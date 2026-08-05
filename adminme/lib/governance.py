@@ -40,7 +40,7 @@ import yaml
 from adminme.events.envelope import EventEnvelope
 
 if TYPE_CHECKING:
-    from adminme.events.log import EventLog
+    from adminme.events.writer import EventSink
     from adminme.lib.session import Session
 
 _log = logging.getLogger(__name__)
@@ -365,12 +365,12 @@ class GuardedWrite:
         config: ActionGateConfig,
         limiter: RateLimiter,
         allowlist: AgentAllowlist,
-        event_log: "EventLog",
+        event_sink: "EventSink",
     ) -> None:
         self._config = config
         self._limiter = limiter
         self._allowlist = allowlist
-        self._log = event_log
+        self._events = event_sink
 
     async def check(
         self,
@@ -520,7 +520,7 @@ class GuardedWrite:
                 "actor_identity": session.auth_member_id,
             },
         )
-        await self._log.append(envelope, correlation_id=correlation)
+        await self._events.write(envelope, correlation_id=correlation)
 
     async def _emit_review_request(
         self,
@@ -553,7 +553,7 @@ class GuardedWrite:
                 "actor_identity": session.auth_member_id,
             },
         )
-        await self._log.append(envelope, correlation_id=correlation)
+        await self._events.write(envelope, correlation_id=correlation)
 
 
 __all__ = [

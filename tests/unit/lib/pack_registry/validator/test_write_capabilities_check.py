@@ -75,9 +75,7 @@ def test_missing_both_shapes_yields_error_per_operation(tmp_path: Path) -> None:
     """Neither ``_handle_<op>`` nor a dispatching ``_apply_write_impl`` → one error per op."""
     _write_adapter(
         tmp_path,
-        "class FakeMirror:\n"
-        "    async def start(self, *, ctx):\n"
-        "        pass\n",
+        "class FakeMirror:\n    async def start(self, *, ctx):\n        pass\n",
     )
     manifest = AdapterManifest.model_validate(
         {

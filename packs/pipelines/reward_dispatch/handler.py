@@ -137,9 +137,7 @@ def _resolve_member_id(event_type: str, payload: dict[str, Any]) -> str | None:
 class RewardDispatchPipeline:
     pack_id: str = "pipeline:reward_dispatch"
     version: str = "1.0.0"
-    triggers: Triggers = {
-        "events": ["task.completed", "commitment.completed"]
-    }
+    triggers: Triggers = {"events": ["task.completed", "commitment.completed"]}
 
     def __init__(
         self,
@@ -150,9 +148,7 @@ class RewardDispatchPipeline:
         self._profile_loader: ProfileLoader = profile_loader or (lambda _mid: None)
         self._persona_loader: PersonaLoader = persona_loader or (lambda: None)
 
-    async def handle(
-        self, event: dict[str, Any], ctx: PipelineContext
-    ) -> None:
+    async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in ("task.completed", "commitment.completed"):
             return
@@ -176,9 +172,7 @@ class RewardDispatchPipeline:
             )
         else:
             triggering_commitment_id = (
-                str(payload["commitment_id"])
-                if "commitment_id" in payload
-                else None
+                str(payload["commitment_id"]) if "commitment_id" in payload else None
             )
 
         profile = self._profile_loader(member_id)
@@ -217,6 +211,7 @@ class RewardDispatchPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity="normal",
+            idempotency_key=f"reward:{source_event_id}",
             payload={
                 "member_id": member_id,
                 "tier": tier,
@@ -226,7 +221,7 @@ class RewardDispatchPipeline:
                 "triggering_commitment_id": triggering_commitment_id,
             },
         )
-        await ctx.event_log.append(
+        await ctx.event_sink.write(
             envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,

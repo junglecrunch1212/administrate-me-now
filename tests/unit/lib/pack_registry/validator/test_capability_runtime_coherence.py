@@ -71,9 +71,7 @@ def test_cat_d_with_owner_scope_overridability_true_yields_error_finding() -> No
     field_paths = {f.field_path for f in findings}
     assert "owner_scope_overridability_at_install" in field_paths
     matching = [
-        f
-        for f in findings
-        if f.field_path == "owner_scope_overridability_at_install"
+        f for f in findings if f.field_path == "owner_scope_overridability_at_install"
     ]
     assert matching[0].severity == "error"
     assert matching[0].check == "capability_runtime_coherence"
@@ -112,9 +110,7 @@ def test_cat_a_messaging_with_bridge_runtime_yields_error() -> None:
             ]
         }
     )
-    findings = check_capability_runtime_coherence(
-        manifest, pack_family="messaging"
-    )
+    findings = check_capability_runtime_coherence(manifest, pack_family="messaging")
     assert len(findings) == 1
     assert findings[0].severity == "error"
     assert findings[0].field_path == "capabilities[0].runtime"
@@ -133,9 +129,7 @@ def test_cat_a_messaging_with_central_runtime_is_happy() -> None:
             ]
         }
     )
-    findings = check_capability_runtime_coherence(
-        manifest, pack_family="messaging"
-    )
+    findings = check_capability_runtime_coherence(manifest, pack_family="messaging")
     assert findings == []
 
 

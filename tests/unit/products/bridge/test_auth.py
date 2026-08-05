@@ -90,6 +90,7 @@ def test_resolve_member_id_blank_member_id_raises_403() -> None:
     """A resolver that returns ``""`` for some reason (e.g. stale
     projection row) is still a privileged-access violation — never
     silently let an empty member_id stamp owner_scope."""
+
     class BadResolver:
         def resolve(self, tailscale_identity: str) -> str:
             return ""

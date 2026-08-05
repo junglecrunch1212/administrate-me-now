@@ -104,7 +104,9 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
     if not isinstance(pack_id, str) or not pack_id:
         raise PipelinePackLoadError("pipeline.yaml: pack.id missing or not a string")
     if not isinstance(version, str) or not version:
-        raise PipelinePackLoadError("pipeline.yaml: pack.version missing or not a string")
+        raise PipelinePackLoadError(
+            "pipeline.yaml: pack.version missing or not a string"
+        )
     if kind != "pipeline":
         raise PipelinePackLoadError(
             f"pipeline.yaml: pack.kind must be 'pipeline', got {kind!r}"
@@ -165,9 +167,7 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
 
     events_emitted_raw = manifest.get("events_emitted") or []
     if not isinstance(events_emitted_raw, list):
-        raise PipelinePackLoadError(
-            "pipeline.yaml: events_emitted must be a list"
-        )
+        raise PipelinePackLoadError("pipeline.yaml: events_emitted must be a list")
     events_emitted = [str(x) for x in events_emitted_raw]
 
     loaded = LoadedPipelinePack(

@@ -1,0 +1,17 @@
+{
+  "id": "kid_scoreboard",
+  "kind": "profile",
+  "version": "1.0.0",
+  "label": "Kid scoreboard",
+  "profile_format": "scoreboard",
+  "behavior": {
+    "available_minutes": 10,
+    "current_energy": "medium",
+    "preferred_contexts": ["school", "home", "chore"],
+    "quiet_hours": {"start": 19, "end": 7},
+    "nudge_penalty": 25,
+    "recent_outcome_bias": 20
+  },
+  "reward_distribution": {"done": 0.45, "warm": 0.35, "delight": 0.18, "jackpot": 0.02},
+  "delivery_channel": "openclaw"
+}

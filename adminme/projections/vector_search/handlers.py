@@ -10,12 +10,12 @@ Subscribed event types:
 
 [§13.8] privileged content is filtered at write time. Either envelope-
 or payload-level ``sensitivity == 'privileged'`` drops the event with an
-INFO log before any row lands. Prompt 08 adds read-time filtering on
-``Session`` for defense in depth.
+INFO log before any row lands. Queries require a ``Session`` and reapply
+owner/visibility authorization for defense in depth.
 
 [§8] AdministrateMe does not import embedding SDKs. The vector is already
-computed by the embedding daemon (future prompt) that calls OpenClaw's
-embedding endpoint.
+supplied by an authorized domain indexing pipeline with source scope and
+provenance. The credential-free fixture uses a deterministic local hash vector.
 """
 
 from __future__ import annotations
@@ -99,8 +99,10 @@ def apply_embedding_generated(
         INSERT INTO embeddings_meta (
             tenant_id, embedding_id, linked_kind, linked_id,
             embedding_dimensions, model_name, sensitivity,
-            source_text_sha256, created_at_ms, last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_text_sha256, owner_scope, visibility_scope,
+            source_event_id, source_adapter, source_account_id,
+            correlation_id, causation_id, created_at_ms, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, embedding_id) DO UPDATE SET
             linked_kind          = excluded.linked_kind,
             linked_id            = excluded.linked_id,
@@ -108,6 +110,13 @@ def apply_embedding_generated(
             model_name           = excluded.model_name,
             sensitivity          = excluded.sensitivity,
             source_text_sha256   = excluded.source_text_sha256,
+            owner_scope          = excluded.owner_scope,
+            visibility_scope     = excluded.visibility_scope,
+            source_event_id      = excluded.source_event_id,
+            source_adapter       = excluded.source_adapter,
+            source_account_id    = excluded.source_account_id,
+            correlation_id       = excluded.correlation_id,
+            causation_id         = excluded.causation_id,
             created_at_ms        = excluded.created_at_ms,
             last_event_id        = excluded.last_event_id
         """,
@@ -120,6 +129,13 @@ def apply_embedding_generated(
             p["model_name"],
             payload_sensitivity,
             p["source_text_sha256"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope.get("causation_id") or envelope["event_id"],
+            envelope["source_adapter"],
+            envelope["source_account_id"],
+            envelope.get("correlation_id"),
+            envelope.get("causation_id"),
             envelope.get("event_at_ms", int(time.time() * 1000)),
             envelope["event_id"],
         ),

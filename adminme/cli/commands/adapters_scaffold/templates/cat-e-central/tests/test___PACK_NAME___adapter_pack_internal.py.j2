@@ -1,0 +1,19 @@
+"""Pack-internal tests for the ``<NAME>`` Cat-E adapter."""
+
+from __future__ import annotations
+
+from <NAME>.adapter import <CLASSNAME>
+
+
+def test_<NAME>_adapter_declares_pack_name() -> None:
+    assert <CLASSNAME>.name == "<NAME>"
+
+
+def test_<NAME>_adapter_inherits_outbound_action_base() -> None:
+    from adminme.lib.adapters import OutboundActionAdapter
+
+    assert issubclass(<CLASSNAME>, OutboundActionAdapter)
+
+
+def test_<NAME>_adapter_pins_observation_mode_required() -> None:
+    assert <CLASSNAME>.observation_mode_required is True

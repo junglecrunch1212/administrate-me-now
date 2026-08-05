@@ -1,27 +1,83 @@
-"""Bridge daemon entrypoint — async lifecycle for knowledge-source adapters.
-
-Mirrors ``adminme/daemons/adapter_supervisor.py`` but Cat-D-only and
-HTTP-emit. 11c-i ships the shell; the instantiate-from-PackHandle hook
-lands in 11c-ii."""
+"""Bridge daemon lifecycle for opt-in Cat-B and Cat-D connector packs."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import signal
+import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from adminme.events.envelope import EventEnvelope
 
 from adminme_bridge.adapters.base import AdapterStatus, BridgeAdapter, BridgeContext
 from adminme_bridge.config import BridgeConfig, load_config
 from adminme_bridge.ingest_client import IngestClient
-from adminme_bridge.packs import PackHandle, discover_packs
+from adminme_bridge.packs import (
+    PackHandle,
+    PackLoadError,
+    discover_packs,
+    instantiate_pack,
+)
 
 
 DEFAULT_CONFIG_PATH = Path("~/.adminme-bridge/config.yaml").expanduser()
 
 logger = logging.getLogger(__name__)
+
+
+class _CommandLedger:
+    """Durable result envelope cache preventing duplicate create side effects."""
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(path), isolation_level=None)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_command_results ("
+            "command_id TEXT PRIMARY KEY, envelope_json TEXT NOT NULL)"
+        )
+
+    def get(self, command_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT envelope_json FROM bridge_command_results WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put(self, command_id: str, envelope: dict) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO bridge_command_results VALUES (?, ?)",
+            (command_id, json.dumps(envelope, separators=(",", ":"), sort_keys=True)),
+        )
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def configured_packs(config: BridgeConfig) -> list[PackHandle]:
+    """Combine installed packs with explicitly enabled built-in packs."""
+
+    installed = {
+        handle.name: handle for handle in discover_packs(config.resolved_packs_dir())
+    }
+    built_in_root = Path(__file__).parent / "connector_packs"
+    built_ins = {handle.name: handle for handle in discover_packs(built_in_root)}
+    enabled = set(config.enabled_packs) | set(config.pack_config)
+    unknown = enabled - (set(installed) | set(built_ins))
+    if unknown:
+        raise PackLoadError(f"configured bridge packs not found: {sorted(unknown)}")
+    selected = dict(installed)
+    for name in enabled:
+        if name in built_ins:
+            selected[name] = built_ins[name]
+    return [selected[name] for name in sorted(selected)]
 
 
 class BridgeSupervisor:
@@ -37,10 +93,31 @@ class BridgeSupervisor:
     ) -> None:
         self._config = config
         self._ingest_client = ingest_client
-        self._packs = packs or []
-        self._adapters: list[BridgeAdapter] = adapters or []
+        self._packs = list(packs or [])
+        if adapters is None:
+            self._adapters = [
+                instantiate_pack(
+                    handle,
+                    config_override={
+                        **self._config.pack_config.get(handle.name, {}),
+                        **(
+                            {
+                                "cursor_db_path": str(
+                                    self._config.resolved_cursor_db_path()
+                                )
+                            }
+                            if handle.subkind == "knowledge-source"
+                            else {}
+                        ),
+                    },
+                )
+                for handle in self._packs
+            ]
+        else:
+            self._adapters = list(adapters)
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
+        self._command_ledger = _CommandLedger(config.resolved_cursor_db_path())
 
     @property
     def adapters(self) -> list[BridgeAdapter]:
@@ -52,6 +129,7 @@ class BridgeSupervisor:
             ingest_client=self._ingest_client,
             correlation_id_factory=lambda: str(uuid.uuid4()),
             now_factory=lambda: datetime.now(timezone.utc),
+            tenant_id=self._config.tenant_id,
         )
 
     async def start(self) -> None:
@@ -62,6 +140,16 @@ class BridgeSupervisor:
                     name=f"bridge-adapter:{type(adapter).__name__}",
                 )
             )
+        if any(
+            getattr(adapter, "provider", None)
+            and callable(getattr(adapter, "apply_write", None))
+            for adapter in self._adapters
+        ) and callable(getattr(self._ingest_client, "fetch_commands", None)):
+            self._tasks.append(
+                asyncio.create_task(
+                    self._command_loop(), name="bridge-command-dispatcher"
+                )
+            )
 
     async def stop(self) -> None:
         self._stopping = True
@@ -70,14 +158,131 @@ class BridgeSupervisor:
                 await adapter.stop()
             except Exception:  # noqa: BLE001 — best-effort
                 logger.exception("bridge adapter stop() raised")
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # Give in-flight startup/emission work a bounded chance to commit
+        # before cancellation. Bridge sinks can be waiting on SQLCipher or
+        # an HTTP response when shutdown begins.
+        _done, pending = (
+            await asyncio.wait(self._tasks, timeout=5.0)
+            if self._tasks
+            else (set(), set())
+        )
+        for task in pending:
+            task.cancel()
         for task in self._tasks:
             try:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        self._tasks.clear()
+        self._command_ledger.close()
+
+    async def _command_loop(self) -> None:
+        adapters: dict[str, Any] = {
+            str(getattr(adapter, "provider")): adapter
+            for adapter in self._adapters
+            if getattr(adapter, "provider", None)
+            and callable(getattr(adapter, "apply_write", None))
+        }
+        while not self._stopping:
+            try:
+                response = await self._ingest_client.fetch_commands(list(adapters))
+                for command in response["commands"]:
+                    command_id = str(command["command_id"])
+                    result_envelope = self._command_ledger.get(command_id)
+                    if result_envelope is None:
+                        adapter = adapters.get(str(command["provider"]))
+                        if adapter is None:
+                            continue
+                        try:
+                            result = await getattr(adapter, "apply_write")(
+                                str(command["operation"]),
+                                dict(command.get("payload") or {}),
+                                command.get("target_external_id"),
+                            )
+                        except RuntimeError as exc:
+                            if "has not finished starting" in str(exc):
+                                continue
+                            result_envelope = self._result_envelope(command, error=exc)
+                        except Exception as exc:  # noqa: BLE001 - typed provider failure
+                            result_envelope = self._result_envelope(command, error=exc)
+                        else:
+                            result_envelope = self._result_envelope(
+                                command, result=result
+                            )
+                        self._command_ledger.put(command_id, result_envelope)
+                    submit = await self._ingest_client.submit(result_envelope)
+                    if not submit.ok:
+                        logger.warning(
+                            "bridge command result upload failed for %s: %s",
+                            command_id,
+                            submit.error,
+                        )
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - polling supervisor retries
+                logger.exception("bridge command poll failed")
+            try:
+                await asyncio.sleep(self._config.command_poll_interval_s)
+            except asyncio.CancelledError:
+                return
+
+    def _result_envelope(
+        self,
+        command: dict,
+        *,
+        result: dict | None = None,
+        error: Exception | None = None,
+    ) -> dict:
+        now = datetime.now(timezone.utc)
+        if error is None:
+            event_type = "external_sync.write_completed"
+            payload = {
+                "command_id": command["command_id"],
+                "member_id": self._config.member_id,
+                "provider": command["provider"],
+                "operation": command["operation"],
+                "external_id": (result or {}).get("external_id"),
+                "provider_revision": (result or {}).get("provider_revision"),
+                "result": result or {},
+                "completed_at": now.isoformat(),
+                "suppressed": bool((result or {}).get("suppressed", False)),
+            }
+        else:
+            event_type = "external_sync.write_failed"
+            payload = {
+                "command_id": command["command_id"],
+                "member_id": self._config.member_id,
+                "provider": command["provider"],
+                "operation": command["operation"],
+                "error_kind": (
+                    "conflict"
+                    if "conflict" in type(error).__name__.casefold()
+                    or "conflict" in str(error).casefold()
+                    else "not_found"
+                    if isinstance(error, LookupError)
+                    else "validation"
+                    if isinstance(error, ValueError)
+                    else "provider"
+                ),
+                "message": f"{type(error).__name__}: {error}",
+                "retryable": not isinstance(error, (LookupError, ValueError)),
+                "failed_at": now.isoformat(),
+            }
+        return EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=self._config.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now.isoformat(),
+            source_adapter="adminme-bridge-command-dispatcher",
+            source_account_id=self._config.member_id,
+            owner_scope=f"private:{self._config.member_id}",
+            visibility_scope=f"private:{self._config.member_id}",
+            sensitivity="normal",
+            causation_id=str(command["event_id"]),
+            idempotency_key=f"external-sync-result:{command['command_id']}",
+            payload=payload,
+        ).model_dump(mode="json")
 
     def snapshot(self) -> dict:
         return {
@@ -119,12 +324,14 @@ async def _run_until_signal(supervisor: BridgeSupervisor) -> None:
 
 async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
     config = load_config(config_path)
-    packs = list(discover_packs(config.resolved_packs_dir()))
+    packs = configured_packs(config)
     ingest_client = IngestClient(
         central_endpoint_url=config.central_endpoint,
         tailscale_identity_header=config.tailscale_identity,
     )
-    supervisor = BridgeSupervisor(config=config, ingest_client=ingest_client, packs=packs)
+    supervisor = BridgeSupervisor(
+        config=config, ingest_client=ingest_client, packs=packs
+    )
     try:
         await _run_until_signal(supervisor)
     finally:
@@ -133,7 +340,20 @@ async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
 
 def run() -> None:  # pragma: no cover — script entrypoint shape only
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main_async())
+    configured = Path(
+        os.environ.get("ADMINME_BRIDGE_CONFIG", str(DEFAULT_CONFIG_PATH))
+    ).expanduser()
+    asyncio.run(main_async(configured))
 
 
-__all__ = ["DEFAULT_CONFIG_PATH", "BridgeSupervisor", "main_async", "run"]
+__all__ = [
+    "DEFAULT_CONFIG_PATH",
+    "BridgeSupervisor",
+    "configured_packs",
+    "main_async",
+    "run",
+]
+
+
+if __name__ == "__main__":  # pragma: no cover - launchd module entrypoint
+    run()

@@ -32,6 +32,7 @@ import pytest
 
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
 from adminme.lib.session import build_internal_session
@@ -88,26 +89,22 @@ def _seed_morning_digest_pack(
 
 
 async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
-    """Validation passes → outbound() called → digest.composed emitted
-    with delivered=true; external.sent lands."""
+    """Validation raises typed notification intent; OpenClaw owns delivery."""
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runtime_path = tmp_path / "config" / "runtime.yaml"
-    obs_mgr = ObservationManager(
-        event_log=log, runtime_config_path=runtime_path
-    )
-    # Force observation OFF so external.sent lands.
+    obs_mgr = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
+    # Force observation OFF so policy can route the notification to OpenClaw.
     await obs_mgr.disable(actor="test", reason="test_setup_off")
 
     pack = load_pipeline_pack(MORNING_DIGEST_PACK_ROOT)
     _seed_morning_digest_pack(pack)
 
-    session = build_internal_session(
-        "pipeline_runner", "device", config.tenant_id
-    )
+    session = build_internal_session("pipeline_runner", "device", config.tenant_id)
 
     async def fake_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         assert skill_id == "compose_morning_digest"
@@ -126,6 +123,7 @@ async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
     ctx = PipelineContext(
         session=session,
         event_log=log,
+        event_sink=events,
         run_skill_fn=fake_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -142,11 +140,15 @@ async def test_morning_digest_happy_path_round_trip(tmp_path: Path) -> None:
         assert len(digest_events) == 1
         e = digest_events[0]
         assert e["payload"]["validation_failed"] is False
-        assert e["payload"]["delivered"] is True
+        assert e["payload"]["delivered"] is False
         assert e["payload"]["body_text"].startswith("Today:")
-        # external.sent lands because observation is off and outbound() ran.
+        signals = [e for e in all_events if e["type"] == "notification.signal.raised"]
+        decisions = [e for e in all_events if e["type"] == "notification.decision.made"]
+        assert len(signals) == len(decisions) == 1
+        assert signals[0]["payload"]["category"] == "digest"
+        # Domain code never fabricates an external-send result.
         sent_events = [e for e in all_events if e["type"] == "external.sent"]
-        assert len(sent_events) == 1
+        assert sent_events == []
     finally:
         await bus.stop()
         await log.close()
@@ -161,18 +163,15 @@ async def test_morning_digest_fabrication_emits_sentinel(tmp_path: Path) -> None
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
     runtime_path = tmp_path / "config" / "runtime.yaml"
-    obs_mgr = ObservationManager(
-        event_log=log, runtime_config_path=runtime_path
-    )
+    obs_mgr = ObservationManager(event_sink=events, runtime_config_path=runtime_path)
     await obs_mgr.disable(actor="test", reason="test_setup_off")
 
     pack = load_pipeline_pack(MORNING_DIGEST_PACK_ROOT)
     _seed_morning_digest_pack(pack)
 
-    session = build_internal_session(
-        "pipeline_runner", "device", config.tenant_id
-    )
+    session = build_internal_session("pipeline_runner", "device", config.tenant_id)
 
     async def fake_run_skill(skill_id: str, inputs: Any, ctx: Any) -> Any:
         return _FakeSkillResult(
@@ -190,6 +189,7 @@ async def test_morning_digest_fabrication_emits_sentinel(tmp_path: Path) -> None
     ctx = PipelineContext(
         session=session,
         event_log=log,
+        event_sink=events,
         run_skill_fn=fake_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -229,6 +229,7 @@ async def test_paralysis_detection_round_trip(tmp_path: Path) -> None:
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
+    events = EventWriter(log, bus)
 
     pack = load_pipeline_pack(PARALYSIS_DETECTION_PACK_ROOT)
     pack.instance._profile_loader = lambda _mid: {
@@ -247,9 +248,7 @@ async def test_paralysis_detection_round_trip(tmp_path: Path) -> None:
         "as_of_iso": "2026-05-05T15:00:00Z",
     }
 
-    session = build_internal_session(
-        "pipeline_runner", "device", config.tenant_id
-    )
+    session = build_internal_session("pipeline_runner", "device", config.tenant_id)
 
     async def stub_run_skill(*a: Any, **kw: Any) -> Any:
         raise AssertionError(
@@ -266,6 +265,7 @@ async def test_paralysis_detection_round_trip(tmp_path: Path) -> None:
     ctx = PipelineContext(
         session=session,
         event_log=log,
+        event_sink=events,
         run_skill_fn=stub_run_skill,
         outbound_fn=stub_outbound_fn,
         guarded_write=None,
@@ -275,14 +275,10 @@ async def test_paralysis_detection_round_trip(tmp_path: Path) -> None:
     )
 
     try:
-        await pack.instance.dispatch(
-            "member-a", "2026-05-05T15:00:00Z", ctx
-        )
+        await pack.instance.dispatch("member-a", "2026-05-05T15:00:00Z", ctx)
 
         all_events = await _read_all(log)
-        triggered = [
-            e for e in all_events if e["type"] == "paralysis.triggered"
-        ]
+        triggered = [e for e in all_events if e["type"] == "paralysis.triggered"]
         assert len(triggered) == 1
         e = triggered[0]
         assert e["payload"]["member_id"] == "member-a"

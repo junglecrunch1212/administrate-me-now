@@ -257,7 +257,7 @@ async def test_send_routes_through_observation_when_seams_populated(
         action_fn: Any,
         *,
         manager: Any,
-        event_log: Any,
+        event_sink: Any,
         target_channel: str,
         target_identifier: str,
     ) -> Any:

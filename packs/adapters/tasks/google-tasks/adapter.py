@@ -27,6 +27,7 @@ import subprocess
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
+from adminme.adapters.emission import write_adapter_event
 from adminme.events.schemas.lists import ListItemAddedV1  # noqa: F401 — type-reference for pack-internal test guards
 from adminme.lib.adapters import (
     ChangeEnvelope,
@@ -64,28 +65,22 @@ def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
     Gmail / Google Calendar resolvers."""
     if not op_ref or not op_ref.startswith("op://"):
         raise ValueError(f"invalid op-ref: {op_ref!r}")
-    if op_ref.startswith("op://test/"):
-        return {
-            "type": "service_account",
-            "project_id": "test-project",
-            "client_email": "test@test.iam.gserviceaccount.com",
-            "private_key": "-----BEGIN PRIVATE KEY-----\nTESTKEY\n-----END PRIVATE KEY-----\n",
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
     op_bin = shutil.which("op")
     if op_bin is None:
-        raise RuntimeError(
-            f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}"
-        )
+        raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
     proc = subprocess.run(
         [op_bin, "read", "--no-newline", op_ref],
-        check=True, capture_output=True, timeout=15,
+        check=True,
+        capture_output=True,
+        timeout=15,
     )
     return json.loads(proc.stdout.decode("utf-8"))
 
 
 def _default_service_factory(
-    credentials_json: dict[str, Any], scopes: list[str], subject_email: str,
+    credentials_json: dict[str, Any],
+    scopes: list[str],
+    subject_email: str,
 ) -> Any:
     """Build Tasks v1 service; lazy import keeps SDK out of CI."""
     from google.oauth2.service_account import Credentials
@@ -145,7 +140,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
-        self._credentials_resolver = credentials_resolver or _default_credentials_resolver
+        self._credentials_resolver = (
+            credentials_resolver or _default_credentials_resolver
+        )
         self._service_factory = service_factory or _default_service_factory
         # [§6 invariant 10] resolve floor at construction; raise on downgrade.
         self.sensitivity_floor: SensitivityFloor = (  # type: ignore[misc]
@@ -206,7 +203,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
-        self._emit_authenticated(ctx=ctx, op_ref=op_ref)
+        await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
         await self._poll_loop(ctx=ctx)
 
     async def stop(self) -> None:
@@ -228,11 +225,11 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             try:
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
-                severity, error_kind, retry_after_s = (
-                    self._classify_tasks_error(exc)
-                )
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                severity, error_kind, retry_after_s = self._classify_tasks_error(exc)
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
@@ -262,7 +259,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 continue
             if task_id in self._seen_inbound:
                 continue
-            self._emit_list_item_added(
+            await self._emit_list_item_added(
                 ctx=ctx, tasklist_id=tasklist_id, task=task
             )
             self._seen_inbound[task_id] = str(task.get("updated") or "")
@@ -290,31 +287,37 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 break
         return records
 
-    def _emit_list_item_added(
-        self, *, ctx: AdapterContext, tasklist_id: str, task: dict[str, Any],
+    async def _emit_list_item_added(
+        self,
+        *,
+        ctx: AdapterContext,
+        tasklist_id: str,
+        task: dict[str, Any],
     ) -> None:
         """Map a Google task onto ``ListItemAddedV1`` per [D7] + canonical
         11a's "MAP DON'T REGISTER". Priority defaults to 5 (medium) per
         F-7 since Google Tasks has no native priority field."""
         list_name = self._config.get("list_name") or tasklist_id
         completed = task.get("status") == "completed"
-        self._append(ctx=ctx, event_type="list_item.added", payload={
-            "member_id": str(self._config["member_id"]),
-            "list_external_id": tasklist_id,
-            "item_external_id": str(task.get("id") or ""),
-            "list_name": str(list_name),
-            "title": str(task.get("title") or ""),
-            "notes": task.get("notes"),
-            "due_at": task.get("due"),
-            "priority": _GOOGLE_TASKS_DEFAULT_PRIORITY,
-            "completed": completed,
-            "last_modified_at": task.get("updated"),
-            "sync_cycle_id": ctx.correlation_id_factory(),
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="list_item.added",
+            payload={
+                "member_id": str(self._config["member_id"]),
+                "list_external_id": tasklist_id,
+                "item_external_id": str(task.get("id") or ""),
+                "list_name": str(list_name),
+                "title": str(task.get("title") or ""),
+                "notes": task.get("notes"),
+                "due_at": task.get("due"),
+                "priority": _GOOGLE_TASKS_DEFAULT_PRIORITY,
+                "completed": completed,
+                "last_modified_at": task.get("updated"),
+                "sync_cycle_id": ctx.correlation_id_factory(),
+            },
+        )
 
-    async def _apply_write_impl(
-        self, operation: WriteOperation
-    ) -> WriteResult:
+    async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """[UT-27] gate already checked ``operation.kind``. Phase B routes
         ``tasks.insert`` through :func:`observation_outbound` per
         [§6.20]; Phase A direct-calls when seams are unset."""
@@ -341,9 +344,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
         async def _do_insert() -> dict[str, Any]:
             return (
-                service.tasks()
-                .insert(tasklist=tasklist_id, body=task_body)
-                .execute()
+                service.tasks().insert(tasklist=tasklist_id, body=task_body).execute()
             )
 
         session = self._observation_session
@@ -365,27 +366,25 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     },
                     _do_insert,
                     manager=manager,
-                    event_log=event_log,
+                    event_sink=event_log,
                     target_channel="tasks-google-tasks",
                     target_identifier=tasklist_id,
                 )
                 if outbound_result.suppressed:
                     # F-3 (HARD): suppressed → unapplied; caller does NOT
                     # emit externally-visible side effects.
-                    return WriteResult(
-                        applied=False, external_id=None, suppressed=True
-                    )
+                    return WriteResult(applied=False, external_id=None, suppressed=True)
                 response = outbound_result.result or {}
             else:
                 response = await _do_insert()
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             ctx = self._ctx
-            severity, error_kind, retry_after_s = (
-                self._classify_tasks_error(exc)
-            )
+            severity, error_kind, retry_after_s = self._classify_tasks_error(exc)
             if ctx is not None:
-                self._emit_error(
-                    ctx=ctx, severity=severity, error_kind=error_kind,
+                await self._emit_error(
+                    ctx=ctx,
+                    severity=severity,
+                    error_kind=error_kind,
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
@@ -404,19 +403,28 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         ingress so this hook stays a no-op."""
         return None
 
-    def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
+    async def _emit_authenticated(self, *, ctx: AdapterContext, op_ref: str) -> None:
         """``adapter.authenticated@v1``; carries op-ref, NEVER the secret."""
-        self._append(ctx=ctx, event_type="adapter.authenticated", payload={
-            "adapter_name": self.name,
-            "adapter_family": self.family,
-            "token_storage_ref": op_ref,
-            "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "scopes": list(self.SCOPES),
-        })
+        await self._append(
+            ctx=ctx,
+            event_type="adapter.authenticated",
+            payload={
+                "adapter_name": self.name,
+                "adapter_family": self.family,
+                "token_storage_ref": op_ref,
+                "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scopes": list(self.SCOPES),
+            },
+        )
 
-    def _emit_error(
-        self, *, ctx: AdapterContext, severity: str, error_kind: str,
-        error_message: str, retry_after_s: int | None,
+    async def _emit_error(
+        self,
+        *,
+        ctx: AdapterContext,
+        severity: str,
+        error_kind: str,
+        error_message: str,
+        retry_after_s: int | None,
     ) -> None:
         """``adapter.error@v1`` — drives the supervisor's backoff."""
         payload: dict[str, Any] = {
@@ -429,32 +437,29 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             "occurred_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self._status.last_error = dict(payload)
-        self._append(ctx=ctx, event_type="adapter.error", payload=payload)
+        await self._append(ctx=ctx, event_type="adapter.error", payload=payload)
 
-    def _append(
-        self, *, ctx: AdapterContext, event_type: str,
-        payload: dict[str, Any], causation_id: str | None = None,
+    async def _append(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        causation_id: str | None = None,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
-        appender = getattr(ctx.event_log, "append_sync", None) or getattr(
-            ctx.event_log, "append", None
-        )
-        if appender is None:
-            return
-        kwargs: dict[str, Any] = {
-            "type": event_type,
-            "schema_version": 1,
-            "payload": payload,
-            "correlation_id": ctx.correlation_id_factory(),
-        }
-        if causation_id is not None:
-            kwargs["causation_id"] = causation_id
         try:
-            appender(**kwargs)
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception(
-                "google-tasks adapter failed to emit %s event", event_type
+            await write_adapter_event(
+                ctx,
+                adapter_name=self.name,
+                sensitivity_floor=self.sensitivity_floor,
+                config=self._config,
+                event_type=event_type,
+                payload=payload,
+                causation_id=causation_id,
             )
+        except Exception:  # noqa: BLE001 — best-effort emission
+            _log.exception("google-tasks adapter failed to emit %s event", event_type)
 
     @staticmethod
     def _classify_tasks_error(
@@ -476,7 +481,8 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 status = None
             retry_header: Any = (
                 resp.get("retry-after") or resp.get("Retry-After")
-                if hasattr(resp, "get") else None
+                if hasattr(resp, "get")
+                else None
             )
             try:
                 retry_after = int(retry_header) if retry_header is not None else None
@@ -495,4 +501,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         return ("transient", "unknown", retry_after)
 
 
-__all__ = ["CredentialsResolver", "GOOGLE_TASKS_SCOPES", "GoogleTasksAdapter", "ServiceFactory"]
+__all__ = [
+    "CredentialsResolver",
+    "GOOGLE_TASKS_SCOPES",
+    "GoogleTasksAdapter",
+    "ServiceFactory",
+]

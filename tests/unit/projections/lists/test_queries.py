@@ -35,7 +35,9 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
-def _S(tenant_id: str = "tenant-a", role: str = "principal", actor: str = "actor-1") -> Session:
+def _S(
+    tenant_id: str = "tenant-a", role: str = "principal", actor: str = "actor-1"
+) -> Session:
     return build_internal_session(actor, role, tenant_id)
 
 

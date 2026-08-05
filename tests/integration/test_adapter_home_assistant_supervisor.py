@@ -80,9 +80,7 @@ from adminme.lib.adapters import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HA_PACK_ROOT = (
-    REPO_ROOT / "packs" / "adapters" / "automation" / "home-assistant"
-)
+HA_PACK_ROOT = REPO_ROOT / "packs" / "adapters" / "automation" / "home-assistant"
 
 
 def _load_home_assistant_module() -> Any:
@@ -108,20 +106,23 @@ _INTEGRATION_FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _IntegrationEventLog:
-    """Captures synchronous ``append_sync`` calls for assertion. Mirrors
-    the duck-typed contract :meth:`HomeAssistantAdapter._append` reads
-    via ``getattr(ctx.event_log, "append_sync", ...)``."""
+    """Captures typed asynchronous event-sink writes for assertion."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **_kwargs: Any) -> str:
+        self.calls.append(envelope.model_dump())
+        return f"event-{len(self.calls)}"
 
 
 def _make_integration_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integration-ha-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
@@ -171,9 +172,7 @@ class _IntegrationAsyncClient:
         assert self._get_response is not None
         return self._get_response
 
-    async def post(
-        self, path: str, *, json: Any = None
-    ) -> _IntegrationResponse:
+    async def post(self, path: str, *, json: Any = None) -> _IntegrationResponse:
         self.post_calls.append({"path": path, "json": json})
         assert self._post_response is not None
         return self._post_response
@@ -183,7 +182,8 @@ class _IntegrationAsyncClient:
 
 
 def _make_adapter(
-    *, client: _IntegrationAsyncClient | None = None,
+    *,
+    client: _IntegrationAsyncClient | None = None,
 ) -> Any:
     """Construct a :class:`HomeAssistantAdapter` skipping ``start()``.
 
@@ -305,9 +305,7 @@ def test_supervisor_inbound_poll_emits_ha_state_changed() -> None:
         "last_updated": "2026-05-18T11:00:05+00:00",
     }
     client = _IntegrationAsyncClient(
-        get_response=_IntegrationResponse(
-            status_code=200, json_data=[ha_state]
-        )
+        get_response=_IntegrationResponse(status_code=200, json_data=[ha_state])
     )
     adapter = _make_adapter(client=client)
     event_log = _IntegrationEventLog()
@@ -317,9 +315,7 @@ def test_supervisor_inbound_poll_emits_ha_state_changed() -> None:
     emitted = asyncio.run(adapter._poll_states_once(ctx=ctx))
 
     assert emitted == 1
-    state_calls = [
-        c for c in event_log.calls if c["type"] == "ha.state_changed"
-    ]
+    state_calls = [c for c in event_log.calls if c["type"] == "ha.state_changed"]
     assert len(state_calls) == 1
     payload = state_calls[0]["payload"]
     instance = HaStateChangedV1.model_validate(payload)
@@ -327,22 +323,14 @@ def test_supervisor_inbound_poll_emits_ha_state_changed() -> None:
     assert instance.state == "on"
     assert instance.source == "home_assistant"
     assert instance.attributes["brightness"] == 220
-    assert instance.last_changed == datetime(
-        2026, 5, 18, 11, 0, 0, tzinfo=timezone.utc
-    )
-    assert instance.last_updated == datetime(
-        2026, 5, 18, 11, 0, 5, tzinfo=timezone.utc
-    )
+    assert instance.last_changed == datetime(2026, 5, 18, 11, 0, 0, tzinfo=timezone.utc)
+    assert instance.last_updated == datetime(2026, 5, 18, 11, 0, 5, tzinfo=timezone.utc)
 
     # Re-poll on the same (entity_id, last_changed) pair is a no-op per
     # the inbound dedupe gate (F-3 of c2): _seen_states populated → no
     # second emit.
-    client._get_response = _IntegrationResponse(
-        status_code=200, json_data=[ha_state]
-    )
+    client._get_response = _IntegrationResponse(status_code=200, json_data=[ha_state])
     emitted_second = asyncio.run(adapter._poll_states_once(ctx=ctx))
     assert emitted_second == 0
-    state_calls_after = [
-        c for c in event_log.calls if c["type"] == "ha.state_changed"
-    ]
+    state_calls_after = [c for c in event_log.calls if c["type"] == "ha.state_changed"]
     assert len(state_calls_after) == 1

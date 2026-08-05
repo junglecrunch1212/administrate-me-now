@@ -107,13 +107,18 @@ class _FakeEventLog:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def append_sync(self, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
+    @property
+    def tenant_id(self) -> str:
+        return "tenant-test"
+
+    async def write(self, envelope: Any, **kwargs: Any) -> str:
+        self.calls.append({**envelope.model_dump(), **kwargs})
+        return f"event-{len(self.calls)}"
 
 
 def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
     return AdapterContext(
-        event_log=event_log,  # type: ignore[arg-type]
+        event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-pack-internal",
         now_factory=lambda: _FROZEN_NOW,
@@ -269,9 +274,7 @@ def test_outbound_dual_emit_payloads_validate_against_on_main_schemas() -> None:
     synced_calls = [
         c for c in event_log.calls if c["type"] == "reminder.list_item.synced"
     ]
-    added_calls = [
-        c for c in event_log.calls if c["type"] == "list_item.added"
-    ]
+    added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(synced_calls) == 1
     assert len(added_calls) == 1
 
@@ -329,8 +332,10 @@ def test_inbound_dual_emit_kinds_derive_from_seen_inbound_cache_state() -> None:
         calendar_item_identifier="EKID-pack-inbound-1",
     )
     reminder_initial.completed = False
-    adapter._emit_inbound_synced(
-        ctx=ctx, reminder=reminder_initial, sync_cycle_id="cycle-inbound-A"
+    asyncio.run(
+        adapter._emit_inbound_synced(
+            ctx=ctx, reminder=reminder_initial, sync_cycle_id="cycle-inbound-A"
+        )
     )
 
     # ---- Observation #2: same id, completion flips False → True.
@@ -343,8 +348,10 @@ def test_inbound_dual_emit_kinds_derive_from_seen_inbound_cache_state() -> None:
         calendar_item_identifier="EKID-pack-inbound-1",
     )
     reminder_completed.completed = True
-    adapter._emit_inbound_synced(
-        ctx=ctx, reminder=reminder_completed, sync_cycle_id="cycle-inbound-B"
+    asyncio.run(
+        adapter._emit_inbound_synced(
+            ctx=ctx, reminder=reminder_completed, sync_cycle_id="cycle-inbound-B"
+        )
     )
 
     # ---- Observation #3: same id, title changes; completion stays True.
@@ -357,8 +364,10 @@ def test_inbound_dual_emit_kinds_derive_from_seen_inbound_cache_state() -> None:
         calendar_item_identifier="EKID-pack-inbound-1",
     )
     reminder_retitled.completed = True
-    adapter._emit_inbound_synced(
-        ctx=ctx, reminder=reminder_retitled, sync_cycle_id="cycle-inbound-C"
+    asyncio.run(
+        adapter._emit_inbound_synced(
+            ctx=ctx, reminder=reminder_retitled, sync_cycle_id="cycle-inbound-C"
+        )
     )
 
     # Three legacy + three new emits, in the appended order.
@@ -390,9 +399,7 @@ def test_inbound_dual_emit_kinds_derive_from_seen_inbound_cache_state() -> None:
     # / ``sync_cycle_id`` are NOT in field_updates because last_modified
     # IS in the diff field set per c2 — completed stayed True; title
     # changed) — verify ``title`` is the changed field.
-    updated_instance = ListItemUpdatedV1.model_validate(
-        new_family_calls[2]["payload"]
-    )
+    updated_instance = ListItemUpdatedV1.model_validate(new_family_calls[2]["payload"])
     assert "title" in updated_instance.field_updates
     assert updated_instance.field_updates["title"] == "Pick up dry cleaning AND laundry"
     # ``completed`` was unchanged in this transition (True → True), so

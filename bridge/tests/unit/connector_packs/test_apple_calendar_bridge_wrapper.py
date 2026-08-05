@@ -31,6 +31,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+import pytest
+
 from adminme.adapters.base import AdapterContext
 from adminme_bridge.adapters.base import (
     AdapterStatus,
@@ -138,9 +140,7 @@ def _swap_internal_with_capture(monkeypatch: Any) -> list[_CapturingInternal]:
     # The wrapper resolves the central adapter class via
     # _load_central_adapter_class(); monkeypatching the loader keeps the
     # test independent of the file-path importlib indirection.
-    monkeypatch.setattr(
-        wrapper_mod, "_load_central_adapter_class", lambda: _factory
-    )
+    monkeypatch.setattr(wrapper_mod, "_load_central_adapter_class", lambda: _factory)
     return captured
 
 
@@ -149,11 +149,20 @@ def _swap_internal_with_capture(monkeypatch: Any) -> list[_CapturingInternal]:
 # ===========================================================================
 
 
-def test_apple_calendar_bridge_adapter_satisfies_state_mirror_bridge_adapter_protocol() -> None:
+def test_missing_calendar_configuration_fails_closed() -> None:
+    with pytest.raises(ValueError, match="calendar_identifier"):
+        AppleCalendarBridgeAdapter()
+
+
+def test_apple_calendar_bridge_adapter_satisfies_state_mirror_bridge_adapter_protocol() -> (
+    None
+):
     """Structural Protocol pin: ``AppleCalendarBridgeAdapter`` carries
     ``family`` + the ``start``/``stop``/``status`` methods so an
     instance passes the runtime-checkable Protocol isinstance check."""
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     assert isinstance(wrapper, StateMirrorBridgeAdapter)
 
 
@@ -169,7 +178,9 @@ def test_status_returns_default_when_never_started() -> None:
     """``status()`` MUST NOT raise when called before ``start()`` — the
     bridge supervisor's snapshot endpoint polls every registered
     wrapper, including ones whose ``start()`` task hasn't fired yet."""
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     status = wrapper.status()
     assert isinstance(status, AdapterStatus)
     assert status.state == "starting"
@@ -190,7 +201,9 @@ def test_wrapper_synthesizes_adapter_context_with_deployment_target_bridge(
     captured = _swap_internal_with_capture(monkeypatch)
 
     sink = _FakeBridgeSink()
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx(member_id="member-bridge-bob", sink=sink)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -201,9 +214,9 @@ def test_wrapper_synthesizes_adapter_context_with_deployment_target_bridge(
     assert synthesized.config["deployment_target"] == "bridge"
     assert synthesized.config["_bridge_member_id"] == "member-bridge-bob"
     assert synthesized.config["_bridge_sink"] is sink
-    # event_log is intentionally None on the bridge path (central
+    # A typed bridge writer is supplied on the bridge path (central
     # adapter's _append routes through _bridge_sink in bridge mode).
-    assert synthesized.event_log is None  # type: ignore[unreachable]
+    assert synthesized.event_sink.tenant_id == bridge_ctx.tenant_id == "tenant-default"
 
 
 def test_wrapper_passes_member_id_into_internal_constructor_config(
@@ -215,7 +228,9 @@ def test_wrapper_passes_member_id_into_internal_constructor_config(
     per-member emit scope."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx(member_id="member-bridge-carol")
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -227,9 +242,7 @@ def test_wrapper_passes_member_id_into_internal_constructor_config(
     # The synthesized AdapterContext.config also carries member_id so
     # in-loop reads of ctx.config["member_id"] stay consistent.
     assert captured[0].start_ctx is not None
-    assert (
-        captured[0].start_ctx.config["member_id"] == "member-bridge-carol"
-    )
+    assert captured[0].start_ctx.config["member_id"] == "member-bridge-carol"
 
 
 def test_wrapper_propagates_factories_from_bridge_context(
@@ -240,7 +253,9 @@ def test_wrapper_propagates_factories_from_bridge_context(
     adapter's emit sites mint ids via these factories."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx()
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -265,7 +280,9 @@ def test_wrapper_prefers_ctx_sink_when_present_per_a5(
     captured = _swap_internal_with_capture(monkeypatch)
 
     injected = _FakeBridgeSink()
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx(sink=injected)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -283,7 +300,9 @@ def test_wrapper_falls_back_to_ingest_client_bridge_sink_when_ctx_sink_none(
     ``ctx.ingest_client``."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx(sink=None)
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -305,7 +324,9 @@ def test_wrapper_forwards_stop_to_internal_adapter(monkeypatch: Any) -> None:
     and Cat-B bridge adapters."""
     captured = _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx()
 
     asyncio.run(wrapper.start(ctx=bridge_ctx))
@@ -319,7 +340,9 @@ def test_wrapper_stop_is_safe_before_start() -> None:
     """``stop()`` MUST be safe to call on a wrapper that never started
     — the bridge supervisor's shutdown sweep iterates every registered
     wrapper regardless of start state."""
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     asyncio.run(wrapper.stop())  # MUST NOT raise
 
 
@@ -329,9 +352,11 @@ def test_wrapper_status_forwards_to_internal_after_start(
     """``status()`` after a successful ``start()`` returns a bridge
     :class:`AdapterStatus` translated from the central adapter's
     status — same ``state`` + ``started_at`` + ``restart_count``."""
-    captured = _swap_internal_with_capture(monkeypatch)
+    _swap_internal_with_capture(monkeypatch)
 
-    wrapper = AppleCalendarBridgeAdapter()
+    wrapper = AppleCalendarBridgeAdapter(
+        internal_config={"calendar_identifier": "test-calendar"}
+    )
     bridge_ctx = _make_bridge_ctx()
     asyncio.run(wrapper.start(ctx=bridge_ctx))
 

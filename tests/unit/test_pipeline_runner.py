@@ -25,6 +25,7 @@ import pytest
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.pipelines import (
     LoadedPipelinePack,
@@ -90,7 +91,7 @@ async def rig(tmp_path: Path):
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
     invalidate_cache()
     # Reset class-level counter on the fixture pack between tests.
     pack = load_pipeline_pack(ECHO_LOGGER_ROOT)
@@ -161,16 +162,14 @@ async def test_handler_raise_does_not_advance_checkpoint(
     config = load_instance_config(instance_dir)
     log = EventLog(config, TEST_KEY)
     bus = EventBus(log, config.bus_checkpoint_path)
-    runner = PipelineRunner(bus, log, config)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
 
     class _RaisingPipeline:
         pack_id = "pipeline:raiser"
         version = "1.0.0"
         triggers = {"events": ["messaging.received"]}
 
-        async def handle(
-            self, event: dict[str, Any], ctx: PipelineContext
-        ) -> None:
+        async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
             raise RuntimeError("boom")
 
     bad_pack = LoadedPipelinePack(
@@ -232,9 +231,7 @@ async def test_status_returns_per_pack_entry(rig: dict[str, Any]) -> None:
 async def test_runner_accepts_parties_conn_factory_none_default(
     rig: dict[str, Any],
 ) -> None:
-    """Backward-compat: existing PipelineRunner(bus, log, config) call sites
-    work unchanged; the constructed PipelineContext carries
-    `parties_conn_factory=None`."""
+    """The constructed PipelineContext carries no parties factory by default."""
     runner: PipelineRunner = rig["runner"]
     log: EventLog = rig["log"]
     bus: EventBus = rig["bus"]
@@ -246,9 +243,7 @@ async def test_runner_accepts_parties_conn_factory_none_default(
         version = "1.0.0"
         triggers = {"events": ["messaging.received"]}
 
-        async def handle(
-            self, event: dict[str, Any], ctx: PipelineContext
-        ) -> None:
+        async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
             captured["factory"] = ctx.parties_conn_factory
 
     pack = LoadedPipelinePack(
@@ -293,7 +288,7 @@ async def test_runner_threads_parties_conn_factory_into_context(
         return sentinel
 
     runner = PipelineRunner(
-        bus, log, config, parties_conn_factory=_factory
+        bus, log, EventWriter(log, bus), config, parties_conn_factory=_factory
     )
 
     captured: dict[str, Any] = {}
@@ -303,9 +298,7 @@ async def test_runner_threads_parties_conn_factory_into_context(
         version = "1.0.0"
         triggers = {"events": ["messaging.received"]}
 
-        async def handle(
-            self, event: dict[str, Any], ctx: PipelineContext
-        ) -> None:
+        async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
             captured["factory"] = ctx.parties_conn_factory
 
     pack = LoadedPipelinePack(
@@ -329,9 +322,7 @@ async def test_runner_threads_parties_conn_factory_into_context(
             )
         )
         await bus.notify(eid)
-        await _wait_for_checkpoint(
-            bus, "pipeline:pipeline:capturing_threaded", eid
-        )
+        await _wait_for_checkpoint(bus, "pipeline:pipeline:capturing_threaded", eid)
 
         assert captured["factory"] is _factory
     finally:
@@ -357,7 +348,7 @@ async def test_runner_parties_conn_factory_is_same_object_per_dispatch(
         return None
 
     runner = PipelineRunner(
-        bus, log, config, parties_conn_factory=_factory
+        bus, log, EventWriter(log, bus), config, parties_conn_factory=_factory
     )
 
     captured: list[Any] = []
@@ -367,9 +358,7 @@ async def test_runner_parties_conn_factory_is_same_object_per_dispatch(
         version = "1.0.0"
         triggers = {"events": ["messaging.received"]}
 
-        async def handle(
-            self, event: dict[str, Any], ctx: PipelineContext
-        ) -> None:
+        async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
             captured.append(ctx.parties_conn_factory)
 
     pack = LoadedPipelinePack(

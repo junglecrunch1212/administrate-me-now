@@ -24,10 +24,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.pipelines.base import PipelineContext
 
 PACK_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "packs"
-    / "pipelines"
-    / "reward_dispatch"
+    Path(__file__).resolve().parents[3] / "packs" / "pipelines" / "reward_dispatch"
 )
 
 
@@ -64,7 +61,7 @@ class _FakeEventLog:
     calls: list[_RecordedAppend] = field(default_factory=list)
     _next_id: int = 0
 
-    async def append(
+    async def write(
         self,
         envelope: EventEnvelope,
         *,
@@ -90,9 +87,7 @@ def _make_ctx(
 ) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
-    session = build_internal_session(
-        "pipeline_runner", "device", "tenant-test"
-    )
+    session = build_internal_session("pipeline_runner", "device", "tenant-test")
 
     async def stub_run_skill(*a: Any, **kw: Any) -> Any:
         raise AssertionError("reward_dispatch must not call run_skill")
@@ -100,6 +95,7 @@ def _make_ctx(
     return PipelineContext(
         session=session,
         event_log=event_log,
+        event_sink=event_log,
         run_skill_fn=stub_run_skill,
         outbound_fn=lambda *a, **kw: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
@@ -251,8 +247,9 @@ async def test_variable_ratio_tier_is_deterministic_per_event_id() -> None:
         _make_ctx(log_b),
     )
 
-    assert log_a.calls[0].envelope.payload["tier"] == (
-        log_b.calls[0].envelope.payload["tier"]
+    assert (
+        log_a.calls[0].envelope.payload["tier"]
+        == (log_b.calls[0].envelope.payload["tier"])
     )
 
 
@@ -425,9 +422,7 @@ async def test_causation_id_equals_triggering_event_id() -> None:
         persona_loader=lambda: _PERSONA_PACK,
     )
     ctx = _make_ctx(log, triggering_event_id="trigger-eid-cause")
-    await pipeline.handle(
-        _task_completed_event(event_id="trigger-eid-cause"), ctx
-    )
+    await pipeline.handle(_task_completed_event(event_id="trigger-eid-cause"), ctx)
     assert log.calls[0].causation_id == "trigger-eid-cause"
 
 

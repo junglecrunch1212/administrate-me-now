@@ -12,7 +12,7 @@ Design:
   log forward of its durable checkpoint (persisted in a separate unencrypted
   sqlite DB — checkpoint state is not secret), delivers events in order, and
   only advances the checkpoint after the callback returns without raising.
-- `notify(event_id)` is called after `EventLog.append()` and wakes every
+- `notify(event_id)` is called by `EventWriter` after a committed append and wakes every
   subscriber's task so they pull the new event immediately.
 - On callback failure the checkpoint is NOT advanced, so the event is
   re-delivered. After `failure_threshold` (default 5) consecutive failures
@@ -58,6 +58,7 @@ class _SubscriberState:
     last_failure_at_ms: int | None = None
     trigger: asyncio.Event = field(default_factory=asyncio.Event)
     lag_warned: bool = False
+    poison_event_id: str | None = None
 
     @property
     def types_filter(self) -> list[str] | None:
@@ -73,14 +74,17 @@ class EventBus:
         checkpoint_db: Path,
         *,
         failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+        shutdown_timeout_s: float = 5.0,
     ) -> None:
         self._log = log
         self._checkpoint_db = Path(checkpoint_db)
         self._checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
         self._failure_threshold = failure_threshold
+        self._shutdown_timeout_s = shutdown_timeout_s
         self._subscribers: dict[str, _SubscriberState] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._running = False
+        self._closed = False
         self._stopping = asyncio.Event()
         self._ckpt_conn = self._open_checkpoint_db()
         self._ckpt_lock = asyncio.Lock()
@@ -104,6 +108,14 @@ class EventBus:
             "  degraded INTEGER NOT NULL DEFAULT 0"
             ")"
         )
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(bus_consumer_offsets)")
+        }
+        if "poison_event_id" not in columns:
+            conn.execute(
+                "ALTER TABLE bus_consumer_offsets ADD COLUMN poison_event_id TEXT"
+            )
         return conn
 
     # ------------------------------------------------------------------
@@ -117,10 +129,12 @@ class EventBus:
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
+        if self._closed:
+            raise RuntimeError("event bus is closed")
         if subscriber_id in self._subscribers:
             raise ValueError(f"subscriber_id already registered: {subscriber_id}")
         if types != "*" and not isinstance(types, list):
-            raise TypeError("types must be list[str] or \"*\"")
+            raise TypeError('types must be list[str] or "*"')
 
         row = self._ckpt_conn.execute(
             "SELECT * FROM bus_consumer_offsets WHERE subscriber_id = ?",
@@ -136,12 +150,14 @@ class EventBus:
             failures = 0
             last_ok: int | None = None
             last_fail: int | None = None
+            poison_event_id: str | None = None
         else:
             checkpoint = row["checkpoint_event_id"]
             degraded = bool(row["degraded"])
             failures = int(row["consecutive_failures"] or 0)
             last_ok = row["last_success_at_ms"]
             last_fail = row["last_failure_at_ms"]
+            poison_event_id = row["poison_event_id"]
 
         self._subscribers[subscriber_id] = _SubscriberState(
             subscriber_id=subscriber_id,
@@ -152,6 +168,7 @@ class EventBus:
             consecutive_failures=failures,
             last_success_at_ms=last_ok,
             last_failure_at_ms=last_fail,
+            poison_event_id=poison_event_id,
         )
 
     # ------------------------------------------------------------------
@@ -160,6 +177,8 @@ class EventBus:
     async def start(self) -> None:
         if self._running:
             return
+        if self._closed:
+            raise RuntimeError("event bus cannot be restarted after close")
         self._running = True
         self._stopping.clear()
         for sid, state in self._subscribers.items():
@@ -169,7 +188,7 @@ class EventBus:
             )
 
     async def stop(self) -> None:
-        if not self._running:
+        if self._closed:
             return
         self._running = False
         self._stopping.set()
@@ -177,14 +196,24 @@ class EventBus:
             state.trigger.set()
         tasks = list(self._tasks.values())
         self._tasks.clear()
-        for t in tasks:
-            t.cancel()
+        # Let callbacks finish and checkpoint before resorting to cancellation.
+        # This prevents a projection SQLCipher operation from racing connection
+        # close during normal shutdown.
+        _done, pending = (
+            await asyncio.wait(tasks, timeout=self._shutdown_timeout_s)
+            if tasks
+            else (set(), set())
+        )
+        for task in pending:
+            task.cancel()
         for t in tasks:
             try:
                 await t
             except (asyncio.CancelledError, Exception):
                 pass
-        await asyncio.to_thread(self._ckpt_conn.close)
+        async with self._ckpt_lock:
+            await asyncio.to_thread(self._ckpt_conn.close)
+        self._closed = True
 
     async def notify(self, event_id: str) -> None:
         if not self._running:
@@ -199,6 +228,7 @@ class EventBus:
             raise KeyError(subscriber_id)
         state.degraded = False
         state.consecutive_failures = 0
+        state.poison_event_id = None
         await self._persist_state(state)
         if self._running:
             # relaunch the task if it exited
@@ -231,9 +261,7 @@ class EventBus:
         state = self._subscribers.get(subscriber_id)
         if state is None:
             raise KeyError(subscriber_id)
-        lag = await self._log.count_since(
-            state.checkpoint, types=state.types_filter
-        )
+        lag = await self._log.count_since(state.checkpoint, types=state.types_filter)
         return {
             "checkpoint_event_id": state.checkpoint,
             "lag_count": lag,
@@ -241,6 +269,12 @@ class EventBus:
             "last_failure_at": state.last_failure_at_ms,
             "consecutive_failures": state.consecutive_failures,
             "degraded": state.degraded,
+            "poison_event_id": state.poison_event_id,
+            "retry_policy": {
+                "delivery": "at_least_once",
+                "failure_threshold": self._failure_threshold,
+                "backoff_seconds": RETRY_BACKOFF_S,
+            },
         }
 
     # ------------------------------------------------------------------
@@ -281,6 +315,7 @@ class EventBus:
                     )
                     if state.consecutive_failures >= self._failure_threshold:
                         state.degraded = True
+                        state.poison_event_id = event["event_id"]
                         await self._persist_state(state)
                         _log.error(
                             "subscriber %s degraded after %d consecutive failures",
@@ -300,8 +335,8 @@ class EventBus:
 
             # drained; warn on lag (events mismatched by filter still count as lag)
             lag = await self._log.count_since(
-            state.checkpoint, types=state.types_filter
-        )
+                state.checkpoint, types=state.types_filter
+            )
             if lag > LAG_WARN_THRESHOLD and not state.lag_warned:
                 _log.warning(
                     "subscriber %s lag=%d exceeds threshold=%d",
@@ -319,6 +354,7 @@ class EventBus:
                 state.checkpoint,
             )
             state.degraded = True
+            state.poison_event_id = state.checkpoint
             await self._persist_state(state)
 
     async def _persist_state(self, state: _SubscriberState) -> None:
@@ -332,7 +368,8 @@ class EventBus:
             "       last_success_at_ms=?,"
             "       last_failure_at_ms=?,"
             "       consecutive_failures=?,"
-            "       degraded=?"
+            "       degraded=?,"
+            "       poison_event_id=?"
             " WHERE subscriber_id=?",
             (
                 state.checkpoint,
@@ -340,6 +377,7 @@ class EventBus:
                 state.last_failure_at_ms,
                 state.consecutive_failures,
                 1 if state.degraded else 0,
+                state.poison_event_id,
                 state.subscriber_id,
             ),
         )

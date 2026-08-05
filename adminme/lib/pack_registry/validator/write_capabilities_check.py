@@ -41,7 +41,9 @@ _CHECK_NAME = "write_capabilities"
 _WRITE_CARRYING_KINDS: frozenset[str] = frozenset({"Cat-B"})
 
 
-def _finding(severity: str, message: str, field_path: str | None = None) -> ValidationFinding:
+def _finding(
+    severity: str, message: str, field_path: str | None = None
+) -> ValidationFinding:
     return ValidationFinding(
         severity=severity,  # type: ignore[arg-type]
         check=_CHECK_NAME,

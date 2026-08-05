@@ -1,0 +1,17 @@
+{
+  "name": "@adminme/console-reference-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dev/test-only rendered evidence harness for the immutable console reference",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <25"
+  },
+  "scripts": {
+    "test": "node run.mjs",
+    "test:gate7": "node run-gate7.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.62.0"
+  }
+}
