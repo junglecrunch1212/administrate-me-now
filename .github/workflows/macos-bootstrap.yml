@@ -18,8 +18,8 @@ permissions:
 
 jobs:
   credential-free-rehearsal:
-    runs-on: macos-14
-    timeout-minutes: 30
+    runs-on: macos-15
+    timeout-minutes: 90
     env:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge
@@ -76,6 +76,9 @@ jobs:
           npm ci --prefix openclaw/administrateme --ignore-scripts
           npm run check --prefix openclaw/administrateme
           npm test --prefix openclaw/administrateme
+
+      - name: Build and verify the exact reviewed OpenClaw source
+        run: bash scripts/acceptance/openclaw-source-install.sh
 
       - name: Credential-free clean install and recovery rehearsal
         run: |

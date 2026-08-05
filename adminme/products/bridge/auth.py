@@ -13,7 +13,8 @@ mapping per F-8.
 
 from __future__ import annotations
 
-from typing import Protocol
+from datetime import datetime, timezone
+from typing import Any, Callable, Protocol
 
 from fastapi import HTTPException, Request, status
 
@@ -38,6 +39,44 @@ class DictMemberIdResolver:
 
     def resolve(self, tailscale_identity: str) -> str | None:
         return self._mapping.get(tailscale_identity)
+
+
+class EnrollmentMemberIdResolver:
+    """Resolve only active or unexpired exported bridge enrollments."""
+
+    def __init__(
+        self,
+        records: dict[str, dict[str, Any]],
+        *,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._records = {
+            identity.casefold(): dict(record) for identity, record in records.items()
+        }
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def resolve(self, tailscale_identity: str) -> str | None:
+        record = self._records.get(tailscale_identity.casefold())
+        if not record:
+            return None
+        member_id = record.get("member_id")
+        status_value = record.get("status")
+        if not isinstance(member_id, str) or not member_id:
+            return None
+        if status_value == "active":
+            return member_id
+        if status_value != "package-exported":
+            return None
+        expires_at = record.get("expires_at")
+        if not isinstance(expires_at, str):
+            return None
+        try:
+            expiry = datetime.fromisoformat(expires_at)
+        except ValueError:
+            return None
+        if expiry.tzinfo is None:
+            return None
+        return member_id if self._now() < expiry else None
 
 
 def resolve_tailscale_identity(request: Request) -> str:
@@ -71,6 +110,7 @@ def resolve_member_id(
 
 __all__ = [
     "DictMemberIdResolver",
+    "EnrollmentMemberIdResolver",
     "MemberIdResolver",
     "TAILSCALE_IDENTITY_HEADER",
     "resolve_member_id",

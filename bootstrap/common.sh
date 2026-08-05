@@ -7,6 +7,25 @@ REPOSITORY_ROOT="$(cd "$BOOTSTRAP_DIR/.." && pwd -P)"
 DEFAULT_INSTANCE_ROOT="$HOME/Library/Application Support/AdministrateMe"
 ACTIVE_RELEASE_ROOT=""
 
+# Homebrew's versioned Node formula is keg-only on Apple silicon.  A fresh
+# Terminal may therefore find `brew` but not the exact Node/OpenClaw binaries
+# installed by bootstrap.  Reconstruct the supported operator PATH for every
+# stable wrapper instead of relying on shell-profile state.
+for adminme_bin_dir in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "$adminme_bin_dir" && ":$PATH:" != *":$adminme_bin_dir:"* ]]; then
+    PATH="$adminme_bin_dir:$PATH"
+  fi
+done
+if command -v brew >/dev/null 2>&1; then
+  adminme_node_prefix="$(brew --prefix node@22 2>/dev/null || true)"
+  if [[ -n "$adminme_node_prefix" && -d "$adminme_node_prefix/bin" \
+    && ":$PATH:" != *":$adminme_node_prefix/bin:"* ]]; then
+    PATH="$adminme_node_prefix/bin:$PATH"
+  fi
+fi
+export PATH
+unset adminme_bin_dir adminme_node_prefix
+
 fail() {
   echo "AdministrateMe: $1" >&2
   exit 1
@@ -22,6 +41,11 @@ resolve_instance_root() {
   fi
   ADMINME_INSTANCE_ROOT="$requested"
   export ADMINME_INSTANCE_ROOT
+  if [[ -d "$ADMINME_INSTANCE_ROOT/bin" \
+    && ":$PATH:" != *":$ADMINME_INSTANCE_ROOT/bin:"* ]]; then
+    PATH="$ADMINME_INSTANCE_ROOT/bin:$PATH"
+    export PATH
+  fi
 }
 
 resolve_active_release() {

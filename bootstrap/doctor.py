@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import sqlcipher3
+import yaml
 from fastapi.testclient import TestClient
 
 from adminme.demo import FIXTURE_MEMBER_ID
@@ -31,6 +32,8 @@ from bootstrap.contracts import (
     sha256_file,
 )
 from bootstrap.openclaw_activation import model_provider_configured
+from bootstrap.openclaw_cron import OpenClawCronReconciler
+from bootstrap.openclaw_install import reviewed_source_status
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 
@@ -292,6 +295,19 @@ class Doctor:
                 observed_versions,
             )
         )
+        source_status = reviewed_source_status(
+            self.paths,
+            test_mode=self.test_mode,
+        )
+        checks.append(
+            DoctorCheck(
+                "reviewed_openclaw_source",
+                bool(source_status["ok"]),
+                str(source_status["detail"]),
+                "Rerun the reviewed source installer; never substitute an npm or floating OpenClaw build.",
+                source_status,
+            )
+        )
         config_path = self.paths.instance_dir / "config" / "instance.yaml"
         checks.append(
             DoctorCheck(
@@ -310,9 +326,11 @@ class Doctor:
         checks.append(
             DoctorCheck(
                 "bootstrap_sections",
-                len(sections) == 10 and set(sections.values()) == {"complete"},
+                len(sections) == 10
+                and set(sections.values()) == {"complete"}
+                and report.get("bootstrap_complete") is True,
                 f"{sum(value == 'complete' for value in sections.values())}/10 complete",
-                "Resume bootstrap at the first incomplete section.",
+                "Resume bootstrap or finish/revoke each selected member-bridge enrollment.",
             )
         )
         references_path = self.paths.instance_dir / "config" / "secret-references.json"
@@ -473,6 +491,36 @@ class Doctor:
                 plugin_evidence,
             )
         )
+        try:
+            instance_config = yaml.safe_load(config_path.read_text("utf-8")) or {}
+            timezone_name = instance_config.get("timezone", "")
+            shared_reference = references.get("openclaw_shared")
+            gateway_token = (
+                self.store.get(shared_reference).decode("ascii")
+                if isinstance(shared_reference, str)
+                and self.store.has(shared_reference)
+                else None
+            )
+            cron_status = OpenClawCronReconciler(
+                self.paths,
+                root=self.root,
+                gateway_token=gateway_token,
+                test_mode=self.test_mode,
+            ).status(timezone_name)
+        except Exception as exc:
+            cron_status = {
+                "ok": False,
+                "detail": f"cron validation failed: {type(exc).__name__}",
+            }
+        checks.append(
+            DoctorCheck(
+                "openclaw_cron_reconciliation",
+                bool(cron_status.get("ok")),
+                str(cron_status.get("detail", "cron status unavailable")),
+                "Run bootstrap/start.sh; it safely reconciles only AdministrateMe-owned schedules.",
+                cron_status,
+            )
+        )
         portal_assets = self.root / "adminme" / "products" / "member" / "assets"
         portal_ok = all(
             (portal_assets / name).is_file()
@@ -558,20 +606,50 @@ class Doctor:
         )
         mapping_path = self.paths.instance_dir / "config" / "member-mapping.json"
         member_count = 0
+        portal_bridge_bindings: dict[str, tuple[str, str]] = {}
         if mapping_path.exists():
-            member_count = len(json.loads(mapping_path.read_text("utf-8"))["members"])
+            mapping_value = json.loads(mapping_path.read_text("utf-8"))
+            members_value = mapping_value["members"]
+            member_count = len(members_value)
+            portal_bridge_bindings = {
+                member["tailscale_identity"].casefold(): (
+                    member["member_id"],
+                    member["role"],
+                )
+                for member in members_value
+                if member.get("tailscale_identity")
+            }
         bridge_path = self.paths.instance_dir / "bridges" / "member-mapping.json"
-        bridge_count = (
-            len(json.loads(bridge_path.read_text("utf-8")))
-            if bridge_path.exists()
-            else 0
+        bridge_records = (
+            json.loads(bridge_path.read_text("utf-8")) if bridge_path.exists() else {}
+        )
+        bridge_count = len(bridge_records)
+        bridge_statuses = [
+            record.get("status")
+            for record in bridge_records.values()
+            if isinstance(record, dict)
+        ]
+        bridge_terminal = all(
+            status in {"active", "revoked"} for status in bridge_statuses
+        )
+        bridge_bindings_ok = all(
+            portal_bridge_bindings.get(identity.casefold())
+            == (record.get("member_id"), record.get("role"))
+            and record.get("owner_scope") == f"private:{record.get('member_id')}"
+            for identity, record in bridge_records.items()
+            if isinstance(identity, str) and isinstance(record, dict)
+        ) and all(isinstance(record, dict) for record in bridge_records.values())
+        bridge_ok = (
+            bridge_count <= member_count
+            and bridge_bindings_ok
+            and (bridge_terminal or self.test_mode)
         )
         checks.append(
             DoctorCheck(
                 "member_mapping_and_bridge_status",
-                member_count > 0 and bridge_count in {0, member_count},
-                f"{member_count} members; {bridge_count} bridge packages",
-                "Re-enroll only the affected member; never reuse another member's package.",
+                member_count > 0 and bridge_ok,
+                f"{member_count} members; {bridge_count} selected bridges; bindings={bridge_bindings_ok}; statuses={bridge_statuses}",
+                "Export, accept, and finalize each selected bridge, or explicitly revoke it; never reuse another member's package.",
             )
         )
         observation_path = self.paths.instance_dir / "config" / "observation.json"

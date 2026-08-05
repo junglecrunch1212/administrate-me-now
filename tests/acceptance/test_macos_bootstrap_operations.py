@@ -5,7 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.backup_restore import BackupManager
+from bootstrap.bridge_enrollment import (
+    BridgeEnrollmentManager,
+    MemberBridgeInstaller,
+    MemberBridgePaths,
+)
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
@@ -13,6 +21,17 @@ from bootstrap.services import ServiceManager
 from bootstrap.wizard import BootstrapWizard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_member_bridge_helpers_execute_from_the_archived_release() -> None:
+    installer = (REPO_ROOT / "bootstrap" / "install-member-bridge.sh").read_text(
+        "utf-8"
+    )
+    helper = (REPO_ROOT / "bootstrap" / "member-bridge.sh").read_text("utf-8")
+    assert 'cd "$release_dir"' in installer
+    assert 'cd "$release_root"' in helper
+    assert ".administrateme-source-commit" in installer
+    assert ".administrateme-bridge-installed-commit" in installer
 
 
 def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
@@ -66,3 +85,92 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     for reference in references.values():
         secret = store.get(reference)
         assert secret not in backup_bytes
+
+
+def test_member_bridge_export_accept_finalize_uses_production_ingest_composition(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "central")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    manager = BridgeEnrollmentManager(paths, root=REPO_ROOT, test_mode=True)
+    transfer_path = tmp_path / "principal-a.adminmebridge"
+    exported = manager.export(
+        "member_fixture_principal_a",
+        transfer_path,
+        central_url="https://central.example-tailnet.ts.net",
+        transfer_key=b"p" * 32,
+    )
+    report = json.loads(paths.public_config_path.read_text("utf-8"))
+    assert report["bootstrap_complete"] is False
+    assert report["bridge_enrollment"]["credential_free_fixture"] is True
+
+    def submitter(transfer: dict, envelope: dict) -> str:
+        references = json.loads(
+            (paths.instance_dir / "config" / "secret-references.json").read_text(
+                "utf-8"
+            )
+        )["references"]
+        bridge_records = json.loads(manager.index_path.read_text("utf-8"))
+        settings = RuntimeSettings.credential_free(
+            paths.instance_dir,
+            encryption_key=secret_store(paths, test_mode=True).get(
+                references["event_log"]
+            ),
+            repository_root=REPO_ROOT,
+            member_identities={
+                "principal-a@example.invalid": "member_fixture_principal_a"
+            },
+            bridge_enrollments=bridge_records,
+            member_roles={"member_fixture_principal_a": "principal"},
+        )
+        with TestClient(create_application(settings)) as client:
+            response = client.post(
+                "/api/bridge/ingest",
+                json=envelope,
+                headers={"Tailscale-User-Login": transfer["tailscale_identity"]},
+            )
+        assert response.status_code == 202, response.text
+        return response.json()["event_id"]
+
+    receipt = MemberBridgeInstaller(
+        MemberBridgePaths.from_root(tmp_path / "member"),
+        root=REPO_ROOT,
+        test_mode=True,
+        submitter=submitter,
+    ).accept(
+        transfer_path,
+        exported.transfer_code,
+        identity_override="principal-a@example.invalid",
+        node_override="node-principal-a",
+    )
+    assert receipt["status"] == "active"
+    finalized = manager.finalize("member_fixture_principal_a")
+    assert finalized["status"] == "active"
+    assert finalized["bootstrap_material_revoked"] is True
+    index = json.loads(manager.index_path.read_text("utf-8"))
+    assert index["principal-a@example.invalid"]["status"] == "active"
+    assert (
+        json.loads(paths.public_config_path.read_text("utf-8"))["bootstrap_complete"]
+        is False
+    )
+
+    manager.revoke("member_fixture_principal_b")
+    manager.revoke("member_fixture_child")
+    assert (
+        json.loads(paths.public_config_path.read_text("utf-8"))["bootstrap_complete"]
+        is True
+    )

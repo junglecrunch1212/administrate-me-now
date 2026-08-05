@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import plistlib
 from pathlib import Path
@@ -12,20 +13,23 @@ import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
+from bootstrap.cli import _bootstrap_diagnostic_status
 from bootstrap.doctor import Doctor
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 from bootstrap.state import EncryptedStateStore
 from bootstrap.upgrade import UpgradeError, validate_candidate
-from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard
+from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
 import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
 from bootstrap.openclaw_activation import activate, model_provider_configured
+from bootstrap.openclaw_install import reviewed_source_status, source_receipt_path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENTRYPOINTS = (
     "bootstrap-macos.sh",
+    "install-openclaw-source.sh",
     "install.sh",
     "doctor.sh",
     "start.sh",
@@ -33,6 +37,12 @@ ENTRYPOINTS = (
     "status.sh",
     "backup.sh",
     "restore.sh",
+    "bridge-export.sh",
+    "bridge-finalize.sh",
+    "bridge-revoke.sh",
+    "bridge-status.sh",
+    "install-member-bridge.sh",
+    "member-bridge.sh",
 )
 
 
@@ -84,6 +94,42 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     common = (REPO_ROOT / "bootstrap" / "common.sh").read_text("utf-8")
     assert "current-release.json" in common
     assert "ACTIVE_RELEASE_ROOT/.venv/bin/python" in common
+    assert "brew --prefix node@22" in common
+    installer = (REPO_ROOT / "bootstrap" / "bootstrap-macos.sh").read_text("utf-8")
+    assert "--expected-commit" in installer
+    assert 'ADMINME_REVIEWED_COMMIT="$commit"' in installer
+    assert ".administrateme-source-commit" in installer
+    assert ".administrateme-installed-commit" in installer
+    assert 'mktemp -d "$release_parent/.staging.XXXXXX"' in installer
+    assert "internal test-harness option" in installer
+    assert "status --porcelain --untracked-files=all" in installer
+    assert "npm install --global" not in installer
+    source_installer = (
+        REPO_ROOT / "bootstrap" / "install-openclaw-source.sh"
+    ).read_text("utf-8")
+    assert "source_archive_sha256" in source_installer
+    assert "--frozen-lockfile" in source_installer
+    assert "codeload.github.com/openclaw/openclaw" in (
+        REPO_ROOT / "bootstrap" / "versions.json"
+    ).read_text("utf-8")
+
+
+def test_bootstrap_reports_expected_pending_bridge_work_without_masking_failures() -> (
+    None
+):
+    pending = {
+        "status": "failed",
+        "checks": [
+            {"name": "bootstrap_sections", "ok": False},
+            {"name": "member_mapping_and_bridge_status", "ok": False},
+        ],
+    }
+    assert _bootstrap_diagnostic_status(pending) == (
+        "bridge_enrollment_required",
+        0,
+    )
+    pending["checks"].append({"name": "encrypted_event_log", "ok": False})
+    assert _bootstrap_diagnostic_status(pending) == ("failed", 1)
 
 
 def test_lock_contains_pinned_apple_silicon_sqlcipher_wheel() -> None:
@@ -96,6 +142,50 @@ def test_lock_contains_pinned_apple_silicon_sqlcipher_wheel() -> None:
     assert 'name = "sqlcipher3"' in lock
     assert 'version = "0.6.2"' in lock
     assert "sqlcipher3-0.6.2-cp311-cp311-macosx_11_0_arm64.whl" in lock
+
+
+def test_reviewed_openclaw_source_receipt_binds_exact_executable(
+    test_paths: DeploymentPaths,
+) -> None:
+    versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )["openclaw"]
+    source_root = test_paths.app_dir / "openclaw" / versions["commit"]
+    source_root.mkdir(parents=True)
+    entry = source_root / "openclaw.mjs"
+    entry.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    (source_root / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "openclaw",
+                "version": versions["version"],
+                "packageManager": versions["package_manager"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = {
+        "schema_version": 1,
+        "install_kind": "verified-github-source-archive",
+        "source_root": str(source_root),
+        "version": versions["version"],
+        "commit": versions["commit"],
+        "source_archive_url": versions["source_archive_url"],
+        "source_archive_sha256": versions["source_archive_sha256"],
+        "package_manager": versions["package_manager"],
+    }
+    source_receipt_path(test_paths).parent.mkdir(parents=True)
+    source_receipt_path(test_paths).write_text(json.dumps(receipt), encoding="utf-8")
+
+    status = reviewed_source_status(test_paths, executable=str(entry))
+    assert status["ok"] is True
+    assert (
+        reviewed_source_status(
+            test_paths,
+            executable=str(test_paths.root / "wrong-openclaw"),
+        )["ok"]
+        is False
+    )
 
 
 def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
@@ -112,6 +202,29 @@ def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
             check_filevault=False,
         )
     assert not target.exists()
+
+
+def test_wizard_rejects_duplicate_tailscale_user_bindings(
+    test_paths: DeploymentPaths,
+) -> None:
+    answers = copy.deepcopy(_wizard(test_paths).answers)
+    answers["household"]["members"][1]["tailscale_identity"] = answers["household"][
+        "members"
+    ][0]["tailscale_identity"].upper()
+    with pytest.raises(WizardFailure, match="Tailscale user logins must be unique"):
+        BootstrapWizard(
+            test_paths,
+            root=REPO_ROOT,
+            fixture=None,
+            test_mode=True,
+            dry_run=True,
+            preflight_overrides={
+                "system": "Darwin",
+                "machine": "arm64",
+                "macos_version": "26.0",
+            },
+            answers=answers,
+        )
 
 
 def test_deployment_paths_reject_relative_and_broad_targets() -> None:
@@ -154,6 +267,78 @@ def test_interrupted_section_records_failure_then_resumes(
     resumed = wizard.run()
     assert resumed["sections"]["6"]["status"] == "complete"
     assert resumed["sections"]["6"]["attempts"] == 2
+
+
+def test_resume_refuses_a_different_answer_set(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_runtime(monkeypatch)
+    original = _wizard(test_paths)
+    original.run(stop_after_section=3)
+    changed_answers = copy.deepcopy(original.answers)
+    changed_answers["assistant"]["identity"] = "A different assistant"
+    changed = BootstrapWizard(
+        test_paths,
+        root=REPO_ROOT,
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+        answers=changed_answers,
+    )
+    with pytest.raises(RuntimeError, match="different encrypted answer set"):
+        changed.run()
+
+
+def test_portal_chat_can_bootstrap_before_channel_actor_pairing(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_runtime(monkeypatch)
+    fixture = _wizard(test_paths)
+    answers = copy.deepcopy(fixture.answers)
+    answers["providers"]["assistant"] = "openclaw"
+    answers["integrations"]["openclaw_actor_identities"] = []
+    wizard = BootstrapWizard(
+        test_paths,
+        root=REPO_ROOT,
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+        answers=answers,
+    )
+    state = wizard.run()
+    adapters = json.loads(
+        (test_paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
+    )
+    assert adapters["openclaw_actor_identities"] == {}
+    assert adapters["member_chat_enabled_members"]
+    assert any(
+        "Pair exact OpenClaw" in follow_up["action"]
+        for follow_up in state["follow_ups"]
+    )
+
+
+def test_seed_questions_never_claim_household_rows_were_created(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_runtime(monkeypatch)
+    _wizard(test_paths).run()
+    manifest = json.loads(
+        (test_paths.instance_dir / "data" / "seed-manifest.json").read_text("utf-8")
+    )
+    assert manifest["seeded"] == []
+    assert manifest["requested_after_bootstrap"]
+    assert "no household rows" in manifest["truthful_status"]
 
 
 def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
@@ -203,8 +388,15 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
         assert package["member_id"] == member_id
         assert package["owner_scope"] == f"private:{member_id}"
         assert package["restrictions"]["cross_owner_claims"] == "deny"
+        assert set(package["allowed_packs"]) <= {
+            "knowledge-apple-notes",
+            "knowledge-apple-voice-memos",
+            "knowledge-obsidian",
+            "calendaring-apple-calendar-bridge",
+            "reminders-apple-eventkit-bridge",
+        }
         if package["restrictions"]["kid"]:
-            assert "obsidian" not in package["allowed_adapters"]
+            assert "knowledge-obsidian" not in package["allowed_packs"]
             assert package["restrictions"]["obsidian_allowed"] is False
 
 
@@ -243,7 +435,11 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     assert runtime_capture["child_chat_enabled_members"] == frozenset()
 
     monkeypatch.setattr(openclaw_service, "secret_store", lambda _paths: store)
-    monkeypatch.setattr(openclaw_service.shutil, "which", lambda _name: "/openclaw")
+    monkeypatch.setattr(
+        openclaw_service,
+        "resolve_reviewed_openclaw",
+        lambda _paths: "/openclaw",
+    )
     monkeypatch.setattr(
         openclaw_service.subprocess,
         "run",
@@ -270,25 +466,42 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_runtime(monkeypatch)
+    _wizard(test_paths).run()
     commands: list[list[str]] = []
+    workspace = test_paths.instance_dir / "openclaw" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"):
+        (workspace / name).write_text("fixture", encoding="utf-8")
 
     def run(command, **_kwargs):
         commands.append(command)
         return SimpleNamespace(stdout="OpenClaw 2026.7.2")
 
     monkeypatch.setattr(
-        "bootstrap.openclaw_activation.shutil.which", lambda _name: "/openclaw"
+        "bootstrap.openclaw_activation.resolve_reviewed_openclaw",
+        lambda _paths, test_mode=False: "/openclaw",
     )
     monkeypatch.setattr("bootstrap.openclaw_activation.subprocess.run", run)
-    result = activate(test_paths)
+    result = activate(test_paths, root=REPO_ROOT, test_mode=True)
 
     assert commands == [
         ["/openclaw", "--version"],
         ["/openclaw", "configure", "--section", "model", "--section", "channels"],
+        [
+            "/openclaw",
+            "config",
+            "set",
+            "agents.defaults.workspace",
+            str(workspace),
+        ],
         ["/openclaw", "config", "validate"],
         ["/openclaw", "models", "status", "--probe"],
+        ["/openclaw", "gateway", "status", "--require-rpc"],
     ]
     assert result["contains_credentials"] is False
+    assert result["cron_reconciled"] is True
+    assert result["cron_jobs"] == 5
     assert model_provider_configured(test_paths) is True
     marker = (
         test_paths.instance_dir / "config" / "openclaw-activation.json"

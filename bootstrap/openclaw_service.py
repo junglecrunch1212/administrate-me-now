@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 from bootstrap.contracts import DeploymentPaths, load_versions
+from bootstrap.openclaw_install import resolve_reviewed_openclaw
 from bootstrap.secrets import secret_store
 
 
@@ -17,9 +17,7 @@ def main() -> None:
     if not root_value:
         raise RuntimeError("ADMINME_INSTANCE_ROOT is required")
     paths = DeploymentPaths.from_root(Path(root_value), production=True)
-    executable = shutil.which("openclaw")
-    if not executable:
-        raise RuntimeError("the pinned OpenClaw executable is unavailable")
+    executable = resolve_reviewed_openclaw(paths)
     expected = load_versions()["openclaw"]["version"]
     version = subprocess.run(
         [executable, "--version"],

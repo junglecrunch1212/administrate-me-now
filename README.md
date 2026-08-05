@@ -7,8 +7,8 @@ gives each member only the information and actions their role permits.
 ## Start here: reviewed Mac installation
 
 If you will run the household Mac, do not improvise from source files. Use only
-a reviewed commit merged to `main`, then follow
-[`docs/operations/FIRST-MAC-BOOTSTRAP.md`](docs/operations/FIRST-MAC-BOOTSTRAP.md)
+a reviewed commit merged to `main`, then follow the parallel wizard read-along
+in [`docs/operations/MAC-MINI-SETUP-READ-ALONG.md`](docs/operations/MAC-MINI-SETUP-READ-ALONG.md)
 from top to bottom. The family Mac is a deployment machine, never an
 experimentation machine.
 
@@ -16,25 +16,29 @@ Before touching the family Mac, a reviewer should prove the credential-free
 install on a disposable Apple-silicon Mac:
 
 ```bash
-./bootstrap/install.sh --dry-run --fixture two-adult-one-child \
-  --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
+./bootstrap/install.sh --fixture two-adult-one-child \
+  --instance-root "$HOME/Library/Application Support/AdministrateMe Lab" \
+  --expected-commit "$APPROVED_SHA"
 ./bootstrap/doctor.sh \
   --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
 ```
 
-Expected result: JSON with `"status": "healthy"`, observation mode active,
-and no live-provider claim. This rehearsal uses fake `.invalid` identities and
+`--dry-run` is reserved for the isolated test harness and is refused in an
+operator installation. Expected result: JSON with `"status": "healthy"`,
+observation mode active, and no live-provider claim. This rehearsal uses fake `.invalid` identities and
 does not contact a household account.
 
 For the later reviewed installation, the stable operator commands are:
 
 ```bash
-./bootstrap/install.sh
+./bootstrap/install.sh --expected-commit "$APPROVED_SHA"
 ./bootstrap/status.sh
 ./bootstrap/doctor.sh
 ./bootstrap/backup.sh
 ./bootstrap/stop.sh
 ./bootstrap/start.sh
+./bootstrap/activate-openclaw.sh
+./bootstrap/bridge-status.sh
 ```
 
 Never paste an API key, Gateway token, password, OAuth code, or provider
@@ -53,7 +57,9 @@ OpenClaw; AdministrateMe encryption and backup keys live in macOS Keychain.
   restrictions, and private temporary quest views that cannot execute code or
   change household truth merely by changing a view.
 - Rerunnable macOS bootstrap, Doctor, start/stop/status, encrypted backup,
-  authenticated restore, guarded upgrade, and rollback.
+  authenticated restore, guarded upgrade, rollback, exact-source OpenClaw
+  provenance, owned cron reconciliation, and revocable per-member bridge
+  enrollment.
 
 ## Credential-free developer demonstration
 

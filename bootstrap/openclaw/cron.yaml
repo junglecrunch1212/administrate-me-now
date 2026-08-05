@@ -2,9 +2,9 @@
 #
 # Per [D1] Corollary, AdministrateMe ships this YAML alongside
 # bootstrap/openclaw/programs/*.md. Bootstrap §8 (prompt 16) reads each
-# entry and runs:
-#
-#   openclaw cron add --cron "<cron>" --message "<message>"
+# entry, cross-checks it against the plugin automation declaration, and
+# reconciles only the owned `administrateme-*` OpenClaw jobs. Duplicate owned
+# names or declaration drift fail closed; unrelated jobs are never changed.
 #
 # Cron strings are versioned installation defaults. Bootstrap resolves profile
 # and member overrides before installing them into OpenClaw; these values remain

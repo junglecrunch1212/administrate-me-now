@@ -14,10 +14,12 @@ the future family Mac. Phase A uses a disposable Mac and fake identities.
   through the locked `sqlcipher3==0.6.2` Apple-silicon wheel,
   Homebrew `>=4.6,<6`, Poetry `2.2.1`, and npm `>=10.9,<11`.
 - OpenClaw `2026.7.2`, plugin API `2026.7.2`, and source commit
-  `944cf08f94c334cff2b0fdf7e01187a9efa42715` exactly. Bun is not required.
+  `944cf08f94c334cff2b0fdf7e01187a9efa42715` exactly. Because that version is
+  unpublished on npm, the installer verifies its GitHub archive SHA-256 and
+  builds with the source-declared `pnpm@11.15.1`. Bun is not required.
 
-The machine-readable source is `bootstrap/versions.json`. These eight names
-are the stable operator surface:
+The machine-readable source is `bootstrap/versions.json`. These names are the
+stable central/operator surface:
 
 ```text
 bootstrap/bootstrap-macos.sh
@@ -28,6 +30,13 @@ bootstrap/stop.sh
 bootstrap/status.sh
 bootstrap/backup.sh
 bootstrap/restore.sh
+bootstrap/activate-openclaw.sh
+bootstrap/bridge-status.sh
+bootstrap/bridge-export.sh
+bootstrap/bridge-finalize.sh
+bootstrap/bridge-revoke.sh
+bootstrap/install-member-bridge.sh
+bootstrap/member-bridge.sh
 ```
 
 `install.sh` is the compatibility name and delegates to
@@ -39,20 +48,24 @@ a replacement for any fixed name.
 From a reviewed checkout on the disposable Mac, run exactly:
 
 ```bash
-./bootstrap/install.sh --dry-run --fixture two-adult-one-child --instance-root "$HOME/Library/Application Support/AdministrateMe Lab"
+./bootstrap/install.sh --fixture two-adult-one-child --instance-root "$HOME/Library/Application Support/AdministrateMe Lab" --expected-commit "$APPROVED_SHA"
 ```
 
 This uses only fake `.invalid` identities and fake-provider contracts. It
-creates an encrypted isolated lab instance, starts simulated user services in
-observation mode, and exits nonzero unless Doctor proves the canonical
+creates an encrypted isolated lab instance, starts the real user-level service
+composition around credential-free boundaries in observation mode, and exits
+nonzero unless Doctor proves the canonical
 message-to-review-to-dashboard/workbook-to-completion-to-what-now path. It
 does not prove Gmail, Apple, Plaid, Home Assistant, Tailscale, or any other
 live provider.
 
-For the later reviewed Phase-B install, omit `--dry-run` and `--fixture`.
+The `--dry-run` flag is test-harness-only and production bootstrap refuses it;
+it previously implied a safety property the macOS path did not provide. For the
+later reviewed Phase-B install, omit `--fixture` but keep `--expected-commit`.
 The terminal wizard asks for household structure and verified Tailscale login
-names. For each interactive member it also records an explicit OpenClaw
-channel/account/actor mapping; an unmapped actor has no household authority.
+names. An exact OpenClaw channel/account/actor mapping may be recorded; it is
+safe to leave channels unmapped while a principal uses private portal chat,
+and an unmapped actor has no household authority.
 It explicitly tells the operator never to paste passwords, tokens, or OAuth
 codes. A local non-secret answer document based on
 `bootstrap/answers.example.json` may instead be supplied with `--answers`.
@@ -67,7 +80,9 @@ instance.
 
 After preflight it installs only the two required Homebrew formulas when
 needed, creates a release-specific Python environment from `poetry.lock`,
-builds and checks the native plugin, refuses an incompatible OpenClaw, creates
+downloads only the exact reviewed OpenClaw source archive, verifies its pinned
+SHA-256/package manager/version, builds its UI and CLI, writes an instance-local
+executable and provenance receipt, builds and checks the native plugin, creates
 isolated app/state/log/backup directories, and runs all ten wizard sections.
 The answers and section journal are AES-GCM encrypted. The encryption,
 transport, backup, and enrollment bootstrap values live in macOS Keychain;
@@ -82,6 +97,13 @@ Neither runs as root. Their argument lists contain no secret. The launcher
 retrieves a required value from Keychain into process memory/environment and
 never prints it. OpenClaw binds `127.0.0.1:18789`; the one AdministrateMe
 process binds `127.0.0.1:3330`. Tailscale Serve remains the sole future edge.
+
+The selected household IANA timezone drives the five OpenClaw standing orders.
+The reconciler owns only `administrateme-*` names, rejects declaration drift or
+duplicates, leaves foreign jobs untouched, verifies the final state, and rolls
+back partial changes. Selected member bridges remain an explicit action-required
+state until their 30-minute encrypted package is accepted on the matching
+Tailscale member Mac and finalized from a real owner-scoped event, or revoked.
 
 ## macOS permissions and OAuth
 

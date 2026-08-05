@@ -1,5 +1,34 @@
 # Gate 8 final validation report
 
+## 2026-08-04 bootstrap remediation addendum
+
+The historical Gate 8 report below describes the earlier implementation
+boundary. A later operator audit reopened the candidate because OpenClaw cron
+declarations were not reconciled, member bridge packages had no safe consumer,
+and the pinned OpenClaw version was not available from npm. The current
+candidate closes all three code gaps with owned/verified cron reconciliation,
+a transactional member enrollment lifecycle, and a checksum-pinned GitHub
+source build. It also makes central and member release extraction atomic and
+receipt-backed.
+
+The complete remediated tree passed 21 acceptance tests, 1,446 root/pack tests,
+60 bridge tests, 12 OpenClaw plugin tests, and 78 rendered-browser checks. Ruff,
+format, mypy, Pyright, root/bridge builds and audits, performance budgets,
+architecture-negative checks, clean install, tenant isolation, and encrypted
+backup/restore also pass. Exact results and the remaining independent/macOS
+gates are in `docs/refactor/HANDOFF.md`; the code-review disposition is in
+`docs/operations/BOOTSTRAP-READ-ALONG-AUDIT.md`.
+
+The current workflow uses GitHub's maintained Apple-silicon `macos-15` label;
+the historical `macos-14` evidence below remains evidence for the older
+boundary, not the runner selected for the remediated candidate.
+
+This addendum supersedes old counts and deployment wording in the historical
+sections below. It does not convert credential-free evidence into a claim that
+a real family Mac, provider login, Apple privacy grant, Tailscale Serve edge,
+or live OpenClaw Gateway has passed. Independent review, merge, green final-SHA
+checks, and a disposable Apple-silicon rehearsal remain mandatory.
+
 ## Verdict and tested boundary
 
 **Release acceptance verdict: PASS.** All AC-00–AC-23 requirements pass at

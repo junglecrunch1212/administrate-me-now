@@ -5,11 +5,14 @@ clock, execution, channel delivery, and generic assistant runtime. Five
 proactive programs are declared in `cron.yaml`. `reward_dispatch` is reactive
 and therefore has documentation here but no cron entry.
 
-Bootstrap Section 8 compiles the program files into the pinned plugin
-workspace and reconciles `cron.yaml` into OpenClaw automations. Morning-digest
-and paralysis-detection schedules are data defaults: bootstrap substitutes the
-activated member profile values before installation. The other three schedules
-are exact built-in defaults unless the instance configuration overrides them.
+Bootstrap compiles the program files into the per-instance OpenClaw workspace,
+and activation selects that workspace. `bootstrap/openclaw_cron.py` reconciles
+the five `administrateme-*` jobs from both `cron.yaml` and
+`openclaw/administrateme/automations.json`, refusing declaration drift and
+duplicates. It uses the explicit household IANA timezone, isolated sessions,
+and `no-deliver`; it leaves foreign jobs untouched and rolls back a partial
+change. Bootstrap, activation, and a safe service start all run the same
+idempotent reconciler. Do not create or rename these jobs manually.
 
 The in-process `PipelineRunner` loads only packs with `triggers.events`.
 AdministrateMe contains no product cron executor, APScheduler dependency, model

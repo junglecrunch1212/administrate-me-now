@@ -8,12 +8,14 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import secrets
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -28,6 +30,7 @@ from bootstrap.contracts import (
     repository_root,
 )
 from bootstrap.preflight import PreflightFailure, public_checks, run_preflight
+from bootstrap.openclaw_cron import OpenClawCronReconciler, load_desired_jobs
 from bootstrap.secrets import reference_for, secret_store
 from bootstrap.state import EncryptedStateStore, new_state, now_utc
 
@@ -56,7 +59,7 @@ def install_launch_agents(
         "ADMINME_INSTANCE_ROOT": str(paths.root),
         "ADMINME_REPOSITORY_ROOT": str(root),
         "PATH": (
-            "/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:"
+            f"{paths.root}/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:"
             "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         ),
     }
@@ -100,24 +103,32 @@ def _fixture_answers(name: str | None) -> dict[str, Any]:
     if name != "two-adult-one-child":
         raise WizardFailure(f"unknown bootstrap fixture: {name}")
     return {
-        "assistant": {"persona": "quiet_assistant", "identity": "Household Assistant"},
+        "assistant": {
+            "persona": "quiet_assistant",
+            "identity": "Household Assistant",
+            "observation_briefing_confirmed": True,
+        },
         "household": {
             "kind": "apple",
+            "timezone": "Etc/UTC",
             "members": [
                 {
                     "member_id": "member_fixture_principal_a",
                     "role": "principal",
                     "label": "Principal A",
+                    "tailscale_identity": "principal-a@example.invalid",
                 },
                 {
                     "member_id": "member_fixture_principal_b",
                     "role": "principal",
                     "label": "Principal B",
+                    "tailscale_identity": "principal-b@example.invalid",
                 },
                 {
                     "member_id": "member_fixture_child",
                     "role": "child",
                     "label": "Child Member",
+                    "tailscale_identity": "child@example.invalid",
                 },
             ],
             "ambient_members": [],
@@ -165,14 +176,27 @@ def _fixture_answers(name: str | None) -> dict[str, Any]:
                 }
             ],
         },
-        "bridges": {"apple": True, "obsidian": False},
+        "bridges": {
+            "apple": True,
+            "obsidian": False,
+            "enabled_members": [
+                "member_fixture_principal_a",
+                "member_fixture_principal_b",
+                "member_fixture_child",
+            ],
+        },
     }
 
 
 class BootstrapWizard:
     """Run each constitutional section as one separately journaled transaction."""
 
-    SECTION_VERSIONS = {str(index): 1 for index in range(1, 11)}
+    SECTION_VERSIONS = {
+        **{str(index): 1 for index in range(1, 11)},
+        "3": 2,
+        "7": 2,
+        "8": 3,
+    }
 
     def __init__(
         self,
@@ -226,6 +250,33 @@ class BootstrapWizard:
         member_ids = [member.get("member_id") for member in members]
         if len(member_ids) != len(set(member_ids)) or not all(member_ids):
             raise WizardFailure("member ids must be present and unique")
+        if not all(
+            isinstance(member_id, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", member_id)
+            and ".." not in member_id
+            for member_id in member_ids
+        ):
+            raise WizardFailure("member ids contain unsafe path characters")
+        tailscale_identities = [
+            member.get("tailscale_identity")
+            for member in members
+            if member.get("tailscale_identity") is not None
+        ]
+        if not all(
+            isinstance(identity, str)
+            and identity == identity.strip()
+            and 1 <= len(identity) <= 320
+            and not any(character.isspace() for character in identity)
+            for identity in tailscale_identities
+        ):
+            raise WizardFailure("Tailscale user logins are invalid")
+        folded_identities = [
+            identity.casefold()
+            for identity in tailscale_identities
+            if isinstance(identity, str)
+        ]
+        if len(folded_identities) != len(set(folded_identities)):
+            raise WizardFailure("Tailscale user logins must be unique per member")
         roles = {member["member_id"]: member.get("role") for member in members}
         if not set(roles.values()) <= {"principal", "child", "helper", "ambient"}:
             raise WizardFailure("household contains an unsupported member role")
@@ -244,6 +295,30 @@ class BootstrapWizard:
                 )
         if set(answers["profiles"]) != set(member_ids):
             raise WizardFailure("every household member requires exactly one profile")
+        timezone_name = answers["household"].get("timezone")
+        if not isinstance(timezone_name, str) or not timezone_name:
+            raise WizardFailure("household requires an explicit IANA timezone")
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise WizardFailure(
+                f"household timezone is not a recognized IANA zone: {timezone_name}"
+            ) from exc
+        enabled_bridges = answers["bridges"].get("enabled_members")
+        if not isinstance(enabled_bridges, list) or len(enabled_bridges) != len(
+            set(enabled_bridges)
+        ):
+            raise WizardFailure("member bridge selection must be a unique list")
+        eligible_bridges = {
+            member["member_id"]
+            for member in members
+            if member.get("tailscale_identity")
+            and member.get("role") in {"principal", "child", "helper"}
+        }
+        if not set(enabled_bridges) <= eligible_bridges:
+            raise WizardFailure(
+                "member bridges require an eligible member and verified Tailscale identity"
+            )
 
     def _state_store(self) -> EncryptedStateStore:
         reference = reference_for(
@@ -342,6 +417,10 @@ class BootstrapWizard:
             return self._initialize()
         state_store = self._state_store()
         state = state_store.load()
+        if state.get("answers") != self.answers:
+            raise WizardFailure(
+                "this instance already has a different encrypted answer set; resume without --answers, or use a new instance root for a separately reviewed installation"
+            )
         return state, state_store
 
     def run(
@@ -575,6 +654,7 @@ class BootstrapWizard:
             "runtime_host": "127.0.0.1",
             "runtime_port": load_versions()["administrateme"]["runtime_port"],
             "observation_mode": True,
+            "timezone": household["timezone"],
         }
         instance_path = config_dir / "instance.yaml"
         atomic_write(
@@ -691,21 +771,35 @@ class BootstrapWizard:
 
     def _section_seed(self, state: dict[str, Any]) -> dict[str, Any]:
         selected = self.answers["seed"]
-        seeded = sorted(name for name, enabled in selected.items() if enabled)
-        skipped = sorted(name for name, enabled in selected.items() if not enabled)
-        for name in skipped:
+        requested = sorted(name for name, enabled in selected.items() if enabled)
+        deferred = sorted(name for name, enabled in selected.items() if not enabled)
+        for name in requested:
             state["follow_ups"].append(
-                {"kind": "seed_data", "action": f"Add or explicitly dismiss {name}"}
+                {"kind": "seed_data", "action": f"Enter reviewed {name} data"}
+            )
+        for name in deferred:
+            state["follow_ups"].append(
+                {"kind": "seed_data", "action": f"Review or dismiss {name}"}
             )
         path = self.paths.instance_dir / "data" / "seed-manifest.json"
         atomic_write(
             path,
-            json.dumps({"seeded": seeded, "skipped": skipped}, indent=2).encode(
-                "utf-8"
-            ),
+            json.dumps(
+                {
+                    "seeded": [],
+                    "requested_after_bootstrap": requested,
+                    "deferred": deferred,
+                    "truthful_status": "no household rows are created by this question set",
+                },
+                indent=2,
+            ).encode("utf-8"),
         )
         state["sections"]["7"]["artifacts"] = [str(path.relative_to(self.paths.root))]
-        return {"seeded": seeded, "inbox_follow_ups": len(skipped)}
+        return {
+            "seeded": [],
+            "requested_after_bootstrap": requested,
+            "inbox_follow_ups": len(selected),
+        }
 
     def _section_integrations(self, state: dict[str, Any]) -> dict[str, Any]:
         selected = self.answers["integrations"]
@@ -757,8 +851,18 @@ class BootstrapWizard:
         if (
             self.answers["providers"]["assistant"] == "openclaw"
             and not actor_identities
+            and not chat_members
         ):
-            raise WizardFailure("OpenClaw requires at least one explicit actor mapping")
+            raise WizardFailure(
+                "OpenClaw requires either an explicit channel actor or an opted-in member-portal chat route"
+            )
+        if not actor_identities:
+            state["follow_ups"].append(
+                {
+                    "kind": "integration",
+                    "action": "Pair exact OpenClaw channel/account/actor identities after channel diagnostics are available",
+                }
+            )
         for name in ("shared_lists", "calendars", "contacts", "home_assistant"):
             if not selected[name]:
                 follow_up = {
@@ -806,10 +910,36 @@ class BootstrapWizard:
             )
         pack_path = self.paths.instance_dir / "config" / "pack-manifests.json"
         atomic_write(pack_path, json.dumps(manifests, indent=2).encode("utf-8"))
+        cron_jobs = [
+            job.public()
+            for job in load_desired_jobs(
+                self.root,
+                self.answers["household"]["timezone"],
+            )
+        ]
+        cron_plan_path = self.paths.instance_dir / "openclaw" / "desired-cron.json"
+        atomic_write(
+            cron_plan_path,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "timezone": self.answers["household"]["timezone"],
+                    "jobs": cron_jobs,
+                },
+                indent=2,
+            ).encode("utf-8"),
+        )
+        if self.test_mode:
+            OpenClawCronReconciler(
+                self.paths,
+                root=self.root,
+                test_mode=True,
+            ).reconcile(self.answers["household"]["timezone"])
         self._install_launch_agents()
         state["sections"]["8"]["artifacts"] = [
             str(path.relative_to(self.paths.root)),
             str(pack_path.relative_to(self.paths.root)),
+            str(cron_plan_path.relative_to(self.paths.root)),
         ]
         return {
             "selected": sorted(
@@ -821,9 +951,14 @@ class BootstrapWizard:
             "member_chat_enabled": len(chat_members),
             "child_chat_enabled": len(child_chat_members),
             "live_claims": 0,
+            "openclaw_cron_jobs_planned": len(cron_jobs),
         }
 
     def _section_observation(self, state: dict[str, Any]) -> dict[str, Any]:
+        if self.answers["assistant"].get("observation_briefing_confirmed") is not True:
+            raise WizardFailure(
+                "observation mode and the minimum trust period require explicit operator confirmation"
+            )
         started = datetime.now(timezone.utc)
         state["observation"].update(
             {
@@ -890,27 +1025,43 @@ class BootstrapWizard:
             await runtime.stop()
 
     def _section_bridges(self, state: dict[str, Any]) -> dict[str, Any]:
-        if not self.answers["bridges"]["apple"]:
-            return {"explicit_non_apple_skip": True, "packages": 0}
+        enabled_members = set(self.answers["bridges"].get("enabled_members", []))
+        if not self.answers["bridges"]["apple"] or not enabled_members:
+            return {"explicit_member_bridge_skip": True, "packages": 0}
         package_dir = self.paths.instance_dir / "bridges" / "enrollment"
         package_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         key = self.store.get(state["secret_references"]["bootstrap_state"])
-        members = self.answers["household"]["members"]
+        members = [
+            member
+            for member in self.answers["household"]["members"]
+            if member["member_id"] in enabled_members
+        ]
+        release_commit = os.environ.get("ADMINME_REVIEWED_COMMIT", "")
+        if not re.fullmatch(r"[0-9a-f]{40}", release_commit):
+            commit_result = subprocess.run(
+                ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            release_commit = commit_result.stdout.strip()
+            if commit_result.returncode or not re.fullmatch(
+                r"[0-9a-f]{40}", release_commit
+            ):
+                raise WizardFailure("bridge packages require a reviewed Git commit")
         artifacts = []
         enrollment_index: dict[str, dict[str, Any]] = {}
         for member in members:
             member_id = member["member_id"]
             is_child = member["role"] == "child"
-            adapters = [
-                "apple_notes",
-                "voice_memos",
-                "apple_calendar",
-                "apple_reminders",
-                "apple_contacts",
-                "notes_checklists",
+            allowed_packs = [
+                "knowledge-apple-notes",
+                "knowledge-apple-voice-memos",
+                "calendaring-apple-calendar-bridge",
+                "reminders-apple-eventkit-bridge",
             ]
             if self.answers["bridges"]["obsidian"] and not is_child:
-                adapters.append("obsidian")
+                allowed_packs.append("knowledge-obsidian")
             tailscale_identity = member.get("tailscale_identity")
             if not tailscale_identity:
                 if not self.dry_run:
@@ -919,12 +1070,16 @@ class BootstrapWizard:
                     )
                 tailscale_identity = f"{member_id}.fixture.ts.net"
             package = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "tenant_id": state["tenant_id"],
                 "member_id": member_id,
+                "role": member["role"],
                 "owner_scope": f"private:{member_id}",
                 "tailscale_identity": tailscale_identity,
-                "allowed_adapters": adapters,
+                "allowed_packs": sorted(allowed_packs),
+                "enabled_packs": [],
+                "pack_config": {},
+                "release_commit": release_commit,
                 "restrictions": {
                     "kid": is_child,
                     "obsidian_allowed": not is_child,
@@ -947,7 +1102,7 @@ class BootstrapWizard:
                 target,
                 json.dumps(
                     {
-                        "format": "administrateme-bridge-enrollment-v1",
+                        "format": "administrateme-bridge-enrollment-v2",
                         "member_id": member_id,
                         "nonce": base64.b64encode(nonce).decode("ascii"),
                         "ciphertext": base64.b64encode(encrypted).decode("ascii"),
@@ -962,6 +1117,7 @@ class BootstrapWizard:
                 "role": member["role"],
                 "kid_restrictions": is_child,
                 "status": "package-created-not-live",
+                "release_commit": release_commit,
             }
         index_path = self.paths.instance_dir / "bridges" / "member-mapping.json"
         atomic_write(
@@ -979,9 +1135,20 @@ class BootstrapWizard:
         install_launch_agents(self.paths, self.root, test_mode=self.test_mode)
 
     def _write_public_report(self, state: dict[str, Any]) -> None:
-        complete = all(
+        sections_complete = all(
             section["status"] == "complete" for section in state["sections"].values()
         )
+        bridge_index_path = self.paths.instance_dir / "bridges" / "member-mapping.json"
+        bridge_records = (
+            json.loads(bridge_index_path.read_text("utf-8"))
+            if bridge_index_path.is_file()
+            else {}
+        )
+        pending_bridges = sum(
+            record.get("status") not in {"active", "revoked"}
+            for record in bridge_records.values()
+        )
+        complete = sections_complete and (self.test_mode or pending_bridges == 0)
         report = {
             "schema_version": 1,
             "generated_at": now_utc(),
@@ -995,6 +1162,11 @@ class BootstrapWizard:
             "observation": state["observation"],
             "follow_up_count": len(state["follow_ups"]),
             "live_provider_claims": [],
+            "bridge_enrollment": {
+                "selected": len(bridge_records),
+                "pending": pending_bridges,
+                "credential_free_fixture": self.test_mode,
+            },
         }
         atomic_write(
             self.paths.public_config_path,

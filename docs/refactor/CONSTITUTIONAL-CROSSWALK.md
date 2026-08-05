@@ -7,6 +7,13 @@ command, coverage, security, clean-room, performance, and live-boundary
 evidence is recorded in `FINAL-VALIDATION-REPORT.md`. The only `DEFER`
 disposition remains C085 and names optional providers, never a core function.
 
+Bootstrap remediation update (2026-08-04): C046/C053/C061/C079/C080/C086 now
+include exact-source OpenClaw provenance, owned cron reconciliation, separate
+bridge authorization state, short-lived encrypted transfer, per-member
+LaunchAgent acceptance, owner-scoped ingest proof, finalization/revocation, and
+the non-programmer read-along. Credential-free tests do not replace the
+independent merge or disposable-Mac live gate.
+
 Gate 6 implementation evidence (2026-08-03): the baseline columns below are
 historical observations. Current executable evidence preserves C001–C090 while
 converging implementation ownership: six product namespaces; thirteen
@@ -97,7 +104,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C050 | One current native TypeScript plugin | Current OpenClaw docs + v2 contract; baseline README says Python | Gate 4 exact-pinned package, manifest, build and fixture/process tests; Python placeholders deleted | SUPERSEDE COMPLETE (live Mac pending) | AC-12 |
 | C051 | Typed skills seam | BUILD skill runner; CLAW Q1; EXAMPLES skill shape | OpenClaw-format skill plus one-call schema wrapper and durable actual provenance | PRESERVE/HARDEN COMPLETE | AC-12 |
 | C052 | Slash-command seam | BUILD products/OpenClaw; CLAW | seven authenticated native commands dispatch to typed handlers | PRESERVE COMPLETE | AC-12 |
-| C053 | Proactive standing-order seam | BUILD L4/bootstrap; CLAW Q3 | five OpenClaw automation declarations, compiled program workspace, typed trigger; live reconcile pending | PRESERVE/HARDEN | AC-12 |
+| C053 | Proactive standing-order seam | BUILD L4/bootstrap; CLAW Q3 | five cross-checked OpenClaw declarations plus owned, timezone-explicit, idempotent reconciliation, duplicate/drift refusal, rollback, and Doctor evidence; live Mac RPC pending | PRESERVE/HARDEN COMPLETE IN CODE | AC-12, AC-21 |
 | C054 | Scoped channel/conversation bridge; generic history stays OpenClaw | BUILD D6/D17; ARCH | explicit consent/channel/event allowlist with full provenance; generic and privileged turns excluded | PRESERVE COMPLETE | AC-03, AC-12 |
 | C055 | Every LLM call through `llm-task` with versioned schema/provenance/correlation/causation | BUILD L4; ARCH §5; CLAW; current official docs | exact-pinned one-call wrapper; no provider override/fallback; actual provenance recorded | MODERNIZE COMPLETE | AC-12 |
 | C056 | Deterministic logic stays code; LLM state change is propose-confirm only | BUILD pipeline/governance; EXAMPLES | some pipelines follow proposal pattern | PRESERVE | AC-03, AC-11 |
@@ -105,7 +112,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C058 | `authMember`/`viewMember`, owner_scope, visibility/sensitivity | PATTERNS §2/§6; BUILD privacy; DIAGRAMS | session/scope code/tests exist | PRESERVE | AC-08 |
 | C059 | Privileged exclusion from LLM/vector/cross-owner processing and audited access | BUILD privacy; PATTERNS privacy filter | wrapper/vector/scope tests partial; audit surface absent | PRESERVE | AC-08 |
 | C060 | Child server-side denial and narrow member portal | PATTERNS §7; HTML child mode; BUILD UI | mock/client patterns only | PRESERVE | AC-08, AC-18 |
-| C061 | Trusted Tailscale edge, not arbitrary header trust | PATTERNS §1 plus v2 security reconciliation | bridge reads identity header; topology enforcement absent | MODERNIZE | AC-08, AC-19 |
+| C061 | Trusted Tailscale edge, not arbitrary header trust | PATTERNS §1 plus v2 security reconciliation | central and member workflows require private HTTPS `.ts.net` Serve origin; member self identity must match the encrypted package; central owner scope is resolved from separate enrollment state; spoof/cross-owner tests fail closed | MODERNIZE COMPLETE IN CODE; LIVE EDGE PENDING | AC-08, AC-19, AC-21 |
 | C062 | guardedWrite order: allowlist -> governance -> sliding rate limit | PATTERNS §§3–4; BUILD authority/governance | Python implementation has these three | PRESERVE/HARDEN | AC-11 |
 | C063 | Independent OpenClaw generic and AdministrateMe domain approvals | BUILD §8; PATTERNS approvals | optional tool exposure plus `allow-once` hook; AdministrateMe independently enforces role/scope/domain approval and exact-once retry | PRESERVE COMPLETE FOR GATE 4 | AC-11, AC-12 |
 | C064 | assistant-send allowed; draft-for-principal review; auto-send-as-principal prohibited | BUILD critical rules/governance | no end-to-end delivery path | PRESERVE | AC-11 |
@@ -128,8 +135,8 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C076 | Responsive/accessibility behavior | BUILD L5; HTML visual contract | exact reference rendered at desktop/narrow viewports with keyboard tab activation; production app/tests absent | PRESERVE | AC-18 |
 | C077 | Quick capture/voice ingest/triage retired; Knowledge read surfaces remain | ARCH §9/D17 overrides older BUILD/HTML | product stub still claims old flow | SUPERSEDE old mutations | AC-04, AC-18 |
 | C078 | One central Python process plus pinned OpenClaw; product ownership/routes compatible | v2 contract reconciles MENTAL/BUILD multi-service ports | only bridge API implemented; no composition root | MODERNIZE | AC-02, AC-19 |
-| C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | Gate 5 encrypted state machine implements all ten sections and explicit non-Apple skip | SUPERSEDE nine-count; PRESERVE 10 COMPLETE | AC-01, AC-21 |
-| C080 | Bootstrap resumable, idempotent, least-privilege, secret-safe, observation-first | BUILD bootstrap; DIAGRAMS state machine; FIELD install | Gate 5 version/input-digest journal, Keychain references, user LaunchAgents, observation briefing, interruption/resume and rollback tests | PRESERVE COMPLETE FOR INSTALLER | AC-01, AC-21 |
+| C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | Encrypted ten-section state machine plus selected-member package lifecycle, 30-minute transfer, member accept, event proof, finalize/revoke, and explicit non-Apple skip | SUPERSEDE nine-count; PRESERVE 10 COMPLETE | AC-01, AC-21 |
+| C080 | Bootstrap resumable, idempotent, least-privilege, secret-safe, observation-first | BUILD bootstrap; DIAGRAMS state machine; FIELD install | Version/input-digest journal, original encrypted answers on resume, Keychain references, verified GitHub source receipt, central/member user LaunchAgents, transactional cron/bridge changes, observation briefing, interruption/resume and rollback tests | PRESERVE COMPLETE FOR INSTALLER | AC-01, AC-21 |
 | C081 | Phase A disposable lab; Phase B only after reviewed merge | FIELD deployment; BUILD phases; v2 contract | process rule only | PRESERVE | AC-21 |
 | C082 | Backup/restore, migration/upcasters, degraded operation | BUILD final checks; FIELD recovery; DIAGRAMS | Gate 5 implements authenticated backup, staging validation, rollback copy, 13-projection/workbook replay; broader legacy migration/degraded matrices remain | PRESERVE/HARDEN PARTIAL | AC-14, AC-15, AC-20 |
 | C083 | Static tenant-identity and instance-path scans | BUILD security/final tree; EXAMPLES tenant warning | invariant script has some checks; named identity canary absent | PRESERVE | AC-16 |

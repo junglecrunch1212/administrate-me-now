@@ -1,10 +1,12 @@
 {
   "assistant": {
     "persona": "quiet_assistant",
-    "identity": "Household Assistant"
+    "identity": "Household Assistant",
+    "observation_briefing_confirmed": true
   },
   "household": {
     "kind": "apple",
+    "timezone": "Etc/UTC",
     "members": [
       {
         "member_id": "member_example_principal",
@@ -59,6 +61,7 @@
   },
   "bridges": {
     "apple": true,
-    "obsidian": false
+    "obsidian": false,
+    "enabled_members": ["member_example_principal"]
   }
 }

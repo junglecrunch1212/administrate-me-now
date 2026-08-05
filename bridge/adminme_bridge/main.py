@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import uuid
 from datetime import datetime, timezone
@@ -184,7 +185,10 @@ async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
 
 def run() -> None:  # pragma: no cover — script entrypoint shape only
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main_async())
+    configured = Path(
+        os.environ.get("ADMINME_BRIDGE_CONFIG", str(DEFAULT_CONFIG_PATH))
+    ).expanduser()
+    asyncio.run(main_async(configured))
 
 
 __all__ = [
@@ -194,3 +198,7 @@ __all__ = [
     "main_async",
     "run",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover - launchd module entrypoint
+    run()

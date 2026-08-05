@@ -52,7 +52,10 @@ from adminme.member_chat import (
 )
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
-from adminme.products.bridge.auth import DictMemberIdResolver
+from adminme.products.bridge.auth import (
+    DictMemberIdResolver,
+    EnrollmentMemberIdResolver,
+)
 from adminme.products.bridge.routers import ingest_router
 from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
@@ -78,6 +81,7 @@ class RuntimeSettings:
     encryption_key: bytes = field(repr=False)
     repository_root: Path
     member_identities: dict[str, str] = field(default_factory=dict)
+    bridge_enrollments: dict[str, dict[str, Any]] = field(default_factory=dict)
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
@@ -103,6 +107,22 @@ class RuntimeSettings:
         adapters = self.adapter_config.get("adapters", [])
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
+        valid_bridge_states = {
+            "package-created-not-live",
+            "package-exported",
+            "active",
+            "revoked",
+        }
+        if not all(
+            isinstance(identity, str)
+            and bool(identity.strip())
+            and isinstance(record, dict)
+            and isinstance(record.get("member_id"), str)
+            and bool(record["member_id"].strip())
+            and record.get("status") in valid_bridge_states
+            for identity, record in self.bridge_enrollments.items()
+        ):
+            raise ValueError("bridge enrollment mapping is invalid")
         if self.openclaw_enabled:
             if not self.openclaw_shared_secret or len(self.openclaw_shared_secret) < 24:
                 raise ValueError(
@@ -216,6 +236,7 @@ class RuntimeSettings:
         encryption_key: bytes,
         repository_root: Path,
         member_identities: dict[str, str] | None = None,
+        bridge_enrollments: dict[str, dict[str, Any]] | None = None,
         deterministic_openclaw_fixture: bool = False,
         member_roles: dict[str, str] | None = None,
         fixture_member_id: str | None = None,
@@ -236,6 +257,9 @@ class RuntimeSettings:
             encryption_key=encryption_key,
             repository_root=repository_root,
             member_identities=dict(member_identities or {}),
+            bridge_enrollments={
+                key: dict(value) for key, value in (bridge_enrollments or {}).items()
+            },
             deterministic_openclaw_fixture=deterministic_openclaw_fixture,
             member_roles=dict(member_roles or {}),
             fixture_member_id=fixture_member_id,
@@ -293,7 +317,11 @@ class AdministrateMeRuntime:
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
-        self.member_id_resolver = DictMemberIdResolver(settings.member_identities)
+        self.member_id_resolver = (
+            EnrollmentMemberIdResolver(settings.bridge_enrollments)
+            if settings.bridge_enrollments
+            else DictMemberIdResolver(settings.member_identities)
+        )
         self.extensions = ExtensionCatalog(
             settings.repository_root, settings.instance.instance_dir
         )

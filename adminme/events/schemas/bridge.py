@@ -1,7 +1,8 @@
 """
 L1-bridge canonical event family — emitted by the bridge daemon's bootstrap
 mini-wizard once a member's bridge Mac Mini has paired with the central
-service and at least one knowledge-source adapter is reporting healthy.
+service. ``adapters_active`` may be empty for the transport-only enrollment
+proof; it lists only packs already configured and healthy at that moment.
 
 Per ADMINISTRATEME_BUILD.md §MEMBER BRIDGES, SYSTEM_INVARIANTS.md §1
 invariants 3 + 9 (event log append-only, typed registry) + §6.19 (bridge
@@ -35,9 +36,8 @@ class BridgeEnrolledV1(BaseModel):
     tailscale_identity: str = Field(min_length=1)
     adapters_active: list[str] = Field(
         description=(
-            "Subkinds of knowledge-source adapters reporting healthy at "
-            "enrollment time (per memo 04 §3.1, kind=adapter, "
-            "subkind=knowledge-source)."
+            "Bridge packs reporting healthy at enrollment time; empty is a "
+            "valid transport-only enrollment and makes no provider claim."
         ),
     )
     enrolled_at: datetime

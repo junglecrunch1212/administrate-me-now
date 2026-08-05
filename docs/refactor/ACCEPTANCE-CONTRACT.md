@@ -17,7 +17,9 @@ restore, OpenClaw protocol, or browser rendering boundary named by a row.
 The release environment is macOS 14 on Apple silicon, Python 3.11 from the
 lockfile, Node 22.23.1 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`, loopback-only services, encrypted
+`944cf08f94c334cff2b0fdf7e01187a9efa42715`, installed from the exact
+SHA-256-pinned GitHub source archive because that version is not on npm,
+loopback-only services, encrypted
 temporary instances, and no real household account. Live provider grants are a
 post-merge activation boundary and cannot be represented as a fixture pass.
 
@@ -26,7 +28,7 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | ID | Executable release requirement | Pass condition |
 |---|---|---|
 | AC-00 | `git diff --check`, clean fresh-worktree status after validation | No tracked build residue, secret, or unrelated file. |
-| AC-01 | `scripts/acceptance/clean-install.sh` and `tests/acceptance/test_macos_bootstrap_operations.py` | Ten-section encrypted fixture install, idempotent rerun, Doctor, redaction, and safe operations pass. |
+| AC-01 | `scripts/acceptance/clean-install.sh`, `tests/acceptance/test_macos_bootstrap_operations.py`, and bootstrap unit suites | Ten-section encrypted fixture install, exact source receipt, idempotent cron, selected-member bridge export/accept/finalize/revoke, idempotent rerun, Doctor, redaction, and safe operations pass. |
 | AC-02 | `tests/acceptance/test_runtime_spine.py` and `tests/integration/test_runtime_application.py` | One Python composition owns encrypted log, durable bus, exactly 13 projections, pipelines, six product routers, bridge ingest, readiness, unwind, and shutdown. |
 | AC-03 | `tests/acceptance/test_communication_commitment_vertical_slice.py` | Communication-to-outcome slice, guarded approval, replay, rebuild, stale/duplicate denial, and contextual next action pass. |
 | AC-04 | `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` | Enrolled member knowledge remains owner-stamped, searchable only where allowed, correctable, replayable, and source-spoof resistant. |
@@ -37,16 +39,16 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-09 | `tests/unit/test_event_bus.py`, pipeline runner tests, communication slice, and forced-exit test in `test_release_candidate_hardening.py` | Append-before-publish, checkpoints, redelivery, poison isolation, idempotency, retry bounds, restart, and committed-event recovery pass. |
 | AC-10 | Adapter base, validator, supervisor, cursor, and dual-deployment suites under `tests/unit/adapters`, `tests/unit/lib/adapters`, and `tests/integration/test_adapter_*` | Cat-A/B/C/D/E contracts, capabilities, allowlists, sensitivity, cursors, circuits, identities, and install validation pass. |
 | AC-11 | `tests/integration/test_security_end_to_end.py`, `tests/unit/test_observation.py`, and `tests/unit/test_notifications_gate6.py` | Governance order, independent approval, observation suppression, result ingestion, retries, and terminal audit pass. |
-| AC-12 | OpenClaw `check`, `contract`, `test`, `build`, and `pack --dry-run`; `tests/acceptance/test_openclaw_native_seam.py` | Exact native contract, scoped tools, model provenance, actor denial, exact-once outcomes, outage/restart, and compatibility refusal pass. Live install/inspect/deep-RPC remains an activation step. |
+| AC-12 | OpenClaw `check`, `contract`, `test`, `build`, and `pack --dry-run`; `tests/acceptance/test_openclaw_native_seam.py`; `tests/unit/bootstrap/test_openclaw_cron_reconciliation.py` | Exact native contract, scoped tools, model provenance, actor denial, exact-once outcomes, outage/restart, owned cron reconciliation/rollback, and compatibility refusal pass. Live install/inspect/deep-RPC remains an activation step. |
 | AC-13 | All `test_xlsx_*` unit/integration suites | Both named workbooks, protected/derived rejection, reverse events, sidecars, locks, conflicts, retries, and rebuild pass. |
 | AC-14 | Runtime, Gate 6 capability, bootstrap Doctor, adapter supervisor, and OpenClaw outage tests | Disabled, stale, degraded, and blocked states remain distinct; reads survive safe degradations; writes fail closed; diagnostics are actionable and redacted. |
 | AC-15 | `scripts/acceptance/backup-restore.sh` and bootstrap operations tests | Encrypted backup, authenticated staging restore, wrong-key/tamper refusal, rollback copy, and post-restore Doctor pass. |
 | AC-16 | `scripts/acceptance/tenant-isolation.sh` | Two separately keyed instances accept identical IDs without crossing log, projection, member knowledge, HTTP, or OpenClaw session boundaries. |
 | AC-17 | Extension, pack-loader, manifest-validator, skill, profile, and persona suites | Six pack kinds, dependencies, install/rollback behavior, five profiles, and four personas compile without changing authority or model routing. |
 | AC-18 | `tests/acceptance/test_gate7_household_experience.py` and console harness `test:gate7` | Eight surfaces, three modes, named controls, responsive/reduced-motion captures, chat/degraded states, and private/promoted/archived quest states pass without browser errors. |
-| AC-19 | Runtime loopback validation, bridge authorization tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, Tailscale identity is resolved server-side, spoofed/cross-owner requests fail, and legacy listeners are absent. |
+| AC-19 | Runtime loopback validation, bridge authorization/enrollment tests, Gate 7 direct-route abuse tests, and listener/config scan in the release report | Gateway stays on pinned loopback, portal and bridge authorization maps are independently revocable, member self identity and owner scope are bound, spoofed/cross-owner requests fail, and legacy listeners are absent. |
 | AC-20 | `tests/acceptance/test_release_candidate_hardening.py`, runtime shutdown tests, and backup/restore tests | A real v1 encrypted file migrates through v3, old facts survive, wrong keys and mutation fail, repeated shutdown is safe, startup unwinds, and a committed append survives forced exit. |
-| AC-21 | `scripts/acceptance/macos-bootstrap-rehearsal.sh` in the `macOS bootstrap contract` PR job | Credential-free Apple-silicon bootstrap, launchd/plist contracts, start/stop/restart, backup/restore, and Doctor pass. Real grants and household providers remain post-merge human activation. |
+| AC-21 | `scripts/acceptance/openclaw-source-install.sh` and `scripts/acceptance/macos-bootstrap-rehearsal.sh` in the `macOS bootstrap contract` PR job plus the live checklist | Credential-free Apple-silicon exact-source build, central/member launchd/plist contracts, cron/bridge process contracts, start/stop/restart, backup/restore, and Doctor pass. Live Gateway RPC, real grants, and household providers remain post-merge human activation. |
 | AC-22 | `scripts/acceptance/architecture-negative-checks.sh` | No direct model SDK, manual pipeline/adapter bus publish, hardcoded tenant path/identity, direct projection write, executable/raw-log temporary view, or projection count other than 13. |
 | AC-23 | Gate 7 acceptance, `tests/unit/test_member_chat_gate7.py`, and OpenClaw checks | Adult chat is cancellable and bounded; sessions/transcripts/results cannot cross; ordinary chat emits no domain event; explicit proposals are private and guarded; temporary lenses are data-only, private, review-promoted, expirable, and non-contaminating. |
 

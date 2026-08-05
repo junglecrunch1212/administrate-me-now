@@ -34,7 +34,30 @@ def main() -> None:
         for member in mapping["members"]
         if member.get("tailscale_identity")
     }
+    normalized_member_identities = {
+        identity.casefold(): member_id
+        for identity, member_id in member_identities.items()
+    }
+    bridge_mapping_path = paths.instance_dir / "bridges" / "member-mapping.json"
+    bridge_enrollments = (
+        json.loads(bridge_mapping_path.read_text("utf-8"))
+        if bridge_mapping_path.is_file()
+        else {}
+    )
+    for bridge_identity, record in bridge_enrollments.items():
+        member_id = record.get("member_id") if isinstance(record, dict) else None
+        if (
+            not isinstance(bridge_identity, str)
+            or not isinstance(member_id, str)
+            or normalized_member_identities.get(bridge_identity.casefold()) != member_id
+            or record.get("owner_scope") != f"private:{member_id}"
+            or record.get("role") != roles.get(member_id)
+        ):
+            raise RuntimeError(
+                "bridge enrollment mapping disagrees with the reviewed household identity map"
+            )
     actor_identities = adapter_config.get("openclaw_actor_identities", {})
+    chat_members = frozenset(adapter_config.get("member_chat_enabled_members", []))
     store = secret_store(paths)
     shared = store.get(references["openclaw_shared"]).decode("ascii")
     settings = RuntimeSettings.credential_free(
@@ -44,16 +67,15 @@ def main() -> None:
             os.environ.get("ADMINME_REPOSITORY_ROOT", str(repository_root()))
         ),
         member_identities=member_identities,
+        bridge_enrollments=bridge_enrollments,
         member_roles=roles,
         deterministic_openclaw_fixture=False,
-        openclaw_enabled=bool(actor_identities),
+        openclaw_enabled=bool(actor_identities or chat_members),
         openclaw_shared_secret=shared,
         openclaw_actor_identities=actor_identities,
         openclaw_gateway_token=shared,
         openclaw_model_configured=model_provider_configured(paths),
-        member_chat_enabled_members=frozenset(
-            adapter_config.get("member_chat_enabled_members", [])
-        ),
+        member_chat_enabled_members=chat_members,
         child_chat_enabled_members=frozenset(
             adapter_config.get("child_chat_enabled_members", [])
         ),

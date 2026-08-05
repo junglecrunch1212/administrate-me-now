@@ -49,6 +49,7 @@ google-auth = "*"
 
 # Shared utilities
 pyyaml = "*"
+tzdata = "*"
 
 [tool.poetry.group.llm]
 optional = true

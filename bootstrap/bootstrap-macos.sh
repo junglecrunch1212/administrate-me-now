@@ -6,6 +6,8 @@ BOOTSTRAP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$BOOTSTRAP_DIR/.." && pwd -P)"
 INSTANCE_ROOT="${ADMINME_INSTANCE_ROOT:-$HOME/Library/Application Support/AdministrateMe}"
 DRY_RUN=0
+EXPECTED_COMMIT=""
+RELEASE_STAGING=""
 PASSTHROUGH=()
 
 while (($#)); do
@@ -20,6 +22,11 @@ while (($#)); do
       PASSTHROUGH+=("$1")
       shift
       ;;
+    --expected-commit)
+      (($# >= 2)) || { echo "--expected-commit requires a value" >&2; exit 2; }
+      EXPECTED_COMMIT="$2"
+      shift 2
+      ;;
     *)
       PASSTHROUGH+=("$1")
       shift
@@ -32,6 +39,15 @@ fail() {
   exit 1
 }
 
+cleanup() {
+  if [[ -n "$RELEASE_STAGING" && -d "$RELEASE_STAGING" ]]; then
+    case "$RELEASE_STAGING" in
+      "$INSTANCE_ROOT"/app/releases/.staging.*) rm -rf "$RELEASE_STAGING" ;;
+    esac
+  fi
+}
+trap cleanup EXIT
+
 [[ "$INSTANCE_ROOT" == /* ]] || fail "the instance root must be absolute"
 [[ "$INSTANCE_ROOT" != "/" && "$INSTANCE_ROOT" != "$HOME" ]] || fail "refusing a broad instance root"
 
@@ -43,9 +59,26 @@ if [[ "${ADMINME_TEST_MODE:-0}" == "1" ]]; then
   exit $?
 fi
 
+((DRY_RUN == 0)) || fail "--dry-run is an internal test-harness option, not a safe operator rehearsal; use --fixture with a separate Lab instance root"
+
 [[ "$(uname -s)" == "Darwin" ]] || fail "requires macOS"
 [[ "$(uname -m)" == "arm64" ]] || fail "requires native Apple-silicon arm64; Rosetta is unsupported"
 [[ "$(id -u)" -ne 0 ]] || fail "do not run as root; use the dedicated AdministrateMe account"
+
+git -C "$REPOSITORY_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || fail "the installer must run from a Git checkout of the reviewed release"
+repository_status="$(git -C "$REPOSITORY_ROOT" status --porcelain --untracked-files=all)"
+[[ -z "$repository_status" ]] \
+  || fail "the release checkout has local changes; restore a clean reviewed checkout instead of deploying it"
+commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+if [[ -n "$EXPECTED_COMMIT" ]]; then
+  [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "--expected-commit must be the full 40-character reviewed Git SHA"
+  [[ "$commit" == "$EXPECTED_COMMIT" ]] \
+    || fail "checked-out commit $commit does not match reviewed commit $EXPECTED_COMMIT"
+fi
+echo "Reviewed source boundary: $commit"
+export ADMINME_REVIEWED_COMMIT="$commit"
 
 macos_major="$(sw_vers -productVersion | cut -d. -f1)"
 case "$macos_major" in
@@ -96,21 +129,41 @@ if ((npm_major != 10 || npm_minor < 9)); then
   fail "npm $npm_version is outside >=10.9,<11"
 fi
 
-commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+"$BOOTSTRAP_DIR/install-openclaw-source.sh" \
+  --instance-root "$INSTANCE_ROOT" \
+  --python "$python_bin"
+export PATH="$INSTANCE_ROOT/bin:$PATH"
+
 release_dir="$INSTANCE_ROOT/app/releases/$commit"
-mkdir -p "$release_dir"
-if [[ ! -f "$release_dir/pyproject.toml" ]]; then
-  git -C "$REPOSITORY_ROOT" archive --format=tar HEAD | tar -xf - -C "$release_dir"
+release_parent="$INSTANCE_ROOT/app/releases"
+mkdir -p "$release_parent"
+if [[ ! -d "$release_dir" ]]; then
+  RELEASE_STAGING="$(mktemp -d "$release_parent/.staging.XXXXXX")"
+  git -C "$REPOSITORY_ROOT" archive --format=tar HEAD | tar -xf - -C "$RELEASE_STAGING"
+  printf '%s\n' "$commit" >"$RELEASE_STAGING/.administrateme-source-commit"
+  mv "$RELEASE_STAGING" "$release_dir"
+  RELEASE_STAGING=""
 fi
+[[ ! -L "$release_dir" \
+  && -f "$release_dir/pyproject.toml" \
+  && -f "$release_dir/poetry.lock" \
+  && -f "$release_dir/bootstrap/cli.py" \
+  && -f "$release_dir/.administrateme-source-commit" \
+  && "$(<"$release_dir/.administrateme-source-commit")" == "$commit" ]] \
+  || fail "the immutable release directory is incomplete; preserve it for diagnosis and deploy into a new instance root"
 
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   "$python_bin" -m venv "$release_dir/.venv"
+fi
+venv_receipt="$release_dir/.venv/.administrateme-installed-commit"
+if [[ ! -f "$venv_receipt" || "$(<"$venv_receipt")" != "$commit" ]]; then
   "$release_dir/.venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
   (
     cd "$release_dir"
     VIRTUAL_ENV="$release_dir/.venv" \
       "$release_dir/.venv/bin/poetry" install --only main --sync --no-interaction
   )
+  printf '%s\n' "$commit" >"$venv_receipt"
 fi
 
 (
@@ -121,10 +174,6 @@ fi
 )
 
 if ((DRY_RUN == 0)); then
-  current_openclaw="$(openclaw --version 2>/dev/null || true)"
-  if [[ "$current_openclaw" != *"2026.7.2"* ]]; then
-    npm install --global "openclaw@2026.7.2"
-  fi
   openclaw plugins install --link "$release_dir/openclaw/administrateme"
   openclaw plugins inspect administrateme --runtime --json >/dev/null
 fi

@@ -22,3 +22,13 @@ Every accepted knowledge event is private to the enrolled member, keeps source
 and correction provenance, and enters the `member_knowledge` read model. Only
 non-privileged content may enter the scope-filtered domain `vector_search`
 projection. The bridge does not copy OpenClaw conversations or generic memory.
+
+The supported first enrollment is driven from the central Mac with
+`bootstrap/bridge-export.sh`, accepted on the exact reviewed member-Mac checkout
+with `bootstrap/install-member-bridge.sh`, and closed centrally with
+`bootstrap/bridge-finalize.sh` or `bootstrap/bridge-revoke.sh`. The encrypted
+transfer and separately conveyed one-time code expire after 30 minutes. The
+installer verifies the Git SHA and Tailscale self identity, writes a per-user
+LaunchAgent, emits the owner-scoped enrollment proof, and consumes the transfer
+file. Enrollment deliberately enables no data pack; pack roots and macOS
+privacy grants remain explicit later opt-ins.
