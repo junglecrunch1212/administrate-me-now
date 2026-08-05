@@ -1,4 +1,4 @@
-# pyright: reportMissingImports=false
+# pyright: reportMissingImports=false, reportAttributeAccessIssue=false
 """EventKit transport boundary for Apple Reminders.
 
 Tests inject protocol-shaped fakes.  On macOS the default factory uses PyObjC

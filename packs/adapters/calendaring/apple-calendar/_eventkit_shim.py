@@ -1,4 +1,4 @@
-# pyright: reportMissingImports=false
+# pyright: reportMissingImports=false, reportAttributeAccessIssue=false
 """
 Protocol-shaped stand-in for EventKit's ``EKEventStore`` (EKEntityTypeEvent).
 
