@@ -60,16 +60,20 @@ def reviewed_source_status(
     executable_ok = bool(observed_executable) and Path(
         str(observed_executable)
     ).resolve() == (entry_path.resolve())
-    receipt_ok = (
-        receipt.get("schema_version") == 1
-        and receipt.get("install_kind") == "verified-github-source-archive"
-        and receipt.get("source_root") == str(source_root)
-        and receipt.get("version") == expected["version"]
-        and receipt.get("commit") == expected["commit"]
-        and receipt.get("source_archive_url") == expected["source_archive_url"]
-        and receipt.get("source_archive_sha256") == expected["source_archive_sha256"]
-        and receipt.get("package_manager") == expected["package_manager"]
+    expected_receipt = {
+        "schema_version": 1,
+        "install_kind": "verified-github-source-archive",
+        "source_root": str(source_root),
+        "version": expected["version"],
+        "commit": expected["commit"],
+        "source_archive_url": expected["source_archive_url"],
+        "source_archive_sha256": expected["source_archive_sha256"],
+        "package_manager": expected["package_manager"],
+    }
+    receipt_mismatches = sorted(
+        key for key, value in expected_receipt.items() if receipt.get(key) != value
     )
+    receipt_ok = not receipt_mismatches
     package_ok = (
         package.get("name") == "openclaw"
         and package.get("version") == expected["version"]
@@ -88,6 +92,7 @@ def reviewed_source_status(
         "archive_sha256": expected["source_archive_sha256"],
         "package_metadata_matches": package_ok,
         "receipt_matches": receipt_ok,
+        "receipt_mismatch_fields": receipt_mismatches,
         "executable_matches": executable_ok,
     }
 

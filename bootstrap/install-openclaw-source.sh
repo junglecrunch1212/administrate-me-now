@@ -41,6 +41,10 @@ done
 [[ "$INSTANCE_ROOT" == /* && "$INSTANCE_ROOT" != "/" && "$INSTANCE_ROOT" != "$HOME" ]] \
   || fail "the instance root must be a narrow absolute path"
 [[ -x "$PYTHON_BIN" ]] || fail "the pinned Python executable is unavailable"
+mkdir -p "$INSTANCE_ROOT"
+INSTANCE_ROOT="$(cd "$INSTANCE_ROOT" && pwd -P)"
+[[ "$INSTANCE_ROOT" != "/" && "$INSTANCE_ROOT" != "$(cd "$HOME" && pwd -P)" ]] \
+  || fail "the resolved instance root must be a narrow absolute path"
 command -v node >/dev/null 2>&1 || fail "Node is unavailable"
 command -v corepack >/dev/null 2>&1 || fail "Node Corepack is unavailable"
 command -v curl >/dev/null 2>&1 || fail "curl is unavailable"

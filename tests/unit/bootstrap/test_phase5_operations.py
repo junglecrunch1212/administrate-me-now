@@ -109,6 +109,10 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     ).read_text("utf-8")
     assert "source_archive_sha256" in source_installer
     assert "--frozen-lockfile" in source_installer
+    assert 'INSTANCE_ROOT="$(cd "$INSTANCE_ROOT" && pwd -P)"' in source_installer
+    assert (
+        "the resolved instance root must be a narrow absolute path" in source_installer
+    )
     versions = json.loads(
         (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
     )
@@ -186,6 +190,7 @@ def test_reviewed_openclaw_source_receipt_binds_exact_executable(
 
     status = reviewed_source_status(test_paths, executable=str(entry))
     assert status["ok"] is True
+    assert status["receipt_mismatch_fields"] == []
     assert (
         reviewed_source_status(
             test_paths,
