@@ -113,9 +113,12 @@ if [[ ! -d "$source_root" ]]; then
 
   corepack enable --install-directory "$bin_dir"
   export PATH="$bin_dir:$PATH"
-  CI=true pnpm -C "$STAGING_DIR" install --frozen-lockfile
-  pnpm -C "$STAGING_DIR" ui:build
-  pnpm -C "$STAGING_DIR" build
+  (
+    cd "$STAGING_DIR"
+    CI=true pnpm install --frozen-lockfile
+    pnpm ui:build
+    pnpm build
+  )
   observed_version="$(node "$STAGING_DIR/dist/entry.js" --version)"
   [[ "$observed_version" == *"$OPENCLAW_VERSION"* ]] \
     || fail "the built OpenClaw CLI reports an unexpected version"

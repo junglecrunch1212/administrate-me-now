@@ -109,9 +109,16 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     ).read_text("utf-8")
     assert "source_archive_sha256" in source_installer
     assert "--frozen-lockfile" in source_installer
-    assert "codeload.github.com/openclaw/openclaw" in (
-        REPO_ROOT / "bootstrap" / "versions.json"
-    ).read_text("utf-8")
+    versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )
+    assert (
+        "codeload.github.com/openclaw/openclaw"
+        in versions["openclaw"]["source_archive_url"]
+    )
+    assert versions["openclaw"]["package_manager"] == (
+        "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+    )
 
 
 def test_bootstrap_reports_expected_pending_bridge_work_without_masking_failures() -> (
