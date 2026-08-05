@@ -93,17 +93,27 @@ class ServiceManager:
         domain = f"gui/{uid}"
         for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
             path = self.paths.launch_agent_dir / f"{label}.plist"
-            if not self._launchctl_loaded(label):
+            if self._launchctl_loaded(label):
                 completed = subprocess.run(
-                    ["launchctl", "bootstrap", domain, str(path)],
+                    ["launchctl", "bootout", f"{domain}/{label}"],
                     check=False,
                     capture_output=True,
                     text=True,
                 )
-                if completed.returncode and not self._launchctl_loaded(label):
+                if completed.returncode and self._launchctl_loaded(label):
                     raise RuntimeError(
-                        f"launchd could not load {label}: {completed.stderr.strip()}"
+                        f"launchd could not reload {label}: {completed.stderr.strip()}"
                     )
+            completed = subprocess.run(
+                ["launchctl", "bootstrap", domain, str(path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode and not self._launchctl_loaded(label):
+                raise RuntimeError(
+                    f"launchd could not load {label}: {completed.stderr.strip()}"
+                )
             subprocess.run(
                 ["launchctl", "kickstart", "-k", f"{domain}/{label}"],
                 check=True,

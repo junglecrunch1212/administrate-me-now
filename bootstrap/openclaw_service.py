@@ -34,6 +34,10 @@ def main() -> None:
     )["references"]
     shared = secret_store(paths).get(references["openclaw_shared"]).decode("ascii")
     environment = os.environ.copy()
+    environment["OPENCLAW_STATE_DIR"] = str(paths.instance_dir / "openclaw" / "runtime")
+    environment["OPENCLAW_CONFIG_PATH"] = str(
+        paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    )
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
     environment["OPENCLAW_GATEWAY_TOKEN"] = shared
     os.execve(executable, [executable, "gateway", "run"], environment)

@@ -201,18 +201,31 @@ class UpgradeManager:
         if sys.version_info[:2] != (3, 11):
             raise UpgradeError("upgrade preparation requires the pinned Python 3.11")
         python = release / ".venv" / "bin" / "python"
+        poetry_venv = self.paths.app_dir / "tooling" / "poetry-2.2.1"
+        poetry = poetry_venv / "bin" / "poetry"
+        if not poetry.is_file():
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(poetry_venv)],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    str(poetry_venv / "bin" / "python"),
+                    "-m",
+                    "pip",
+                    "install",
+                    "poetry==2.2.1",
+                ],
+                check=True,
+            )
         if not python.is_file():
             subprocess.run(
                 [sys.executable, "-m", "venv", str(release / ".venv")],
                 check=True,
             )
-            subprocess.run(
-                [str(python), "-m", "pip", "install", "poetry==2.2.1"],
-                check=True,
-            )
         subprocess.run(
             [
-                str(release / ".venv" / "bin" / "poetry"),
+                str(poetry),
                 "install",
                 "--only",
                 "main",

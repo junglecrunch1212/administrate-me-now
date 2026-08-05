@@ -13,14 +13,25 @@ export default definePluginEntry({
   name: "AdministrateMe",
   description: "Authorized household state and action seam for AdministrateMe v2.",
   register(api) {
-    if (api.registrationMode !== "full") return;
+    // The pinned runtime uses discovery/tool-discovery while its published SDK
+    // type still names the equivalent non-activating modes setup/snapshot.
+    const registrationMode = String(api.registrationMode);
+    if (
+      registrationMode !== "full" &&
+      registrationMode !== "discovery" &&
+      registrationMode !== "tool-discovery"
+    ) {
+      return;
+    }
     const config = readPluginConfig(api.pluginConfig);
     const runtime = {
       transport: new AdministrateMeTransport(config),
       trackedSessions: new Map(),
     };
     registerDashboard(api, runtime);
+    if (registrationMode === "discovery") return;
     registerTools(api, runtime);
+    if (registrationMode === "tool-discovery") return;
     registerCommands(api, runtime);
     registerHooks(api, runtime);
     registerService(api, runtime);

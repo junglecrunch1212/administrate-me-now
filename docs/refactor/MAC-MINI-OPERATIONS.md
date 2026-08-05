@@ -12,7 +12,7 @@ the future family Mac. Phase A uses a disposable Mac and fake identities.
 - A dedicated non-administrator-at-runtime account with FileVault enabled.
 - Python `>=3.11,<3.12`, Node `>=22.22.3,<23`, SQLCipher `>=4.12,<5`
   through the locked `sqlcipher3==0.6.2` Apple-silicon wheel,
-  Homebrew `>=4.6,<6`, Poetry `2.2.1`, and npm `>=10.9,<11`.
+  Homebrew `>=6,<7`, Poetry `2.2.1`, and npm `>=10.9,<11`.
 - OpenClaw `2026.7.2`, plugin API `2026.7.2`, and source commit
   `944cf08f94c334cff2b0fdf7e01187a9efa42715` exactly. Because that version is
   unpublished on npm, the installer verifies its GitHub archive SHA-256 and

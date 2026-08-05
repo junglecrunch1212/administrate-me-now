@@ -25,7 +25,10 @@ type HookRegistration = {
   handler: (event: Record<string, unknown>, context: Record<string, unknown>) => unknown;
 };
 
-function fakeApi(config: Record<string, unknown> = {}) {
+function fakeApi(
+  config: Record<string, unknown> = {},
+  registrationMode = "full",
+) {
   const tools = new Map<string, ToolFactory>();
   const commands = new Map<string, OpenClawPluginCommandDefinition>();
   const gateways = new Map<string, GatewayRegistration>();
@@ -36,7 +39,7 @@ function fakeApi(config: Record<string, unknown> = {}) {
     name: "AdministrateMe",
     version: "2.0.0-gate7",
     source: "fixture",
-    registrationMode: "full",
+    registrationMode: registrationMode as OpenClawPluginApi["registrationMode"],
     pluginConfig: config,
     logger: {
       debug: vi.fn(),
@@ -122,6 +125,22 @@ describe("native OpenClaw contract fixture", () => {
     expect([...runtime.gateways]).toHaveLength(11);
     expect(runtime.services).toHaveLength(1);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
+  });
+
+  it("registers dashboard ownership during read-only OpenClaw discovery", () => {
+    const runtime = fakeApi({}, "discovery");
+    expect([...runtime.gateways]).toHaveLength(11);
+    expect(runtime.tools).toHaveLength(0);
+    expect(runtime.commands).toHaveLength(0);
+    expect(runtime.hooks).toHaveLength(0);
+    expect(runtime.services).toHaveLength(0);
+  });
+
+  it("exposes tools without starting services during tool discovery", () => {
+    const runtime = fakeApi({}, "tool-discovery");
+    expect([...runtime.gateways]).toHaveLength(11);
+    expect([...runtime.tools]).toHaveLength(9);
+    expect(runtime.services).toHaveLength(0);
   });
 
   it("sends a typed tool request with full trusted provenance and no operator token body", async () => {

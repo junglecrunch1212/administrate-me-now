@@ -224,6 +224,12 @@ class OpenClawCronReconciler:
 
     def _run(self, arguments: list[str]) -> str:
         environment = os.environ.copy()
+        environment["OPENCLAW_STATE_DIR"] = str(
+            self.paths.instance_dir / "openclaw" / "runtime"
+        )
+        environment["OPENCLAW_CONFIG_PATH"] = str(
+            self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+        )
         if self.gateway_token:
             environment["OPENCLAW_GATEWAY_TOKEN"] = self.gateway_token
         completed = self.runner(

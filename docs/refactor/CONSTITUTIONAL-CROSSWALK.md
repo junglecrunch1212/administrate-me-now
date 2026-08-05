@@ -1,5 +1,13 @@
 # Constitutional crosswalk
 
+Mac bootstrap compatibility amendment (2026-08-05): C046/C050/C053 preserve
+their semantics while the installer moves to Homebrew 6 metadata, isolates
+Poetry from its synchronized target environment, recognizes only its own
+pre-wizard scaffold, explicitly trusts the exact reviewed local plugin, and
+registers dashboard ownership during pinned OpenClaw discovery. This
+**MODERNIZES** package/runtime integration and **PRESERVES** source review,
+Doctor truthfulness, OpenClaw scheduler ownership, and fail-closed bootstrap.
+
 Primary-surface release amendment (2026-08-05): C035 and C037 now have
 executable bidirectional implementations for central Google Calendar and
 per-member Apple Calendar, Reminders, and Notes. Provider-native fields stay at
