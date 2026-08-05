@@ -93,7 +93,7 @@ filevault_status="$(fdesetup status 2>/dev/null || true)"
 xcode-select -p >/dev/null 2>&1 || fail "install Apple's Command Line Tools with: xcode-select --install"
 command -v brew >/dev/null 2>&1 || fail "install Homebrew from its signed package, then rerun"
 brew_version="$(brew --version | awk 'NR==1 {print $2}')"
-IFS=. read -r brew_major brew_minor _ <<<"$brew_version"
+IFS=. read -r brew_major _ <<<"$brew_version"
 [[ "$brew_major" =~ ^[0-9]+$ ]] || fail "could not read the Homebrew version"
 if ((brew_major < 6 || brew_major >= 7)); then
   fail "Homebrew $brew_version is outside >=6,<7"
