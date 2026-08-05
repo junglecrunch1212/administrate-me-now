@@ -17,6 +17,31 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-05 Mac bootstrap compatibility repair
+
+The live Apple-silicon rehearsal exposed five release-blocking compatibility
+defects and this reviewed amendment fixes them. Bootstrap now requires the
+current Homebrew 6 metadata consumer, keeps pinned Poetry in an instance-local
+tooling environment outside the synchronized application virtualenv, permits
+only the installer-owned `app`, `bin`, and `state` scaffold at first wizard
+entry, and explicitly acknowledges the reviewed local OpenClaw plugin path.
+The plugin now registers its eleven declared dashboard methods during the
+pinned runtime's read-only discovery mode and its nine tools during tool
+discovery, without starting hooks or services outside full activation.
+Every OpenClaw CLI, cron, activation, and launchd path is also bound to the
+instance-local OpenClaw state/config directory so lab and production cannot
+select each other's plugin paths. Bootstrap explicitly writes and validates
+`gateway.mode=local` before launchd starts the pinned Gateway.
+Optional unconfigured member chat remains explicitly blocked in capability
+health but no longer blocks the deterministic runtime's global readiness.
+Resumed installs reload existing user LaunchAgents before kickstart, ensuring
+the plist's current immutable release is the process actually under test.
+
+This **MODERNIZES** installer/package compatibility while **PRESERVING** the
+reviewed-source boundary, fail-closed first-run behavior, one pinned OpenClaw
+runtime, OpenClaw cron ownership, and AdministrateMe domain authority. Evidence
+is recorded in `docs/refactor/evidence/mac-bootstrap-compatibility-2026-08-05.md`.
+
 ## 2026-08-05 release disposition
 
 The operator explicitly authorized final review, amendment, green-check merge,

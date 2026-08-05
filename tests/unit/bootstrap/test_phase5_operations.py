@@ -104,6 +104,15 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert "internal test-harness option" in installer
     assert "status --porcelain --untracked-files=all" in installer
     assert "npm install --global" not in installer
+    assert 'poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.2.1"' in installer
+    assert '"$poetry_venv/bin/poetry" install --only main --sync' in installer
+    assert 'openclaw plugins install --link --force "$release_dir/' in installer
+    assert "openclaw plugins uninstall administrateme --force --keep-files" in installer
+    assert "openclaw config set gateway.mode local" in installer
+    assert "openclaw config validate" in installer
+    assert "outside >=6,<7" in installer
+    assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
+    assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
     source_installer = (
         REPO_ROOT / "bootstrap" / "install-openclaw-source.sh"
     ).read_text("utf-8")
@@ -122,6 +131,9 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     )
     assert versions["openclaw"]["package_manager"] == (
         "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+    )
+    assert (
+        'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
     )
 
 
@@ -214,6 +226,31 @@ def test_preflight_wrong_platform_and_arch_leave_no_partial_instance(
             check_filevault=False,
         )
     assert not target.exists()
+
+
+def test_wizard_accepts_only_the_reviewed_installer_scaffold(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_runtime(monkeypatch)
+    (test_paths.root / "app" / "tooling").mkdir(parents=True)
+    (test_paths.root / "bin").mkdir()
+    (test_paths.root / "state" / "openclaw").mkdir(parents=True)
+    (test_paths.root / "state" / "openclaw" / "source-install.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    assert (
+        _wizard(test_paths).run(stop_after_section=1)["sections"]["1"]["status"]
+        == "complete"
+    )
+
+
+def test_wizard_rejects_unknown_prebootstrap_top_level_content(
+    test_paths: DeploymentPaths,
+) -> None:
+    (test_paths.root / "unexpected").mkdir(parents=True)
+    with pytest.raises(WizardFailure, match="non-empty"):
+        _wizard(test_paths).run(stop_after_section=1)
 
 
 def test_wizard_rejects_duplicate_tailscale_user_bindings(

@@ -41,6 +41,9 @@ resolve_instance_root() {
   fi
   ADMINME_INSTANCE_ROOT="$requested"
   export ADMINME_INSTANCE_ROOT
+  OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"
+  OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  export OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
   if [[ -d "$ADMINME_INSTANCE_ROOT/bin" \
     && ":$PATH:" != *":$ADMINME_INSTANCE_ROOT/bin:"* ]]; then
     PATH="$ADMINME_INSTANCE_ROOT/bin:$PATH"

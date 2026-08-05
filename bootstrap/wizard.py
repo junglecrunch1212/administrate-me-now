@@ -58,6 +58,10 @@ def install_launch_agents(
     common_environment = {
         "ADMINME_INSTANCE_ROOT": str(paths.root),
         "ADMINME_REPOSITORY_ROOT": str(root),
+        "OPENCLAW_STATE_DIR": str(paths.instance_dir / "openclaw" / "runtime"),
+        "OPENCLAW_CONFIG_PATH": str(
+            paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+        ),
         "PATH": (
             f"{paths.root}/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:"
             "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -333,7 +337,9 @@ class BootstrapWizard:
         existing_children = (
             {path.name for path in self.paths.root.iterdir()} if existed else set()
         )
-        if existing_children - {"app"}:
+        # The reviewed shell installer prepares these roots before handing off to
+        # the resumable wizard. Any other top-level entry still fails closed.
+        if existing_children - {"app", "bin", "state"}:
             raise WizardFailure(
                 "deployment root is non-empty but has no resumable bootstrap state"
             )

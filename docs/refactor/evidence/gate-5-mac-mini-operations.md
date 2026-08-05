@@ -24,7 +24,7 @@ remains version/API `2026.7.2` at commit
 is `>=22.22.3,<23`, and SQLCipher is `>=4.12,<5` with cross-platform locked
 `sqlcipher3==0.6.2`. This supersedes the old binary-distribution decision
 because that package has no Apple artifact, while 0.6.2 publishes an exact
-CPython 3.11 Apple-silicon wheel. Homebrew is `>=4.6,<6`, Poetry is `2.2.1`, npm is
+CPython 3.11 Apple-silicon wheel. Homebrew is `>=6,<7`, Poetry is `2.2.1`, npm is
 `>=10.9,<11`, and Bun is not required.
 
 Primary platform sources reviewed on 2026-07-30:

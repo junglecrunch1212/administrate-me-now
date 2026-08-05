@@ -1,5 +1,12 @@
 # Migration map
 
+Mac bootstrap compatibility update (2026-08-05): the build/package and
+bootstrap rows are **HARDEN COMPLETE** for Homebrew 6 metadata, external pinned
+Poetry tooling, installer-owned first-run scaffolding, explicit reviewed-local
+plugin trust, and pinned OpenClaw discovery registration. The production
+virtualenv remains synchronized, but no longer contains the Poetry executable
+performing that destructive sync.
+
 Primary-surface update (2026-08-05): central Google Calendar and per-member
 Apple Calendar, Reminders, and Notes are now **KEEP/HARDEN COMPLETE IN CODE**.
 The release preserves provider-native schemas at the transport boundary,

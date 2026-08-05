@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,12 +53,18 @@ def activate(
     """Run OpenClaw-owned interactive auth, probe it, then write metadata only."""
 
     executable = resolve_reviewed_openclaw(paths, test_mode=test_mode)
+    environment = os.environ.copy()
+    environment["OPENCLAW_STATE_DIR"] = str(paths.instance_dir / "openclaw" / "runtime")
+    environment["OPENCLAW_CONFIG_PATH"] = str(
+        paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    )
     expected = load_versions()["openclaw"]["version"]
     version = subprocess.run(
         [executable, "--version"],
         check=True,
         capture_output=True,
         text=True,
+        env=environment,
     ).stdout
     if expected not in version:
         raise RuntimeError(
@@ -71,6 +78,7 @@ def activate(
     subprocess.run(
         [executable, "configure", "--section", "model", "--section", "channels"],
         check=True,
+        env=environment,
     )
     workspace = paths.instance_dir / "openclaw" / "workspace"
     required_workspace_files = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md")
@@ -87,10 +95,17 @@ def activate(
             str(workspace),
         ],
         check=True,
+        env=environment,
     )
-    subprocess.run([executable, "config", "validate"], check=True)
-    subprocess.run([executable, "models", "status", "--probe"], check=True)
-    subprocess.run([executable, "gateway", "status", "--require-rpc"], check=True)
+    subprocess.run([executable, "config", "validate"], check=True, env=environment)
+    subprocess.run(
+        [executable, "models", "status", "--probe"], check=True, env=environment
+    )
+    subprocess.run(
+        [executable, "gateway", "status", "--require-rpc"],
+        check=True,
+        env=environment,
+    )
 
     instance = yaml.safe_load(
         (paths.instance_dir / "config" / "instance.yaml").read_text("utf-8")

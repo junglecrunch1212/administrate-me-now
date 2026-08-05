@@ -152,8 +152,9 @@ brew doctor
 ```
 
 Expected: `which brew` prints `/opt/homebrew/bin/brew`. Warnings from
-`brew doctor` need review; do not continue past an error. The bootstrap accepts
-Homebrew `>=4.6,<6` and installs its own Python 3.11 and Node 22 formulae.
+`brew doctor` need review; do not continue past an error. The bootstrap requires
+Homebrew `>=6,<7` because Homebrew 5 cannot consume the current Homebrew Core
+formula metadata. It installs its own Python 3.11 and Node 22 formulae.
 
 ## Stage 3: install Tailscale before AdministrateMe
 
@@ -255,7 +256,17 @@ commit `944cf08f94c334cff2b0fdf7e01187a9efa42715` as a roughly 95 MB source
 archive, verifies its pinned SHA-256, installs its exact pnpm lock, and builds
 the UI and CLI locally. It never falls back to npm `latest`, a beta, or a
 floating branch. Normal output includes package downloads and TypeScript/UI
-builds. It must not ask for a household or model-provider credential.
+builds. Poetry runs from a separate instance-local tooling environment so its
+`--sync` operation cannot delete the installer that is performing the sync.
+The installer also explicitly acknowledges trust for the local plugin path;
+that acknowledgment is bounded to the plugin inside the exact reviewed release
+archive. Lab and production OpenClaw state are isolated beneath their respective
+instance roots, so the rehearsal cannot leave a plugin/config path in the real
+instance. The installer writes and validates the explicit local Gateway mode
+required by the pinned build before it starts services. On a resume or upgrade,
+it removes stale plugin registration metadata while preserving every immutable
+release directory, then links only the current reviewed release. It must not ask
+for a household or model-provider credential.
 
 Check and stop the lab:
 
@@ -268,7 +279,8 @@ Check and stop the lab:
 
 Expected Doctor result: top-level `"status": "healthy"`, ten complete
 sections, thirteen healthy projection stores/checkpoints, observation mode,
-and no live-provider claim. Expected stop result: both services `stopped`.
+`plugin_compatibility.evidence.discovered: true`, five reconciled OpenClaw cron
+jobs, and no live-provider claim. Expected stop result: both services `stopped`.
 
 If this fails, stop. The family instance is still untouched. Use the
 troubleshooting section at the end of this guide.
@@ -710,6 +722,7 @@ These commands preserve data, backups, Keychain items, and enrollment state.
 |---|---|---|
 | `brew: command not found` | Homebrew shell environment was not loaded | Run `eval "$(/opt/homebrew/bin/brew shellenv)"`, verify `which brew`, then retry once |
 | Unsupported Homebrew/Python/Node/npm | A floating system tool is being selected | Do not upgrade OpenClaw; rerun the reviewed installer so its exact formula paths are used |
+| Homebrew reports `unknown install step` | Homebrew 5 is trying to read current Homebrew Core metadata | Update Homebrew to the supported `>=6,<7` release, verify `brew --version`, then rerun the reviewed installer |
 | `openclaw: command not found` | The verified source build or instance-local wrapper is missing | Rerun the reviewed installer once. Do not run `npm install -g openclaw` or substitute `latest`; attach Doctor output if it persists |
 | OpenClaw archive checksum/source provenance failure | Download was incomplete, changed, or an unreviewed executable is first on PATH | Stop. Keep the diagnostic, verify network/disk, and rerun the exact installer; never bypass the SHA-256 check |
 | Checkout has local changes | File edit, generated file, or wrong clone | Do not clean it manually on the family Mac. Rename the checkout and clone the approved `main` again after review |
@@ -720,6 +733,7 @@ These commands preserve data, backups, Keychain items, and enrollment state.
 | Port 3330 or 18789 is busy | Another runtime/Gateway is installed | Stop. Do not kill an unknown process. Attach Doctor output and identify the process with `lsof -nP -iTCP:3330 -sTCP:LISTEN` and the same command for 18789 |
 | `no_model`, `missing_credential`, auth, billing, or rate-limit probe | Provider setup is incomplete or unavailable | Return to `./bootstrap/activate-openclaw.sh`; fix only in OpenClaw/provider UI, then probe again |
 | Plugin compatibility mismatch | OpenClaw was upgraded or a wrong plugin is linked | Do not use `latest`. Restore the reviewed pin through the installer or rollback |
+| Doctor says plugin `discovered: false` or cron reports non-JSON output | The plugin did not register its declared dashboard RPCs during pinned-runtime discovery | Stop services, preserve the diagnostic, and reinstall the reviewed release containing the discovery-registration repair; do not hand-edit `.openclaw` |
 | Tailscale URL gives 502/unavailable | Runtime is stopped or Serve points to the wrong backend | Run status/Doctor; verify Serve targets only `127.0.0.1:3330` |
 | Portal says missing/unknown Tailscale identity | Wrong login was entered, direct LAN access, or requesting device is tagged | Use the private Serve URL from a user-owned Tailscale device and compare the exact login; do not spoof the header |
 | One member sees another member’s data | Identity/scope failure | Immediately reset Serve and stop services. Preserve the diagnostic and treat it as a release-blocking security incident |

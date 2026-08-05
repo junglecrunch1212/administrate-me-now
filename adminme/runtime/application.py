@@ -980,7 +980,12 @@ class AdministrateMeRuntime:
     def overall_state(
         self,
     ) -> Literal["healthy", "observation_only", "degraded", "blocked"]:
-        states = {record.state for record in self.capabilities.values()}
+        blocking_states = {
+            key: record.state
+            for key, record in self.capabilities.items()
+            if key != "openclaw:member-chat"
+        }
+        states = set(blocking_states.values())
         if "blocked" in states:
             return "blocked"
         if "degraded" in states:

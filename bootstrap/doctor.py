@@ -257,7 +257,7 @@ class Doctor:
                 "python": "3.11.0",
                 "node": versions["node"]["preferred"],
                 "npm": "10.9.8",
-                "homebrew": "4.6.0",
+                "homebrew": "6.0.0",
                 "openclaw": versions["openclaw"]["version"],
             }
         else:
@@ -281,7 +281,7 @@ class Doctor:
             and node_version >= (22, 22, 3)
             and npm_version[0] == 10
             and npm_version >= (10, 9, 0)
-            and 4 <= brew_version[0] < 6
+            and 6 <= brew_version[0] < 7
             and versions["openclaw"]["version"] in str(observed_versions["openclaw"])
         )
         checks.append(

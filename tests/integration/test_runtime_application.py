@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,35 @@ def test_application_boots_with_complete_truthful_inventory_and_routes(
             assert response.status_code == 200
             assert response.json()["name"] == product
         assert client.get("/api/bridge/health").status_code == 200
+
+
+def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "instance").mkdir()
+    settings = RuntimeSettings.credential_free(
+        tmp_path / "instance",
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={"member-a.ts.net": "member-a"},
+        member_chat_enabled_members={"member-a"},
+    )
+    settings = replace(
+        settings,
+        openclaw_enabled=True,
+        openclaw_shared_secret="fixture-secret-at-least-24-characters",
+        member_roles={"member-a": "principal"},
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        runtime.openclaw_state = "unavailable"
+        response = client.get("/api/system/ready")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ready"] is True
+        assert body["status"] == "degraded"
+        assert body["capabilities"]["openclaw:member-chat"]["state"] == "blocked"
 
         ingest = client.post(
             "/api/bridge/ingest",

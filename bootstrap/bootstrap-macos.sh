@@ -50,6 +50,8 @@ trap cleanup EXIT
 
 [[ "$INSTANCE_ROOT" == /* ]] || fail "the instance root must be absolute"
 [[ "$INSTANCE_ROOT" != "/" && "$INSTANCE_ROOT" != "$HOME" ]] || fail "refusing a broad instance root"
+export OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 
 if [[ "${ADMINME_TEST_MODE:-0}" == "1" ]]; then
   export ADMINME_INSTANCE_ROOT="$INSTANCE_ROOT"
@@ -93,8 +95,8 @@ command -v brew >/dev/null 2>&1 || fail "install Homebrew from its signed packag
 brew_version="$(brew --version | awk 'NR==1 {print $2}')"
 IFS=. read -r brew_major brew_minor _ <<<"$brew_version"
 [[ "$brew_major" =~ ^[0-9]+$ ]] || fail "could not read the Homebrew version"
-if ((brew_major < 4 || brew_major >= 6 || (brew_major == 4 && brew_minor < 6))); then
-  fail "Homebrew $brew_version is outside >=4.6,<6"
+if ((brew_major < 6 || brew_major >= 7)); then
+  fail "Homebrew $brew_version is outside >=6,<7"
 fi
 
 free_kib="$(df -Pk "$(dirname "$INSTANCE_ROOT")" | awk 'NR==2 {print $4}')"
@@ -152,16 +154,20 @@ fi
   && "$(<"$release_dir/.administrateme-source-commit")" == "$commit" ]] \
   || fail "the immutable release directory is incomplete; preserve it for diagnosis and deploy into a new instance root"
 
+poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.2.1"
+if [[ ! -x "$poetry_venv/bin/poetry" ]]; then
+  "$python_bin" -m venv "$poetry_venv"
+  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
+fi
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   "$python_bin" -m venv "$release_dir/.venv"
 fi
 venv_receipt="$release_dir/.venv/.administrateme-installed-commit"
 if [[ ! -f "$venv_receipt" || "$(<"$venv_receipt")" != "$commit" ]]; then
-  "$release_dir/.venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
   (
     cd "$release_dir"
     VIRTUAL_ENV="$release_dir/.venv" \
-      "$release_dir/.venv/bin/poetry" install --only main --sync --no-interaction
+      "$poetry_venv/bin/poetry" install --only main --sync --no-interaction
   )
   printf '%s\n' "$commit" >"$venv_receipt"
 fi
@@ -174,7 +180,18 @@ fi
 )
 
 if ((DRY_RUN == 0)); then
-  openclaw plugins install --link "$release_dir/openclaw/administrateme"
+  for _ in {1..20}; do
+    openclaw plugins inspect administrateme --json >/dev/null 2>&1 || break
+    # Remove only prior registration metadata; immutable release files stay intact.
+    openclaw plugins uninstall administrateme --force --keep-files
+  done
+  if openclaw plugins inspect administrateme --json >/dev/null 2>&1; then
+    fail "could not remove every stale AdministrateMe plugin registration"
+  fi
+  # The local path is the plugin inside the exact reviewed release archived above.
+  openclaw plugins install --link --force "$release_dir/openclaw/administrateme"
+  openclaw config set gateway.mode local
+  openclaw config validate
   openclaw plugins inspect administrateme --runtime --json >/dev/null
 fi
 

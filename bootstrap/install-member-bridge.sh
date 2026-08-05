@@ -90,16 +90,20 @@ fi
   && -f "$release_dir/.administrateme-source-commit" \
   && "$(<"$release_dir/.administrateme-source-commit")" == "$commit" ]] \
   || fail "the immutable member release is incomplete; preserve it for diagnosis and use a new bridge root"
+poetry_venv="$BRIDGE_ROOT/app/tooling/poetry-2.2.1"
+if [[ ! -x "$poetry_venv/bin/poetry" ]]; then
+  "$python_bin" -m venv "$poetry_venv"
+  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
+fi
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   "$python_bin" -m venv "$release_dir/.venv"
 fi
 venv_receipt="$release_dir/.venv/.administrateme-bridge-installed-commit"
 if [[ ! -f "$venv_receipt" || "$(<"$venv_receipt")" != "$commit" ]]; then
-  "$release_dir/.venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
   (
     cd "$release_dir"
     VIRTUAL_ENV="$release_dir/.venv" \
-      "$release_dir/.venv/bin/poetry" -C bridge install --only main --sync --no-interaction
+      "$poetry_venv/bin/poetry" -C bridge install --only main --sync --no-interaction
   )
   printf '%s\n' "$commit" >"$venv_receipt"
 fi
