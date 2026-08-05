@@ -3,8 +3,11 @@ schema_version: 1
 current_phase: 8
 phase_name: deployment_candidate_remediated
 gate: 8
-gate_result: LOCAL_RELEASE_MATRIX_PASS_AWAITING_INDEPENDENT_REVIEW_AND_MACOS_CI
+gate_result: AUTOMATED_RELEASE_MATRIX_PASS_AWAITING_INDEPENDENT_REVIEW_AND_DISPOSABLE_MAC
 verified_local_date: 2026-08-04
+verified_github_date: 2026-08-04
+verified_github_apple_silicon_run: 30964802418
+verified_github_candidate_commit: 95f2fe8d0a007ecf4a000057ab456a4b49a2d5f2
 branch: codex/administrateme-v2-runtime
 candidate_commit_resolution: git rev-parse HEAD
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
@@ -26,10 +29,12 @@ status, disable, and revocation commands. The audit also found that OpenClaw
 `2026.7.2` is absent from npm; bootstrap now builds only the exact reviewed
 GitHub commit from a pinned archive checksum and records source provenance.
 
-This handoff does not authorize installation on the family Mac. PR #248 still
-requires independent review, green checks at its final head, merge, and a
-disposable Apple-silicon live rehearsal. No household data, provider
-credential, family identity, or family Mac was touched by this remediation.
+This handoff does not authorize installation on the family Mac. GitHub's
+Apple-silicon `macos-15` contract passed at the executable candidate in run
+30964802418. PR #248 still requires independent review and merge only while
+checks at its final head are green, followed by a disposable Apple-silicon
+live rehearsal. No household data, provider credential, family identity, or
+family Mac was touched by this remediation.
 
 ## What is ready
 
@@ -94,19 +99,23 @@ The only recurring test warning is Starlette's upstream TestClient/httpx
 deprecation. Poetry also reports metadata-migration warnings. Neither affects
 the locked runtime or the passing builds.
 
-## Required live and independent gates
+GitHub run 30964802418 also passed on the maintained Apple-silicon `macos-15`
+runner. It built and verified the exact OpenClaw source, exercised the native
+plugin contract, performed the credential-free bootstrap/Doctor/recovery
+rehearsal, checked the static and secret-safe tree, and ran the whole release
+candidate suite. The later receipt-path patch passed in that same run under
+macOS's canonical `/private/var` temporary path.
+
+## Remaining independent and live gates
 
 The following cannot be honestly completed on the current Windows workstation:
 
-1. independent review and approval of PR #248, followed by green GitHub checks
-   for the exact final head and merge without bypassing protection;
-2. the GitHub `macos-15` Apple-silicon job, including shellcheck, native
-   OpenClaw source build, launchd plist validation, clean bootstrap, recovery,
-   and the whole release-candidate suite;
-3. a disposable Apple-silicon Mac rehearsal of real launchd startup, reboot,
+1. independent review and approval of PR #248, confirmation that GitHub checks
+   are green for the exact final head, and merge without bypassing protection;
+2. a disposable Apple-silicon Mac rehearsal of real launchd startup, reboot,
    Tailscale Serve identity headers, OpenClaw Gateway RPC, cron list state, and
    one non-household bridge enrollment/revocation;
-4. real model/channel sign-in, minimal Apple/provider grants, Safari with
+3. real model/channel sign-in, minimal Apple/provider grants, Safari with
    VoiceOver, encrypted off-machine restore, and the five-to-seven-day
    observation soak.
 

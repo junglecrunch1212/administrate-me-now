@@ -15,9 +15,12 @@ The complete remediated tree passed 21 acceptance tests, 1,446 root/pack tests,
 60 bridge tests, 12 OpenClaw plugin tests, and 78 rendered-browser checks. Ruff,
 format, mypy, Pyright, root/bridge builds and audits, performance budgets,
 architecture-negative checks, clean install, tenant isolation, and encrypted
-backup/restore also pass. Exact results and the remaining independent/macOS
-gates are in `docs/refactor/HANDOFF.md`; the code-review disposition is in
-`docs/operations/BOOTSTRAP-READ-ALONG-AUDIT.md`.
+backup/restore also pass. GitHub Apple-silicon `macos-15` run 30964802418 then
+passed the exact source build, credential-free bootstrap/recovery, static
+checks, and the whole release-candidate suite at implementation commit
+`95f2fe8d0a007ecf4a000057ab456a4b49a2d5f2`. Exact results and the remaining
+independent/live gates are in `docs/refactor/HANDOFF.md`; the code-review
+disposition is in `docs/operations/BOOTSTRAP-READ-ALONG-AUDIT.md`.
 
 The current workflow uses GitHub's maintained Apple-silicon `macos-15` label;
 the historical `macos-14` evidence below remains evidence for the older
@@ -26,8 +29,8 @@ boundary, not the runner selected for the remediated candidate.
 This addendum supersedes old counts and deployment wording in the historical
 sections below. It does not convert credential-free evidence into a claim that
 a real family Mac, provider login, Apple privacy grant, Tailscale Serve edge,
-or live OpenClaw Gateway has passed. Independent review, merge, green final-SHA
-checks, and a disposable Apple-silicon rehearsal remain mandatory.
+or live OpenClaw Gateway has passed. Independent review, merge only with green
+final-SHA checks, and a disposable Apple-silicon rehearsal remain mandatory.
 
 ## Verdict and tested boundary
 
