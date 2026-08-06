@@ -127,7 +127,7 @@ Security is defense-in-depth across the session layer, scope enforcement at ever
 **HIDDEN_FOR_CHILD:**
 
 17. Admin surfaces are enforced two ways for child sessions: a **client-side nav filter** (canonical list in `console/lib/nav.js`) AND a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES`); client-side is UX, server-side is security, and the two arrays are deliberately independent. [arch §6, CONSOLE_PATTERNS.md §7]
-18. Child sessions see only `today` and `scoreboard` in the nav; direct requests for Triage, People/CRM, Knowledge, Finance, Calendar, Settings, adult lifecycle, and adult OpenClaw tools fail closed regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7, D26]
+18. Child sessions see only `today` and `scoreboard` in the nav; direct requests for Triage, Comms, People/CRM, Knowledge, Finance, Calendar, Settings, adult lifecycle, and adult OpenClaw tools fail closed regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7, D26, D28]
 
 **Bridge sovereignty:**
 
@@ -136,6 +136,21 @@ Security is defense-in-depth across the session layer, scope enforcement at ever
 **Observation mode at the action verb (Cat-E):**
 
 20. Cat-E (Outbound-Action) adapters integrate observation mode at the **action verb** level via the same `outbound()` seam Cat-A messaging adapters use at the message verb level; both routes pass through `adminme/lib/observation.py` as the single enforcement point. The framework default for any capability declared `kind: cat_e_outbound_action` is `observation_mode_required: true` — the install-time validator (per BUILD.md §ADAPTER FRAMEWORK §3.4) refuses to register a Cat-E capability with `observation_mode_required: false` unless the manifest explicitly justifies the override (e.g. an internal-only Cat-E adapter that has no external side effect). When `observation_mode = active`, a Cat-E request emits `observation.suppressed@v1` with the full would-have-sent payload (service domain, action verb, request body, target entity, requesting actor, source `event_id`) and does NOT emit `action.executed@v1`. Reading external state via Cat-C capabilities is internal logic, not external side effect — Cat-C capabilities declare `observation_mode_required: false` and are unaffected. [arch §6, BUILD.md §ADAPTER TAXONOMY, BUILD.md §ADAPTER FRAMEWORK, D24, PM-32]
+
+**Comms scope and determinism:**
+
+21. A Comms account is readable only after exact `member_id`, provider account,
+and `personal|work` workspace binding. The combined view is a query-time union
+over independently authorized accounts, never a copied mailbox or source of
+truth. [D28]
+22. Comms Focus/noise buckets and ordering are fixed, explained code over typed
+facts and explicit member state. An LLM may produce a typed classification or
+Triage proposal through `llm-task`; it may not rank, suppress, archive, send,
+or create canonical work. [D26, D28]
+23. Local snooze/quiet uses typed event-sourced state. Reply/read/archive uses
+an exact-account capability check and the full external-write approval,
+privacy, observation, and terminal-outcome chain. View-as cannot mutate Comms.
+[D28]
 
 ## Section 7: Pipelines — reactive and proactive
 
@@ -153,31 +168,59 @@ Pipelines at L4 turn events into derived events, proposals, and skill calls; the
 
 ## Section 8: OpenClaw boundaries
 
-AdministrateMe and OpenClaw are two independent systems that meet at exactly four documented seams; every other putative interaction between them is a violation. [arch §2, cheatsheet Q1, cheatsheet Q2, cheatsheet Q3, cheatsheet Q4]
+AdministrateMe and OpenClaw are two independent systems that meet only at the
+version-pinned seams documented by ADR-0001 and D28; every other putative
+integration requires a reviewed ADR.
 
-1. The two systems meet at exactly **four seams**: skills, slash commands, standing orders, and channel plugins. Any other integration path is a violation and requires an ADR. [arch §2]
+1. The permitted seams are typed skills/tools, slash commands, standing orders,
+dashboard bindings, the narrow signed member-chat relay, reviewed hooks, and
+explicit provider/channel adapters. Any other path requires an ADR. [ADR-0001,
+D28]
 2. **OpenClaw owns all LLM provider contact**; AdministrateMe never imports the `anthropic` or `openai` SDK and never opens a socket to `api.anthropic.com` / `api.openai.com` / any provider API. [arch §2, arch §5]
-3. **OpenClaw owns all channel transport** (iMessage via BlueBubbles, Telegram, Discord, web); AdministrateMe receives inbound through the `openclaw-memory-bridge` plugin rather than opening its own connections to those services. [arch §2, cheatsheet Q4]
-4. The `openclaw-memory-bridge` plugin is **one-way** (OpenClaw → AdministrateMe) — it emits `messaging.received` and `conversation.turn.recorded` events into the AdministrateMe event log; it does not read back. [arch §2, arch §3]
-5. When AdministrateMe's `outbound()` wants to send on a channel, it calls OpenClaw's channel-send API via the channel bridge plugin; AdministrateMe does **not** open transports to BlueBubbles / Telegram / Discord / web directly. [arch §2]
+3. **OpenClaw owns member-to-CoS channels and generic conversation sessions.**
+Cat-A provider adapters own explicitly configured human-to-human email/message
+transport for Comms. Provider capability and account scope decide the route;
+the same message is never silently mirrored through both. [D28]
+4. Generic OpenClaw history is not copied into AdministrateMe. Only an
+explicitly selected typed domain event/proposal or a configured Cat-A provider
+fact enters the event log. [D17, D28]
+5. Cat-A provider writes use the adapter's governed outbound seam plus
+independent OpenClaw/domain approval. Member-to-CoS channel replies remain
+OpenClaw-owned. [D28]
 6. Slash-command handlers live in **AdministrateMe** as HTTP endpoints inside the Python product APIs; OpenClaw dispatches to them when a user types the command, but the business logic is AdministrateMe's. [arch §2, arch §9, cheatsheet Q2]
-7. OpenClaw's approval gates (tool-execution boundary, host-local, after tool policy and before exec) and AdministrateMe's `guardedWrite` (HTTP API boundary inside the Node console) are **independent** gates — both must pass and neither substitutes for the other. [arch §2, cheatsheet Q7]
-8. OpenClaw memory stays in `~/.openclaw/`; AdministrateMe event log stays in `~/.adminme/`; the two systems **never share a database** and there is no shared SQLite file or symlink between them. [arch §2, cheatsheet Q8]
-9. L1 adapters run in **two places**: central adapters (messaging, calendaring, financial, etc.) run as standalone Python processes on the CoS Mac Mini at `:333x` process scope, and bridge adapters (knowledge-source: Apple Notes, Voice Memos, Obsidian, connector packs) run on member bridges per BUILD.md §MEMBER BRIDGES. Bridges emit owner-scoped events into the central event log via the `:3337 bridge` HTTP ingest endpoint over the tailnet; Tailscale identity binds the inbound owner_scope at the endpoint. The bridge daemon does not hold the AdministrateMe SQLCipher master key and does not write to the central event log directly. [BUILD.md §MEMBER BRIDGES, D17, arch §1, arch §9]
+7. OpenClaw's approval gate and AdministrateMe's runtime domain gate are
+**independent** — both must pass and neither substitutes for the other.
+8. OpenClaw state and the AdministrateMe instance directory remain separate;
+they never share a database or writable state symlink.
+9. Central adapters are supervised inside the one long-lived AdministrateMe
+Python runtime. Per-member Apple/knowledge bridges are separate edge daemons;
+Tailscale enrollment binds owner scope and a bridge never holds the central
+event-log key. [BOOTSTRAP-AND-TOPOLOGY-CONTRACT, D17]
 
 10. Adapter categorization is by **epistemic role** (five categories: Cat-A Communication, Cat-B External-State-Mirror, Cat-C Inbound-Only Data, Cat-D Personal-Knowledge, Cat-E Outbound-Action), not by runtime substrate. Runtime is an orthogonal secondary axis: a single category may have central, bridge, or dual-deployment runtime. **Multi-capability adapters** declare each capability as its own seam with its own `kind`, `event_families`, `write_capabilities`, `sensitivity_default`, and `observation_mode_required` declarations; capabilities are a list, not a singleton. Apple Notes-checklists declares two capabilities (Cat-D prose + Cat-B checklist round-trip); Home Assistant declares two capabilities (Cat-C state-read + Cat-E service-call). Install-time validator enforces capability-runtime coherence + base-class conformance (per BUILD.md §ADAPTER FRAMEWORK §3.4). [BUILD.md §ADAPTER TAXONOMY, BUILD.md §ADAPTER FRAMEWORK, D19, D24, PM-35]
 
-## Section 9: Console is a rendering + authorization layer
+## Section 9: Portal is a rendering + authorization layer
 
-The Node console at `:3330` is an HTTP edge: it authenticates, authorizes, proxies, and renders — it does not own data, does not host pipelines, and does not own long-lived state. [arch §8, BUILD.md §L5, CONSOLE_PATTERNS.md §§1/2/3/10]
+The one Python runtime at loopback `:3330` serves the portal and product APIs
+behind Tailscale Serve. The browser renders authorized responses; it does not
+own household truth, run pipelines, hold provider credentials, or persist a
+second transcript/mailbox. Node is build-time only. [D26–D28,
+BOOTSTRAP-AND-TOPOLOGY-CONTRACT]
 
-1. The Node console at `:3330` is the **only tailnet-facing surface** on the host; Python product APIs (`:3333–:3336`) bind to loopback only. [arch §8, arch §9]
-2. The Node console **never reads the event log directly** — all event-derived reads pass through Python product APIs over the HTTP bridge. [arch §8]
-3. The Node console **never writes to projection SQLite directly**; writes proxy to the Python product APIs through the HTTP bridge with tenant header injection and correlation-ID propagation. [arch §8, CONSOLE_PATTERNS.md §10]
-4. The Node console MAY read projection SQLite read-only via `better-sqlite3` opened in readonly mode, as a performance optimization for UI rendering; that is the only direct DB access the console has, and it is strictly read-only. [arch §8]
-5. The console resolves `authMember` from the `Tailscale-User-Login` header and the `party_tailscale_binding` projection; it does not implement its own auth, and there is no login page — on the tailnet = authenticated. [arch §8, CONSOLE_PATTERNS.md §1]
-6. The dev-mode `X-ADMINME-Member` header requires **both** `ADMINME_ENV=dev` AND a loopback `remoteAddr`; either condition failing rejects the header. [arch §8, CONSOLE_PATTERNS.md §1]
-7. SSE chat at `/api/chat/stream` is a pass-through proxy to OpenClaw on `:18789`; the console adds `correlation_id` and rate-limits under `web_chat` before opening the upstream connection, and `AbortController` propagates cancellation upstream. [arch §8, CONSOLE_PATTERNS.md §5]
+1. Tailscale Serve is the only tailnet-facing edge; the one AdministrateMe
+runtime and pinned OpenClaw Gateway bind loopback only. [BOOTSTRAP contract]
+2. Event-derived reads run through authorized projection query functions under
+a `Session`; browser code never receives an event-log or database handle.
+3. Browser writes call typed Python endpoints with correlation and optimistic
+concurrency. JavaScript never writes a projection or provider directly.
+4. There is no browser/Node SQLite optimization or second application runtime.
+5. Trusted ingress resolves `authMember` from the Tailscale login binding;
+untrusted identity headers are stripped and there is no password login page.
+6. Any development identity override requires both explicit development mode
+and loopback origin; production rejects it.
+7. Member chat uses only the bounded `/api/member/v1/chat/*` relay to the
+loopback pinned Gateway. OpenClaw owns the transcript; disconnect/cancellation
+propagates upstream and model loss does not disable deterministic views.
 
 ## Section 10: xlsx is a bidirectional projection
 
@@ -222,7 +265,9 @@ This section names pairs of concepts that sound related but are deliberately ind
 3. `noise.filtered` does **not** delete the originating event; the underlying `messaging.received` (or equivalent) is still in the log, just flagged downstream as noise for ranking purposes. [arch §3, arch §5]
 4. `identity.merge_suggested` does **not** auto-merge parties; merging requires explicit operator confirmation, and only after confirmation does a `party.merged` event land in the log. [arch §5]
 5. The `xlsx_workbooks` projection is the **only** projection that writes to disk files; all other projections write to SQLite tables only, and a projection writing to disk outside that seam is a bug. [arch §4, arch §4 table row 3.11]
-6. The console is **not** a pipeline host; proactive behaviors run inside the Python products (registered as OpenClaw standing orders), not inside the Node console process — the console renders, it does not schedule. [arch §8, arch §9]
+6. The portal/browser is **not** a pipeline host; reactive pipelines run in the
+one Python runtime and proactive schedules remain OpenClaw-owned standing
+orders. [BOOTSTRAP contract]
 7. Morning digest composition does **not** read projections directly; it reads via Python product APIs over HTTP, like any other caller — even though digest and projections may live in the same process, the boundary is kept explicit. [arch §9]
 8. The `vector_search` projection does **not** include privileged content; `sensitivity='privileged'` rows are never embedded, and privileged content cannot enter cross-party semantic search under any circumstance. [arch §4 table row 3.10, arch §6]
 9. Slash commands are **not** the same as REST endpoints — slash commands are registered with OpenClaw; REST endpoints live inside Python products; a slash-command handler usually calls a REST endpoint to do its work, but the two surfaces are wired independently and authorized independently. [arch §2, arch §9]
@@ -252,10 +297,16 @@ No module under `adminme/` hardcodes the string `~/.adminme/` or any subpath of 
 The invariants below are suspected true from a careful reading of the specs, but the specs do not state them precisely enough to commit to §§1–§15. Each is stated as a concrete one-sentence invariant and cites where the ambiguity lives. Operator: confirm or reject each before prompt 02 begins.
 
 1. _Proposed:_ Proactive pipelines register with OpenClaw by writing prose programs into the workspace `AGENTS.md` plus `openclaw cron add` invocations at bootstrap §8; there is no programmatic plugin-hook path and no typed registration API. [cheatsheet Q3, arch §11 item 1, BUILD.md §L4 "Scheduled/proactive pipelines"] _Operator: confirm or reject._
-2. _Proposed:_ The Node console hosts exactly one `Bus` class that handles all four SSE-ish fan-out mechanisms (chat stream proxy, reward toast fan-out, degraded-mode notifications, general event fan-out) against the in-process event bus; the four are facets of one object, not four independent components. [arch §11 item 2, CONSOLE_PATTERNS.md §§5/8/9, BUILD.md §L2] _Operator: confirm or reject._
-3. _Proposed:_ Each profile pack's view mode (`carousel` / `compressed` / `child`) is a JSX component signature that the profile pack must implement against a shell-defined protocol; the mode is not a data-shape contract negotiated with a backend and not an API parameter. [arch §11 item 3, CONSOLE_PATTERNS.md §2, REFERENCE_EXAMPLES.md §6] _Operator: confirm or reject._
+2. _Superseded:_ D26–D28 and the topology contract removed the Node runtime.
+The Python composition owns the durable bus; chat streaming is a separate
+bounded OpenClaw relay, not event-bus fan-out.
+3. _Superseded:_ Gate 7 removed the false JSX application/profile scaffold.
+Profiles select server-owned behavior modes; browser assets render stable
+typed contracts.
 4. _Proposed:_ CRM-adjacent surfaces belong in the **Capture** product (because the CRM UI lives there); Core calls Capture's APIs when it needs CRM data for ranking, digest, or custody_brief — there is no cross-product "parties" API family. [arch §11 item 4, arch §9, BUILD.md §THE CRM IS THE SPINE] _Operator: confirm or reject._
 5. _Proposed:_ The forward xlsx projector runs **unconditionally** regardless of observation mode, because the workbook is a purely local artifact and observation mode gates external side effects only; the tenant sees updates in the workbook during observation period as part of verifying the system is working. [arch §11 item 5, arch §6, BUILD.md §3.11] _Operator: confirm or reject._
-6. _Proposed:_ The `openclaw-memory-bridge` plugin emits events into AdministrateMe by calling an HTTP endpoint on one of the Python product APIs (most likely Comms `:3334`), not by writing into the AdministrateMe SQLCipher database directly — because the plugin runs inside OpenClaw and does not carry the AdministrateMe SQLCipher master key. [arch §11 item 6, arch §2, BUILD.md §OPENCLAW IS THE ASSISTANT SUBSTRATE] _Operator: confirm or reject._
+6. _Superseded by D28:_ generic OpenClaw history is not mirrored into
+AdministrateMe. Explicit typed proposals use the reviewed plugin/API seam;
+human-to-human Comms facts arrive through member-bound Cat-A adapters.
 7. _Proposed:_ `schema_version` on events is a **monotonically increasing integer per `event_type`** (not semver, not a string); upcasters form a chain from `v1→v2→v3` such that an old event can always be decoded by composing upcasters in order. [arch §3, BUILD.md §CRITICAL OPERATING RULES rule 18] _Operator: confirm or reject._
 8. _Proposed:_ The `correlation_id` on an event is set by the **originating adapter or surface** (the first entry point of a logical operation) and preserved unchanged through every derived event; the `causation_id` is set to the event id of the immediate parent. Neither is ever overwritten downstream. [arch §3, DIAGRAMS.md §2] _Operator: confirm or reject._

@@ -6,4 +6,8 @@
 
 service_account_key_ref: op://AdministrateMe/gmail-sandbox/service-account-json
 user_email: sandbox@example.test
+member_id: member_example
+workspace: personal
+account_label: Personal Gmail
+enable_writes: false
 sensitivity_floor: normal

@@ -17,6 +17,51 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 deterministic Comms cockpit
+
+This amendment **MODERNIZES** unified communications under D28 while
+**PRESERVING** event authority, member/privacy scope, Triage human gating,
+provider-native truth, and the single OpenClaw model seam. Comms is the ninth
+adult surface after Triage. It composes authorized interactions at read time
+into combined, per-account, and personal/workspace lenses; the union is never
+stored as a shared mailbox. Children, devices, cross-member requests, and
+view-as mutations fail closed.
+
+The Focus, Waiting, Snoozed, Quieted, and All lenses use fixed, explained
+rules over direction, unread/important state, typed classification, urgency,
+recency, and explicit member controls. No model ranks, sends, archives, or
+materializes household truth. The pinned `llm-task` seam may produce auditable
+NLP classifications and extraction proposals, but calendar/task/reminder/list
+and CRM candidates still require Triage confirmation.
+
+`messaging.received@v3` and `messaging.sent@v2` retain member, provider,
+account, workspace, native thread/message identifiers, participants, labels,
+state, and provenance in the interactions projection. Snooze/quiet state is
+local and event sourced. Reply/read/archive operations are exact-account,
+capability-negotiated `external_sync` commands that require independent
+approval, the normal external-write guard, observation handling, optimistic
+concurrency, and completed/failed reconciliation. Gmail implements these
+contracts; Microsoft Graph, a reviewed BlueBubbles bridge, and Twilio
+SMS/WhatsApp are truthful disabled catalog edges until installed and granted.
+
+Human-to-human provider messages bypass OpenClaw model sessions. Member-to-CoS
+external DMs use one isolated agent per member with account-aware DM scope; a
+separate work agent is justified only by a real policy/tool/model/retention
+boundary, not by an inbox filter. The portal and pinned OpenClaw dashboard read
+the same `deterministic-comms-cockpit-v1` contract.
+
+Final local verification on 2026-08-06: the root Python/bridge suite passed
+with 1,340 tests and the combined `tests` + `packs` release slice passed with
+1,486 tests; strict acceptance passed with 24 tests under
+`--runxfail`; Ruff, format, mypy across 189 source files, invariant checks,
+architecture-negative checks, JavaScript syntax, and diff hygiene passed. The
+pinned OpenClaw contract, TypeScript check, 14 tests, and build passed. The
+production browser harness passed 92 assertions across 21 screenshots at
+desktop/tablet/phone widths with zero console, page, or request failures.
+Research, exact capability ceilings, process proof, and live boundaries are
+retained in
+`docs/refactor/evidence/gate-7/comms-cockpit-2026-08-06.md`.
+
 ## 2026-08-06 Today Daily Brief and execution correction
 
 This amendment **MODERNIZES** Today into the member's deterministic CoS Day

@@ -8,7 +8,7 @@ integration layers respectively:
 - ``test_gmail_adapter_pack_internal.py`` (existing, 11r-a precedent) —
   manifest + ingest path canaries that live next to the pack.
 - ``test_gmail_send.py`` (11a c3) — framework-level send-contract
-  coverage (MIME builder + observation seam + ``MessagingSentV1``
+  coverage (MIME builder + observation seam + ``MessagingSentV2``
   field-mapping + ``AdapterErrorV1`` taxonomy).
 - THIS FILE (11a c4) — pack-internal coverage focused on the contract
   the pack itself owns: that the import surface of the pack's
@@ -17,8 +17,8 @@ integration layers respectively:
   trips through stdlib decoders (the wire-shape contract the Gmail v1
   ``users.messages.send`` endpoint reads), and that the
   ``messaging.sent`` payload :meth:`send` emits validates byte-for-
-  byte against the on-main :class:`MessagingSentV1` schema (closing
-  the [D7] "v1 schemas immutable" loop pack-side).
+  byte against the additive :class:`MessagingSentV2` schema while the
+  immutable v1 registration remains available to historical producers.
 
 F-4: unique basename (``test_gmail_send_pack_internal.py``) per the
 sidecar #150 + 11r-c precedent so pytest collection from the repo root
@@ -37,7 +37,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
-from adminme.events.schemas.ingest import MessagingSentV1
+from adminme.events.schemas.ingest import MessagingSentV2
 from adminme.lib.adapters import OutboundMessage
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +130,8 @@ def _make_adapter(*, service: _FakeSendService | None = None) -> Any:
         config={
             "service_account_key_ref": "op://test/v/i/f",
             "user_email": "sandbox@example.test",
+            "member_id": "member-fixture",
+            "workspace": "personal",
         },
     )
     if service is not None:
@@ -237,8 +239,8 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 # ---------------------------------------------------------------------------
 # 3) the messaging.sent payload :meth:`send` emits validates byte-for-
-#    byte against the existing :class:`MessagingSentV1` schema. The
-#    extra="forbid" check on the v1 model means any extra field on the
+#    byte against the additive :class:`MessagingSentV2` schema. The
+#    inherited extra="forbid" check means any extra field on the
 #    pack's emit-side would fail validation; the field-name spelling
 #    must match the on-main registration character-for-character per
 #    [D7]. This is the closing assertion on the [D7] "v1 immutable"
@@ -247,10 +249,10 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messaging_sent_v1_emit_validates_against_existing_schema() -> None:
+async def test_messaging_sent_v2_emit_validates_against_additive_schema() -> None:
     """End-to-end pack-internal: after a successful Phase A send (seams
     unset), the emitted ``messaging.sent`` payload validates byte-for-
-    byte against :class:`MessagingSentV1` (which has ``extra='forbid'``
+    byte against :class:`MessagingSentV2` (which has ``extra='forbid'``
     on its model_config). Any drift in field names or extras introduced
     by the pack would fail validation here — the pack-side guard
     against accidental schema-shape drift across future Gmail-adapter
@@ -273,9 +275,10 @@ async def test_messaging_sent_v1_emit_validates_against_existing_schema() -> Non
     assert result.delivered is True
     sent = [c for c in event_log.calls if c["type"] == "messaging.sent"]
     assert len(sent) == 1
+    assert sent[0]["schema_version"] == 2
     payload = sent[0]["payload"]
     # extra="forbid" — extras would raise here.
-    model = MessagingSentV1.model_validate(payload)
+    model = MessagingSentV2.model_validate(payload)
     assert model.source_channel == "gmail"
     assert model.to_identifier == "alice@example.test"
     assert model.thread_id == "thr-pack-x"
@@ -283,3 +286,8 @@ async def test_messaging_sent_v1_emit_validates_against_existing_schema() -> Non
     assert model.body_text == "pack-internal emit test body"
     assert model.delivery_status == "sent"
     assert model.sent_at  # ISO timestamp set
+    assert model.member_id == "member-fixture"
+    assert model.provider == "gmail"
+    assert model.provider_account_id == "sandbox@example.test"
+    assert model.workspace == "personal"
+    assert model.native_message_id == "gmail-pack-x"

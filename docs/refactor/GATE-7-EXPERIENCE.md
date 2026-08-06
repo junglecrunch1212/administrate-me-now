@@ -7,7 +7,7 @@ flowchart LR
     P["Principal"] --> OC["Pinned OpenClaw Control UI"]
     A["Authenticated adult"] --> MP["Narrow member portal"]
     C["Child or shared screen"] --> MP
-    OC --> B["Eight typed dashboard bindings"]
+    OC --> B["Nine typed dashboard bindings"]
     MP --> V["Authorized domain views"]
     MP --> R["Protocol-v4 text relay"]
     R --> G["Loopback OpenClaw Gateway"]
@@ -73,15 +73,15 @@ unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard,
-  Settings.
+- Adults: Today, Triage, Comms, People, Knowledge, Finance, Calendar,
+  Scoreboard, Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.
 - Carousel: `adhd_executive`/fog-aware, one ranked action, micro-step, endowed
   progress, bounded decisions, immediate outcome-to-recalculated-next action.
 - Compressed: minimalist/dense queue, restrained animation, strict proactive
   cap.
-- Child: warm language/rewards, no adult communications, CRM, finance,
+- Child: warm language/rewards, no Comms/adult communications, CRM, finance,
   knowledge, settings, or operator control.
 
 The page route and data route each enforce the role allowlist. Navigation

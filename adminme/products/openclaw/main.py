@@ -1116,7 +1116,13 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
 @router.post("/dashboard/{surface}")
 async def dashboard_surface(
     surface: Literal[
-        "people", "knowledge", "finance", "calendar", "scoreboard", "settings"
+        "comms",
+        "people",
+        "knowledge",
+        "finance",
+        "calendar",
+        "scoreboard",
+        "settings",
     ],
     body: ContextRequest,
     request: Request,

@@ -35,7 +35,12 @@ import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext, AdapterStatus
 from adminme.events.envelope import EventEnvelope
-from adminme.lib.adapters import WriteOperation, WriteResult
+from adminme.lib.adapters import (
+    CommunicationAdapter,
+    OutboundMessage,
+    WriteOperation,
+    WriteResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +202,86 @@ class AdapterSupervisor:
         result = await candidates[0].apply_write(operation)  # type: ignore[attr-defined]
         if not result.applied and not result.suppressed:
             raise RuntimeError("provider adapter is not ready to accept writes")
+        return result
+
+    async def dispatch_communication_write(
+        self,
+        *,
+        provider: str,
+        member_id: str,
+        provider_account_id: str,
+        operation: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Route a governed Comms mutation to one exact Cat-A account."""
+
+        provider_names = {
+            "gmail": "messaging-gmail-api",
+            "microsoft_graph": "messaging-microsoft-graph",
+            "bluebubbles": "messaging-bluebubbles",
+            "twilio_sms": "messaging-twilio-sms",
+            "twilio_whatsapp": "messaging-twilio-whatsapp",
+        }
+        expected_name = provider_names.get(provider)
+        candidates: list[CommunicationAdapter] = []
+        for managed in self._managed.values():
+            adapter = managed.adapter
+            if expected_name is None or getattr(adapter, "name", None) != expected_name:
+                continue
+            config = getattr(adapter, "_config", {})
+            if config.get("member_id") != member_id:
+                continue
+            configured_account = (
+                config.get("provider_account_id")
+                or config.get("subject_email")
+                or config.get("user_email")
+            )
+            if configured_account != provider_account_id:
+                continue
+            if isinstance(adapter, CommunicationAdapter):
+                candidates.append(adapter)
+        if len(candidates) != 1:
+            raise LookupError(
+                f"communication route expected one {provider} adapter for "
+                f"{member_id}/{provider_account_id}, found {len(candidates)}"
+            )
+        communication_adapter = candidates[0]
+        if operation == "reply":
+            recipient = payload.get("recipient")
+            body = payload.get("body")
+            if not isinstance(recipient, str) or not recipient:
+                raise ValueError("reply recipient is unavailable")
+            if not isinstance(body, str) or not body.strip():
+                raise ValueError("reply body is empty")
+            result = await communication_adapter.send(
+                OutboundMessage(
+                    channel=provider,
+                    recipient=recipient,
+                    body=body,
+                    metadata={
+                        "subject": payload.get("subject"),
+                        "thread_id": payload.get("thread_id"),
+                        "in_reply_to": payload.get("rfc_message_id"),
+                        "interaction_id": payload.get("interaction_id"),
+                    },
+                )
+            )
+            return {
+                "applied": result.delivered,
+                "suppressed": result.suppressed,
+                "external_id": result.external_id,
+                "state": {},
+            }
+        manage = getattr(communication_adapter, "manage_message", None)
+        if not callable(manage):
+            raise ValueError(f"{provider} does not implement {operation}")
+        result = await manage(
+            operation=operation,
+            native_message_id=payload.get("native_message_id")
+            or payload.get("target_external_id"),
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("communication adapter returned an invalid result")
         return result
 
     async def stop(self) -> None:

@@ -17,16 +17,23 @@ GOOGLE_ADAPTER_SCOPES = (
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/tasks",
 )
+GMAIL_WRITE_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+)
 
 
-def enroll(client_file: Path, *, secret_name: str) -> str:
+def enroll(
+    client_file: Path, *, secret_name: str, enable_gmail_writes: bool = False
+) -> str:
     """Run browser consent and retain only refresh credentials in Keychain."""
     paths = DeploymentPaths.default()
     paths.run_dir.mkdir(parents=True, exist_ok=True)
     authorization_url_file = paths.run_dir / "google-oauth-authorization-url"
-    flow = InstalledAppFlow.from_client_secrets_file(
-        str(client_file), scopes=list(GOOGLE_ADAPTER_SCOPES)
-    )
+    scopes = list(GOOGLE_ADAPTER_SCOPES)
+    if enable_gmail_writes:
+        scopes.extend(GMAIL_WRITE_SCOPES)
+    flow = InstalledAppFlow.from_client_secrets_file(str(client_file), scopes=scopes)
     token_uri = flow.client_config.get("token_uri")
     if not isinstance(token_uri, str) or not token_uri:
         raise RuntimeError("Google OAuth client configuration has no token URI")
@@ -60,7 +67,7 @@ def enroll(client_file: Path, *, secret_name: str) -> str:
         "client_secret": credentials.client_secret,
         "refresh_token": credentials.refresh_token,
         "token_uri": token_uri,
-        "scopes": sorted(credentials.scopes or GOOGLE_ADAPTER_SCOPES),
+        "scopes": sorted(credentials.scopes or scopes),
     }
     return secret_store(paths).put(
         secret_name, json.dumps(document, sort_keys=True).encode("utf-8")
@@ -71,8 +78,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("client_file", type=Path)
     parser.add_argument("--secret-name", default="google-oauth-primary")
+    parser.add_argument(
+        "--enable-gmail-writes",
+        action="store_true",
+        help="also consent to Gmail modify/send for Comms reply and mailbox actions",
+    )
     args = parser.parse_args(argv)
-    reference = enroll(args.client_file, secret_name=args.secret_name)
+    reference = enroll(
+        args.client_file,
+        secret_name=args.secret_name,
+        enable_gmail_writes=args.enable_gmail_writes,
+    )
     print(f"Google adapter credentials stored at {reference}")
     return 0
 

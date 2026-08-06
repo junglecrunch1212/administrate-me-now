@@ -20,6 +20,7 @@ from fastapi.responses import (
 )
 from pydantic import BaseModel, Field
 
+from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
@@ -32,6 +33,7 @@ from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
     authorize_surface,
     build_surface,
+    communication_accounts,
     crm_detail,
     evaluate_query,
     experience_mode,
@@ -44,6 +46,7 @@ from adminme.products.openclaw.main import (
     _task_lifecycle,
 )
 from adminme.projections.parties.queries import get_party
+from adminme.projections.interactions.queries import get_interaction, participants_for
 from adminme.projections.calendars.queries import (
     get_calendar_event,
     get_calendar_outcome,
@@ -148,6 +151,28 @@ class ExternalWriteRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
 
 
+class CommsCommandRequest(BaseModel):
+    """One explicit member decision against a visible communication."""
+
+    model_config = {"extra": "forbid"}
+    operation: Literal[
+        "reply",
+        "mark_read",
+        "mark_unread",
+        "archive",
+        "restore",
+        "snooze",
+        "unsnooze",
+        "quiet",
+        "unquiet",
+    ]
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    request_id: str = Field(min_length=8, max_length=120)
+    body: str | None = Field(default=None, max_length=20_000)
+    snoozed_until: str | None = None
+    openclaw_approved: bool = False
+
+
 class TriageEnrichmentRequest(BaseModel):
     """Member corrections applied before a candidate can be confirmed."""
 
@@ -202,6 +227,14 @@ _EXTERNAL_OPERATIONS = {
         "update_folder",
         "delete_folder",
     },
+}
+_COMMS_EXTERNAL_OPERATIONS = {
+    "gmail": {"reply", "mark_read", "mark_unread", "archive", "restore"},
+    "microsoft_graph": {"reply", "mark_read", "mark_unread", "archive", "restore"},
+    "bluebubbles": {"reply"},
+    "twilio_sms": {"reply"},
+    "twilio_whatsapp": {"reply"},
+    "fixture": {"reply"},
 }
 
 
@@ -1600,6 +1633,236 @@ async def surface(
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
     return build_surface(_runtime(request), session, surface)
+
+
+@router.post("/api/member/v1/comms/{interaction_id}/commands")
+async def communication_command(
+    interaction_id: str,
+    body: CommsCommandRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    lock = runtime.communication_command_locks.setdefault(
+        f"{session.auth_member_id}:{interaction_id}", asyncio.Lock()
+    )
+    async with lock:
+        return await _communication_command_locked(
+            interaction_id, body, request, session
+        )
+
+
+async def _communication_command_locked(
+    interaction_id: str,
+    body: CommsCommandRequest,
+    request: Request,
+    session: Session,
+) -> dict[str, Any]:
+    """Apply local focus state or enqueue one governed provider mutation."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "communication actions are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "communication state is unavailable")
+    interactions_conn = runtime.projections.connection("interactions")
+    interaction = get_interaction(
+        interactions_conn, session, interaction_id=interaction_id
+    )
+    if interaction is None or (
+        interaction.get("member_id") != session.auth_member_id
+        and interaction.get("owner_scope") != f"private:{session.auth_member_id}"
+    ):
+        raise HTTPException(404, "communication not found")
+    if interaction["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "communication changed; refresh before acting")
+
+    now = EventEnvelope.now_utc_iso()
+    local_operations = {"snooze", "unsnooze", "quiet", "unquiet"}
+    if body.operation in local_operations:
+        if body.operation == "snooze":
+            if body.snoozed_until is None:
+                raise HTTPException(422, "snooze requires a wake time")
+            try:
+                wake = datetime.fromisoformat(body.snoozed_until.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HTTPException(422, "snooze wake time is invalid") from exc
+            if wake.tzinfo is None or wake <= datetime.now(timezone.utc):
+                raise HTTPException(422, "snooze wake time must be in the future")
+        payload = {
+            "interaction_id": interaction_id,
+            "member_id": session.auth_member_id,
+            "operation": body.operation,
+            "snoozed_until": body.snoozed_until if body.operation == "snooze" else None,
+            "quieted": True
+            if body.operation == "quiet"
+            else False
+            if body.operation == "unquiet"
+            else None,
+            "changed_at": now,
+            "expected_last_event_id": body.expected_last_event_id,
+        }
+        decision = await runtime.guarded_write.check(
+            session, "communication.state_changed", payload
+        )
+        if not decision.pass_:
+            raise HTTPException(
+                403,
+                {
+                    "reason": decision.reason,
+                    "correlation_id": decision.correlation_id,
+                },
+            )
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=session.tenant_id,
+                type="communication.state_changed",
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="member-portal",
+                source_account_id=session.auth_member_id,
+                owner_scope=f"private:{session.auth_member_id}",
+                visibility_scope=f"private:{session.auth_member_id}",
+                sensitivity=interaction.get("sensitivity") or "normal",
+                correlation_id=decision.correlation_id,
+                actor_identity=session.auth_member_id,
+                idempotency_key=(
+                    f"communication-state:{session.auth_member_id}:{body.request_id}"
+                ),
+                payload=payload,
+            )
+        )
+        await runtime.wait_for_projection("interactions", event_id)
+        return {
+            "accepted": True,
+            "local": True,
+            "event_id": event_id,
+            "interaction": get_interaction(
+                interactions_conn, session, interaction_id=interaction_id
+            ),
+        }
+
+    provider = str(interaction.get("provider") or "")
+    provider_account_id = str(interaction.get("provider_account_id") or "")
+    operation_capability = {
+        "reply": "reply",
+        "mark_read": "mark_read",
+        "mark_unread": "mark_read",
+        "archive": "archive",
+        "restore": "archive",
+    }[body.operation]
+    account = next(
+        (
+            item
+            for item in communication_accounts(runtime, session.auth_member_id)
+            if item["provider"] == provider
+            and item["provider_account_id"] == provider_account_id
+        ),
+        None,
+    )
+    if account is None:
+        raise HTTPException(409, "the source account is not bound to this member")
+    if not account["capabilities"].get(operation_capability):
+        raise HTTPException(
+            409,
+            account.get("write_access_remedy")
+            or "the provider does not support this action",
+        )
+    if not body.openclaw_approved:
+        raise HTTPException(403, "independent OpenClaw delivery approval is required")
+    if body.operation == "reply" and not (body.body or "").strip():
+        raise HTTPException(422, "reply body cannot be empty")
+    if body.operation not in _COMMS_EXTERNAL_OPERATIONS.get(provider, set()):
+        raise HTTPException(422, "the provider does not support this action")
+
+    participant_map = participants_for(
+        interactions_conn, session, interaction_ids=[interaction_id]
+    )
+    fixture_recipient = next(
+        (
+            item["party_id"]
+            for item in participant_map.get(interaction_id, [])
+            if item["role"] == "from"
+        ),
+        None,
+    )
+    recipient = interaction.get("reply_to_identifier")
+    if provider == "fixture":
+        recipient = recipient or fixture_recipient
+    try:
+        content_privacy_guard = validate_outbound_communication(
+            operation=body.operation,
+            member_id=session.auth_member_id,
+            interaction=interaction,
+            account=account,
+            recipient=recipient,
+            body=body.body,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    command_payload = {
+        "command_id": body.request_id,
+        "member_id": session.auth_member_id,
+        "provider": provider,
+        "provider_account_id": provider_account_id,
+        "operation": body.operation,
+        "target_external_id": interaction.get("native_message_id"),
+        "expected_provider_revision": None,
+        "payload": {
+            "interaction_id": interaction_id,
+            "expected_last_event_id": body.expected_last_event_id,
+            "recipient": recipient,
+            "body": (body.body or "").strip() or None,
+            "thread_id": interaction.get("thread_id"),
+            "subject": interaction.get("subject"),
+            "rfc_message_id": interaction.get("rfc_message_id"),
+            "workspace": interaction.get("workspace") or "personal",
+            "openclaw_approved": True,
+            "content_privacy_guard": content_privacy_guard,
+        },
+        "requested_at": now,
+    }
+    decision = await runtime.guarded_write.check(
+        session, "external_sync.write_requested", command_payload
+    )
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {
+                "reason": decision.reason,
+                "correlation_id": decision.correlation_id,
+            },
+        )
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="external_sync.write_requested",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=interaction.get("sensitivity") or "normal",
+            correlation_id=decision.correlation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"communication-command:{session.auth_member_id}:{body.request_id}",
+            payload=command_payload,
+        )
+    )
+    await runtime.wait_for_projection("interactions", event_id)
+    return {
+        "accepted": True,
+        "local": False,
+        "command_id": body.request_id,
+        "event_id": event_id,
+        "observation_mode": runtime._observation_active,
+    }
 
 
 @router.get("/api/member/v1/people/{party_id}")

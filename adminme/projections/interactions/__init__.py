@@ -15,13 +15,17 @@ from adminme.projections.interactions import handlers
 
 class InteractionsProjection(Projection):
     name = "interactions"
-    version = 2
+    version = 3
     subscribes_to = [
         "messaging.received",
         "messaging.sent",
         "telephony.sms_received",
         "interaction.participant_resolved",
         "messaging.classified",
+        "communication.state_changed",
+        "external_sync.write_requested",
+        "external_sync.write_completed",
+        "external_sync.write_failed",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -36,16 +40,46 @@ class InteractionsProjection(Projection):
             "native_message_id": "TEXT",
             "classification": "TEXT",
             "classification_confidence": "REAL",
+            "body_text": "TEXT",
+            "body_preview": "TEXT",
+            "member_id": "TEXT",
+            "provider": "TEXT",
+            "provider_account_id": "TEXT",
+            "workspace": "TEXT NOT NULL DEFAULT 'personal'",
+            "unread": "INTEGER NOT NULL DEFAULT 0",
+            "archived": "INTEGER NOT NULL DEFAULT 0",
+            "starred": "INTEGER NOT NULL DEFAULT 0",
+            "important": "INTEGER NOT NULL DEFAULT 0",
+            "snoozed_until": "TEXT",
+            "quieted": "INTEGER NOT NULL DEFAULT 0",
+            "rfc_message_id": "TEXT",
+            "reply_to_identifier": "TEXT",
+            "provider_labels": "TEXT NOT NULL DEFAULT '[]'",
+            "attachment_metadata": "TEXT NOT NULL DEFAULT '[]'",
+            "command_state": "TEXT",
+            "last_command_id": "TEXT",
+            "delivery_status": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE interactions ADD COLUMN {name} {sql_type}")
+                columns.add(name)
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS "
             "idx_interactions_tenant_native_message "
             "ON interactions(tenant_id, channel_specific, native_message_id) "
             "WHERE native_message_id IS NOT NULL"
         )
+        if {"tenant_id", "member_id", "occurred_at"} <= columns:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interactions_member_occurred "
+                "ON interactions(tenant_id, member_id, occurred_at)"
+            )
+        if {"tenant_id", "provider_account_id", "thread_id"} <= columns:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_interactions_account_thread "
+                "ON interactions(tenant_id, provider_account_id, thread_id)"
+            )
 
 
 __all__ = ["InteractionsProjection"]

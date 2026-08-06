@@ -19,8 +19,28 @@ CREATE TABLE IF NOT EXISTS interactions (
     subject            TEXT,
     summary            TEXT,
     body_ref           TEXT,
+    body_text          TEXT,
+    body_preview       TEXT,
     thread_id          TEXT,
     native_message_id  TEXT,
+    member_id          TEXT,
+    provider           TEXT,
+    provider_account_id TEXT,
+    workspace          TEXT NOT NULL DEFAULT 'personal'
+                       CHECK (workspace IN ('personal','work')),
+    unread             INTEGER NOT NULL DEFAULT 0,
+    archived           INTEGER NOT NULL DEFAULT 0,
+    starred            INTEGER NOT NULL DEFAULT 0,
+    important          INTEGER NOT NULL DEFAULT 0,
+    snoozed_until      TEXT,
+    quieted            INTEGER NOT NULL DEFAULT 0,
+    rfc_message_id     TEXT,
+    reply_to_identifier TEXT,
+    provider_labels    TEXT NOT NULL DEFAULT '[]',
+    attachment_metadata TEXT NOT NULL DEFAULT '[]',
+    command_state      TEXT,
+    last_command_id    TEXT,
+    delivery_status    TEXT,
     raw_event_ids      TEXT NOT NULL,          -- JSON array
     owner_scope        TEXT NOT NULL,
     visibility_scope   TEXT NOT NULL,
@@ -39,6 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_interactions_tenant_occurred
     ON interactions(tenant_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_interactions_tenant_thread
     ON interactions(tenant_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_interactions_member_occurred
+    ON interactions(tenant_id, member_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_interactions_account_thread
+    ON interactions(tenant_id, provider_account_id, thread_id);
 CREATE TABLE IF NOT EXISTS interaction_participants (
     tenant_id          TEXT NOT NULL,
     interaction_id     TEXT NOT NULL,

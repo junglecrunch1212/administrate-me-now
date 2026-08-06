@@ -60,13 +60,49 @@ def recent_for_member(
             ON p.tenant_id = i.tenant_id
            AND p.interaction_id = i.interaction_id
          WHERE i.tenant_id = ?
-           AND (i.owner_scope = ? OR p.party_id = ?)
+           AND (i.member_id = ? OR i.owner_scope = ? OR p.party_id = ?)
          ORDER BY i.occurred_at DESC
          LIMIT ?
         """,
-        (session.tenant_id, f"private:{member_id}", member_id, limit),
+        (
+            session.tenant_id,
+            member_id,
+            f"private:{member_id}",
+            member_id,
+            limit,
+        ),
     ).fetchall()
     return filter_rows(session, [dict(row) for row in rows])
+
+
+def participants_for(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    interaction_ids: list[str],
+) -> dict[str, list[dict[str, str]]]:
+    """Return participants only for already-authorized interaction rows."""
+
+    if not interaction_ids:
+        return {}
+    placeholders = ",".join("?" for _ in interaction_ids)
+    rows = conn.execute(
+        f"SELECT interaction_id, party_id, role FROM interaction_participants "  # noqa: S608 - bound placeholders
+        f"WHERE tenant_id=? AND interaction_id IN ({placeholders}) "
+        "ORDER BY interaction_id, role, party_id",
+        (session.tenant_id, *interaction_ids),
+    ).fetchall()
+    allowed = set(interaction_ids)
+    result: dict[str, list[dict[str, str]]] = {}
+    for row in rows:
+        value = dict(row)
+        interaction_id = str(value["interaction_id"])
+        if interaction_id not in allowed:
+            continue
+        result.setdefault(interaction_id, []).append(
+            {"party_id": str(value["party_id"]), "role": str(value["role"])}
+        )
+    return result
 
 
 def recent_with(

@@ -15,7 +15,7 @@ Gate 4 selects the current OpenClaw source package version `2026.7.2` at commit 
 | OpenClaw owns | AdministrateMe owns |
 |---|---|
 | Channel transports and delivery adapters | Typed communication facts and delivery outcome events |
-| Conversations, generic transcripts, sessions, per-channel-peer scoping | Explicit domain-relevant conversation events admitted by policy |
+| Conversations, generic transcripts, one isolated member agent, account-aware peer sessions | Explicit typed domain proposals admitted by policy; member-bound human-to-human provider facts remain Cat-A adapter inputs |
 | Generic conversational memory and workspace context | Owner-scoped `member_knowledge` and scope-filtered `vector_search` domain projections |
 | Provider/model routing, retries, credentials, token accounting | Skill input/output schemas, sensitivity policy, provenance events, proposal semantics |
 | Cron, background execution, multi-step agent orchestration | Domain recurrences, standing-order definitions, event-driven pipelines, durable outcomes |
@@ -55,7 +55,9 @@ Both approval systems must pass when both apply. OpenClaw approval never grants 
 ## Privacy contract
 
 - Resolve AdministrateMe membership from trusted identity; do not equate OpenClaw operator access with household membership.
-- OpenClaw sessions use per-channel-peer scope. AdministrateMe keeps `authMember` distinct from `viewMember` and authorizes against the former.
+- External member DMs use one isolated OpenClaw agent per member and
+  `per-account-channel-peer` scope. AdministrateMe independently keeps
+  `authMember` distinct from `viewMember` and authorizes against the former.
 - Privileged material never enters LLM input, vector processing, cross-owner processing, or bridge payloads unless the owning member explicitly uses an audited privileged path allowed by policy. No broad plugin token may bypass this rule.
 - Children receive server-side route denial and data filtering. Hidden navigation is not authorization.
 - A narrow member portal is mandatory for members who must not receive OpenClaw operator/runtime access.

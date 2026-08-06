@@ -7,11 +7,9 @@ retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
 :meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
 directly when the observation seam slots are unpopulated (Phase A),
 and routes through :func:`adminme.lib.observation.outbound` when the
-slots are populated by the supervisor (Phase B). The emitted event is
-the EXISTING ``messaging.sent@v1`` schema registered at
-``adminme/events/schemas/ingest.py`` since phase 04-3 (commit
-``2ce1cff``); NO new schema is registered by 11a per [D7] (v1 schemas
-immutable, 47 production consumers).
+slots are populated by the supervisor (Phase B). D28 emits the additive
+``messaging.sent@v2`` schema with exact member/account/workspace coordinates;
+the existing v1 registration remains immutable for historical producers.
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
@@ -42,7 +40,7 @@ import base64
 import logging
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
-from email.utils import formatdate
+from email.utils import formatdate, getaddresses
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
@@ -64,6 +62,8 @@ _log = logging.getLogger(__name__)
 
 
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 
 
 # Ordering used by the sensitivity-floor downgrade check.
@@ -97,9 +97,9 @@ def _default_service_factory(
     from googleapiclient.discovery import build
 
     if {"client_id", "client_secret", "refresh_token"} <= credentials_json.keys():
-        from google.oauth2.credentials import Credentials
+        from google.oauth2.credentials import Credentials as UserCredentials
 
-        creds = Credentials(
+        creds = UserCredentials(
             token=None,
             refresh_token=str(credentials_json["refresh_token"]),
             token_uri=str(
@@ -111,9 +111,11 @@ def _default_service_factory(
             scopes=scopes,
         )
     else:
-        from google.oauth2.service_account import Credentials
+        from google.oauth2.service_account import Credentials as ServiceCredentials
 
-        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+        creds = ServiceCredentials.from_service_account_info(
+            credentials_json, scopes=scopes
+        )
         if subject_email:
             creds = creds.with_subject(subject_email)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
@@ -124,7 +126,7 @@ class GmailAdapter(CommunicationAdapter):
 
     Polls the Gmail history API (``users.history.list``) every 2 minutes
     per ``pack.yaml`` ``triggers.schedule`` and emits ``messaging.received``
-    v1 per fetched message. Cursor-advance emission is milestone-only
+    v3 per fetched message. Cursor-advance emission is milestone-only
     (every 100 messages OR every 5 minutes — see
     ``AdapterCursorAdvancedV1`` docstring) per anti-vision §"Quiet by
     default".
@@ -134,12 +136,9 @@ class GmailAdapter(CommunicationAdapter):
     §3.3). The inheritance flip preserves the simple ``Adapter`` Protocol
     surface (``start`` / ``stop`` / ``status`` / ``name`` / ``family`` /
     ``version`` / ``sensitivity_floor``) and adds the Cat-A contract
-    methods :meth:`send` + :meth:`_on_inbound`. Today Gmail is
-    inbound-only; the :meth:`send` stub raises ``NotImplementedError``
-    via an ``action_fn`` routed through
-    :func:`adminme.lib.observation.outbound`. Phase B will ship real
-    Gmail outbound + the ``messaging.sent`` event schema + the second
-    capability block in the manifest.
+    methods :meth:`send` + :meth:`_on_inbound`. Live write capability is
+    account-negotiated: read-only OAuth remains the safe default, while an
+    explicitly re-consented account may expose reply/read/archive operations.
     """
 
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
@@ -151,14 +150,13 @@ class GmailAdapter(CommunicationAdapter):
         {
             "kind": "Cat-A",
             "runtime": "central",
-            "event_families": ["messaging.received"],
+            "event_families": ["messaging.received", "messaging.sent"],
         }
     ]
     """Class-level mirror of the manifest's ``capabilities`` block per
     memo 05 §3.2 (runtime introspection without re-parsing pack.yaml).
-    Today: one Cat-A entry declaring ``messaging.received`` only. Phase B
-    adds a second entry covering ``messaging.sent`` when real Gmail
-    outbound ships."""
+    This is the code ceiling. ``enable_writes`` and the granted OAuth scopes
+    determine the lower per-account capability actually shown in Comms."""
 
     HARDCODED_FLOOR: ClassVar[SensitivityFloor] = "normal"
     """Class-level minimum sensitivity_floor. Config may RAISE the floor
@@ -190,6 +188,11 @@ class GmailAdapter(CommunicationAdapter):
         observation_event_log: Any = None,
     ) -> None:
         self._config = dict(config)
+        self._scopes = (
+            [GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE]
+            if bool(self._config.get("enable_writes"))
+            else [GMAIL_READONLY_SCOPE]
+        )
         self._credentials_resolver = (
             credentials_resolver or _default_credentials_resolver
         )
@@ -212,7 +215,7 @@ class GmailAdapter(CommunicationAdapter):
         self._max_poll_cycles: int | None = max_poll_cycles
         # ctx is captured at start() so :meth:`send` (a Cat-A contract
         # method the supervisor invokes without re-passing ctx) can emit
-        # ``messaging.sent@v1`` / ``adapter.error@v1`` events through the
+        # ``messaging.sent@v2`` / ``adapter.error@v1`` events through the
         # supervisor-bound event log. Mirrors the apple-eventkit pattern.
         self._ctx: AdapterContext | None = None
         # Observation-mode wiring slots for :meth:`send`. Phase A leaves
@@ -272,7 +275,7 @@ class GmailAdapter(CommunicationAdapter):
             raise ValueError("user_email must be a valid email address")
 
         creds_json = self._credentials_resolver(op_ref)
-        self._service = self._service_factory(creds_json, self.SCOPES, user_email)
+        self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
@@ -372,18 +375,17 @@ class GmailAdapter(CommunicationAdapter):
         the Gmail service directly (Phase A — memo 08 §3.4
         Phase-A-conditional, mirroring 11r-c's
         :meth:`_apply_write_impl`). On success, emits one
-        ``messaging.sent@v1`` event with field-mapping from Gmail
-        semantics to the existing schema (registered at
-        ``adminme/events/schemas/ingest.py`` since phase 04-3); on
+        ``messaging.sent@v2`` event with field-mapping from Gmail
+        semantics plus the exact Comms account coordinates; on
         observation-suppress, the same event is emitted with
-        ``delivery_status="queued"`` and ``thread_id=None``. The
-        ``messaging.sent@v1`` registration is reused unchanged per [D7].
+        ``delivery_status="queued"`` and ``thread_id=None``. The immutable
+        ``messaging.sent@v1`` registration remains available per [D7].
 
         Errors classify per :meth:`_classify_gmail_error` into the
         ``AdapterErrorV1`` taxonomy (4xx auth → fatal ``auth_failed``,
         5xx → transient ``network``, 429 → transient ``rate_limited``),
         emit one ``adapter.error@v1`` event, and re-raise so the
-        supervisor's backoff handles retry. ``messaging.sent@v1`` is
+        supervisor's backoff handles retry. ``messaging.sent@v2`` is
         NOT emitted on the error path — the action did not, in fact,
         send.
         """
@@ -391,6 +393,10 @@ class GmailAdapter(CommunicationAdapter):
         # OutboundMessage is frozen but does not validate non-emptiness.
         if not message.recipient:
             raise ValueError("OutboundMessage.recipient must be a non-empty string")
+        if self._config.get("enable_writes") is False:
+            raise PermissionError(
+                "Gmail writes are disabled; reconnect with modify/send scopes"
+            )
         ctx = self._ctx
         if self._service is None:
             raise RuntimeError("Gmail service not initialized; call start() first")
@@ -402,10 +408,14 @@ class GmailAdapter(CommunicationAdapter):
             # Wrapped in a closure so :func:`outbound` can suppress it
             # under observation mode. ``execute()`` is sync; the
             # observation seam awaits the closure.
+            request_body = {"raw": mime_b64}
+            thread_id = message.metadata.get("thread_id")
+            if isinstance(thread_id, str) and thread_id:
+                request_body["threadId"] = thread_id
             return (
                 service.users()
                 .messages()
-                .send(userId="me", body={"raw": mime_b64})
+                .send(userId="me", body=request_body)
                 .execute()
             )
 
@@ -457,9 +467,8 @@ class GmailAdapter(CommunicationAdapter):
                 )
             raise
 
-        # [D7] map onto the EXISTING ``messaging.sent@v1`` field set.
-        # No new schema; field names match
-        # ``MessagingSentV1`` byte-for-byte.
+        # D28 retains the delivery fields and adds the account-bound
+        # ``messaging.sent@v2`` coordinates required by Comms.
         if ctx is not None:
             now_dt = ctx.now_factory()
         else:
@@ -481,12 +490,19 @@ class GmailAdapter(CommunicationAdapter):
             "body_text": message.body,  # FULL body — schema allows str | None
             "sent_at": sent_at_iso,
             "delivery_status": delivery_status,
+            "member_id": str(self._config.get("member_id") or "unbound"),
+            "provider": "gmail",
+            "provider_account_id": str(self._config.get("user_email") or "gmail"),
+            "workspace": str(self._config.get("workspace") or "personal"),
+            "native_message_id": None if suppressed else response.get("id"),
+            "in_reply_to_interaction_id": message.metadata.get("interaction_id"),
         }
         if ctx is not None:
             await self._append(
                 ctx=ctx,
                 event_type="messaging.sent",
                 payload=sent_payload,
+                schema_version=2,
             )
 
         external_id_value: str | None = None if suppressed else response.get("id")
@@ -519,8 +535,72 @@ class GmailAdapter(CommunicationAdapter):
         )
         if subject_meta:
             mime["Subject"] = str(subject_meta)
+        in_reply_to = message.metadata.get("in_reply_to")
+        if isinstance(in_reply_to, str) and in_reply_to:
+            mime["In-Reply-To"] = in_reply_to
+            mime["References"] = in_reply_to
         mime["Date"] = formatdate(localtime=False, usegmt=True)
         return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
+
+    async def manage_message(
+        self, *, operation: str, native_message_id: str | None
+    ) -> dict[str, Any]:
+        """Apply Gmail read/archive state through the observation seam."""
+
+        if self._config.get("enable_writes") is False:
+            raise PermissionError(
+                "Gmail writes are disabled; reconnect with modify/send scopes"
+            )
+        if self._service is None:
+            raise RuntimeError("Gmail service not initialized; call start() first")
+        if not isinstance(native_message_id, str) or not native_message_id:
+            raise ValueError("Gmail message id is unavailable")
+        changes = {
+            "mark_read": ({"removeLabelIds": ["UNREAD"]}, {"unread": False}),
+            "mark_unread": ({"addLabelIds": ["UNREAD"]}, {"unread": True}),
+            "archive": ({"removeLabelIds": ["INBOX"]}, {"archived": True}),
+            "restore": ({"addLabelIds": ["INBOX"]}, {"archived": False}),
+        }
+        if operation not in changes:
+            raise ValueError(f"unsupported Gmail message operation: {operation}")
+        request_body, state = changes[operation]
+
+        async def _gmail_api_modify() -> dict[str, Any]:
+            return (
+                self._service.users()
+                .messages()
+                .modify(userId="me", id=native_message_id, body=request_body)
+                .execute()
+            )
+
+        suppressed = False
+        if (
+            self._observation_session is not None
+            and self._observation_manager is not None
+            and self._observation_event_log is not None
+        ):
+            result = await outbound(
+                self._observation_session,
+                "messaging.manage",
+                {
+                    "operation": operation,
+                    "native_message_id": native_message_id,
+                },
+                _gmail_api_modify,
+                manager=self._observation_manager,
+                event_sink=self._observation_event_log,
+                target_channel="gmail",
+                target_identifier=str(self._config.get("user_email") or "gmail"),
+            )
+            suppressed = result.suppressed
+        else:
+            await _gmail_api_modify()
+        return {
+            "applied": not suppressed,
+            "suppressed": suppressed,
+            "external_id": native_message_id,
+            "state": state,
+        }
 
     async def _on_inbound(self, envelope: InboundEnvelope) -> None:
         """Inbound hook — Phase A no-op satisfying the ABC contract.
@@ -664,6 +744,31 @@ class GmailAdapter(CommunicationAdapter):
                 out[name.lower()] = value
         return out
 
+    @classmethod
+    def _attachment_metadata(cls, part: dict[str, Any]) -> list[dict[str, Any]]:
+        """Collect safe Gmail attachment metadata without fetching content."""
+
+        result: list[dict[str, Any]] = []
+        body = part.get("body") or {}
+        attachment_id = body.get("attachmentId")
+        filename = part.get("filename")
+        if attachment_id or filename:
+            result.append(
+                {
+                    "provider_attachment_id": str(attachment_id or ""),
+                    "filename": str(filename or "Attachment"),
+                    "mime_type": str(
+                        part.get("mimeType") or "application/octet-stream"
+                    ),
+                    "size": int(body.get("size") or 0),
+                    "content_available": False,
+                }
+            )
+        for child in part.get("parts") or []:
+            if isinstance(child, dict):
+                result.extend(cls._attachment_metadata(child))
+        return result
+
     # ------------------------------------------------------------------
     # Emission helpers
     # ------------------------------------------------------------------
@@ -675,7 +780,7 @@ class GmailAdapter(CommunicationAdapter):
             "adapter_family": self.family,
             "token_storage_ref": op_ref,
             "authenticated_at": ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "scopes": list(self.SCOPES),
+            "scopes": list(self._scopes),
         }
         await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
 
@@ -683,7 +788,7 @@ class GmailAdapter(CommunicationAdapter):
         self, *, ctx: AdapterContext, message: dict[str, Any]
     ) -> None:
         """Translate a Gmail ``users.messages.get`` response into a
-        ``messaging.received`` v1 event. The pack's ``user_email`` is the
+        ``messaging.received`` v3 event. The pack's ``user_email`` is the
         ``to_identifier``; ``from_identifier`` comes from the From header.
         """
         payload_dict = message.get("payload") or {}
@@ -691,6 +796,18 @@ class GmailAdapter(CommunicationAdapter):
         body_text, body_html = self._extract_bodies(payload_dict)
         received_iso = self._epoch_ms_to_iso(message.get("internalDate"))
         configured_to = self._config.get("user_email") or ""
+        to_addresses = [
+            address for _, address in getaddresses([headers.get("to") or ""]) if address
+        ]
+        cc_addresses = [
+            address for _, address in getaddresses([headers.get("cc") or ""]) if address
+        ]
+        bcc_addresses = [
+            address
+            for _, address in getaddresses([headers.get("bcc") or ""])
+            if address
+        ]
+        labels = [str(value) for value in (message.get("labelIds") or [])]
         event_payload: dict[str, Any] = {
             "source_channel": "gmail",
             "from_identifier": headers.get("from") or "unknown@unknown",
@@ -700,10 +817,29 @@ class GmailAdapter(CommunicationAdapter):
             "body_text": body_text,
             "body_html": body_html,
             "received_at": received_iso,
-            "attachments": [],
+            "attachments": self._attachment_metadata(payload_dict),
+            "native_message_id": str(message.get("id") or "unknown"),
+            "member_id": str(self._config.get("member_id") or "unbound"),
+            "provider": "gmail",
+            "provider_account_id": str(configured_to or "gmail"),
+            "workspace": str(self._config.get("workspace") or "personal"),
+            "to_identifiers": to_addresses,
+            "cc_identifiers": cc_addresses,
+            "bcc_identifiers": bcc_addresses,
+            "reply_to_identifier": headers.get("reply-to") or headers.get("from"),
+            "rfc_message_id": headers.get("message-id"),
+            "references": (headers.get("references") or "").split(),
+            "provider_labels": labels,
+            "unread": "UNREAD" in labels,
+            "archived": "INBOX" not in labels,
+            "starred": "STARRED" in labels,
+            "important": "IMPORTANT" in labels,
         }
         await self._append(
-            ctx=ctx, event_type="messaging.received", payload=event_payload
+            ctx=ctx,
+            event_type="messaging.received",
+            payload=event_payload,
+            schema_version=3,
         )
 
     async def _maybe_emit_cursor_advance(
@@ -773,6 +909,7 @@ class GmailAdapter(CommunicationAdapter):
         ctx: AdapterContext,
         event_type: str,
         payload: dict[str, Any],
+        schema_version: int = 1,
     ) -> None:
         """Append a typed event via the supervisor-provided event log.
 
@@ -787,6 +924,7 @@ class GmailAdapter(CommunicationAdapter):
                 config=self._config,
                 event_type=event_type,
                 payload=payload,
+                schema_version=schema_version,
             )
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception("gmail adapter failed to emit %s event", event_type)
@@ -841,7 +979,9 @@ class GmailAdapter(CommunicationAdapter):
 
 
 __all__ = [
+    "GMAIL_MODIFY_SCOPE",
     "GMAIL_READONLY_SCOPE",
+    "GMAIL_SEND_SCOPE",
     "CredentialsResolver",
     "GmailAdapter",
     "ServiceFactory",
