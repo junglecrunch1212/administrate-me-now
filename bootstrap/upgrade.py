@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -223,6 +224,8 @@ class UpgradeManager:
                 [sys.executable, "-m", "venv", str(release / ".venv")],
                 check=True,
             )
+        poetry_environment = os.environ.copy()
+        poetry_environment.pop("VIRTUAL_ENV", None)
         subprocess.run(
             [
                 str(poetry),
@@ -234,6 +237,7 @@ class UpgradeManager:
             ],
             cwd=release,
             check=True,
+            env=poetry_environment,
         )
         plugin = release / "openclaw" / "administrateme"
         subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=plugin, check=True)

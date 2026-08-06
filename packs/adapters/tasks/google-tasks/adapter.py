@@ -256,6 +256,11 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 continue
             if task_id in self._seen_inbound:
                 continue
+            title = task.get("title")
+            if not isinstance(title, str) or not title.strip():
+                _log.warning("skipping titleless Google task %s", task_id)
+                self._seen_inbound[task_id] = str(task.get("updated") or "")
+                continue
             await self._emit_list_item_added(
                 ctx=ctx, tasklist_id=tasklist_id, task=task
             )
