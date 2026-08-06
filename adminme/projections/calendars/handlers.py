@@ -368,6 +368,38 @@ def apply_calendar_source_observed(
             envelope["event_id"],
         ),
     )
+    # Google accepts the literal ``primary`` as an API alias, but calendarList
+    # returns the canonical calendar id.  Once discovery reports that canonical
+    # primary, keeping an older alias row would make one provider calendar look
+    # like two onboarding decisions.  Projection replay may safely retire the
+    # derived alias and its obsolete rule; event facts remain append-only.
+    if (
+        p["provider"] == "google_calendar"
+        and p.get("primary")
+        and p["calendar_external_id"] != "primary"
+    ):
+        route = (
+            envelope["tenant_id"],
+            p["provider"],
+            p["provider_account_id"],
+            "primary",
+        )
+        conn.execute(
+            """
+            DELETE FROM calendar_member_rules
+             WHERE tenant_id=? AND provider=? AND provider_account_id=?
+               AND calendar_external_id=?
+            """,
+            route,
+        )
+        conn.execute(
+            """
+            DELETE FROM calendar_sources
+             WHERE tenant_id=? AND provider=? AND provider_account_id=?
+               AND calendar_external_id=?
+            """,
+            route,
+        )
 
 
 def apply_calendar_rule_configured(

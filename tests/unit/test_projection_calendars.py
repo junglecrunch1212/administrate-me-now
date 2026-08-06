@@ -265,6 +265,67 @@ async def test_calendar_directory_rules_and_schedule_project(rig: dict[str, Any]
     assert policy["buffer_minutes"] == {"remote_before": 10}
 
 
+async def test_canonical_google_primary_retires_legacy_alias(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    observed_at = "2026-04-20T12:00:00Z"
+    alias = {
+        "member_id": "m1",
+        "provider": "google_calendar",
+        "provider_account_id": "account-a",
+        "calendar_external_id": "primary",
+        "calendar_name": "Primary",
+        "access_role": "owner",
+        "primary": True,
+        "read_details": True,
+        "read_free_busy": True,
+        "write_events": True,
+        "observed_at": observed_at,
+    }
+    await log.append(_envelope("calendar.source_observed", alias))
+    await log.append(
+        _envelope(
+            "calendar.rule.configured",
+            {
+                "rule_id": "calendar-rule-primary-alias",
+                "subject_member_id": "m1",
+                "source_member_id": "m1",
+                "provider": "google_calendar",
+                "provider_account_id": "account-a",
+                "calendar_external_id": "primary",
+                "purpose": "personal",
+                "effect": "hard_block",
+                "tentative_effect": "soft_hold",
+                "caregiving_load": "ignore",
+                "caregiving_summary_values": [],
+                "buffer_kind": "auto",
+                "write_target": False,
+                "destination_kind": None,
+                "enabled": True,
+                "configured_at": observed_at,
+            },
+        )
+    )
+    canonical = {
+        **alias,
+        "calendar_external_id": "member@example.test",
+        "calendar_name": "Personal",
+    }
+    last = await log.append(_envelope("calendar.source_observed", canonical))
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:calendars", last)
+
+    conn = runner.connection("calendars")
+    sources = list_sources(conn, _S("tenant-a"), member_id="m1")
+    assert [row["calendar_external_id"] for row in sources] == [
+        "member@example.test"
+    ]
+    assert rules_for_member(conn, _S("tenant-a"), member_id="m1") == []
+
+
 async def test_calendar_event_added_inserts_row(rig: dict[str, Any]) -> None:
     log = rig["log"]
     bus = rig["bus"]
