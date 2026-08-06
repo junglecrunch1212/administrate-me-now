@@ -26,7 +26,9 @@ kickstart race only when the job is verifiably loaded, and encrypted backup
 omits only OpenClaw's generated `plugin-skills` links while continuing to reject
 all other links. Quiesced backup also tolerates SQLite removing only disposable
 `-wal`/`-shm` sidecars between enumeration and hashing; durable files remain
-fail-closed. The complete root suite passes with 1,314 tests.
+fail-closed. Launchd now proves the central runtime ready before starting the
+Gateway so the local plugin can register against its backend. The complete root
+suite passes with 1,314 tests.
 
 ## 2026-08-05 Mac bootstrap compatibility repair
 

@@ -20,7 +20,7 @@ from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import secret_store
-from bootstrap.services import ServiceManager
+from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.state import EncryptedStateStore
 from bootstrap.upgrade import UpgradeError, validate_candidate
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
@@ -666,7 +666,33 @@ def test_start_stop_restart_crash_recovery_states_are_truthful(
     assert manager.status().status == "failed"
     assert manager.start().status == "healthy"
     assert manager.stop().status == "stopped"
-    assert manager.stop().status == "stopped"
+
+
+def test_live_services_start_runtime_before_openclaw(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths)
+    commands: list[list[str]] = []
+    healthy = ServiceStatus("healthy", "observation_only", "running", True, "fixture")
+    monkeypatch.setattr(
+        manager, "_validate_plist", lambda label: Path(f"/{label}.plist")
+    )
+    monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
+    monkeypatch.setattr(manager, "_runtime_health", lambda: "observation_only")
+    monkeypatch.setattr(manager, "status", lambda: healthy)
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("bootstrap.services.subprocess.run", run)
+    assert manager.start() == healthy
+    kickstarts = [command[-1] for command in commands if "kickstart" in command]
+    assert kickstarts == [
+        f"gui/{os.getuid()}/com.administrateme.runtime",
+        f"gui/{os.getuid()}/com.administrateme.openclaw",
+    ]
 
 
 def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
