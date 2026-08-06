@@ -139,13 +139,17 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     )
 
 
-def test_macos_installer_dispatches_without_optional_passthrough_args(tmp_path: Path) -> None:
+def test_macos_installer_dispatches_without_optional_passthrough_args(
+    tmp_path: Path,
+) -> None:
     """The real first run has no fixture args and must work under macOS Bash 3."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     captured = tmp_path / "python-args.txt"
     python = fake_bin / "python3"
-    python.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$ADMINME_CAPTURE"\n', "utf-8")
+    python.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$@" > "$ADMINME_CAPTURE"\n', "utf-8"
+    )
     python.chmod(0o755)
     instance_root = tmp_path / "instance"
     env = os.environ.copy()
