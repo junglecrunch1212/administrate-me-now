@@ -1,5 +1,11 @@
 # Migration map
 
+Live activation hardening update (2026-08-05): the OpenClaw activation,
+launchd, and backup rows are **HARDEN COMPLETE** for authenticated managed-RPC
+probing, the macOS RunAtLoad/kickstart race, and generated OpenClaw plugin-skill
+links. Arbitrary state links remain fail-closed and excluded generated links are
+reconstructed by the pinned runtime rather than restored as trusted state.
+
 Mac bootstrap compatibility update (2026-08-05): the build/package and
 bootstrap rows are **HARDEN COMPLETE** for Homebrew 6 metadata, external pinned
 Poetry tooling, installer-owned first-run scaffolding, explicit reviewed-local

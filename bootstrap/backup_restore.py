@@ -187,6 +187,14 @@ class BackupManager:
         files: list[dict[str, Any]] = []
         for path in sorted(self.paths.instance_dir.rglob("*")):
             if path.is_symlink():
+                # OpenClaw materializes plugin skill discovery as generated
+                # links into reviewed release content.  They are runtime cache,
+                # not household state, and are recreated on service startup.
+                plugin_skills = (
+                    self.paths.instance_dir / "openclaw" / "runtime" / "plugin-skills"
+                )
+                if path.parent == plugin_skills:
+                    continue
                 raise BackupError(f"backup refuses symlink: {path.name}")
             if not path.is_file():
                 continue

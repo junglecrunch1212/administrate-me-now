@@ -101,6 +101,19 @@ def activate(
     subprocess.run(
         [executable, "models", "status", "--probe"], check=True, env=environment
     )
+
+    references = json.loads(
+        (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
+    )["references"]
+    gateway_token = (
+        secret_store(paths, test_mode=test_mode)
+        .get(references["openclaw_shared"])
+        .decode("ascii")
+    )
+    # The AdministrateMe-owned LaunchAgent intentionally does not use OpenClaw's
+    # generic service label.  Authenticate the RPC probe explicitly so the CLI
+    # validates the running managed gateway instead of rejecting its URL.
+    environment["OPENCLAW_GATEWAY_TOKEN"] = gateway_token
     subprocess.run(
         [executable, "gateway", "status", "--require-rpc"],
         check=True,
@@ -109,14 +122,6 @@ def activate(
 
     instance = yaml.safe_load(
         (paths.instance_dir / "config" / "instance.yaml").read_text("utf-8")
-    )
-    references = json.loads(
-        (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
-    )["references"]
-    gateway_token = (
-        secret_store(paths, test_mode=test_mode)
-        .get(references["openclaw_shared"])
-        .decode("ascii")
     )
     cron = OpenClawCronReconciler(
         paths,
