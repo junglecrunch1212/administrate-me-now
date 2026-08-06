@@ -138,6 +138,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert (
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
     )
+    assert 'cd "$ACTIVE_RELEASE_ROOT"' in common
 
 
 def test_macos_installer_dispatches_without_optional_passthrough_args(
@@ -502,6 +503,9 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
         definition = plistlib.loads(path.read_bytes())
         assert definition["Label"] == label
         assert "/opt/homebrew/bin" in definition["EnvironmentVariables"]["PATH"]
+        assert definition["EnvironmentVariables"]["ADMINME_INSTANCE_DIR"] == str(
+            test_paths.instance_dir
+        )
         rendered = json.dumps(definition["ProgramArguments"]).lower()
         assert all(word not in rendered for word in ("secret", "token", "password"))
     store = secret_store(test_paths, test_mode=True)
@@ -686,6 +690,10 @@ def test_live_services_start_runtime_before_openclaw(
         manager, "_validate_plist", lambda label: Path(f"/{label}.plist")
     )
     monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
+    monkeypatch.setattr(manager, "_wait_until_unloaded", lambda _label: True)
+    monkeypatch.setattr(
+        manager, "_launchctl_definition_matches", lambda _label, _path: True
+    )
     monkeypatch.setattr(manager, "_runtime_health", lambda: "observation_only")
     monkeypatch.setattr(manager, "status", lambda: healthy)
 
@@ -700,6 +708,41 @@ def test_live_services_start_runtime_before_openclaw(
         f"gui/{os.getuid()}/com.administrateme.runtime",
         f"gui/{os.getuid()}/com.administrateme.openclaw",
     ]
+
+
+def test_live_service_definition_must_match_the_candidate_release(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = test_paths.app_dir / "releases" / "candidate-sha"
+    program = release / ".venv" / "bin" / "python"
+    path = test_paths.launch_agent_dir / f"{RUNTIME_LABEL}.plist"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": RUNTIME_LABEL,
+                "ProgramArguments": [str(program), "-m", "bootstrap.runtime_service"],
+                "WorkingDirectory": str(release),
+                "EnvironmentVariables": {"ADMINME_REPOSITORY_ROOT": str(release)},
+            }
+        )
+    )
+    launchctl_output = (
+        f"program = {program}\n"
+        f"working directory = {release}\n"
+        f"ADMINME_REPOSITORY_ROOT => {release}\n"
+    )
+
+    def run(_command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=launchctl_output, stderr="")
+
+    monkeypatch.setattr("bootstrap.services.subprocess.run", run)
+    manager = ServiceManager(test_paths)
+    assert manager._launchctl_definition_matches(RUNTIME_LABEL, path) is True
+
+    launchctl_output = launchctl_output.replace("candidate-sha", "previous-sha")
+    assert manager._launchctl_definition_matches(RUNTIME_LABEL, path) is False
 
 
 def test_doctor_export_is_machine_readable_and_contains_no_secret_values(

@@ -57,6 +57,7 @@ def install_launch_agents(
         raise WizardFailure(f"release Python environment is missing: {python_path}")
     common_environment = {
         "ADMINME_INSTANCE_ROOT": str(paths.root),
+        "ADMINME_INSTANCE_DIR": str(paths.instance_dir),
         "ADMINME_REPOSITORY_ROOT": str(root),
         "OPENCLAW_STATE_DIR": str(paths.instance_dir / "openclaw" / "runtime"),
         "OPENCLAW_CONFIG_PATH": str(

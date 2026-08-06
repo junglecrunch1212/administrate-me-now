@@ -39,8 +39,8 @@ the production composition from proposal through human confirmation to one
 official task.
 
 Local release evidence on 2026-08-06: the complete root suite passed with
-1,321 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
-and mypy passed across 186 production source files; both invariant scripts
+1,322 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
+and mypy passed across 188 production/bootstrap source files; both invariant scripts
 passed; and the exact pinned OpenClaw contract, TypeScript check, 14 plugin
 tests, and build passed. The Triage process proof also covers idempotent
 enrichment/confirmation/dismissal, private-scope isolation, CRM visibility,
@@ -57,6 +57,19 @@ Gmail and Google Tasks (matching Calendar), and a local consent helper that
 stores only refresh credentials in Keychain. Gmail remains read-only; Calendar
 and Tasks remain governed by observation mode and the external-write seams.
 Pack-level regression coverage passes with 29 tests and Ruff is clean.
+
+## 2026-08-06 live release-switch hardening
+
+The first guarded Triage activation attempt rolled back automatically when
+launchd retained the previous immutable release definition during a reload
+race. The repair waits for the old job to disappear, then verifies the loaded
+program, working directory, and repository-root environment against the new
+plist before health can pass. Stable wrappers also change into the validated
+active release before importing bootstrap code, and LaunchAgents now provide
+the exact state directory through `ADMINME_INSTANCE_DIR`, preventing live
+model-skill pipelines from degrading on an unresolved instance path. These
+changes **MODERNIZE** service switching while **PRESERVING** rollback, release
+immutability, secret-free argument lists, and fail-closed readiness.
 
 ## 2026-08-05 live activation hardening
 
@@ -88,8 +101,9 @@ select each other's plugin paths. Bootstrap explicitly writes and validates
 `gateway.mode=local` before launchd starts the pinned Gateway.
 Optional unconfigured member chat remains explicitly blocked in capability
 health but no longer blocks the deterministic runtime's global readiness.
-Resumed installs reload existing user LaunchAgents before kickstart, ensuring
-the plist's current immutable release is the process actually under test.
+Resumed installs reload existing user LaunchAgents before kickstart; the later
+2026-08-06 hardening above adds the required unload wait and exact loaded-job
+verification.
 
 This **MODERNIZES** installer/package compatibility while **PRESERVING** the
 reviewed-source boundary, fail-closed first-run behavior, one pinned OpenClaw

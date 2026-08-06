@@ -66,6 +66,43 @@ class ServiceManager:
         )
         return completed.returncode == 0
 
+    def _wait_until_unloaded(self, label: str) -> bool:
+        for _ in range(50):
+            if not self._launchctl_loaded(label):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def _launchctl_definition_matches(self, label: str, path: Path) -> bool:
+        definition = plistlib.loads(path.read_bytes())
+        arguments = definition.get("ProgramArguments") or []
+        expected_program = str(arguments[0]) if arguments else ""
+        expected_working_directory = str(definition.get("WorkingDirectory") or "")
+        expected_repository_root = str(
+            (definition.get("EnvironmentVariables") or {}).get(
+                "ADMINME_REPOSITORY_ROOT", ""
+            )
+        )
+        uid = int(getattr(os, "getuid", lambda: 0)())
+        completed = subprocess.run(
+            ["launchctl", "print", f"gui/{uid}/{label}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode:
+            return False
+        output = completed.stdout
+        return all(
+            (
+                expected_program and f"program = {expected_program}" in output,
+                expected_working_directory
+                and f"working directory = {expected_working_directory}" in output,
+                expected_repository_root
+                and f"ADMINME_REPOSITORY_ROOT => {expected_repository_root}" in output,
+            )
+        )
+
     def _validate_plist(self, label: str) -> Path:
         path = self.paths.launch_agent_dir / f"{label}.plist"
         if not path.is_file():
@@ -104,6 +141,10 @@ class ServiceManager:
                     raise RuntimeError(
                         f"launchd could not reload {label}: {completed.stderr.strip()}"
                     )
+                if not self._wait_until_unloaded(label):
+                    raise RuntimeError(
+                        f"launchd retained the previous {label} definition"
+                    )
             completed = subprocess.run(
                 ["launchctl", "bootstrap", domain, str(path)],
                 check=False,
@@ -114,6 +155,12 @@ class ServiceManager:
                 raise RuntimeError(
                     f"launchd could not load {label}: {completed.stderr.strip()}"
                 )
+            for _ in range(50):
+                if self._launchctl_definition_matches(label, path):
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError(f"launchd loaded a stale {label} release definition")
             kickstart = subprocess.run(
                 ["launchctl", "kickstart", "-k", f"{domain}/{label}"],
                 check=False,
