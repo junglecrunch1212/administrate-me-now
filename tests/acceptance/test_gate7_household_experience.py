@@ -243,6 +243,11 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         )
 
         diagnostics = client.get("/api/system/ready").text
+        dashboard_root = client.get(
+            "/", headers=HEADERS[ADULT], follow_redirects=False
+        )
+        assert dashboard_root.status_code == 307
+        assert dashboard_root.headers["location"] == "/member"
         member_page = client.get("/member/today", headers=HEADERS[ADULT])
         assets = (
             client.get("/member-assets/member.js").text

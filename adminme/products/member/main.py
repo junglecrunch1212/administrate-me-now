@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from adminme.events.envelope import EventEnvelope
@@ -343,6 +343,12 @@ async def _execute_lifecycle(
         request,
         session,
     )
+
+
+@router.get("/", response_class=RedirectResponse)
+async def dashboard_root(session: SessionDep) -> RedirectResponse:
+    """Send an authenticated household member to the canonical portal URL."""
+    return RedirectResponse(url="/member", status_code=307)
 
 
 @router.get("/member")
