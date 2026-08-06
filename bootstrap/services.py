@@ -114,10 +114,20 @@ class ServiceManager:
                 raise RuntimeError(
                     f"launchd could not load {label}: {completed.stderr.strip()}"
                 )
-            subprocess.run(
+            kickstart = subprocess.run(
                 ["launchctl", "kickstart", "-k", f"{domain}/{label}"],
-                check=True,
+                check=False,
+                capture_output=True,
+                text=True,
             )
+            # launchctl can return EX_OSERR (37) when RunAtLoad wins the race
+            # and starts a freshly bootstrapped job before kickstart executes.
+            # A loaded job is the authoritative result; the health wait below
+            # still proves that it actually reaches a terminal runtime state.
+            if kickstart.returncode and not self._launchctl_loaded(label):
+                raise RuntimeError(
+                    f"launchd could not start {label}: {kickstart.stderr.strip()}"
+                )
         result = self.status()
         for _ in range(30):
             if result.status in {"healthy", "failed"}:

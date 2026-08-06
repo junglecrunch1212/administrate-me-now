@@ -1,5 +1,11 @@
 # Constitutional crosswalk
 
+Live activation amendment (2026-08-05): C046/C080/C082 are **HARDENED** by an
+authenticated probe of the AdministrateMe-owned Gateway, truthful launchd race
+handling, and backup treatment of generated OpenClaw discovery links as cache.
+This preserves Keychain secrecy, fail-closed service health, safe extraction,
+and event/projection state as the recoverable source of truth.
+
 Mac bootstrap compatibility amendment (2026-08-05): C046/C050/C053 preserve
 their semantics while the installer moves to Homebrew 6 metadata, isolates
 Poetry from its synchronized target environment, recognizes only its own

@@ -612,8 +612,11 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     for name in ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"):
         (workspace / name).write_text("fixture", encoding="utf-8")
 
-    def run(command, **_kwargs):
+    environments: list[dict[str, str]] = []
+
+    def run(command, **kwargs):
         commands.append(command)
+        environments.append(dict(kwargs.get("env", {})))
         return SimpleNamespace(stdout="OpenClaw 2026.7.2")
 
     monkeypatch.setattr(
@@ -638,6 +641,8 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
         ["/openclaw", "gateway", "status", "--require-rpc"],
     ]
     assert result["contains_credentials"] is False
+    assert "OPENCLAW_GATEWAY_TOKEN" not in environments[4]
+    assert environments[5]["OPENCLAW_GATEWAY_TOKEN"]
     assert result["cron_reconciled"] is True
     assert result["cron_jobs"] == 5
     assert model_provider_configured(test_paths) is True

@@ -66,6 +66,9 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     )["evidence"]
     assert proof["external_side_effects"] == 0
     assert proof["review_suppressed_by_observation"] is True
+    plugin_skills = paths.instance_dir / "openclaw" / "runtime" / "plugin-skills"
+    plugin_skills.mkdir(parents=True, exist_ok=True)
+    (plugin_skills / "generated-skill").symlink_to(REPO_ROOT / "packs" / "skills")
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
     backup = manager.create()
     assert backup["encrypted"] is True

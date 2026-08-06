@@ -17,6 +17,15 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-05 live activation hardening
+
+The production Mac rehearsal additionally proved and repaired three operational
+edges: the managed Gateway RPC probe now receives its Keychain-backed token
+without persisting it, launchd startup tolerates the documented RunAtLoad versus
+kickstart race only when the job is verifiably loaded, and encrypted backup
+omits only OpenClaw's generated `plugin-skills` links while continuing to reject
+all other links. The complete root suite passes with 1,314 tests.
+
 ## 2026-08-05 Mac bootstrap compatibility repair
 
 The live Apple-silicon rehearsal exposed five release-blocking compatibility
