@@ -34,6 +34,8 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _handle_participant_resolved(envelope, conn)
     elif event_type == "messaging.classified":
         _handle_classified(envelope, conn)
+    elif event_type == "messaging.semantic_features_extracted":
+        _handle_semantic_features(envelope, conn)
     elif event_type == "communication.state_changed":
         _handle_state_changed(envelope, conn)
     elif event_type == "external_sync.write_requested":
@@ -403,7 +405,11 @@ def _handle_participant_resolved(
 
 def _handle_classified(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
-    interaction_id = f"ix_{p['source_event_id']}"
+    interaction_id = _interaction_for_source(
+        conn, tenant_id=envelope["tenant_id"], source_event_id=p["source_event_id"]
+    )
+    if interaction_id is None:
+        return
     conn.execute(
         "UPDATE interactions SET classification=?, classification_confidence=?, "
         "last_event_id=? WHERE tenant_id=? AND interaction_id=? "
@@ -411,6 +417,67 @@ def _handle_classified(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         (
             p["classification"],
             p["confidence"],
+            envelope["event_id"],
+            envelope["tenant_id"],
+            interaction_id,
+            envelope["event_id"],
+        ),
+    )
+
+
+def _interaction_for_source(
+    conn: sqlcipher3.Connection, *, tenant_id: str, source_event_id: str
+) -> str | None:
+    direct = f"ix_{source_event_id}"
+    row = conn.execute(
+        "SELECT interaction_id FROM interactions WHERE tenant_id=? AND interaction_id=?",
+        (tenant_id, direct),
+    ).fetchone()
+    if row is not None:
+        return str(row[0])
+    for candidate in conn.execute(
+        "SELECT interaction_id, raw_event_ids FROM interactions WHERE tenant_id=?",
+        (tenant_id,),
+    ).fetchall():
+        try:
+            source_ids = json.loads(candidate[1] or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if source_event_id in source_ids:
+            return str(candidate[0])
+    return None
+
+
+def _handle_semantic_features(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    interaction_id = _interaction_for_source(
+        conn, tenant_id=envelope["tenant_id"], source_event_id=p["source_event_id"]
+    )
+    if interaction_id is None:
+        return
+    features = {
+        key: p.get(key)
+        for key in (
+            "reply_signal",
+            "automated",
+            "transactional_due",
+            "security_code",
+            "person_to_person",
+            "deadline",
+            "reasons",
+        )
+    }
+    conn.execute(
+        "UPDATE interactions SET semantic_features_json=?, semantic_confidence=?, "
+        "semantic_skill_name=?, semantic_skill_version=?, last_event_id=? "
+        "WHERE tenant_id=? AND interaction_id=? AND last_event_id < ?",
+        (
+            json.dumps(features, sort_keys=True, separators=(",", ":")),
+            p["confidence"],
+            p["skill_name"],
+            p["skill_version"],
             envelope["event_id"],
             envelope["tenant_id"],
             interaction_id,

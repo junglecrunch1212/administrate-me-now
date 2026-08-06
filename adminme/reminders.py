@@ -10,9 +10,13 @@ an item is visible and which system remains authoritative.
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from adminme.surface_contracts import provider_action_state, surface_link
 
 
 APPLE_OPERATIONS = frozenset(
@@ -93,6 +97,8 @@ PROVIDER_CONTRACTS: dict[str, dict[str, Any]] = {
         "operations": ["add_item", "toggle_completion"],
     },
 }
+
+_BUCKET_RANK = {"now": 0, "scheduled": 1, "places": 2, "anytime": 3, "completed": 4}
 
 CONTEXT_SIGNAL_CATALOG = [
     {
@@ -203,20 +209,59 @@ def _provider_account(account: dict[str, Any]) -> tuple[str, str]:
     )
 
 
-def compose_reminders_cockpit(
+def _possible_copy_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return a conservative read-only grouping key; never merge provider rows."""
+
+    if item.get("completed"):
+        return None
+    title = re.sub(r"\s+", " ", str(item.get("title") or "").strip()).casefold()
+    if len(title) < 4:
+        return None
+    return (
+        str(item.get("provider") or ""),
+        str(item.get("provider_account_id") or ""),
+        title,
+    )
+
+
+def _mark_possible_copies(items: list[dict[str, Any]]) -> None:
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for item in items:
+        key = _possible_copy_key(item)
+        if key is not None:
+            groups.setdefault(key, []).append(item)
+    for key, rows in groups.items():
+        containers = {
+            (str(row.get("list_external_id") or ""), str(row.get("list_name") or ""))
+            for row in rows
+        }
+        if len(rows) < 2 or len(containers) < 2:
+            continue
+        digest = hashlib.sha256("\x1f".join(key).encode()).hexdigest()[:12]
+        group_id = f"possible-copy:{digest}"
+        identities = [str(row["id"]) for row in rows]
+        for row in rows:
+            row["possible_copy"] = {
+                "contract": "possible-reminder-copy-v1",
+                "group_id": group_id,
+                "count": len(rows),
+                "reason": "Same normalized title appears in more than one provider list",
+                "member_review_required": True,
+                "provider_items_preserved": identities,
+            }
+
+
+def compose_effective_reminders(
     *,
-    member_id: str,
     timezone_name: str,
     items: list[dict[str, Any]],
-    lists: list[dict[str, Any]],
     accounts: list[dict[str, Any]],
     cues: list[dict[str, Any]],
     signals: list[dict[str, Any]],
     now: datetime,
-) -> dict[str, Any]:
-    """Return one stable member-isolated reminders read contract."""
+) -> list[dict[str, Any]]:
+    """Enrich provider rows once for Reminders, Today, and What Now."""
 
-    del member_id  # all rows arrive through member/scope-filtered queries.
     tz = ZoneInfo(timezone_name)
     now = now.astimezone(timezone.utc)
     local_today = now.astimezone(tz).date()
@@ -287,12 +332,26 @@ def compose_reminders_cockpit(
             (str(row.get("provider") or ""), str(row.get("provider_account_id") or ""))
         )
         provider = str(row.get("provider") or "")
+        provider_account_id = str(row.get("provider_account_id") or "")
         contract = PROVIDER_CONTRACTS.get(provider, {})
         operations = set(account.get("operations") or []) if account else set()
+        can_complete = (
+            (provider == "apple_reminders" and "complete_reminder" in operations)
+            or (provider == "google_tasks" and "complete_task" in operations)
+        ) and not row.get("read_only_reason")
+        can_edit = (
+            (provider == "apple_reminders" and "update_reminder" in operations)
+            or (provider == "google_tasks" and "update_task" in operations)
+        ) and not row.get("read_only_reason")
+        item_id = (
+            f"{provider}:{provider_account_id}:"
+            f"{row['list_external_id']}:{row['item_external_id']}"
+        )
+        evidence_ids = [str(row.get("last_event_id") or "")]
         enriched.append(
             {
                 **row,
-                "id": f"{provider}:{row.get('provider_account_id')}:{row['list_external_id']}:{row['item_external_id']}",
+                "id": item_id,
                 "bucket": bucket,
                 "why": why,
                 "alarms": alarms,
@@ -303,28 +362,50 @@ def compose_reminders_cockpit(
                 "account_label": account.get("label")
                 if account
                 else contract.get("label", provider.replace("_", " ").title()),
-                "can_complete": (
-                    (
-                        provider == "apple_reminders"
-                        and "complete_reminder" in operations
-                    )
-                    or (provider == "google_tasks" and "complete_task" in operations)
-                )
-                and not row.get("read_only_reason"),
-                "can_edit": (
-                    (provider == "apple_reminders" and "update_reminder" in operations)
-                    or (provider == "google_tasks" and "update_task" in operations)
-                )
-                and not row.get("read_only_reason"),
+                "can_complete": can_complete,
+                "can_edit": can_edit,
                 "due_sort": due.isoformat() if due else None,
+                "surface_link": surface_link(
+                    "reminders",
+                    object_kind="item",
+                    object_id=item_id,
+                    evidence_event_ids=evidence_ids,
+                ),
+                "complete_action": provider_action_state(
+                    provider=provider,
+                    provider_account_id=provider_account_id,
+                    action="complete",
+                    available=can_complete,
+                    reason=(
+                        "Provider capability is available; governance still applies"
+                        if can_complete
+                        else str(
+                            row.get("read_only_reason")
+                            or "Provider capability is unavailable"
+                        )
+                    ),
+                ),
+                "edit_action": provider_action_state(
+                    provider=provider,
+                    provider_account_id=provider_account_id,
+                    action="edit",
+                    available=can_edit,
+                    reason=(
+                        "Provider capability is available; governance still applies"
+                        if can_edit
+                        else str(
+                            row.get("read_only_reason")
+                            or "Provider capability is unavailable"
+                        )
+                    ),
+                ),
             }
         )
 
-    bucket_rank = {"now": 0, "scheduled": 1, "places": 2, "anytime": 3, "completed": 4}
     priority_rank = {1: 0, 5: 1, 9: 2, 0: 3}
     enriched.sort(
         key=lambda item: (
-            bucket_rank[item["bucket"]],
+            _BUCKET_RANK[item["bucket"]],
             item["due_sort"] is None,
             item["due_sort"] or "",
             priority_rank.get(int(item.get("priority") or 0), 3),
@@ -333,9 +414,36 @@ def compose_reminders_cockpit(
             item["id"],
         )
     )
+    _mark_possible_copies(enriched)
+    return enriched
+
+
+def compose_reminders_cockpit(
+    *,
+    member_id: str,
+    timezone_name: str,
+    items: list[dict[str, Any]],
+    lists: list[dict[str, Any]],
+    accounts: list[dict[str, Any]],
+    cues: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    """Return one stable member-isolated reminders read contract."""
+
+    del member_id  # all rows arrive through member/scope-filtered queries.
+    now = now.astimezone(timezone.utc)
+    enriched = compose_effective_reminders(
+        timezone_name=timezone_name,
+        items=items,
+        accounts=accounts,
+        cues=cues,
+        signals=signals,
+        now=now,
+    )
     counts = {
         bucket: sum(1 for item in enriched if item["bucket"] == bucket)
-        for bucket in bucket_rank
+        for bucket in _BUCKET_RANK
     }
     return {
         "version": "deterministic-reminders-cockpit-v1",
@@ -358,6 +466,7 @@ def compose_reminders_cockpit(
 __all__ = [
     "APPLE_OPERATIONS",
     "CONTEXT_SIGNAL_CATALOG",
+    "compose_effective_reminders",
     "GOOGLE_OPERATIONS",
     "PROVIDER_CONTRACTS",
     "compose_reminders_cockpit",

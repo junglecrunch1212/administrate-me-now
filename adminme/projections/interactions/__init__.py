@@ -15,13 +15,14 @@ from adminme.projections.interactions import handlers
 
 class InteractionsProjection(Projection):
     name = "interactions"
-    version = 3
+    version = 4
     subscribes_to = [
         "messaging.received",
         "messaging.sent",
         "telephony.sms_received",
         "interaction.participant_resolved",
         "messaging.classified",
+        "messaging.semantic_features_extracted",
         "communication.state_changed",
         "external_sync.write_requested",
         "external_sync.write_completed",
@@ -59,6 +60,10 @@ class InteractionsProjection(Projection):
             "command_state": "TEXT",
             "last_command_id": "TEXT",
             "delivery_status": "TEXT",
+            "semantic_features_json": "TEXT NOT NULL DEFAULT '{}'",
+            "semantic_confidence": "REAL",
+            "semantic_skill_name": "TEXT",
+            "semantic_skill_version": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:

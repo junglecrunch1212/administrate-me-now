@@ -186,6 +186,64 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             f'["{events[-2]["event_id"]}"]',
         )
 
+        calendar_source_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_000_000_000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="calendar.source_observed",
+                schema_version=1,
+                occurred_at="2026-08-06T10:00:00Z",
+                source_adapter="triage-calendar-fixture",
+                source_account_id=MEMBER,
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                actor_identity=MEMBER,
+                payload={
+                    "member_id": MEMBER,
+                    "provider": "apple_calendar",
+                    "provider_account_id": MEMBER,
+                    "calendar_external_id": "calendar-primary",
+                    "calendar_name": "Fixture personal calendar",
+                    "access_role": "owner",
+                    "primary": True,
+                    "selected": True,
+                    "read_details": True,
+                    "read_free_busy": True,
+                    "write_events": True,
+                    "observed_at": "2026-08-06T10:00:00Z",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "calendars", calendar_source_id)
+        calendar_policy = client.post(
+            "/api/member/v1/calendar/onboarding",
+            headers=AUTH,
+            json={
+                "request_id": "triage-calendar-policy-0001",
+                "member_id": MEMBER,
+                "timezone": "Etc/UTC",
+                "rules": [
+                    {
+                        "source_member_id": MEMBER,
+                        "provider": "apple_calendar",
+                        "provider_account_id": MEMBER,
+                        "calendar_external_id": "calendar-primary",
+                        "purpose": "personal",
+                        "effect": "hard_block",
+                        "write_target": True,
+                        "destination_kind": "personal",
+                    }
+                ],
+                "windows": [],
+                "buffer_minutes": {},
+                "accepted_chores_required": True,
+                "one_confirm_write": True,
+            },
+        )
+        assert calendar_policy.status_code == 202, calendar_policy.text
+
         routed = client.post(
             "/api/openclaw/v1/tools/action",
             headers=OPENCLAW_AUTH,
@@ -235,6 +293,12 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         assert retried_enrichment.status_code == 200, retried_enrichment.text
         assert retried_enrichment.json()["duplicate"] is True
         assert retried_enrichment.json()["event_id"] == enriched.json()["event_id"]
+        triage_surface = client.get(
+            "/api/member/v1/surfaces/triage", headers=AUTH
+        ).json()
+        [reviewed_calendar_candidate] = triage_surface["items"]
+        assert reviewed_calendar_candidate["review_state"]["state"] == "ready"
+        assert reviewed_calendar_candidate["calendar_preview"]["state"] == "ready"
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []
         ), "enrichment alone cannot request a provider write"

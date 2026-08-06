@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 1.0.0
+  version: 2.0.0
   kind: pipeline
 runtime:
   language: python
@@ -14,7 +14,9 @@ triggers:
     - telephony.sms_received
 depends_on:
   skills:
-    - classify_message_nature@^2.0.0
+    - classify_message_nature@^3.0.0
   projections: []
 events_emitted:
   - messaging.classified
+  - messaging.semantic_features_extracted
+  - triage.item.proposed

@@ -152,6 +152,35 @@ def test_read_only_assignment_disables_provider_mutation() -> None:
     assert item["can_edit"] is False
 
 
+def test_possible_copies_are_labeled_but_never_merged() -> None:
+    result = _compose(
+        [
+            _item(
+                "first",
+                title="Submit form",
+                list_external_id="list-a",
+                list_name="Personal",
+            ),
+            _item(
+                "second",
+                title="  submit   FORM ",
+                list_external_id="list-b",
+                list_name="Shared",
+            ),
+        ]
+    )
+    assert len(result["items"]) == 2
+    groups = {item["possible_copy"]["group_id"] for item in result["items"]}
+    assert len(groups) == 1
+    assert all(
+        item["possible_copy"]["member_review_required"] for item in result["items"]
+    )
+    assert all(
+        len(item["possible_copy"]["provider_items_preserved"]) == 2
+        for item in result["items"]
+    )
+
+
 def _command(
     *,
     provider: str,

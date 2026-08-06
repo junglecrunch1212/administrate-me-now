@@ -98,6 +98,12 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-21 | Calendar discovery records account/calendar identity and provider read/write capability independently from per-member policy. Availability, duplicate grouping, buffers, conflicts, protected windows, and find-time results are deterministic functions of provider facts, principal-approved rules, schedule policy, timezone, and an explicit clock; no model ranks or chooses time. |
 | UX-22 | Triage exposes only reviewed writable calendar destinations and one confirmation authorizes both canonical materialization and the independently governed provider command. Today consumes the same deduplicated effective-event contract; transparent/context events never become hard blocks, and soft load remains visible without silently forbidding a member choice. |
 | UX-23 | Calendar date navigation requests an explicit, timezone-local Day, Monday-based Week, six-week Month, or fourteen-day Agenda/Find-time range from the production composition root. Per-calendar visibility and capacity-versus-source color lenses are presentation-only: hidden facts still participate in deterministic capacity, conflicts, guardrails, Today, and Triage routing. Color is never the sole signal; event blocks retain text labels, effect language, source provenance, and keyboard-operable detail. |
+| UX-24 | Today, Triage, Comms, Reminders, and Calendar use typed exact source links plus URL-backed view/filter/selection state. A link changes presentation only and cannot change authorization, routing, provider truth, capacity, ranking, or write eligibility. |
+| UX-25 | Comms Focus v2 and Today actionable messages call the same deterministic predicate with the same typed semantic, provider, local-state, and linked-Triage inputs. Unread is visible but is never sufficient priority; temporary security-code attention expires after a fixed 15-minute window. Schema-bound NLP reports features only and cannot select a lens, score, suppress, route, or write. |
+| UX-26 | Triage is a compact structured master/detail review surface with Ready, Needs details, and Recent lenses; exact source evidence; authorized member/provider/account/container choices; inline readiness; deterministic Calendar impact preview; observation consequence; and one final confirmation. Provider/container identifiers are not free text and no domain workflow uses native prompt/confirm/alert. |
+| UX-27 | Reminders and Today consume one effective-reminder contract with exact provider identity, date semantics, cue reasons, capability, and source link. Possible copies are strict read-only presentation groups: every provider item, list, revision, and available action remains independently inspectable and no copy is merged or mutated implicitly. |
+| UX-28 | Today separates timed schedule, all-day/context facts, executable moves, decisions, and actionable messages. Only an in-progress or near-term timed event with an approved capacity effect may displace deterministic executable work; context cannot become “next on the clock.” |
+| UX-29 | Every one of the five action-capable surfaces persistently distinguishes observation, healthy-empty, fresh, stale, degraded, and not-configured state and links to evidence. At widths below 1600 px generic OpenClaw chat is an explicit drawer, never a competing permanent rail or a visual continuation of Comms. |
 
 ## State model
 
@@ -160,3 +166,17 @@ dates, priorities, alarms, recurrence, and location geofences while not
 claiming Reminders.app-only tags, sections, subtasks, templates, assignments,
 or smart-list rules. AdministrateMe context cues compare typed, authorized,
 expiring signals using fixed operators; they never change provider truth.
+
+Five-surface amendment (2026-08-06): CO-001 advances Today to
+`deterministic-daily-brief-v2` and Comms to
+`deterministic-comms-cockpit-v2`. Today, Triage, Comms, Reminders, and Calendar
+now share non-authorizing link, attention, action-state, and freshness
+presentation contracts while preserving every real domain type. Today and
+Comms use the same Focus v2 predicate; unread alone is never Focus. Today and
+Reminders use one effective-reminder composer, with strict read-only possible
+copy groups. Triage uses structured authorized destinations, readiness, Recent
+outcomes, and the existing Calendar reasoning preview. URL query state
+preserves view and exact selection; it never changes computation or authority.
+All five surfaces explain observation/freshness, remove native prompt dialogs,
+and collapse generic chat into an explicit drawer below 1600 px. AC-28 owns the
+closed-loop production-composition proof.

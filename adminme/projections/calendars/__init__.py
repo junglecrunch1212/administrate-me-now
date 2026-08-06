@@ -116,8 +116,7 @@ class CalendarsProjection(Projection):
             """
         )
         rule_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(calendar_member_rules)")
+            row[1] for row in conn.execute("PRAGMA table_info(calendar_member_rules)")
         }
         for name, declaration in {
             "caregiving_summary_values_json": "TEXT NOT NULL DEFAULT '[]'",

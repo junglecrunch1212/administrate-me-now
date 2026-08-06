@@ -45,7 +45,12 @@ async def status(request: Request) -> dict[str, Any]:
     return request.app.state.runtime.product_status("core")
 
 
-def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
+def _what_now(
+    runtime: Any,
+    session: Session,
+    *,
+    effective_list_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if runtime.projections is None:
         raise HTTPException(503, "work projections unavailable")
     commitments = active_for_member(
@@ -58,10 +63,14 @@ def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
         session,
         member_party_id=session.view_member_id,
     )
-    list_items = open_items_for_member(
-        runtime.projections.connection("lists"),
-        session,
-        member_id=session.view_member_id,
+    list_items = (
+        effective_list_items
+        if effective_list_items is not None
+        else open_items_for_member(
+            runtime.projections.connection("lists"),
+            session,
+            member_id=session.view_member_id,
+        )
     )
     recurrences = recurrences_for_member(
         runtime.projections.connection("recurrences"),

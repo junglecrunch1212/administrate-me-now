@@ -32,10 +32,14 @@
           </div>
           <div class="top-actions">
             <span id="observation-pill" class="pill pill-lavender">Observation mode</span>
-            <button class="avatar" id="member-button" type="button" aria-label="Current member">M</button>
+            <a class="avatar" id="member-button" href="/member/settings" aria-label="Open member settings">M</a>
           </div>
         </header>
 
+        <section id="observation-banner" class="observation-banner" aria-label="Observation status" hidden>
+          <div><strong>Observation mode is active.</strong><span>Approved actions are audited as “would happen” records; connected providers are not changed.</span></div>
+          <a href="/api/core/v1/activity" target="_blank" rel="noopener">View activity evidence</a>
+        </section>
         <div id="state-banner" class="banner" role="status" hidden></div>
         <section id="surface" class="surface" aria-live="polite" aria-busy="true">
           <div class="skeleton wide"></div><div class="skeleton"></div><div class="skeleton"></div>
@@ -67,6 +71,10 @@
     <dialog id="evidence-dialog" aria-labelledby="evidence-title">
       <div class="dialog-heading"><h2 id="evidence-title">Why this is here</h2><button class="icon-button" data-close-dialog aria-label="Close evidence">×</button></div>
       <div id="evidence-content"></div>
+    </dialog>
+    <dialog id="action-dialog" aria-labelledby="action-title">
+      <div class="dialog-heading"><h2 id="action-title">Review action</h2><button class="icon-button" data-close-action aria-label="Close action">×</button></div>
+      <div id="action-content"></div>
     </dialog>
   </body>
 </html>

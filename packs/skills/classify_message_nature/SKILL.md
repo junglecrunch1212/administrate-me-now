@@ -1,14 +1,14 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 2.0.0
-description: Classify an inbound message as noise, transactional, personal, professional, or promotional.
+version: 3.0.0
+description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
 provider_preferences:
   - anthropic/claude-haiku-4-5
   - anthropic/claude-opus-4-7
-max_tokens: 200
+max_tokens: 700
 temperature: 0.1
 sensitivity_required: normal
 context_scopes_required: []
@@ -19,6 +19,13 @@ on_failure:
   confidence: 0.0
   reasons:
     - skill_failure_defensive_default
+  reply_signal: unknown
+  automated: false
+  transactional_due: false
+  security_code: false
+  person_to_person: false
+  deadline: null
+  candidates: []
 ---
 
 # classify_message_nature
@@ -64,3 +71,16 @@ classifier is genuinely uncertain) default to `personal` so the
 message remains in the interactions view; the safer failure mode is "human sees
 something they could have ignored" rather than "human misses
 something they needed to see."
+
+## Typed features and candidates
+
+The skill extracts language features only. `reply_signal` describes whether
+the text explicitly calls for a response; unread state never changes it.
+Automation, transactional-due, security-code, person-to-person, and deadline
+fields are typed evidence consumed by deterministic code. The model does not
+rank messages or authorize a write.
+
+Possible tasks, calendar events, reminders, list items, lists, and party
+identifiers are returned as candidates. They remain derived proposals until
+the member reviews them in Triage. Commitment extraction remains owned by the
+existing commitment pipeline so the same promise is not proposed twice.

@@ -32,6 +32,32 @@ Every useful path must close this loop:
 
 A test that stops at proposal, approval, API 202, or outbound request does not prove the loop.
 
+### Five-surface member loop
+
+Today, Triage, Comms, Reminders, and Calendar are five bounded lenses over that
+one loop, not five sources of truth. Comms, Calendar, and Reminders expose
+authorized provider observations without collapsing their domains. A
+schema-bound OpenClaw skill may extract language features, but deterministic
+pipeline rules alone decide whether a candidate is eligible for Triage.
+Triage is the only cross-domain human proposal gate and resolves an exact
+member/provider/account/container from authorized directories. Calendar
+previews time effects; Reminders preserves provider capability; Comms preserves
+thread/account/workspace context. Today then recomposes verified projection
+state and deep-links back to the exact source. Shared read contracts may reduce
+working-memory load, but they never rank by model, authorize a write, or become
+a universal work object.
+
+| Loop stage | Primary member lens | Cross-surface guarantee |
+|---|---|---|
+| Observe | Comms, Reminders, Calendar | Provider/member/account/container identity remains visible and authoritative. |
+| Understand | Source lens plus bounded semantic provenance | A model reports typed language features only; deterministic code owns attention and eligibility. |
+| Organize | Source lens and deterministic projections | Read filters cannot change truth, time capacity, or authority. |
+| Propose | Triage | Only derived candidates wait; raw facts and already-official work do not. |
+| Authorize | Triage plus source-specific action review | Exact route, capability, observation effect, and immutable evidence precede confirmation. |
+| Act/project | Typed domain/API seam | Task, commitment, calendar event, reminder/list item, recurrence, and scheduler job remain distinct. |
+| Verify | Triage Recent and source reconciliation state | Requested, suppressed, confirmed, failed, and reconciled are not interchangeable. |
+| Recalculate | Today | Timed/context calendar facts, effective reminders, actionable Comms, and decisions recompute without copied truth. |
+
 ## Temporal model and contextual what-now
 
 What-now is not one sorted task list. For an authorized `viewMember`, the deterministic candidate set uses:

@@ -9,12 +9,13 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from adminme.calendar import compose_calendar_cockpit
+from adminme.calendar import compose_calendar_cockpit, preview_calendar_candidate
 from adminme.comms import compose_comms_cockpit
 from adminme.reminders import (
     APPLE_OPERATIONS,
     GOOGLE_OPERATIONS,
     PROVIDER_CONTRACTS,
+    compose_effective_reminders,
     compose_reminders_cockpit,
 )
 from adminme.lib.session import Session
@@ -57,6 +58,8 @@ from adminme.projections.places_assets_accounts.queries import linked_to_party
 from adminme.projections.recurrences.queries import for_member
 from adminme.projections.tasks.queries import open_for_member
 from adminme.projections.triage.queries import pending_for_member as pending_triage
+from adminme.projections.triage.queries import recent_for_member as recent_triage
+from adminme.surface_contracts import surface_freshness, surface_link
 
 
 ADULT_SURFACES = (
@@ -133,12 +136,16 @@ def reminder_accounts(
             )
             label = str(config.get("account_label") or "Google Tasks")
             runtime_shape = "central_oauth"
+            configured_container = config.get("tasklist_id")
+            configured_container_label = config.get("list_name")
         elif "apple-eventkit" in adapter_id:
             provider = "apple_reminders"
             operations = APPLE_OPERATIONS
             account_id = str(config.get("provider_account_id") or member_id)
             label = str(config.get("account_label") or "Apple Reminders")
             runtime_shape = str(config.get("deployment_target") or "central")
+            configured_container = config.get("target_list_identifier")
+            configured_container_label = config.get("target_list_name")
         else:
             continue
         contract = PROVIDER_CONTRACTS[provider]
@@ -152,6 +159,18 @@ def reminder_accounts(
             "operations": sorted(operations),
             "native": contract["native"],
             "limitations": contract["limitations"],
+            "configured_containers": (
+                [
+                    {
+                        "list_external_id": str(configured_container),
+                        "list_name": str(
+                            configured_container_label or configured_container
+                        ),
+                    }
+                ]
+                if configured_container
+                else []
+            ),
         }
 
     for row in [*projected_lists, *projected_items]:
@@ -174,6 +193,7 @@ def reminder_accounts(
             "native": contract["native"],
             "limitations": contract["limitations"],
             "remedy": "Reconnect this member's provider adapter to enable writes.",
+            "configured_containers": [],
         }
     return sorted(
         accounts.values(),
@@ -427,6 +447,78 @@ def _workbook_health(runtime: Any) -> list[dict[str, Any]]:
     return values
 
 
+def _latest_time(rows: list[dict[str, Any]], *keys: str) -> datetime | None:
+    values: list[datetime] = []
+    for row in rows:
+        for key in keys:
+            value = row.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            values.append(
+                parsed.replace(tzinfo=timezone.utc)
+                if parsed.tzinfo is None
+                else parsed.astimezone(timezone.utc)
+            )
+            break
+    return max(values) if values else None
+
+
+def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
+    """Explain whether a candidate is ready; approval still goes through gates."""
+
+    candidate = item.get("candidate") or {}
+    route = item.get("route") or {}
+    target = str(item.get("target_kind") or "")
+    missing: list[str] = []
+    if not str(item.get("title") or "").strip():
+        missing.append("title")
+    if not route.get("member_id"):
+        missing.append("member")
+    if target == "commitment" and not candidate.get("owed_to_party_id"):
+        missing.append("owed_to_party")
+    if target == "calendar_event":
+        if not candidate.get("start"):
+            missing.append("start")
+        if not candidate.get("end"):
+            missing.append("end")
+    if target == "party_identifier":
+        for field in (
+            "surviving_party_id",
+            "candidate_kind",
+            "candidate_value",
+            "candidate_value_normalized",
+        ):
+            if not candidate.get(field):
+                missing.append(field)
+    if target in {"calendar_event", "reminder", "list", "list_item"}:
+        if not route.get("provider"):
+            missing.append("provider")
+        if not route.get("provider_account_id"):
+            missing.append("account")
+        if target != "list" and not route.get("container_external_id"):
+            missing.append("destination")
+    return {
+        "contract": "triage-review-state-v1",
+        "state": "ready" if not missing else "needs_details",
+        "missing": missing,
+        "human_gate_required": True,
+        "approval_authorized": False,
+    }
+
+
+def _add_triage_requirement(item: dict[str, Any], requirement: str) -> None:
+    review = item["review_state"]
+    missing = list(review.get("missing") or [])
+    if requirement not in missing:
+        missing.append(requirement)
+    review["missing"] = missing
+    review["state"] = "needs_details"
+
+
 def build_surface(
     runtime: Any,
     session: Session,
@@ -447,9 +539,42 @@ def build_surface(
         "mode": experience_mode(runtime, session),
         "state": "ready",
         "semantics": experience_semantics(runtime, session),
+        "observation": {
+            "active": bool(runtime._observation_active),
+            "writes_execute": not bool(runtime._observation_active),
+            "explanation": (
+                "Observation mode records what would happen without changing providers."
+                if runtime._observation_active
+                else "Approved writes may execute after every governance gate passes."
+            ),
+            "evidence_href": "/api/core/v1/activity",
+        },
     }
     if surface == "today":
-        what_now = core._what_now(runtime, session)
+        lists_conn = runtime.projections.connection("lists")
+        reminder_items = items_for_member(lists_conn, session, member_id=member)
+        reminder_lists = lists_for_member(lists_conn, session, member_id=member)
+        reminder_account_rows = reminder_accounts(
+            runtime,
+            member,
+            projected_items=reminder_items,
+            projected_lists=reminder_lists,
+        )
+        effective_reminders = compose_effective_reminders(
+            timezone_name=runtime.settings.instance.timezone,
+            items=reminder_items,
+            accounts=reminder_account_rows,
+            cues=reminder_cues_for_member(lists_conn, session, member_id=member),
+            signals=context_signals_for_member(lists_conn, session, member_id=member),
+            now=now,
+        )
+        what_now = core._what_now(
+            runtime,
+            session,
+            effective_list_items=[
+                item for item in effective_reminders if not item.get("completed")
+            ],
+        )
         zone = ZoneInfo(runtime.settings.instance.timezone)
         local_now = now.astimezone(zone)
         local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -509,29 +634,203 @@ def build_surface(
                 "counts": calendar_cockpit["counts"],
             },
         )
-    elif surface == "triage":
-        base["items"] = pending_triage(
-            runtime.projections.connection("triage"), session, member_id=member
+        today_rows = [*calendar_events, *interactions, *questions]
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(
+                today_rows, "updated_at", "occurred_at", "proposed_at", "start_at"
+            ),
+            stale_after_seconds=172800,
+            row_count=len(today_rows),
         )
+    elif surface == "triage":
+        triage_conn = runtime.projections.connection("triage")
+        items = pending_triage(triage_conn, session, member_id=member)
+        recent_items = recent_triage(triage_conn, session, member_id=member)
+        for item in [*items, *recent_items]:
+            item["review_state"] = _triage_review_state(item)
+            item["surface_link"] = surface_link(
+                "triage",
+                object_kind="item",
+                object_id=str(item["proposal_id"]),
+                evidence_event_ids=[str(item.get("source_event_id") or "")],
+            )
+        base["items"] = items
+        base["recent_items"] = recent_items
         base["contract"] = {
             "facts_are_not_queued": True,
             "human_gate_required": True,
             "states": ["pending_review", "confirmed", "dismissed"],
         }
         calendar_conn = runtime.projections.connection("calendars")
-        base["calendar_destinations"] = compose_calendar_cockpit(
+        calendar_sources = list_sources(calendar_conn, session)
+        calendar_rules = rules_for_member(calendar_conn, session, member_id=member)
+        calendar_policy = schedule_policy_for_member(
+            calendar_conn, session, member_id=member
+        )
+        calendar_destinations = compose_calendar_cockpit(
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
             as_of=now,
             range_start=now,
             range_end=now + timedelta(days=30),
             events=[],
-            sources=list_sources(calendar_conn, session),
-            rules=rules_for_member(calendar_conn, session, member_id=member),
-            schedule_policy=schedule_policy_for_member(
-                calendar_conn, session, member_id=member
-            ),
+            sources=calendar_sources,
+            rules=calendar_rules,
+            schedule_policy=calendar_policy,
         )["write_destinations"]
+        for item in items:
+            if item["target_kind"] != "calendar_event":
+                continue
+            candidate = item.get("candidate") or {}
+            start_value = candidate.get("start") or candidate.get("start_at")
+            end_value = candidate.get("end") or candidate.get("end_at")
+            candidate_events: list[dict[str, Any]] = []
+            try:
+                candidate_start = datetime.fromisoformat(
+                    str(start_value).replace("Z", "+00:00")
+                )
+                candidate_end = datetime.fromisoformat(
+                    str(end_value).replace("Z", "+00:00")
+                )
+                if candidate_start.tzinfo is None:
+                    candidate_start = candidate_start.replace(
+                        tzinfo=ZoneInfo(runtime.settings.instance.timezone)
+                    )
+                if candidate_end.tzinfo is None:
+                    candidate_end = candidate_end.replace(
+                        tzinfo=ZoneInfo(runtime.settings.instance.timezone)
+                    )
+                candidate_events = events_in_range(
+                    calendar_conn,
+                    session,
+                    member_party_id=member,
+                    range_start_iso=(candidate_start - timedelta(days=1))
+                    .astimezone(timezone.utc)
+                    .isoformat(),
+                    range_end_iso=(candidate_end + timedelta(days=1))
+                    .astimezone(timezone.utc)
+                    .isoformat(),
+                )
+            except (TypeError, ValueError):
+                pass
+            item["calendar_preview"] = preview_calendar_candidate(
+                member_id=member,
+                timezone_name=runtime.settings.instance.timezone,
+                as_of=now,
+                item=item,
+                events=candidate_events,
+                sources=calendar_sources,
+                rules=calendar_rules,
+                schedule_policy=calendar_policy,
+                observation_active=bool(runtime._observation_active),
+            )
+        lists_conn = runtime.projections.connection("lists")
+        reminder_items = items_for_member(lists_conn, session, member_id=member)
+        reminder_lists = lists_for_member(lists_conn, session, member_id=member)
+        reminder_account_rows = reminder_accounts(
+            runtime,
+            member,
+            projected_items=reminder_items,
+            projected_lists=reminder_lists,
+        )
+        reminder_destinations = [dict(row) for row in reminder_lists]
+        known_reminder_routes = {
+            (
+                str(row.get("provider") or ""),
+                str(row.get("provider_account_id") or ""),
+                str(row.get("list_external_id") or ""),
+            )
+            for row in reminder_destinations
+        }
+        for configured_account in reminder_account_rows:
+            for container in configured_account.get("configured_containers") or []:
+                configured_route = (
+                    str(configured_account["provider"]),
+                    str(configured_account["provider_account_id"]),
+                    str(container["list_external_id"]),
+                )
+                if configured_route in known_reminder_routes:
+                    continue
+                known_reminder_routes.add(configured_route)
+                reminder_destinations.append(
+                    {
+                        "provider": configured_route[0],
+                        "provider_account_id": configured_route[1],
+                        "list_external_id": configured_route[2],
+                        "list_name": container["list_name"],
+                        "destination_source": "configured_adapter",
+                    }
+                )
+        parties = all_parties(runtime.projections.connection("parties"), session)
+        base["calendar_destinations"] = calendar_destinations
+        base["destinations"] = {
+            "members": [
+                {
+                    "member_id": party["party_id"],
+                    "label": party.get("display_name") or "Household member",
+                    "role": runtime.settings.member_roles.get(party["party_id"]),
+                }
+                for party in parties
+                if party["party_id"] in runtime.settings.member_roles
+            ],
+            "calendars": calendar_destinations,
+            "reminder_accounts": reminder_account_rows,
+            "reminder_lists": reminder_destinations,
+        }
+        calendar_routes = {
+            (
+                str(row.get("provider") or ""),
+                str(row.get("provider_account_id") or ""),
+                str(row.get("calendar_external_id") or ""),
+            )
+            for row in calendar_destinations
+        }
+        reminder_accounts_by_route = {
+            (
+                str(row.get("provider") or ""),
+                str(row.get("provider_account_id") or ""),
+            ): row
+            for row in reminder_account_rows
+        }
+        for item in items:
+            item_route = item.get("route") or {}
+            target = str(item.get("target_kind") or "")
+            route_key = (
+                str(item_route.get("provider") or ""),
+                str(item_route.get("provider_account_id") or ""),
+                str(item_route.get("container_external_id") or ""),
+            )
+            if target == "calendar_event":
+                preview = item.get("calendar_preview") or {}
+                if route_key not in calendar_routes or preview.get("state") != "ready":
+                    _add_triage_requirement(item, "approved_calendar_destination")
+            elif target in {"reminder", "list_item", "list"}:
+                routed_account = reminder_accounts_by_route.get(route_key[:2])
+                required_operation = (
+                    "create_list"
+                    if target == "list"
+                    else "create_reminder"
+                    if route_key[0] == "apple_reminders"
+                    else "create_task"
+                )
+                account_writable = bool(
+                    routed_account
+                    and routed_account.get("state") != "read_only"
+                    and required_operation
+                    in set(routed_account.get("operations") or [])
+                )
+                container_ready = target == "list" or route_key in known_reminder_routes
+                if not account_writable or not container_ready:
+                    _add_triage_requirement(item, "approved_reminder_destination")
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(
+                [*items, *recent_items], "proposed_at", "resolved_at"
+            ),
+            stale_after_seconds=604800,
+            row_count=len(items),
+        )
     elif surface == "comms":
         interactions_conn = runtime.projections.connection("interactions")
         rows = recent_for_member(
@@ -561,6 +860,13 @@ def build_surface(
             now=now,
         )
         base["connector_catalog"] = _connector_catalog()
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(rows, "occurred_at"),
+            stale_after_seconds=172800,
+            row_count=len(rows),
+            configured=bool(base["cockpit"]["accounts"]),
+        )
     elif surface == "reminders":
         lists_conn = runtime.projections.connection("lists")
         reminder_items = items_for_member(lists_conn, session, member_id=member)
@@ -580,6 +886,15 @@ def build_surface(
             cues=reminder_cues_for_member(lists_conn, session, member_id=member),
             signals=context_signals_for_member(lists_conn, session, member_id=member),
             now=now,
+        )
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(
+                reminder_items, "updated_at", "completed_at", "due_at"
+            ),
+            stale_after_seconds=604800,
+            row_count=len(reminder_items),
+            configured=bool(accounts),
         )
     elif surface == "people":
         base["people"] = all_parties(runtime.projections.connection("parties"), session)
@@ -647,6 +962,13 @@ def build_surface(
             schedule_policy=schedule_policy_for_member(
                 calendar_conn, session, member_id=member
             ),
+        )
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(rows, "updated_at", "start_at"),
+            stale_after_seconds=172800,
+            row_count=len(rows),
+            configured=bool(base["cockpit"]["sources"]),
         )
     elif surface == "scoreboard":
         tasks = open_for_member(

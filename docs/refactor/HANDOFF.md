@@ -17,6 +17,64 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 CO-001 five-surface executive loop
+
+The principal approved CO-001 on 2026-08-06. The implementation
+**PRESERVES** event-log authority, provider truth, member isolation, typed
+domain separation, dual approval/governance, observation, and the pinned
+OpenClaw `llm-task` seam. It **MODERNIZES** the Today, Triage, Comms,
+Reminders, and Calendar read compositions and browser workflow. It
+**SUPERSEDES** unread-as-Focus, all-day/context-as-next-event, raw reminder
+recomposition in Today, free-text/native-prompt routing, and a permanent chat
+rail on dense workspaces. No required product function is deferred.
+
+`adminme/surface_contracts.py` supplies disposable non-authorizing deep-link,
+attention, provider-action, and freshness DTOs. Daily Brief v2 separates timed
+schedule and day context, consumes the shared effective-reminder composer, and
+uses the same Focus v2 predicate/inputs as Comms. Comms v2 treats unread as
+presentation only and safely normalizes provider text. Triage exposes
+structured authorized destinations, deterministic readiness, recent decisions,
+exact source evidence, and Calendar candidate previews through the existing
+household reasoning contract. Strict reminder possible-copy groups reduce
+duplicate cognitive load without merging, completing, deleting, or hiding any
+provider row.
+
+Interactions v4 additively stores schema-bound semantic features and provenance
+from `messaging.semantic_features_extracted`. The existing ten-skill inventory
+is unchanged: `classify_message_nature` v3 reports bounded features/candidates
+through pinned OpenClaw, and `noise_filtering` v2 applies fixed confidence,
+exact-private-member scope, sensitivity, target, and field allowlists before emitting private,
+human-gated Triage proposals. The model does not rank, route, authorize,
+schedule, send, complete, suppress, or mutate.
+
+AC-28 is the process-level proof in
+`tests/acceptance/test_gate7_household_experience.py`, supported by the pure
+surface/Today/Comms/Reminders/What Now/Calendar suites, Interaction migration
+and replay, pipeline defensive cases, server authorization, and Gate 7 browser
+checks. Final exact release counts and live immutable deployment evidence are
+recorded below after the release gates complete.
+
+Release-candidate evidence on the supported Mac is
+`bash scripts/acceptance/release-candidate.sh`: **PASS**. Its retained phases
+reported 27/27 acceptance tests with `--runxfail`, 1,536/1,536 Python
+code-and-pack tests, 60/60 standalone bridge tests, and 14/14 pinned OpenClaw
+plugin tests. Ruff lint/format, mypy (213 files), pyright, architecture
+negatives, invariant/identity/path scans, dependency audits, Python and bridge
+builds, OpenClaw TypeScript build/contract/pack, npm audit, shellcheck, and
+`git diff --check` passed. The credential-free performance smoke stayed inside
+every budget; clean install, tenant isolation, and authenticated backup/restore
+rehearsals passed. There were no unexpected skips or xfails and no known
+third-party vulnerabilities. Non-failing environment notices were the retained
+Starlette/httpx deprecation, Poetry metadata deprecations, pip-audit exclusions
+for the two unpublished local packages, cache-deserialization warnings, and an
+available newer pyright release.
+
+Observation remains active. This change does not activate optional providers,
+perform a real provider mutation, or change People, Knowledge, Finance,
+Scoreboard, or Settings. Rollback is the existing authenticated immutable
+release-pointer rollback after service quiescence; the event migration is
+additive, so prior events are not rewritten or deleted.
+
 ## 2026-08-06 multi-calendar interaction reconciliation
 
 The Calendar frontend **MODERNIZES** its agenda-list-only presentation while

@@ -7,9 +7,13 @@ bucket, score, and explanation from projected facts and explicit member state.
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+from adminme.surface_contracts import attention_explanation, surface_link
 
 
 _BUCKET_WEIGHT = {
@@ -44,6 +48,48 @@ def _json_list(value: Any) -> list[Any]:
     return result if isinstance(result, list) else []
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value:
+        return {}
+    try:
+        result = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _clean_message_text(value: Any) -> str | None:
+    """Decode transport entities and remove unsafe display controls."""
+
+    if not isinstance(value, str):
+        return None
+    decoded = html.unescape(value)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", decoded)
+
+
+def _clean_message_body(value: Any) -> str | None:
+    """Return a bounded primary body without quoted-message/signature noise."""
+
+    cleaned = _clean_message_text(value)
+    if cleaned is None:
+        return None
+    retained: list[str] = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if (
+            stripped == "--"
+            or re.match(r"^On .{1,240} wrote:$", stripped, re.IGNORECASE)
+            or re.match(r"^-{2,}\s*Original Message\s*-{2,}$", stripped, re.IGNORECASE)
+            or re.match(r"^From:\s+\S", stripped, re.IGNORECASE)
+        ):
+            break
+        retained.append(line.rstrip())
+    primary = "\n".join(retained).strip()
+    return primary[:6000] or None
+
+
 def _thread_key(row: dict[str, Any]) -> str:
     provider = str(row.get("provider") or row.get("channel_specific") or "unknown")
     account = str(row.get("provider_account_id") or "unknown")
@@ -76,10 +122,10 @@ def _message(
         "interaction_id": interaction_id,
         "direction": row.get("direction"),
         "occurred_at": row.get("occurred_at"),
-        "subject": row.get("subject"),
-        "body": row.get("body_text"),
-        "preview": row.get("body_preview")
-        or row.get("subject")
+        "subject": _clean_message_text(row.get("subject")),
+        "body": _clean_message_body(row.get("body_text")),
+        "preview": _clean_message_body(row.get("body_preview"))
+        or _clean_message_text(row.get("subject"))
         or "Message content unavailable",
         "from": _people(interaction_id, participants, party_labels, "from"),
         "to": _people(interaction_id, participants, party_labels, "to"),
@@ -101,30 +147,92 @@ def _active_snooze(value: Any, now: datetime) -> bool:
         return False
 
 
-def _bucket(latest: dict[str, Any], now: datetime) -> tuple[str, list[str]]:
+def message_attention_decision(
+    latest: dict[str, Any], now: datetime, *, triage_count: int = 0
+) -> tuple[str, dict[str, Any]]:
+    """Apply Focus v2: unread is presentation state, never urgency by itself."""
+
     why: list[str] = []
-    classification = str(latest.get("classification") or "")
+    classification = str(latest.get("classification") or "").casefold()
+    features = _json_object(latest.get("semantic_features_json"))
+    reply_signal = str(
+        features.get("reply_signal") or latest.get("reply_signal") or "unknown"
+    ).casefold()
+    urgency = str(latest.get("response_urgency") or "").casefold()
+    person_to_person = bool(features.get("person_to_person"))
+    transactional_due = bool(features.get("transactional_due"))
+    security_code = bool(features.get("security_code"))
+    occurred_at = _timestamp(latest.get("occurred_at"))
+    security_code_age_seconds = (
+        max(0, int(now.timestamp() - occurred_at)) if occurred_at else None
+    )
+    security_code_active = bool(
+        security_code
+        and security_code_age_seconds is not None
+        and security_code_age_seconds <= 15 * 60
+    )
+    signals = {
+        "unread": bool(latest.get("unread")),
+        "important": bool(latest.get("important")),
+        "reply_signal": reply_signal,
+        "response_urgency": urgency or None,
+        "person_to_person": person_to_person,
+        "transactional_due": transactional_due,
+        "security_code": security_code,
+        "security_code_active": security_code_active,
+        "security_code_age_seconds": security_code_age_seconds,
+        "triage_count": triage_count,
+    }
+
+    def decision(
+        bucket: str, rule_id: str, reasons: list[str]
+    ) -> tuple[str, dict[str, Any]]:
+        return bucket, attention_explanation(
+            rule_id=rule_id, reasons=reasons, signals=signals
+        )
+
     if bool(latest.get("archived")):
-        return "archive", ["Archived at the provider"]
+        return decision("archive", "comms.archived", ["Archived at the provider"])
     if bool(latest.get("quieted")) or classification in {"noise", "promotional"}:
-        return "quieted", ["Quieted by an explicit rule or classification"]
+        return decision(
+            "quieted",
+            "comms.quieted",
+            ["Quieted by an explicit rule or classification"],
+        )
     if _active_snooze(latest.get("snoozed_until"), now):
-        return "snoozed", ["Snoozed until the chosen time"]
+        return decision("snoozed", "comms.snoozed", ["Snoozed until the chosen time"])
     if latest.get("direction") == "outbound":
-        return "waiting", ["Your message is the latest in this thread"]
-    if bool(latest.get("important")):
-        why.append("Provider marked important")
-    if bool(latest.get("unread")):
-        why.append("Unread inbound message")
-    if classification in {"personal", "professional"}:
-        why.append(f"Classified {classification}")
-    if latest.get("response_urgency"):
-        why.append(f"Response urgency: {latest['response_urgency']}")
-    if latest.get("direction") == "inbound" and why:
-        return "focus", why
+        return decision(
+            "waiting",
+            "comms.waiting",
+            ["Your message is the latest in this thread"],
+        )
     if latest.get("direction") == "inbound":
-        return "needs_reply", ["Inbound message has no later reply"]
-    return "later", ["No immediate action signal"]
+        if reply_signal == "required":
+            why.append("A typed semantic signal says a reply is required")
+        if urgency in {"today", "urgent", "high", "critical"}:
+            why.append(f"Response urgency: {urgency}")
+        if latest.get("suggested_action"):
+            why.append("The source record contains an explicit next action")
+        if triage_count:
+            why.append(
+                f"{triage_count} derived item{'s' if triage_count != 1 else ''} await Triage"
+            )
+        if transactional_due:
+            why.append("A typed transactional due signal is present")
+        if security_code_active:
+            why.append("A typed security-code signal is within its 15-minute window")
+        if bool(latest.get("important")) and person_to_person:
+            why.append("Provider-important person-to-person message")
+        if why:
+            return decision("focus", "comms.focus-v2", why)
+        quiet_reason = (
+            "Unread is visible but does not create urgency without an action signal"
+            if bool(latest.get("unread"))
+            else "No deterministic action signal"
+        )
+        return decision("later", "comms.later-v2", [quiet_reason])
+    return decision("later", "comms.later-v2", ["No immediate action signal"])
 
 
 def _score(bucket: str, latest: dict[str, Any]) -> int:
@@ -176,12 +284,16 @@ def compose_comms_cockpit(
         account_id = str(latest.get("provider_account_id") or "unknown")
         account = account_by_key.get((provider, account_id))
         messages = [_message(row, participants, party_labels) for row in ordered]
-        bucket, why = _bucket(latest, as_of)
         raw_ids = {
             str(event_id)
             for row in ordered
             for event_id in _json_list(row.get("raw_event_ids"))
         }
+        triage_count = len(raw_ids & triage_sources)
+        bucket, attention = message_attention_decision(
+            latest, as_of, triage_count=triage_count
+        )
+        why = attention["reasons"]
         counterparties = []
         roles = ("from",) if latest.get("direction") == "inbound" else ("to",)
         for role in roles:
@@ -190,7 +302,7 @@ def compose_comms_cockpit(
             ):
                 if party != account_id and party not in counterparties:
                     counterparties.append(party)
-        title = latest.get("subject") or (
+        title = _clean_message_text(latest.get("subject")) or (
             counterparties[0] if counterparties else "Conversation"
         )
         threads.append(
@@ -207,22 +319,30 @@ def compose_comms_cockpit(
                 "focus_score": _score(bucket, latest),
                 "why": why,
                 "occurred_at": latest.get("occurred_at"),
-                "preview": latest.get("body_preview")
-                or latest.get("subject")
+                "preview": _clean_message_body(latest.get("body_preview"))
+                or _clean_message_text(latest.get("subject"))
                 or "Message content unavailable",
                 "unread_count": sum(1 for row in ordered if bool(row.get("unread"))),
                 "message_count": len(messages),
-                "triage_count": len(raw_ids & triage_sources),
+                "triage_count": triage_count,
                 "snoozed_until": latest.get("snoozed_until"),
                 "quieted": bool(latest.get("quieted")),
                 "archived": bool(latest.get("archived")),
                 "important": bool(latest.get("important")),
                 "classification": latest.get("classification"),
+                "attention": attention,
+                "needs_reply": attention["signals"]["reply_signal"] == "required",
                 "command_state": latest.get("command_state"),
                 "last_interaction_id": latest["interaction_id"],
                 "last_event_id": latest["last_event_id"],
                 "capabilities": (account or {}).get("capabilities", {}),
                 "messages": messages,
+                "surface_link": surface_link(
+                    "comms",
+                    object_kind="thread",
+                    object_id=key,
+                    evidence_event_ids=sorted(raw_ids),
+                ),
             }
         )
     threads.sort(
@@ -234,9 +354,7 @@ def compose_comms_cockpit(
     )
     counts = {
         "focus": sum(1 for item in threads if item["bucket"] == "focus"),
-        "needs_reply": sum(
-            1 for item in threads if item["bucket"] in {"focus", "needs_reply"}
-        ),
+        "needs_reply": sum(1 for item in threads if item["needs_reply"]),
         "waiting": sum(1 for item in threads if item["bucket"] == "waiting"),
         "snoozed": sum(1 for item in threads if item["bucket"] == "snoozed"),
         "quieted": sum(1 for item in threads if item["bucket"] == "quieted"),
@@ -244,12 +362,17 @@ def compose_comms_cockpit(
         "all": len(threads),
     }
     return {
-        "contract": "deterministic-comms-cockpit-v1",
+        "contract": "deterministic-comms-cockpit-v2",
         "member_id": member_id,
         "as_of": as_of.isoformat().replace("+00:00", "Z"),
         "decision_maker": "rules_not_model",
         "combined_view_is_union_not_copy": True,
         "official_items_require_triage": True,
+        "attention_policy": {
+            "id": "comms-focus-v2",
+            "unread_is_visual_state_only": True,
+            "model_decides_attention": False,
+        },
         "accounts": accounts,
         "counts": counts,
         "threads": threads,
@@ -301,4 +424,8 @@ def validate_outbound_communication(
     }
 
 
-__all__ = ["compose_comms_cockpit", "validate_outbound_communication"]
+__all__ = [
+    "compose_comms_cockpit",
+    "message_attention_decision",
+    "validate_outbound_communication",
+]

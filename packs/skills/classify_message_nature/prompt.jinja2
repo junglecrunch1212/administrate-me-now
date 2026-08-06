@@ -30,11 +30,38 @@ If you are genuinely uncertain, output classification "personal" with
 low confidence — the safer failure mode is to surface a real message
 than to drop one.
 
+Extract typed language evidence as well. `reply_signal` is `required` only
+when the sender explicitly asks for an answer or confirmation; unread state is
+not evidence. Mark machine-generated text as `automated`. Mark an invoice,
+renewal, payment, appointment, or other transaction with a due action as
+`transactional_due`. Mark one-time authentication content as `security_code`.
+Mark direct human conversation as `person_to_person`. Copy an explicit deadline
+as written, otherwise return null.
+
+Also extract possible household candidates for human review: task,
+calendar_event, reminder, list, list_item, or party_identifier. Include only
+details present in the message. Never extract a commitment here; the dedicated
+commitment pipeline owns that path. A candidate is never an instruction to
+write and never becomes official until Triage confirmation.
+
 Return ONLY valid JSON matching this schema:
 {
   "classification": "noise" | "transactional" | "personal" | "professional" | "promotional",
   "confidence": <float 0-1>,
-  "reasons": [<short strings>]
+  "reasons": [<short strings>],
+  "reply_signal": "required" | "not_required" | "unknown",
+  "automated": <boolean>,
+  "transactional_due": <boolean>,
+  "security_code": <boolean>,
+  "person_to_person": <boolean>,
+  "deadline": <string or null>,
+  "candidates": [{
+    "target_kind": "task" | "calendar_event" | "reminder" | "list" | "list_item" | "party_identifier",
+    "title": <short review title>,
+    "candidate": <object containing only grounded typed fields>,
+    "confidence": <float 0-1>,
+    "reasons": [<short evidence explanations>]
+  }]
 }
 
 Confidence guidance:

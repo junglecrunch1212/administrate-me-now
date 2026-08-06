@@ -147,13 +147,17 @@ async def test_v2_calendar_identity_is_route_scoped(rig: dict[str, Any]) -> None
     await bus.notify(last)
     await _wait_for_checkpoint(bus, "projection:calendars", last)
 
-    rows = runner.connection("calendars").execute(
-        """
+    rows = (
+        runner.connection("calendars")
+        .execute(
+            """
         SELECT calendar_external_id, summary FROM calendar_events
          WHERE tenant_id=? AND external_uid=? ORDER BY calendar_external_id
         """,
-        ("tenant-a", "same-provider-event-id"),
-    ).fetchall()
+            ("tenant-a", "same-provider-event-id"),
+        )
+        .fetchall()
+    )
     assert [(row["calendar_external_id"], row["summary"]) for row in rows] == [
         ("calendar-a", "First copy"),
         ("calendar-b", "Second copy"),
@@ -188,7 +192,9 @@ async def test_v3_migration_rekeys_existing_routed_calendar_rows(
     assert migrated == current
 
 
-async def test_calendar_directory_rules_and_schedule_project(rig: dict[str, Any]) -> None:
+async def test_calendar_directory_rules_and_schedule_project(
+    rig: dict[str, Any],
+) -> None:
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -320,9 +326,7 @@ async def test_canonical_google_primary_retires_legacy_alias(
 
     conn = runner.connection("calendars")
     sources = list_sources(conn, _S("tenant-a"), member_id="m1")
-    assert [row["calendar_external_id"] for row in sources] == [
-        "member@example.test"
-    ]
+    assert [row["calendar_external_id"] for row in sources] == ["member@example.test"]
     assert rules_for_member(conn, _S("tenant-a"), member_id="m1") == []
 
 

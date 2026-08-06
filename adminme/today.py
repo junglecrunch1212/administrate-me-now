@@ -9,9 +9,13 @@ counts here are pure functions of typed state plus an explicit clock.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from adminme.comms import message_attention_decision
+from adminme.surface_contracts import surface_link
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -71,10 +75,14 @@ def _calendar_item(
     if not outcome and state in {"in_progress", "awaiting_outcome"}:
         actions = ["attended", "missed", "evidence"]
     effect = str(row.get("effect") or "hard_block")
+    event_id = str(row.get("calendar_event_id") or row.get("id") or "")
     return {
-        "id": row.get("calendar_event_id") or row.get("id"),
+        "id": event_id,
         "kind": "calendar_event",
-        "title": row.get("summary") or row.get("title") or row.get("title_redacted") or "Busy",
+        "title": row.get("summary")
+        or row.get("title")
+        or row.get("title_redacted")
+        or "Busy",
         "start_at": row.get("start_at"),
         "end_at": row.get("end_at"),
         "all_day": bool(row.get("all_day")),
@@ -101,25 +109,56 @@ def _calendar_item(
         "linked_item_kind": row.get("linked_item_kind"),
         "linked_item_id": row.get("linked_item_id"),
         "completion_policy": row.get("completion_policy") or "manual",
+        "surface_link": surface_link(
+            "calendar",
+            object_kind="event",
+            object_id=event_id,
+            evidence_event_ids=[str(row.get("last_event_id") or "")],
+        ),
         "_sort": start or datetime.max.replace(tzinfo=timezone.utc),
     }
 
 
-def _actionable_message(row: dict[str, Any]) -> bool:
-    urgency = str(row.get("response_urgency") or "").casefold()
-    classification = str(row.get("classification") or "").casefold()
+def _source_event_ids(row: dict[str, Any]) -> set[str]:
+    value = row.get("raw_event_ids")
+    if isinstance(value, list):
+        return {str(event_id) for event_id in value if event_id}
+    if not isinstance(value, str) or not value:
+        return set()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return set()
     return (
-        row.get("direction") == "inbound"
-        and not bool(row.get("auto_handled"))
-        and classification != "noise"
-        and bool(
-            row.get("suggested_action")
-            or urgency in {"today", "urgent", "high", "critical"}
-        )
+        {str(event_id) for event_id in parsed if event_id}
+        if isinstance(parsed, list)
+        else set()
     )
 
 
-def _message_item(row: dict[str, Any]) -> dict[str, Any]:
+def _message_attention(
+    row: dict[str, Any], *, as_of: datetime, triage_sources: set[str]
+) -> tuple[str, dict[str, Any], int]:
+    triage_count = len(_source_event_ids(row) & triage_sources)
+    bucket, attention = message_attention_decision(
+        row, as_of, triage_count=triage_count
+    )
+    return bucket, attention, triage_count
+
+
+def _message_thread_key(row: dict[str, Any]) -> str:
+    provider = str(row.get("provider") or row.get("channel_specific") or "unknown")
+    account = str(row.get("provider_account_id") or "unknown")
+    native = (
+        row.get("thread_id") or row.get("native_message_id") or row["interaction_id"]
+    )
+    return f"{provider}:{account}:{native}"
+
+
+def _message_item(
+    row: dict[str, Any], *, attention: dict[str, Any], triage_count: int
+) -> dict[str, Any]:
+    thread_key = _message_thread_key(row)
     return {
         "id": row["interaction_id"],
         "kind": "message",
@@ -128,16 +167,26 @@ def _message_item(row: dict[str, Any]) -> dict[str, Any]:
         "context": row.get("channel_specific") or row.get("channel_family"),
         "micro_step": row.get("suggested_action")
         or "Open it and decide whether to reply.",
-        "actions": ["open_chat", "evidence"],
+        "actions": ["open_comms", "evidence"],
         "last_event_id": row.get("last_event_id"),
         "evidence_event_id": row.get("last_event_id"),
         "occurred_at": row.get("occurred_at"),
+        "thread_key": thread_key,
+        "attention": attention,
+        "triage_count": triage_count,
+        "surface_link": surface_link(
+            "comms",
+            object_kind="thread",
+            object_id=thread_key,
+            evidence_event_ids=[str(row.get("last_event_id") or "")],
+        ),
     }
 
 
 def _question_item(row: dict[str, Any]) -> dict[str, Any]:
+    proposal_id = str(row["proposal_id"])
     return {
-        "id": row["proposal_id"],
+        "id": proposal_id,
         "kind": "clarifying_question",
         "title": row.get("title") or "A household detail needs your decision",
         "status": "waiting_for_you",
@@ -146,6 +195,14 @@ def _question_item(row: dict[str, Any]) -> dict[str, Any]:
         "actions": ["open_triage", "evidence"],
         "last_event_id": row.get("last_event_id"),
         "evidence_event_id": row.get("source_event_id") or row.get("last_event_id"),
+        "surface_link": surface_link(
+            "triage",
+            object_kind="item",
+            object_id=proposal_id,
+            evidence_event_ids=[
+                str(row.get("source_event_id") or row.get("last_event_id") or "")
+            ],
+        ),
     }
 
 
@@ -191,11 +248,30 @@ def compose_daily_brief(
             item.setdefault("evidence_event_id", item.get("last_event_id"))
             day_work.append(item)
 
-    messages = [_message_item(row) for row in interactions if _actionable_message(row)]
     questions = [_question_item(row) for row in triage_items]
+    triage_sources = {
+        str(item.get("source_event_id"))
+        for item in triage_items
+        if item.get("source_event_id")
+    }
+    messages = []
+    for row in interactions:
+        bucket, attention, triage_count = _message_attention(
+            row, as_of=as_of, triage_sources=triage_sources
+        )
+        if bucket == "focus" and not bool(row.get("auto_handled")):
+            messages.append(
+                _message_item(row, attention=attention, triage_count=triage_count)
+            )
 
     next_event = next(
-        (item for item in schedule if item["status"] in {"upcoming", "in_progress"}),
+        (
+            item
+            for item in schedule
+            if not item["all_day"]
+            and item["effect"] != "context"
+            and item["status"] in {"upcoming", "in_progress"}
+        ),
         None,
     )
     overdue = sum(
@@ -205,17 +281,29 @@ def compose_daily_brief(
         and due < as_of
         and not (item.get("kind") == "routine" and item.get("status") == "in_progress")
     )
+    timed_schedule = [
+        item for item in schedule if not item["all_day"] and item["effect"] != "context"
+    ]
+    day_context = [
+        item for item in schedule if item["all_day"] or item["effect"] == "context"
+    ]
     stats = {
-        "events": len(schedule),
+        "events": len(timed_schedule),
+        "timed_events": len(timed_schedule),
+        "day_context": len(day_context),
         "moves": len(day_work),
         "messages": len(messages),
         "questions": len(questions),
         "overdue": overdue,
     }
     clauses = []
-    if stats["events"]:
+    if stats["timed_events"]:
         clauses.append(
-            f"{stats['events']} timed event{'s' if stats['events'] != 1 else ''}"
+            f"{stats['timed_events']} timed event{'s' if stats['timed_events'] != 1 else ''}"
+        )
+    if stats["day_context"]:
+        clauses.append(
+            f"{stats['day_context']} day-context item{'s' if stats['day_context'] != 1 else ''}"
         )
     if stats["moves"]:
         clauses.append(
@@ -250,6 +338,7 @@ def compose_daily_brief(
         item
         for item in schedule
         if not item["all_day"]
+        and item["effect"] != "context"
         and (
             item["status"] == "in_progress"
             or (
@@ -260,14 +349,20 @@ def compose_daily_brief(
     ]
     add(urgent_schedule)
     add(day_work[:1])
-    add([item for item in schedule if item["status"] in {"in_progress", "upcoming"}])
+    add(
+        [
+            item
+            for item in timed_schedule
+            if item["status"] in {"in_progress", "upcoming"}
+        ]
+    )
     add(day_work[1:])
     add(questions)
     add(messages)
-    add([item for item in schedule if item["status"] == "awaiting_outcome"])
+    add([item for item in timed_schedule if item["status"] == "awaiting_outcome"])
 
     return {
-        "contract": "deterministic-daily-brief-v1",
+        "contract": "deterministic-daily-brief-v2",
         "member_id": member_id,
         "date_iso": local_now.date().isoformat(),
         "date_label": _date_label(local_now),
@@ -278,6 +373,8 @@ def compose_daily_brief(
         "stats": stats,
         "next_event": _public_item(next_event) if next_event else None,
         "schedule": [_public_item(item) for item in schedule],
+        "timed_schedule": [_public_item(item) for item in timed_schedule],
+        "day_context": [_public_item(item) for item in day_context],
         "plan": [_public_item(item) for item in day_work],
         "messages": messages,
         "questions": questions,

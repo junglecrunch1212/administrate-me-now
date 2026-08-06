@@ -14,21 +14,61 @@ than mis-classifying noise as personal.
 from typing import Any
 
 _VALID = {"noise", "transactional", "personal", "professional", "promotional"}
+_CANDIDATE_KINDS = {
+    "task",
+    "calendar_event",
+    "reminder",
+    "list",
+    "list_item",
+    "party_identifier",
+}
+
+
+def _defensive(reasons: list[str]) -> dict:
+    return {
+        "classification": "personal",
+        "confidence": 0.0,
+        "reasons": reasons,
+        "reply_signal": "unknown",
+        "automated": False,
+        "transactional_due": False,
+        "security_code": False,
+        "person_to_person": False,
+        "deadline": None,
+        "candidates": [],
+    }
 
 
 def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
     if not isinstance(raw, dict):
-        return {
-            "classification": "personal",
-            "confidence": 0.0,
-            "reasons": ["skill_post_process_non_dict_input"],
-        }
+        return _defensive(["skill_post_process_non_dict_input"])
     classification = raw.get("classification")
     if classification not in _VALID:
-        return {
-            "classification": "personal",
-            "confidence": 0.0,
-            "reasons": list(raw.get("reasons", []))
-            + [f"rejected_classification:{classification!r}"],
-        }
-    return raw
+        return _defensive(
+            list(raw.get("reasons", []))
+            + [f"rejected_classification:{classification!r}"]
+        )
+    result = dict(raw)
+    result["reply_signal"] = (
+        raw.get("reply_signal")
+        if raw.get("reply_signal") in {"required", "not_required", "unknown"}
+        else "unknown"
+    )
+    for key in (
+        "automated",
+        "transactional_due",
+        "security_code",
+        "person_to_person",
+    ):
+        result[key] = bool(raw.get(key, False))
+    result["deadline"] = (
+        raw.get("deadline") if isinstance(raw.get("deadline"), str) else None
+    )
+    candidates = raw.get("candidates")
+    result["candidates"] = [
+        candidate
+        for candidate in (candidates if isinstance(candidates, list) else [])
+        if isinstance(candidate, dict)
+        and candidate.get("target_kind") in _CANDIDATE_KINDS
+    ]
+    return result

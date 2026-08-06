@@ -370,6 +370,9 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "Time guardrails" in js_asset.text
         assert "Month at a glance" in js_asset.text
         assert "Calendars in view" in js_asset.text
+        assert "window.prompt" not in js_asset.text
+        assert "triage-workspace" in css_asset.text
+        assert "observation-banner" in member_page.text
         assert "calendar-time-grid" in css_asset.text
         assets = (
             js_asset.text
@@ -720,7 +723,8 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
         )
         assert response.status_code == 200, response.text
         cockpit = response.json()["cockpit"]
-        assert cockpit["contract"] == "deterministic-comms-cockpit-v1"
+        assert cockpit["contract"] == "deterministic-comms-cockpit-v2"
+        assert cockpit["attention_policy"]["unread_is_visual_state_only"] is True
         assert cockpit["decision_maker"] == "rules_not_model"
         assert cockpit["combined_view_is_union_not_copy"] is True
         assert cockpit["official_items_require_triage"] is True
@@ -822,7 +826,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         surface = response.json()
         brief = surface["brief"]
         assert "lists" not in surface
-        assert brief["contract"] == "deterministic-daily-brief-v1"
+        assert brief["contract"] == "deterministic-daily-brief-v2"
         assert brief["timezone"] == "Etc/UTC"
         assert brief["carousel"]["later_is_view_only"] is True
         assert brief["what_now"] == surface["what_now"]
@@ -1352,3 +1356,146 @@ def test_calendar_onboarding_drives_calendar_today_and_triage_routes(
         assert triage["calendar_destinations"][0]["calendar_external_id"] == (
             "calendar-personal"
         )
+
+
+def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
+    tmp_path: Path,
+) -> None:
+    """CO-001 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "ac28-credential-free",
+            "source_account_id": "fixture-account",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        message_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="messaging.received",
+                schema_version=3,
+                idempotency_key="ac28:message",
+                payload={
+                    "source_channel": "fixture",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "body_text": "Please review the school form today.",
+                    "received_at": now.isoformat(),
+                    "native_message_id": "ac28-message-native",
+                    "member_id": PRINCIPAL,
+                    "provider": "fixture",
+                    "provider_account_id": "fixture-account",
+                    "workspace": "personal",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "interactions", message_event)
+        semantic_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="messaging.semantic_features_extracted",
+                schema_version=1,
+                idempotency_key="ac28:semantic",
+                causation_id=message_event,
+                payload={
+                    "source_event_id": message_event,
+                    "reply_signal": "required",
+                    "automated": False,
+                    "transactional_due": False,
+                    "security_code": False,
+                    "person_to_person": True,
+                    "deadline": "today",
+                    "confidence": 0.97,
+                    "reasons": ["Explicit request and deadline"],
+                    "skill_name": "classify_message_nature",
+                    "skill_version": "3.0.0",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "interactions", semantic_event)
+        proposal_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="triage.item.proposed",
+                schema_version=1,
+                idempotency_key="ac28:triage-proposal",
+                causation_id=message_event,
+                payload={
+                    "proposal_id": "ac28-school-form",
+                    "target_kind": "task",
+                    "owner_member_id": PRINCIPAL,
+                    "title": "Review the school form",
+                    "candidate": {"due": now.date().isoformat()},
+                    "route": {"member_id": PRINCIPAL},
+                    "source_event_id": message_event,
+                    "confidence": 0.94,
+                    "reasons": ["Explicit requested action"],
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", proposal_event)
+
+        comms = client.get(
+            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [thread] = comms["cockpit"]["threads"]
+        assert thread["bucket"] == "focus"
+        assert thread["attention"]["rule_id"] == "comms.focus-v2"
+        assert thread["surface_link"]["href"].startswith("/member/comms?thread=")
+        assert thread["triage_count"] == 1
+
+        triage = client.get(
+            "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [proposal] = triage["items"]
+        assert proposal["review_state"]["state"] == "ready"
+        assert proposal["source_event_id"] == message_event
+        assert triage["recent_items"] == []
+        approved = client.post(
+            "/api/member/v1/triage/ac28-school-form/approve",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac28-approve-school-form",
+                "expected_last_event_id": proposal["last_event_id"],
+            },
+        )
+        assert approved.status_code == 200, approved.text
+
+        seeded = client.portal.call(_seed_today_truth, runtime)
+        today = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        ).json()["brief"]
+        assert any(item["title"] == "Review the school form" for item in today["plan"])
+        assert today["stats"]["timed_events"] == 1
+        calendar_item = next(
+            item
+            for item in today["schedule"]
+            if item["last_event_id"] == seeded["calendar"]
+        )
+        assert calendar_item["surface_link"]["surface"] == "calendar"
+        assert calendar_item["surface_link"]["href"].startswith("/member/calendar?")
+
+        resolved = client.get(
+            "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert resolved["items"] == []
+        assert resolved["recent_items"][0]["state"] == "confirmed"
+        for surface in ("today", "triage", "comms", "reminders", "calendar"):
+            value = client.get(
+                f"/api/member/v1/surfaces/{surface}", headers=HEADERS[PRINCIPAL]
+            ).json()
+            assert value["observation"]["active"] is True

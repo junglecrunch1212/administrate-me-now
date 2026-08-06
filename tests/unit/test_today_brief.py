@@ -126,13 +126,15 @@ def _compose() -> dict:
 def test_daily_brief_is_repeatable_local_and_semantically_distinct() -> None:
     first = _compose()
     assert first == _compose()
-    assert first["contract"] == "deterministic-daily-brief-v1"
+    assert first["contract"] == "deterministic-daily-brief-v2"
     assert first["date_iso"] == "2034-03-02"
     assert first["date_label"] == "Thursday, March 2"
     assert first["timezone"] == "America/New_York"
     assert first["as_of"] == "2034-03-02T15:30:00+00:00"
     assert first["stats"] == {
         "events": 1,
+        "timed_events": 1,
+        "day_context": 0,
         "moves": 4,
         "messages": 1,
         "questions": 1,
@@ -152,7 +154,8 @@ def test_daily_brief_is_repeatable_local_and_semantically_distinct() -> None:
     assert by_kind["routine"]["actions"][:2] == ["complete_step", "skip_step"]
     assert by_kind["calendar_event"]["actions"] == ["evidence"]
     assert by_kind["clarifying_question"]["actions"][0] == "open_triage"
-    assert by_kind["message"]["actions"][0] == "open_chat"
+    assert by_kind["message"]["actions"][0] == "open_comms"
+    assert by_kind["message"]["surface_link"]["surface"] == "comms"
     assert first["carousel"]["later_is_view_only"] is True
     assert first["carousel"]["items"][0]["kind"] == "calendar_event"
     assert first["carousel"]["recommended_item"] == {
@@ -186,3 +189,71 @@ def test_elapsed_calendar_event_requests_member_confirmed_outcome() -> None:
     event = brief["schedule"][0]
     assert event["status"] == "awaiting_outcome"
     assert event["actions"] == ["attended", "missed", "evidence"]
+
+
+def test_all_day_context_is_not_the_next_appointment_or_action_card() -> None:
+    brief = compose_daily_brief(
+        member_id="member-a",
+        timezone_name="Etc/UTC",
+        as_of=AS_OF,
+        what_now={"ranked": [], "horizons": {}},
+        calendar_events=[
+            {
+                "calendar_event_id": "context-free",
+                "summary": "Free",
+                "start_at": "2034-03-02T00:00:00Z",
+                "end_at": "2034-03-03T00:00:00Z",
+                "all_day": 1,
+                "effect": "context",
+                "last_event_id": "event-context",
+            },
+            {
+                "calendar_event_id": "timed-appointment",
+                "summary": "Appointment",
+                "start_at": "2034-03-02T16:00:00Z",
+                "end_at": "2034-03-02T17:00:00Z",
+                "all_day": 0,
+                "effect": "hard_block",
+                "last_event_id": "event-timed",
+            },
+        ],
+        interactions=[],
+        triage_items=[],
+    )
+    assert brief["next_event"]["id"] == "timed-appointment"
+    assert [item["id"] for item in brief["day_context"]] == ["context-free"]
+    assert "context-free" not in {item["id"] for item in brief["carousel"]["items"]}
+
+
+def test_today_and_comms_share_triage_link_as_an_attention_signal() -> None:
+    brief = compose_daily_brief(
+        member_id="member-a",
+        timezone_name="Etc/UTC",
+        as_of=AS_OF,
+        what_now={"ranked": [], "horizons": {}},
+        calendar_events=[],
+        interactions=[
+            {
+                "interaction_id": "message-triage",
+                "direction": "inbound",
+                "subject": "An ordinary message with a derived candidate",
+                "response_urgency": "none",
+                "unread": 0,
+                "raw_event_ids": '["source-for-triage"]',
+                "last_event_id": "event-message",
+            }
+        ],
+        triage_items=[
+            {
+                "proposal_id": "proposal-linked",
+                "title": "Review the derived candidate",
+                "target_kind": "task",
+                "source_event_id": "source-for-triage",
+                "last_event_id": "event-proposal",
+            }
+        ],
+    )
+    message = brief["messages"][0]
+    assert message["triage_count"] == 1
+    assert message["attention"]["rule_id"] == "comms.focus-v2"
+    assert message["attention"]["signals"]["triage_count"] == 1

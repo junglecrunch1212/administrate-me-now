@@ -8,6 +8,8 @@ const state = {
   todayView: "brief",
   carouselIndex: 0,
   carouselItems: [],
+  triageView: "ready",
+  triageSelected: null,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -36,6 +38,16 @@ function currentSurface() {
   if (parts[1] === "quests" && parts[2]) return `quest:${parts[2]}`;
   const value = parts[1];
   return value || "today";
+}
+
+function replaceQuery(values) {
+  const params = new URLSearchParams(location.search);
+  for (const [key, value] of Object.entries(values)) {
+    if (value == null || value === "") params.delete(key);
+    else params.set(key, String(value));
+  }
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}`);
 }
 
 async function api(path, options = {}) {
@@ -131,90 +143,216 @@ async function decideTriage(item, action, buttons) {
   }
 }
 
-async function enrichTriage(item, buttons) {
-  const title = window.prompt("Confirm or correct the title", item.title || "");
-  if (title == null) return;
-  let targetKind = item.target_kind;
-  if (item.source_kind !== "commitment_proposal") {
-    targetKind = window.prompt("Target type (task, commitment, calendar_event, reminder, list, list_item, or party_identifier)", item.target_kind);
-    if (targetKind == null) return;
+function field(label, control, extraClass = "") {
+  const wrapper = document.createElement("label");
+  wrapper.className = `field ${extraClass}`.trim();
+  wrapper.append(text("span", label), control);
+  return wrapper;
+}
+
+function selectControl(options, selected, emptyLabel = "Choose…") {
+  const select = document.createElement("select");
+  if (emptyLabel) {
+    const empty = text("option", emptyLabel); empty.value = ""; select.append(empty);
   }
-  const external = ["calendar_event", "reminder", "list", "list_item"].includes(targetKind);
+  for (const option of options) {
+    const node = text("option", option.label); node.value = option.value;
+    if (option.value === selected) node.selected = true;
+    select.append(node);
+  }
+  return select;
+}
+
+function replaceSelectOptions(select, options, selected = "", emptyLabel = "Choose…") {
+  select.replaceChildren();
+  if (emptyLabel) {
+    const empty = text("option", emptyLabel); empty.value = ""; select.append(empty);
+  }
+  for (const option of options) {
+    const node = text("option", option.label); node.value = option.value;
+    if (option.value === selected) node.selected = true;
+    select.append(node);
+  }
+}
+
+async function saveTriageForm(item, form) {
+  const values = new FormData(form);
+  const targetKind = String(values.get("target_kind") || item.target_kind);
   const candidateUpdates = {};
-  let route = item.route || { member_id: state.bootstrap.member.id };
+  for (const key of ["due", "start", "end", "owed_to_party_id"]) {
+    const value = String(values.get(key) || "").trim();
+    if (value) candidateUpdates[key] = value;
+  }
+  let route = null;
   if (item.source_kind !== "commitment_proposal") {
-    const member = window.prompt("Destination household member ID", route.member_id || state.bootstrap.member.id);
-    if (member == null) return;
-    route = { ...route, member_id: member };
-  } else {
-    route = null;
+    route = {
+      member_id: String(values.get("member_id") || state.bootstrap.member.id),
+      provider: String(values.get("provider") || "") || null,
+      provider_account_id: String(values.get("provider_account_id") || "") || null,
+      container_external_id: String(values.get("container_external_id") || "") || null,
+    };
   }
-  if (targetKind === "commitment" && item.source_kind !== "commitment_proposal") {
-    const owedTo = window.prompt("Party ID this commitment is owed to", item.candidate?.owed_to_party_id || "");
-    if (owedTo == null) return;
-    candidateUpdates.owed_to_party_id = owedTo;
-  }
-  if (targetKind === "calendar_event") {
-    const start = window.prompt("Start date/time (ISO 8601 with time zone)", item.candidate?.start || item.candidate?.due || "");
-    if (start == null) return;
-    const end = window.prompt("End date/time (ISO 8601 with time zone)", item.candidate?.end || "");
-    if (end == null) return;
-    candidateUpdates.start = start;
-    candidateUpdates.end = end;
-  }
-  if (external) {
-    const provider = window.prompt("Provider (google_calendar, google_tasks, apple_calendar, or apple_reminders)", route?.provider || "");
-    if (provider == null) return;
-    const account = window.prompt("Provider account ID", route?.provider_account_id || "");
-    if (account == null) return;
-    const container = targetKind === "list" ? route?.container_external_id || null : window.prompt("Destination calendar or list ID", route?.container_external_id || "");
-    if (container == null && targetKind !== "list") return;
-    route = { member_id: route.member_id, provider, provider_account_id: account, container_external_id: container || null };
-  }
+  const buttons = [...form.querySelectorAll("button")];
   buttons.forEach((button) => { button.disabled = true; });
-  const banner = $("#state-banner"); banner.hidden = false; banner.textContent = "Saving the enrichment without creating official household state…";
+  setBanner("Saving these details as a proposal—nothing official is being created yet…");
   try {
     await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, title, target_kind: targetKind, candidate_updates: candidateUpdates, route }),
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_last_event_id: item.last_event_id,
+        title: String(values.get("title") || item.title).trim(),
+        target_kind: targetKind,
+        candidate_updates: candidateUpdates,
+        route,
+      }),
     });
-    banner.textContent = "Enrichment saved. Review the candidate once more before confirming it.";
+    setBanner("Details saved. Review the destination and preview once more before confirming.");
     await reloadActiveSurface();
   } catch (error) {
-    banner.textContent = `${error.message} The candidate was not changed.`;
+    setBanner(`${error.message} The proposal was not changed.`);
     buttons.forEach((button) => { button.disabled = false; });
   }
 }
 
-function triageSurface(items, calendarDestinations = []) {
+function triageDetail(item, data, readOnly = false) {
+  const section = document.createElement("section"); section.className = "card triage-detail";
+  if (!item) {
+    section.append(text("h2", "Choose a proposal"), text("p", "Select one item to review its evidence, destination, and exact effect.", "empty"));
+    return section;
+  }
+  section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", item.title));
+  if (item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
+  if (readOnly) {
+    section.append(text("p", `${titleCase(item.state)} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, "review-state ready"));
+    if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
+    const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id)); section.append(evidence);
+    return section;
+  }
+
+  const form = document.createElement("form"); form.className = "triage-review-form";
+  const grid = document.createElement("div"); grid.className = "field-grid";
+  const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
+  grid.append(field("Review title", title, "field-span"));
+  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "party_identifier"].map((value) => ({ value, label: titleCase(value) }));
+  const target = selectControl(targetOptions, item.target_kind, ""); target.name = "target_kind"; target.disabled = item.source_kind === "commitment_proposal";
+  grid.append(field("Creates", target));
+  const members = (data.destinations?.members || []).map((value) => ({ value: value.member_id, label: `${value.label} · ${value.role || "member"}` }));
+  const member = selectControl(members, item.route?.member_id || state.bootstrap.member.id, ""); member.name = "member_id"; member.disabled = item.source_kind === "commitment_proposal";
+  grid.append(field("Household member", member));
+
+  const candidate = item.candidate || {};
+  if (item.target_kind === "commitment") {
+    const owed = document.createElement("input"); owed.name = "owed_to_party_id"; owed.value = candidate.owed_to_party_id || ""; owed.placeholder = "Required party ID";
+    grid.append(field("Owed to", owed));
+  }
+  if (item.target_kind === "calendar_event") {
+    const start = document.createElement("input"); start.name = "start"; start.value = candidate.start || candidate.due || ""; start.placeholder = "ISO 8601 with time zone";
+    const end = document.createElement("input"); end.name = "end"; end.value = candidate.end || ""; end.placeholder = "ISO 8601 with time zone";
+    grid.append(field("Starts", start), field("Ends", end));
+  } else if (["task", "commitment", "reminder", "list_item"].includes(item.target_kind)) {
+    const due = document.createElement("input"); due.name = "due"; due.value = candidate.due || candidate.due_at || ""; due.placeholder = "Optional ISO 8601 date/time";
+    grid.append(field("Due", due));
+  }
+
+  const external = ["calendar_event", "reminder", "list", "list_item"].includes(item.target_kind);
+  if (external) {
+    const calendarRoutes = (data.destinations?.calendars || []).map((value) => ({
+      provider: value.provider, account: value.provider_account_id, container: value.calendar_external_id,
+      label: value.calendar_name || titleCase(value.destination_kind),
+    }));
+    const reminderRoutes = (data.destinations?.reminder_lists || []).map((value) => ({
+      provider: value.provider, account: value.provider_account_id, container: value.list_external_id,
+      label: value.list_name || "Reminder list",
+    }));
+    const routes = item.target_kind === "calendar_event" ? calendarRoutes : reminderRoutes;
+    const providers = [...new Set(routes.map((value) => value.provider))].map((value) => ({ value, label: titleCase(value) }));
+    const provider = selectControl(providers, item.route?.provider || ""); provider.name = "provider";
+    const account = document.createElement("select"); account.name = "provider_account_id";
+    const container = document.createElement("select"); container.name = "container_external_id";
+    const refreshContainers = (selected = "") => {
+      const options = routes.filter((value) => value.provider === provider.value && value.account === account.value).map((value) => ({ value: value.container, label: value.label }));
+      replaceSelectOptions(container, options, selected, item.target_kind === "list" ? "Provider default" : "Choose destination…");
+    };
+    const refreshAccounts = (selectedAccount = "", selectedContainer = "") => {
+      const options = [...new Set(routes.filter((value) => value.provider === provider.value).map((value) => value.account))].map((value) => ({ value, label: value }));
+      replaceSelectOptions(account, options, selectedAccount, "Choose account…");
+      refreshContainers(selectedContainer);
+    };
+    provider.addEventListener("change", () => refreshAccounts());
+    account.addEventListener("change", () => refreshContainers());
+    refreshAccounts(item.route?.provider_account_id || "", item.route?.container_external_id || "");
+    grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
+  }
+  form.append(grid);
+  if (item.calendar_preview) {
+    const preview = item.calendar_preview;
+    const box = document.createElement("section"); box.className = "state-card";
+    box.append(text("h3", "Calendar impact preview"));
+    if (preview.state === "needs_details") {
+      box.append(text("p", `Add ${preview.missing.map(titleCase).join(", ")} to calculate conflicts, buffers, and guardrails.`, "state-note"));
+    } else {
+      const event = preview.event || {};
+      const destination = preview.destination?.calendar_name || preview.destination?.destination_kind;
+      box.append(text("p", destination ? `Destination: ${destination}.` : "This is not an approved writable destination.", destination ? "calendar-route-ready" : "calendar-route-missing"));
+      box.append(text("p", `Effective load: ${titleCase(event.effect)} · buffer ${event.buffer_before_minutes || 0} min before / ${event.buffer_after_minutes || 0} min after.`, "meta"));
+      box.append(text("p", preview.conflicts?.length ? `${preview.conflicts.length} conflict or pressure warning${preview.conflicts.length === 1 ? "" : "s"}: ${preview.conflicts.map((value) => value.why).join(" · ")}` : "No buffered conflict appears in this range.", preview.conflicts?.length ? "calendar-route-missing" : "calendar-route-ready"));
+      box.append(text("p", preview.guardrails?.length ? `Overlaps ${preview.guardrails.map((value) => value.label || titleCase(value.kind)).join(", ")}.` : "No household guardrail overlaps this proposal.", "state-note"));
+      box.append(text("p", preview.observation?.active ? "Observation mode: confirmation would be audited without changing the provider." : "Confirmation would enter the governed provider-write path.", "meta"));
+    }
+    form.append(box);
+  }
+  const missing = item.review_state?.missing || [];
+  const review = text("p", missing.length ? `Needs: ${missing.map(titleCase).join(", ")}. Save the missing details before confirming.` : "Ready for your final confirmation. Every real write still passes governance and observation controls.", `review-state ${missing.length ? "" : "ready"}`.trim());
+  form.append(review);
+  const row = document.createElement("div"); row.className = "button-row";
+  const save = text("button", "Save details", "button button-quiet"); save.type = "submit";
+  const approve = text("button", "Confirm and route", "button button-primary"); approve.type = "button"; approve.disabled = missing.length > 0;
+  const dismiss = text("button", "Dismiss", "button button-quiet"); dismiss.type = "button";
+  const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
+  const buttons = [save, approve, dismiss];
+  form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
+  approve.addEventListener("click", () => decideTriage(item, "approve", buttons));
+  dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
+  evidence.addEventListener("click", () => showEvidence(item.source_event_id));
+  row.append(save, approve, dismiss, evidence); form.append(row); section.append(form);
+  return section;
+}
+
+function triageSurface(data) {
   const fragment = document.createDocumentFragment();
   const intro = document.createElement("section"); intro.className = "hero-card";
-  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "Nothing becomes household truth by inference alone.", "action-title"), text("p", "Review extracted candidates, add missing routing details, then confirm or dismiss. Provider observations remain facts and do not wait here."));
+  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "One decision at a time.", "action-title"), text("p", "Derived candidates wait here until you verify their meaning and destination. Raw provider observations never enter this queue."));
   fragment.append(intro);
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Awaiting your decision"));
-  if (!Array.isArray(items) || items.length === 0) {
-    section.append(text("p", "Triage is clear. No extracted candidates are waiting for you.", "empty")); fragment.append(section); return fragment;
+  const pending = data.items || [];
+  const recent = data.recent_items || [];
+  const groups = {
+    ready: pending.filter((item) => item.review_state?.state === "ready"),
+    needs_details: pending.filter((item) => item.review_state?.state !== "ready"),
+    recent,
+  };
+  if (!groups[state.triageView]) state.triageView = "ready";
+  const controls = document.createElement("section"); controls.className = "card comms-controls";
+  const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
+  for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["recent", "Recent"]]) {
+    const button = text("button", `${label} ${groups[key].length}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
+    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
   }
-  const list = document.createElement("ul"); list.className = "item-list";
-  for (const item of items) {
-    const li = document.createElement("li"); li.className = "item triage-item";
-    li.append(text("strong", item.title), text("span", `${String(item.target_kind).replaceAll("_", " ")} · ${item.source_kind.replaceAll("_", " ")}`, "meta"));
-    if (item.reasons?.length) li.append(text("small", item.reasons.join(" · ")));
-    if (item.target_kind === "calendar_event") {
-      const route = item.route || {};
-      const destination = calendarDestinations.find((candidate) => candidate.provider === route.provider && candidate.provider_account_id === route.provider_account_id && candidate.calendar_external_id === route.container_external_id);
-      li.append(text("small", destination ? `Will write to ${destination.calendar_name || titleCase(destination.destination_kind)} after this confirmation.` : "Choose one approved calendar destination before confirming.", destination ? "calendar-route-ready" : "calendar-route-missing"));
-    }
-    const row = document.createElement("div"); row.className = "button-row";
-    const enrich = text("button", item.source_kind === "commitment_proposal" ? "Edit" : "Enrich", "button button-quiet");
-    const approve = text("button", "Confirm", "button button-primary");
-    const dismiss = text("button", "Dismiss", "button button-quiet");
-    const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id));
-    const buttons = [enrich, approve, dismiss]; buttons.forEach((button) => { button.type = "button"; });
-    enrich.addEventListener("click", () => enrichTriage(item, buttons)); approve.addEventListener("click", () => decideTriage(item, "approve", buttons)); dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
-    row.append(enrich, approve, dismiss, evidence); li.append(row); list.append(li);
+  controls.append(tabs); fragment.append(controls);
+  const visible = groups[state.triageView];
+  if (!state.triageSelected || !visible.some((item) => item.proposal_id === state.triageSelected)) state.triageSelected = visible[0]?.proposal_id || null;
+  const selected = visible.find((item) => item.proposal_id === state.triageSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "triage-workspace";
+  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Awaiting review"));
+  if (!visible.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : "No recent decisions yet.", "empty"));
+  const list = document.createElement("ul"); list.className = "triage-master-list";
+  for (const item of visible) {
+    const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
+    button.append(text("strong", item.title), text("small", `${titleCase(item.target_kind)} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}`));
+    button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
-  section.append(list); fragment.append(section); return fragment;
+  master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;
 }
 
 function rankedItems(value) {
@@ -310,8 +448,13 @@ async function executeTodayAction(item, action, container) {
     if (item.evidence_event_id || item.last_event_id) await showEvidence(item.evidence_event_id || item.last_event_id);
     return;
   }
-  if (action === "open_triage") {
-    location.href = "/member/triage";
+  if (["open_triage", "open_comms", "open_reminder", "open_calendar"].includes(action)) {
+    location.href = item.surface_link?.href || ({
+      open_triage: "/member/triage",
+      open_comms: "/member/comms",
+      open_reminder: "/member/reminders",
+      open_calendar: "/member/calendar",
+    })[action];
     return;
   }
   if (action === "open_chat") {
@@ -397,6 +540,9 @@ function actionButton(item, action, container) {
     attended: "Attended",
     missed: "Missed",
     open_triage: "Review",
+    open_comms: "Open conversation",
+    open_reminder: "Review copies",
+    open_calendar: "Open calendar",
     open_chat: "Talk it through",
     evidence: "Why this is here",
   };
@@ -405,6 +551,23 @@ function actionButton(item, action, container) {
   button.type = "button";
   button.addEventListener("click", () => executeTodayAction(item, action, container));
   return button;
+}
+
+function possibleCopySources(item, compact = false) {
+  const copies = item.possible_copy?.items || [];
+  if (!copies.length) return null;
+  const box = document.createElement(compact ? "small" : "section");
+  box.className = "possible-copy possible-copy-sources";
+  box.append(text("strong", `${copies.length} possible provider copies are grouped only in this view. `));
+  const links = document.createElement("span");
+  copies.forEach((copy, index) => {
+    if (index) links.append(document.createTextNode(" · "));
+    const anchor = text("a", copy.list_name || `Source ${index + 1}`);
+    anchor.href = copy.surface_link?.href || "/member/reminders";
+    links.append(anchor);
+  });
+  box.append(links);
+  return box;
 }
 
 function todayItem(item, { interactive = true } = {}) {
@@ -416,11 +579,12 @@ function todayItem(item, { interactive = true } = {}) {
   const meta = todayItemMeta(item);
   if (meta) body.append(text("span", meta, "meta"));
   if (item.micro_step) body.append(text("small", item.micro_step));
+  const copies = possibleCopySources(item, true); if (copies) body.append(copies);
   li.append(body);
   if (interactive) {
     const row = document.createElement("div");
     row.className = "day-item-actions";
-    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat", "evidence"].includes(action));
     for (const action of actions) row.append(actionButton(item, action, li));
     if (actions.length) li.append(row);
   }
@@ -458,6 +622,7 @@ function todayViewControls(data) {
     button.setAttribute("aria-pressed", String(state.todayView === view));
     button.addEventListener("click", () => {
       state.todayView = view;
+      replaceQuery({ view });
       if (view === "carousel") state.carouselIndex = 0;
       renderToday(data);
     });
@@ -493,7 +658,7 @@ function briefHero(brief) {
   }
   const stats = document.createElement("dl");
   stats.className = "brief-stats";
-  for (const [label, value] of [["Events", brief.stats.events], ["Moves", brief.stats.moves], ["Messages", brief.stats.messages], ["Decisions", brief.stats.questions]]) {
+  for (const [label, value] of [["Timed", brief.stats.timed_events ?? brief.stats.events], ["Day context", brief.stats.day_context || 0], ["Moves", brief.stats.moves], ["Decisions", brief.stats.questions]]) {
     stats.append(text("div", "", "stat"));
     stats.lastElementChild.append(text("dt", label), text("dd", value));
   }
@@ -535,10 +700,11 @@ function renderDayBrief(brief) {
   const grid = document.createElement("div");
   grid.className = "brief-grid";
   grid.append(
-    daySection("On the clock", brief.schedule || [], "No timed events are on the calendar today."),
+    daySection("On the clock", brief.timed_schedule || [], "No timed events are on the calendar today."),
     daySection("Moves for today", brief.plan || [], "No planned moves are due today."),
   );
   fragment.append(grid);
+  if ((brief.day_context || []).length) fragment.append(daySection("Day context", brief.day_context, "No all-day context."));
   if ((brief.questions || []).length || (brief.messages || []).length) {
     const attention = document.createElement("div");
     attention.className = "brief-grid";
@@ -569,6 +735,7 @@ function renderCarousel(brief) {
   );
   const meta = todayItemMeta(item);
   if (meta) section.append(text("p", meta, "meta carousel-meta"));
+  const copies = possibleCopySources(item); if (copies) section.append(copies);
   const progress = document.createElement("div");
   progress.className = "progress-track carousel-progress";
   progress.setAttribute("role", "progressbar");
@@ -582,7 +749,7 @@ function renderCarousel(brief) {
   section.append(progress);
   const row = document.createElement("div");
   row.className = "button-row carousel-actions";
-  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
+  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat"].includes(value))) {
     row.append(actionButton(item, action, section));
   }
   if (items.length > 1) {
@@ -616,6 +783,7 @@ function renderToday(data) {
   const root = $("#surface");
   const brief = data.brief;
   root.replaceChildren();
+  root.append(freshnessStrip(data));
   $("#mode-label").textContent = brief?.date_label || "Your daily briefing";
   root.append(todayViewControls(data));
   root.append(state.todayView === "carousel" ? renderCarousel(brief) : renderDayBrief(brief));
@@ -639,7 +807,7 @@ function commsControls(cockpit, data) {
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "Communication focus view");
   const choices = [
-    ["focus", "Focus", cockpit.counts.needs_reply],
+    ["focus", "Focus", cockpit.counts.focus],
     ["waiting", "Waiting", cockpit.counts.waiting],
     ["snoozed", "Snoozed", cockpit.counts.snoozed],
     ["quieted", "Quieted", cockpit.counts.quieted],
@@ -649,7 +817,7 @@ function commsControls(cockpit, data) {
     const button = text("button", `${label} ${count}`, "comms-filter");
     button.type = "button";
     button.setAttribute("aria-pressed", String(state.commsView === value));
-    button.addEventListener("click", () => { state.commsView = value; renderComms(data); });
+    button.addEventListener("click", () => { state.commsView = value; replaceQuery({ view: value }); renderComms(data); });
     views.append(button);
   }
   const accounts = document.createElement("div");
@@ -660,7 +828,7 @@ function commsControls(cockpit, data) {
     const button = text("button", `${account.label}${account.workspace ? ` · ${titleCase(account.workspace)}` : ""}`, "account-filter");
     button.type = "button";
     button.setAttribute("aria-pressed", String(state.commsAccount === account.provider_account_id));
-    button.addEventListener("click", () => { state.commsAccount = account.provider_account_id; renderComms(data); });
+    button.addEventListener("click", () => { state.commsAccount = account.provider_account_id; replaceQuery({ account: state.commsAccount }); renderComms(data); });
     accounts.append(button);
   }
   controls.append(views, accounts);
@@ -672,8 +840,8 @@ function commsHero(cockpit) {
   hero.className = "hero-card comms-hero";
   hero.append(
     text("p", "COMMUNICATION COCKPIT", "eyebrow"),
-    text("h2", cockpit.counts.needs_reply === 1 ? "1 conversation deserves a look." : cockpit.counts.needs_reply ? `${cockpit.counts.needs_reply} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
-    text("p", "Focus is a deterministic lens over your connected accounts. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
+    text("h2", cockpit.counts.focus === 1 ? "1 conversation deserves a look." : cockpit.counts.focus ? `${cockpit.counts.focus} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
+    text("p", "Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
   );
   const stats = document.createElement("dl");
   stats.className = "brief-stats comms-stats";
@@ -741,6 +909,15 @@ function commsReadingPane(thread) {
   const badge = text("span", titleCase(thread.bucket), `pill ${thread.bucket === "focus" ? "pill-blush" : "pill-lavender"}`);
   heading.append(title, badge); pane.append(heading);
   const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode(thread.why.join(" · "))); pane.append(why);
+  if (thread.command_state) {
+    const labels = {
+      pending: "Provider change requested; awaiting a terminal observation.",
+      suppressed: "Observation mode recorded the approved change without contacting the provider.",
+      completed: "Provider reported the requested change complete.",
+      failed: "Provider change failed; the original message state remains authoritative.",
+    };
+    pane.append(text("p", labels[thread.command_state] || `Command state: ${titleCase(thread.command_state)}.`, `state-label state-${String(thread.command_state).replaceAll("_", "-")}`));
+  }
   if (thread.triage_count) {
     const triage = text("a", `${thread.triage_count} extracted candidate${thread.triage_count === 1 ? "" : "s"} awaiting Triage`, "triage-link"); triage.href = "/member/triage"; pane.append(triage);
   }
@@ -797,7 +974,7 @@ function commsThreadList(threads) {
     const first = document.createElement("span"); first.className = "comms-thread-title"; first.append(text("strong", thread.title), text("span", thread.account_label, "meta"));
     const count = thread.unread_count ? text("span", thread.unread_count, "unread-badge") : text("span", titleCase(thread.bucket), "meta");
     button.append(first, count, text("span", thread.preview, "thread-preview"), text("span", thread.why[0], "focus-explanation"));
-    button.addEventListener("click", () => { state.commsThread = thread.thread_key; renderComms(state.surface); });
+    button.addEventListener("click", () => { state.commsThread = thread.thread_key; replaceQuery({ thread: thread.thread_key }); renderComms(state.surface); });
     li.append(button); items.append(li);
   }
   list.append(items); return list;
@@ -807,7 +984,7 @@ function renderComms(data) {
   const root = $("#surface"); root.replaceChildren();
   const cockpit = data.cockpit;
   $("#mode-label").textContent = "Private · deterministic focus";
-  root.append(commsHero(cockpit), commsControls(cockpit, data));
+  root.append(freshnessStrip(data), commsHero(cockpit), commsControls(cockpit, data));
   const visible = cockpit.threads.filter(commsMatches);
   if (!state.commsThread || !visible.some((thread) => thread.thread_key === state.commsThread)) state.commsThread = visible[0]?.thread_key || null;
   const selected = visible.find((thread) => thread.thread_key === state.commsThread);
@@ -850,34 +1027,73 @@ async function runReminderCommand(item, operation, payload = {}) {
   }
 }
 
-async function configureReminderCue(item) {
-  const signalKey = window.prompt("Typed signal key (for example presence:home or weather:rain)", "");
-  if (!signalKey?.trim()) return;
-  const source = window.prompt("Signal source (home_assistant, member_bridge, weather, device, network, calendar, member_profile, or manual)", "home_assistant");
-  if (!source) return;
-  const kind = window.prompt("Signal kind (location, presence, weather, device_state, network_presence, calendar_transition, energy, or capacity)", "presence");
-  if (!kind) return;
-  const operator = window.prompt("Match rule (equals, not_equals, above, below, entered, left, or present)", "equals");
-  if (!operator) return;
-  const expected = ["equals", "not_equals"].includes(operator) ? window.prompt("Expected state", "present") : ["above", "below"].includes(operator) ? window.prompt("Threshold number", "0") : null;
-  if (["equals", "not_equals", "above", "below"].includes(operator) && expected == null) return;
-  setBanner("Saving a deterministic cue. This will not change the source reminder…");
-  try {
-    await api("/api/member/v1/reminders/cues", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({
-        cue_id: crypto.randomUUID(), list_external_id: item.list_external_id,
-        item_external_id: item.item_external_id, expected_last_event_id: item.last_event_id,
-        signal_key: signalKey.trim(), source, kind, operator,
-        expected_state: ["equals", "not_equals"].includes(operator) ? expected : null,
-        expected_number: ["above", "below"].includes(operator) ? Number(expected) : null,
-        enabled: true,
-      }),
-    });
-    setBanner("Cue saved. It activates only when a fresh authorized signal matches.");
-    await reloadActiveSurface();
-  } catch (error) { setBanner(`${error.message} No cue was created.`); }
+function openActionDialog(title, content) {
+  const dialog = $("#action-dialog");
+  $("#action-title").textContent = title;
+  $("#action-content").replaceChildren(content);
+  dialog.showModal();
+  content.querySelector("input, select, textarea, button")?.focus();
+}
+
+function closeActionDialog() { $("#action-dialog").close(); }
+
+function configureReminderCue(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const signalKey = document.createElement("input"); signalKey.required = true; signalKey.placeholder = "presence:home or weather:rain";
+  const source = selectControl(["home_assistant", "member_bridge", "weather", "device", "network", "calendar", "member_profile", "manual"].map((value) => ({ value, label: titleCase(value) })), "home_assistant", "");
+  const kind = selectControl(["location", "presence", "weather", "device_state", "network_presence", "calendar_transition", "energy", "capacity"].map((value) => ({ value, label: titleCase(value) })), "presence", "");
+  const operator = selectControl(["equals", "not_equals", "above", "below", "entered", "left", "present"].map((value) => ({ value, label: titleCase(value) })), "equals", "");
+  const expected = document.createElement("input"); expected.value = "present"; expected.placeholder = "State or numeric threshold";
+  const note = text("p", "This compares one fresh, scoped signal with one explicit operator. It does not change provider reminder truth.", "state-note");
+  const submit = text("button", "Save cue", "button button-primary"); submit.type = "submit";
+  form.append(field("Signal key", signalKey), field("Source", source), field("Signal kind", kind), field("Match rule", operator), field("Expected value", expected), note, submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true; setBanner("Saving a deterministic cue. This will not change the source reminder…");
+    try {
+      await api("/api/member/v1/reminders/cues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          cue_id: crypto.randomUUID(), list_external_id: item.list_external_id,
+          item_external_id: item.item_external_id, expected_last_event_id: item.last_event_id,
+          signal_key: signalKey.value.trim(), source: source.value, kind: kind.value, operator: operator.value,
+          expected_state: ["equals", "not_equals"].includes(operator.value) ? expected.value : null,
+          expected_number: ["above", "below"].includes(operator.value) ? Number(expected.value) : null,
+          enabled: true,
+        }),
+      });
+      closeActionDialog(); setBanner("Cue saved. It activates only when a fresh authorized signal matches."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} No cue was created.`); submit.disabled = false; }
+  });
+  openActionDialog("Add a context cue", form);
+}
+
+function editReminderDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const title = document.createElement("input"); title.required = true; title.maxLength = 1000; title.value = item.title;
+  const submit = text("button", "Save title", "button button-primary"); submit.type = "submit";
+  form.append(field("Reminder title", title), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "update"), { title: title.value.trim() }); });
+  openActionDialog("Edit provider reminder", form);
+}
+
+function moveReminderDialog(item, cockpit) {
+  const candidates = (cockpit.lists || []).filter((list) => list.provider === item.provider && list.provider_account_id === item.provider_account_id && list.list_external_id !== item.list_external_id);
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const destination = selectControl(candidates.map((list) => ({ value: list.list_external_id, label: list.list_name })), candidates[0]?.list_external_id || "", candidates.length ? "" : "No other list available"); destination.required = true;
+  const submit = text("button", "Move reminder", "button button-primary"); submit.type = "submit"; submit.disabled = !candidates.length;
+  form.append(field("Destination list", destination), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "move"), { destination_list_external_id: destination.value }); });
+  openActionDialog("Move provider reminder", form);
+}
+
+function deleteReminderDialog(item) {
+  const wrapper = document.createElement("div"); wrapper.className = "dialog-form";
+  wrapper.append(text("p", `Delete “${item.title}” from ${item.account_label}? This is a real provider action after approval; it is suppressed while observation mode is active.`));
+  const row = document.createElement("div"); row.className = "button-row";
+  const cancel = text("button", "Cancel", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+  const confirm = text("button", "Delete from provider", "button button-primary"); confirm.type = "button"; confirm.addEventListener("click", async () => { closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "delete")); });
+  row.append(cancel, confirm); wrapper.append(row); openActionDialog("Confirm deletion", wrapper);
 }
 
 function reminderMatches(item) {
@@ -907,19 +1123,19 @@ function remindersControls(cockpit, data) {
   for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["completed", "Completed"]]) {
     const button = text("button", `${label} ${cockpit.counts[value] || 0}`, "comms-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersView === value));
-    button.addEventListener("click", () => { state.remindersView = value; renderReminders(data); }); views.append(button);
+    button.addEventListener("click", () => { state.remindersView = value; replaceQuery({ view: value }); renderReminders(data); }); views.append(button);
   }
   const accounts = document.createElement("div"); accounts.className = "comms-filter-row account-filters";
   for (const account of [{ provider_account_id: "all", label: "All accounts" }, ...(cockpit.accounts || [])]) {
     const button = text("button", account.label, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersAccount === account.provider_account_id));
-    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; renderReminders(data); }); accounts.append(button);
+    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; replaceQuery({ account: state.remindersAccount, list: null }); renderReminders(data); }); accounts.append(button);
   }
   const lists = document.createElement("div"); lists.className = "comms-filter-row account-filters";
   for (const list of [{ list_external_id: "all", list_name: "All lists" }, ...(cockpit.lists || []).filter((row) => state.remindersAccount === "all" || row.provider_account_id === state.remindersAccount)]) {
     const button = text("button", list.list_name, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersList === list.list_external_id));
-    button.addEventListener("click", () => { state.remindersList = list.list_external_id; renderReminders(data); }); lists.append(button);
+    button.addEventListener("click", () => { state.remindersList = list.list_external_id; replaceQuery({ list: state.remindersList }); renderReminders(data); }); lists.append(button);
   }
   controls.append(views, accounts, lists); return controls;
 }
@@ -931,7 +1147,7 @@ function reminderItemButton(item) {
   heading.append(text("strong", item.title), text("span", `${item.account_label} · ${item.list_name}`, "meta"));
   button.append(heading, text("span", item.why?.[0] || "Available", "focus-explanation"));
   if (item.due_at) button.append(text("span", new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(item.due_at)), "meta"));
-  button.addEventListener("click", () => { state.reminderItem = item.id; renderReminders(state.surface); });
+  button.addEventListener("click", () => { state.reminderItem = item.id; replaceQuery({ item: item.id }); renderReminders(state.surface); });
   return button;
 }
 
@@ -945,6 +1161,7 @@ function reminderDetail(item, cockpit) {
   const fields = [["Provider", item.account_label], ["Scheduled", item.due_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(new Date(item.due_at)) : "No date"], ["Priority", item.priority === 1 ? "High" : item.priority === 5 ? "Medium" : item.priority === 9 ? "Low" : "None"], ["Repeats", item.recurrence_rules?.length ? item.recurrence_rules.join(", ") : "No"], ["Context cues", item.cues?.length || 0]];
   for (const [label, value] of fields) facts.append(text("dt", label), text("dd", value)); pane.append(facts);
   if (item.read_only_reason) pane.append(text("p", item.read_only_reason, "state-note"));
+  if (item.possible_copy) pane.append(text("p", `${item.possible_copy.count} possible copies are preserved across provider lists. Review each source before changing or completing anything.`, "possible-copy"));
   const actions = document.createElement("div"); actions.className = "button-row";
   if (item.can_complete || item.completed) {
     const stem = item.completed ? "uncomplete" : "complete"; const button = text("button", item.completed ? "Restore" : "Done", "button button-primary"); button.type = "button";
@@ -952,11 +1169,11 @@ function reminderDetail(item, cockpit) {
   }
   if (item.can_edit) {
     const edit = text("button", "Edit title", "button button-quiet"); edit.type = "button";
-    edit.addEventListener("click", () => { const title = window.prompt("Reminder title", item.title); if (title?.trim()) runReminderCommand(item, reminderOperation(item, "update"), { title: title.trim() }); }); actions.append(edit);
+    edit.addEventListener("click", () => editReminderDialog(item)); actions.append(edit);
     const move = text("button", "Move", "button button-quiet"); move.type = "button";
-    move.addEventListener("click", () => { const candidates = (cockpit.lists || []).filter((list) => list.provider === item.provider && list.provider_account_id === item.provider_account_id && list.list_external_id !== item.list_external_id); const destination = window.prompt(`Destination list ID\n${candidates.map((list) => `${list.list_name}: ${list.list_external_id}`).join("\n")}`, candidates[0]?.list_external_id || ""); if (destination) runReminderCommand(item, reminderOperation(item, "move"), { destination_list_external_id: destination }); }); actions.append(move);
+    move.addEventListener("click", () => moveReminderDialog(item, cockpit)); actions.append(move);
     const remove = text("button", "Delete", "button button-quiet"); remove.type = "button";
-    remove.addEventListener("click", () => { if (window.confirm("Delete this reminder from its source provider?")) runReminderCommand(item, reminderOperation(item, "delete")); }); actions.append(remove);
+    remove.addEventListener("click", () => deleteReminderDialog(item)); actions.append(remove);
   }
   const cue = text("button", "Add context cue", "button button-quiet"); cue.type = "button";
   cue.addEventListener("click", () => configureReminderCue(item)); actions.append(cue);
@@ -1068,6 +1285,7 @@ async function setCalendarView(view, anchor = state.calendarAnchor) {
   state.calendarView = view;
   state.calendarAnchor = anchor || state.calendarToday || calendarLocalDate();
   state.calendarSelectedEvent = null;
+  replaceQuery({ view, date: state.calendarAnchor, event: null });
   await reloadActiveSurface();
 }
 
@@ -1148,7 +1366,7 @@ function calendarEventButton(event, cockpit, compact = false) {
   button.setAttribute("aria-label", `${event.title}, ${time}, ${calendarEffectLabel(event.effect)}`);
   if (compact) button.append(text("span", event.all_day ? "" : time, "calendar-event-time"), text("strong", event.title));
   else button.append(text("strong", event.title), text("span", `${time} · ${calendarEffectLabel(event.effect)}`, "calendar-event-meta"));
-  button.addEventListener("click", () => { state.calendarSelectedEvent = event.cluster_id || event.id; renderCalendar(state.surface); });
+  button.addEventListener("click", () => { state.calendarSelectedEvent = event.cluster_id || event.id; replaceQuery({ event: state.calendarSelectedEvent }); renderCalendar(state.surface); });
   return button;
 }
 
@@ -1268,7 +1486,7 @@ function renderCalendar(data) {
   state.calendarAnchor ||= data.calendar_anchor || calendarLocalDate();
   state.calendarToday = data.calendar_today || state.calendarToday || calendarLocalDate();
   $("#mode-label").textContent = "Private · deterministic calendar policy";
-  root.append(calendarHero(cockpit), calendarControls(cockpit));
+  root.append(freshnessStrip(data), calendarHero(cockpit), calendarControls(cockpit));
   if (state.calendarView !== "rules") root.append(calendarSourcePanel(cockpit, data));
   if (state.calendarView === "find") root.append(calendarFindTime(cockpit));
   else if (state.calendarView === "rules") root.append(calendarRuleEditor(cockpit, data));
@@ -1280,7 +1498,7 @@ function renderCalendar(data) {
 function renderReminders(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
   $("#mode-label").textContent = "Private · provider-backed · deterministic";
-  root.append(remindersHero(cockpit), remindersControls(cockpit, data));
+  root.append(freshnessStrip(data), remindersHero(cockpit), remindersControls(cockpit, data));
   const visible = cockpit.items.filter(reminderMatches);
   if (!state.reminderItem || !visible.some((item) => item.id === state.reminderItem)) state.reminderItem = visible[0]?.id || null;
   const selected = visible.find((item) => item.id === state.reminderItem);
@@ -1288,6 +1506,17 @@ function renderReminders(data) {
   const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} reminders`));
   if (!visible.length) list.append(text("p", "Nothing in this lens. Your provider truth is unchanged.", "empty")); else { const items = document.createElement("ol"); items.className = "reminder-items"; for (const item of visible) { const li = document.createElement("li"); li.append(reminderItemButton(item)); items.append(li); } list.append(items); }
   workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
+}
+
+function freshnessStrip(data) {
+  const value = data.freshness;
+  const strip = document.createElement("div"); strip.className = "freshness-strip";
+  if (!value) return strip;
+  strip.append(text("span", titleCase(value.state), `pill state-label state-${String(value.state).replaceAll("_", "-")}`));
+  const latest = value.latest_source_at ? `Latest source ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
+  strip.append(text("span", `${latest} · ${value.row_count} visible record${value.row_count === 1 ? "" : "s"}`));
+  if (value.degraded_reason) strip.append(text("strong", value.degraded_reason));
+  return strip;
 }
 
 function renderSurface(data) {
@@ -1303,7 +1532,7 @@ function renderSurface(data) {
     state.carouselIndex = 0;
     renderToday(data);
   } else if (data.surface === "triage") {
-    root.append(triageSurface(data.items, data.calendar_destinations));
+    root.append(freshnessStrip(data), triageSurface(data));
   } else if (data.surface === "comms") {
     renderComms(data);
   } else if (data.surface === "reminders") {
@@ -1439,14 +1668,45 @@ async function initialize() {
   $("#chat-form").addEventListener("submit", sendChat);
   $("#chat-stop").addEventListener("click", async () => { state.controller?.abort(); await fetch("/api/member/v1/chat/abort", { method: "POST", credentials: "same-origin" }); });
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
+  $("[data-close-action]").addEventListener("click", closeActionDialog);
   try {
     state.bootstrap = await api("/api/member/v1/bootstrap"); renderNavigation(combinedNavigation(state.bootstrap)); configureChat(state.bootstrap.chat);
     $("#member-button").textContent = state.bootstrap.member.id.slice(0, 1).toUpperCase();
     $("#observation-pill").textContent = state.bootstrap.observation_mode ? "Observation mode" : "Member-safe";
+    $("#observation-banner").hidden = !state.bootstrap.observation_mode;
     const active = currentSurface();
+    const params = new URLSearchParams(location.search);
+    const requestedView = params.get("view");
+    if (active === "today" && ["brief", "carousel"].includes(requestedView)) state.todayView = requestedView;
+    if (active === "triage") {
+      if (["ready", "needs_details", "recent"].includes(requestedView)) state.triageView = requestedView;
+      state.triageSelected = params.get("item");
+    }
+    if (active === "comms") {
+      if (["focus", "waiting", "snoozed", "quieted", "all"].includes(requestedView)) state.commsView = requestedView;
+      state.commsAccount = params.get("account") || "all";
+      state.commsThread = params.get("thread");
+    }
+    if (active === "reminders") {
+      if (["now", "scheduled", "places", "anytime", "completed"].includes(requestedView)) state.remindersView = requestedView;
+      state.remindersAccount = params.get("account") || "all";
+      state.remindersList = params.get("list") || "all";
+      state.reminderItem = params.get("item");
+    }
+    if (active === "calendar") {
+      if (["day", "week", "month", "agenda", "find", "rules"].includes(requestedView)) state.calendarView = requestedView;
+      state.calendarAnchor = params.get("date");
+      state.calendarSelectedEvent = params.get("event");
+    }
+    let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
+    if (active === "calendar") {
+      const query = new URLSearchParams({ view: state.calendarView });
+      if (state.calendarAnchor) query.set("date", state.calendarAnchor);
+      path += `?${query}`;
+    }
     const surfaceRequest = active.startsWith("quest:")
       ? api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest)
-      : api(`/api/member/v1/surfaces/${encodeURIComponent(active)}`).then(renderSurface);
+      : api(path).then(renderSurface);
     await Promise.all([surfaceRequest, loadChatHistory()]);
   } catch (error) { renderFailure(error); }
 }
