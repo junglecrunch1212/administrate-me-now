@@ -17,6 +17,19 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 Comms live projection migration repair
+
+The first production activation of D28 exposed an ordering defect that fresh
+databases could not reproduce: `schema.sql` attempted to create Comms indexes
+on `member_id` and `provider_account_id` before the additive interaction
+migration created those columns on an existing v2 projection. This hotfix
+**HARDENS** live upgrade behavior while **PRESERVING** every D28 semantic and
+the append-only event authority. Additive-column indexes now remain owned by
+`InteractionsProjection.migrate_schema()` and are created only after their
+columns exist. The regression test executes the current bootstrap schema and
+migration hook against a pre-Comms interaction table, matching the production
+failure boundary instead of testing the hook in isolation.
+
 ## 2026-08-06 deterministic Comms cockpit
 
 This amendment **MODERNIZES** unified communications under D28 while

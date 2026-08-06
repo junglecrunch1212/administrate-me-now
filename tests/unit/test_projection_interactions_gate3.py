@@ -10,13 +10,18 @@ from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.handlers import apply_event
 
 
-def test_existing_interactions_schema_adds_columns_before_native_index() -> None:
+def test_existing_interactions_schema_adds_columns_before_additive_indexes() -> None:
     conn = sqlcipher3.connect(":memory:")
     try:
         conn.execute(
-            "CREATE TABLE interactions (tenant_id TEXT, channel_specific TEXT)"
+            "CREATE TABLE interactions ("
+            "tenant_id TEXT, channel_specific TEXT, occurred_at TEXT, thread_id TEXT"
+            ")"
         )
-        InteractionsProjection().migrate_schema(conn)
+        projection = InteractionsProjection()
+        schema = Path(projection.schema_path).read_text(encoding="utf-8")
+        conn.executescript(schema)
+        projection.migrate_schema(conn)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(interactions)")}
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(interactions)")}
         assert {
@@ -25,6 +30,8 @@ def test_existing_interactions_schema_adds_columns_before_native_index() -> None
             "classification_confidence",
         } <= columns
         assert "idx_interactions_tenant_native_message" in indexes
+        assert "idx_interactions_member_occurred" in indexes
+        assert "idx_interactions_account_thread" in indexes
     finally:
         conn.close()
 

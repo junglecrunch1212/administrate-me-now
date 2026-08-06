@@ -59,10 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_interactions_tenant_occurred
     ON interactions(tenant_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_interactions_tenant_thread
     ON interactions(tenant_id, thread_id);
-CREATE INDEX IF NOT EXISTS idx_interactions_member_occurred
-    ON interactions(tenant_id, member_id, occurred_at);
-CREATE INDEX IF NOT EXISTS idx_interactions_account_thread
-    ON interactions(tenant_id, provider_account_id, thread_id);
+-- Indexes that depend on additive columns are created by migrate_schema()
+-- after an existing projection has received those columns. Keeping them in
+-- this bootstrap script would make SQLite resolve the new column names before
+-- the migration hook runs and block an otherwise safe in-place upgrade.
 CREATE TABLE IF NOT EXISTS interaction_participants (
     tenant_id          TEXT NOT NULL,
     interaction_id     TEXT NOT NULL,
