@@ -901,5 +901,15 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
     assert calls[0]["cwd"] == release
     environment = calls[0]["env"]
     assert isinstance(environment, dict)
+    assert environment["ADMINME_INSTANCE_ROOT"] == str(test_paths.root)
+    assert environment["ADMINME_INSTANCE_DIR"] == str(test_paths.instance_dir)
     assert environment["ADMINME_REPOSITORY_ROOT"] == str(release)
+    assert environment["OPENCLAW_STATE_DIR"] == str(
+        test_paths.instance_dir / "openclaw" / "runtime"
+    )
+    assert environment["OPENCLAW_CONFIG_PATH"] == str(
+        test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    )
+    assert str(test_paths.root / "bin") in environment["PATH"]
+    assert "/opt/homebrew/opt/node@22/bin" in environment["PATH"]
     assert "PYTHONPATH" not in environment

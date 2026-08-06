@@ -133,7 +133,24 @@ class UpgradeManager:
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment.pop("VIRTUAL_ENV", None)
-        environment["ADMINME_REPOSITORY_ROOT"] = str(release)
+        environment.update(
+            {
+                "ADMINME_INSTANCE_ROOT": str(self.paths.root),
+                "ADMINME_INSTANCE_DIR": str(self.paths.instance_dir),
+                "ADMINME_REPOSITORY_ROOT": str(release),
+                "OPENCLAW_STATE_DIR": str(
+                    self.paths.instance_dir / "openclaw" / "runtime"
+                ),
+                "OPENCLAW_CONFIG_PATH": str(
+                    self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+                ),
+                "PATH": (
+                    f"{self.paths.root}/bin:/opt/homebrew/bin:"
+                    "/opt/homebrew/opt/node@22/bin:/usr/local/bin:"
+                    "/usr/bin:/bin:/usr/sbin:/sbin"
+                ),
+            }
+        )
         command = [
             str(release_python),
             "-m",
