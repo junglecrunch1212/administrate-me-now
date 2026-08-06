@@ -71,6 +71,7 @@ def install_launch_agents(
         RUNTIME_LABEL: {
             "Label": RUNTIME_LABEL,
             "ProgramArguments": [python_path, "-m", "bootstrap.runtime_service"],
+            "WorkingDirectory": str(root),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 10,
@@ -81,6 +82,7 @@ def install_launch_agents(
         OPENCLAW_LABEL: {
             "Label": OPENCLAW_LABEL,
             "ProgramArguments": [python_path, "-m", "bootstrap.openclaw_service"],
+            "WorkingDirectory": str(root),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 10,
