@@ -24,6 +24,7 @@ const requestFailures = [];
 const screenshots = {};
 let expected404Console = 0;
 let observedExpected404Console = 0;
+let browserDescription = "installed Chromium browser via playwright-core@1.62.0";
 
 function record(name, pass, detail) {
   results.push({ name, status: pass ? "PASS" : "FAIL", detail });
@@ -32,14 +33,18 @@ function record(name, pass, detail) {
 
 async function launchEdge() {
   for (const executablePath of [
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   ]) {
     try {
       await access(executablePath);
+      browserDescription = `${executablePath.includes("Google Chrome") ? "Google Chrome" : "Microsoft Edge"} via playwright-core@1.62.0`;
       return await chromium.launch({ executablePath, headless: true, timeout: 20_000 });
     } catch {}
   }
+  browserDescription = "Microsoft Edge via playwright-core@1.62.0";
   return chromium.launch({ channel: "msedge", headless: true, timeout: 20_000 });
 }
 
@@ -77,6 +82,10 @@ async function startServer(port, modelConfigured) {
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
     await waitForServer(baseUrl);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    if (child.exitCode !== null) {
+      throw new Error(`Gate 7 fixture exited before owning ${baseUrl}\n${output.slice(-2000)}`);
+    }
   } catch (error) {
     child.kill();
     throw new Error(`${error.message}\n${output.slice(-2000)}`);
@@ -92,7 +101,14 @@ async function stopServer(server) {
     await new Promise((resolveWait) => killer.once("close", resolveWait));
   } else {
     server.child.kill("SIGTERM");
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    await Promise.race([
+      new Promise((resolveWait) => server.child.once("close", resolveWait)),
+      new Promise((resolveWait) => setTimeout(resolveWait, 2500)),
+    ]);
+    if (server.child.exitCode === null && server.child.signalCode === null) {
+      server.child.kill("SIGKILL");
+      await new Promise((resolveWait) => server.child.once("close", resolveWait));
+    }
   }
   await rm(server.instance, {
     recursive: true,
@@ -247,13 +263,24 @@ async function run() {
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
-      today: "Today", inbox: "Inbox", people: "People", knowledge: "Knowledge",
+      today: "Today", triage: "Triage", people: "People", knowledge: "Knowledge",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
-      record(`${surface} carousel mode`, (await principal.page.locator("#mode-label").textContent()).startsWith("carousel"), await principal.page.locator("#mode-label").textContent());
-      await screenshot(principal.page, `surface-${surface}-carousel-desktop.png`);
+      if (surface === "today") {
+        record("Today defaults to Day Brief", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await principal.page.locator("#surface").textContent());
+        record("Today offers Carousel and What Now", await principal.page.getByRole("button", { name: "Carousel" }).count() === 1 && await principal.page.getByRole("button", { name: "What Now?" }).count() === 1, await principal.page.locator(".today-controls").textContent());
+        record("Today hides internal profile and member identifiers", !(await principal.page.locator("#mode-label").textContent()).includes("carousel") && !(await principal.page.locator("#mode-label").textContent()).includes("visual_principal"), await principal.page.locator("#mode-label").textContent());
+        await screenshot(principal.page, "surface-today-day-brief-desktop.png");
+        await principal.page.getByRole("button", { name: "Carousel" }).click();
+        await principal.page.locator(".carousel-card").waitFor();
+        record("Today Carousel is interactive", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "false", await principal.page.locator("#surface").textContent());
+        await screenshot(principal.page, "surface-today-carousel-desktop.png");
+      } else {
+        record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
+        await screenshot(principal.page, `surface-${surface}-desktop.png`);
+      }
     }
     record("eight principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 8, await principal.page.locator("#primary-nav .nav-link").count());
     await auditAccessibility(principal.page, "desktop");
@@ -261,13 +288,13 @@ async function run() {
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");
-    record("compressed profile", (await adult.page.locator("#mode-label").textContent()).startsWith("compressed"), await adult.page.locator("#mode-label").textContent());
+    record("tablet Day Brief default", await adult.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await adult.page.locator("#surface").textContent());
     record("observation mode visible", await adult.page.locator("#observation-pill").textContent() === "Observation mode", await adult.page.locator("#observation-pill").textContent());
     await screenshot(adult.page, "mode-compressed-observation-tablet.png");
     await adult.page.locator("#chat-open").click();
     await adult.page.locator("#chat-input").fill("What is one kind next step?");
     await adult.page.locator("#chat-send").click();
-    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).waitFor();
+    await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor();
     await adult.page.locator("#chat-state").filter({ hasText: "Ready" }).waitFor();
     record("adult OpenClaw stream rendered", await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
@@ -378,9 +405,9 @@ async function run() {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     status: results.every((item) => item.status === "PASS") ? "PASS" : "FAIL",
-    browser: "installed Microsoft Edge via playwright-core@1.62.0",
+    browser: browserDescription,
     viewports: ["1440x1000", "1280x900", "1024x768", "820x1180", "390x844"],
-    states: ["carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
+    states: ["day-brief", "carousel", "compressed", "child", "observation", "degraded", "chat-streamed", "quest-private", "quest-promoted", "quest-expired", "quest-archived"],
     results,
     screenshots,
     console_errors: consoleErrors,
@@ -391,12 +418,13 @@ async function run() {
   const lines = [
     "# Gate 7 rendered portal evidence", "", `Status: **${report.status}**`, "",
     "Run from the repository root:", "", "```powershell", "npm.cmd run test:gate7 --prefix tools/console-reference-harness", "```", "",
-    "The harness starts credential-free loopback fixtures, uses installed Microsoft Edge through pinned Playwright, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.", "",
+    `The harness starts credential-free loopback fixtures, uses ${browserDescription}, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.`, "",
     "## Checks", "",
     ...results.map((item) => `- ${item.status}: ${item.name}`), "", "## Screenshots", "",
     ...Object.entries(screenshots).map(([name, meta]) => `- \`${name}\` — ${meta.bytes} bytes, SHA-256 \`${meta.sha256}\``),
   ];
   await writeFile(join(evidenceDir, "README.md"), `${lines.join("\n")}\n`);
+  await rm(join(evidenceDir, "visual-failure.txt"), { force: true });
   if (report.status !== "PASS") process.exitCode = 1;
 }
 

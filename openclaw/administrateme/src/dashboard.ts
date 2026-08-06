@@ -25,7 +25,7 @@ async function dispatch(
 export function registerDashboard(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   const reads = [
     ["administrateme.dashboard.today", "/api/openclaw/v1/dashboard/today"],
-    ["administrateme.dashboard.inbox", "/api/openclaw/v1/dashboard/inbox"],
+    ["administrateme.dashboard.triage", "/api/openclaw/v1/dashboard/triage"],
     ["administrateme.dashboard.people", "/api/openclaw/v1/dashboard/people"],
     ["administrateme.dashboard.knowledge", "/api/openclaw/v1/dashboard/knowledge"],
     ["administrateme.dashboard.finance", "/api/openclaw/v1/dashboard/finance"],

@@ -57,6 +57,7 @@ def install_launch_agents(
         raise WizardFailure(f"release Python environment is missing: {python_path}")
     common_environment = {
         "ADMINME_INSTANCE_ROOT": str(paths.root),
+        "ADMINME_INSTANCE_DIR": str(paths.instance_dir),
         "ADMINME_REPOSITORY_ROOT": str(root),
         "OPENCLAW_STATE_DIR": str(paths.instance_dir / "openclaw" / "runtime"),
         "OPENCLAW_CONFIG_PATH": str(
@@ -71,6 +72,7 @@ def install_launch_agents(
         RUNTIME_LABEL: {
             "Label": RUNTIME_LABEL,
             "ProgramArguments": [python_path, "-m", "bootstrap.runtime_service"],
+            "WorkingDirectory": str(root),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 10,
@@ -81,6 +83,7 @@ def install_launch_agents(
         OPENCLAW_LABEL: {
             "Label": OPENCLAW_LABEL,
             "ProgramArguments": [python_path, "-m", "bootstrap.openclaw_service"],
+            "WorkingDirectory": str(root),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},
             "ThrottleInterval": 10,

@@ -53,7 +53,7 @@
       "type": "integer",
       "minimum": 1,
       "default": 30,
-      "description": "Seconds between outbound EventKit write batches. The adapter drains queued upstream events (`reminder.dispatched` / `task.created` / `commitment.proposed`) at this cadence to minimize iCloud sync churn."
+      "description": "Seconds between outbound EventKit write batches. The adapter drains only confirmed upstream state (`reminder.dispatched` / `task.created`) at this cadence; unconfirmed proposals remain in Triage."
     },
     "emit_schema_version": {
       "const": 2,

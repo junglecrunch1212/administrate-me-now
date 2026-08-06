@@ -63,8 +63,8 @@ class AdapterAuthenticatedV1(BaseModel):
     adapter_family: str = Field(min_length=1)
     token_storage_ref: str = Field(
         min_length=1,
-        pattern=r"^op://[^/]+/[^/]+/[^/]+$",
-        description="1Password reference (op://<vault>/<item>/<field>) — NEVER the secret itself.",
+        pattern=r"^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
+        description="Secure-provider reference — NEVER the secret itself.",
     )
     authenticated_at: str = Field(min_length=1)
     scopes: list[str] = Field(default_factory=list)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from adminme import temporary_surfaces as temporary_surface_clock
+from adminme.events.envelope import EventEnvelope
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -93,6 +95,101 @@ async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
     async for event in runtime.event_log.read_since(types=list(types) or None):
         rows.append(event)
     return rows
+
+
+async def _seed_today_truth(runtime: Any) -> dict[str, str]:
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    common = {
+        "event_at_ms": int(now.timestamp() * 1000),
+        "tenant_id": runtime.settings.instance.tenant_id,
+        "occurred_at": now.isoformat(),
+        "source_adapter": "gate7-today-fixture",
+        "source_account_id": "credential-free",
+        "owner_scope": f"private:{PRINCIPAL}",
+        "visibility_scope": f"private:{PRINCIPAL}",
+        "sensitivity": "normal",
+        "actor_identity": PRINCIPAL,
+    }
+    recurrence_event_id = await runtime.events.write(
+        EventEnvelope(
+            **common,
+            type="recurrence.added",
+            schema_version=1,
+            idempotency_key="gate7:today:recurrence",
+            payload={
+                "recurrence_id": "gate7-morning-reset",
+                "linked_kind": "party",
+                "linked_id": PRINCIPAL,
+                "kind": "morning_reset",
+                "rrule": "FREQ=DAILY",
+                "next_occurrence": day_start.isoformat(),
+                "trackable": True,
+                "notes": "Put one thing back where it belongs.",
+            },
+        )
+    )
+    await runtime.wait_for_projection("recurrences", recurrence_event_id)
+    routine_event_id = await runtime.events.write(
+        EventEnvelope(
+            **common,
+            type="routine.defined",
+            schema_version=1,
+            idempotency_key="gate7:today:routine",
+            payload={
+                "routine_id": "gate7-evening-landing",
+                "member_id": PRINCIPAL,
+                "title": "Evening landing",
+                "timezone": "Etc/UTC",
+                "starts_on": day_start.date().isoformat(),
+                "rrule": "FREQ=DAILY",
+                "window_start_local": "00:00",
+                "window_end_local": "23:59",
+                "steps": [
+                    {
+                        "step_id": "put-away",
+                        "title": "Put one thing away",
+                        "position": 0,
+                        "micro_step": "Pick up the nearest loose item.",
+                    },
+                    {
+                        "step_id": "water",
+                        "title": "Set out water",
+                        "position": 1,
+                    },
+                ],
+            },
+        )
+    )
+    await runtime.wait_for_projection("recurrences", routine_event_id)
+    calendar_event_id = await runtime.events.write(
+        EventEnvelope(
+            **common,
+            type="calendar.event_added",
+            schema_version=2,
+            idempotency_key="gate7:today:calendar",
+            payload={
+                "member_id": PRINCIPAL,
+                "provider": "google_calendar",
+                "provider_account_id": "gate7-calendar-account",
+                "calendar_external_id": "primary",
+                "calendar_name": "Personal",
+                "external_event_id": "gate7-today-calendar",
+                "summary": "Daily planning check-in",
+                "start": day_start.isoformat(),
+                "end": (day_start + timedelta(hours=1)).isoformat(),
+                "start_time_zone": "Etc/UTC",
+                "end_time_zone": "Etc/UTC",
+                "updated_at": now.isoformat(),
+            },
+        )
+    )
+    await runtime.wait_for_projection("calendars", calendar_event_id)
+    return {
+        "recurrence": recurrence_event_id,
+        "routine": routine_event_id,
+        "calendar": calendar_event_id,
+    }
 
 
 def _portal_provenance(
@@ -247,9 +344,20 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert dashboard_root.status_code == 307
         assert dashboard_root.headers["location"] == "/member"
         member_page = client.get("/member/today", headers=HEADERS[ADULT])
+        css_asset = client.get("/member-assets/member.css")
+        js_asset = client.get("/member-assets/member.js")
+        asset_versions = re.findall(
+            r"/member-assets/member\.(?:css|js)\?v=([0-9a-f]{12})",
+            member_page.text,
+        )
+        assert len(asset_versions) == 2
+        assert len(set(asset_versions)) == 1
+        assert member_page.headers["cache-control"] == "no-store"
+        assert css_asset.headers["cache-control"] == "no-store"
+        assert js_asset.headers["cache-control"] == "no-store"
         assets = (
-            client.get("/member-assets/member.js").text
-            + client.get("/member-assets/member.css").text
+            js_asset.text
+            + css_asset.text
             + client.get("/member-assets/index.html").text
         )
         persisted_events = json.dumps(
@@ -281,7 +389,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert adult_bootstrap.status_code == 200
         assert [item["id"] for item in adult_bootstrap.json()["navigation"]] == [
             "today",
-            "inbox",
+            "triage",
             "people",
             "knowledge",
             "finance",
@@ -313,7 +421,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         ]
         assert child_bootstrap["mode"] == "child"
         for forbidden in (
-            "inbox",
+            "triage",
             "people",
             "knowledge",
             "finance",
@@ -402,6 +510,199 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert completed.json()["next_action"] != before
 
 
+def test_today_is_one_deterministic_brief_with_typed_member_actions(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        seeded = client.portal.call(_seed_today_truth, runtime)
+
+        response = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        )
+        assert response.status_code == 200, response.text
+        surface = response.json()
+        brief = surface["brief"]
+        assert "lists" not in surface
+        assert brief["contract"] == "deterministic-daily-brief-v1"
+        assert brief["timezone"] == "Etc/UTC"
+        assert brief["carousel"]["later_is_view_only"] is True
+        assert brief["what_now"] == surface["what_now"]
+        assert any(
+            item["id"] == "gate7-morning-reset"
+            and item["kind"] == "recurrence"
+            and item["actions"] == ["complete", "evidence"]
+            for item in brief["plan"]
+        )
+        routine_item = next(
+            item for item in brief["plan"] if item["id"] == "gate7-evening-landing"
+        )
+        assert routine_item["kind"] == "routine"
+        assert routine_item["current_step"]["step_id"] == "put-away"
+        assert routine_item["actions"] == [
+            "complete_step",
+            "skip_step",
+            "evidence",
+        ]
+        view_as_headers = {
+            **HEADERS[PRINCIPAL],
+            "X-AdminMe-View-Member": ADULT,
+        }
+        denied_routine_progress = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=view_as_headers,
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-view-as-denied",
+            },
+        )
+        assert denied_routine_progress.status_code == 403
+        calendar_item = next(
+            item
+            for item in brief["schedule"]
+            if item["external_event_id"] == "gate7-today-calendar"
+        )
+        assert calendar_item["actions"] == ["attended", "missed", "evidence"]
+
+        completed = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "recurrence",
+                "item_id": "gate7-morning-reset",
+                "action": "complete",
+                "expected_last_event_id": seeded["recurrence"],
+                "request_id": "gate7-today-recurrence-complete",
+            },
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["duplicate"] is False
+        assert completed.json()["recurrence"]["next_occurrence"] > brief["as_of"]
+        retry = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "recurrence",
+                "item_id": "gate7-morning-reset",
+                "action": "complete",
+                "expected_last_event_id": seeded["recurrence"],
+                "request_id": "gate7-today-recurrence-complete",
+            },
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["duplicate"] is True
+
+        first_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-step-one",
+            },
+        )
+        assert first_routine_step.status_code == 200, first_routine_step.text
+        progressed_routine = first_routine_step.json()["routine"]
+        assert progressed_routine["current_step"]["step_id"] == "water"
+        assert progressed_routine["completed_steps"] == 1
+        routine_retry = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-step-one",
+            },
+        )
+        assert routine_retry.status_code == 200, routine_retry.text
+        assert routine_retry.json()["duplicate"] is True
+        stale_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/water/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-stale-step",
+            },
+        )
+        assert stale_routine_step.status_code == 409
+        final_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/water/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "skipped",
+                "expected_last_event_id": progressed_routine["last_event_id"],
+                "request_id": "gate7-today-routine-step-two",
+            },
+        )
+        assert final_routine_step.status_code == 200, final_routine_step.text
+        assert final_routine_step.json()["routine"]["status"] == (
+            "completed_with_skips"
+        )
+        assert all(
+            item["id"] != "gate7-evening-landing"
+            for item in final_routine_step.json()["brief"]["plan"]
+        )
+
+        outcome = client.post(
+            f"/api/member/v1/calendar/{calendar_item['id']}/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "attended",
+                "expected_last_event_id": seeded["calendar"],
+                "request_id": "gate7-today-calendar-attended",
+            },
+        )
+        assert outcome.status_code == 200, outcome.text
+        assert outcome.json()["duplicate"] is False
+        updated_event = next(
+            item
+            for item in outcome.json()["brief"]["schedule"]
+            if item["id"] == calendar_item["id"]
+        )
+        assert updated_event["status"] == "attended"
+        assert updated_event["actions"] == ["evidence"]
+        outcome_retry = client.post(
+            f"/api/member/v1/calendar/{calendar_item['id']}/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "attended",
+                "expected_last_event_id": seeded["calendar"],
+                "request_id": "gate7-today-calendar-attended",
+            },
+        )
+        assert outcome_retry.status_code == 200, outcome_retry.text
+        assert outcome_retry.json()["duplicate"] is True
+        conflicting_outcome = client.post(
+            f"/api/member/v1/calendar/{calendar_item['id']}/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "missed",
+                "expected_last_event_id": seeded["calendar"],
+                "request_id": "gate7-today-calendar-conflict",
+            },
+        )
+        assert conflicting_outcome.status_code == 409
+
+        dashboard = client.post(
+            "/api/openclaw/v1/dashboard/today",
+            headers=OPENCLAW_HEADERS,
+            json={"provenance": _portal_provenance(runtime, PRINCIPAL, "gate7-today")},
+        )
+        assert dashboard.status_code == 200, dashboard.text
+        assert dashboard.json()["brief"]["contract"] == brief["contract"]
+        assert dashboard.json()["today"]["generated_by"] == ("deterministic-ranker-v2")
+
+
 def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> None:
     instance = tmp_path / "instance"
     instance.mkdir()
@@ -409,7 +710,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
     with TestClient(app) as client:
         runtime = app.state.runtime
         projection_names = runtime.projections.projection_names()
-        assert len(projection_names) == 13
+        assert len(projection_names) == 14
         before_counts = _domain_counts(runtime)
         create = client.post(
             "/api/member/v1/temporary-surfaces",
@@ -518,7 +819,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
             == 404
         )
         assert _domain_counts(runtime) == before_counts
-        assert len(runtime.projections.projection_names()) == 13
+        assert len(runtime.projections.projection_names()) == 14
         assert not any(
             "project" in name for name in runtime.projections.projection_names()
         )

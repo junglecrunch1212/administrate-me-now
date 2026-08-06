@@ -83,7 +83,7 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     backup = manager.create()
     assert backup["encrypted"] is True
     restored = manager.restore(Path(backup["path"]))
-    assert restored["projections_rebuilt"] == 13
+    assert restored["projections_rebuilt"] == 14
     assert restored["workbooks_rebuilt"] is True
     assert Path(restored["rollback"]).is_dir()
     after = Doctor(

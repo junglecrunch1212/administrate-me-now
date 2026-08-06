@@ -3,9 +3,9 @@
 -- Per ADMINISTRATEME_BUILD.md §3.5 and SYSTEM_INVARIANTS.md §4, §13.
 --
 -- Tasks are NOT commitments. Commitments are obligations between parties
--- (§4.1). Tasks are household work (mow lawn, renew license). The inbox
--- surface merges them at read time in a later prompt; the projections
--- stay separate (§4.3, §13.1).
+-- (§4.1). Tasks are household work (mow lawn, renew license). Triage keeps
+-- inferred candidates separate from already-official work; the projections
+-- remain distinct (§4.3, §13.1, D26).
 --
 -- Cross-DB FK references (assignee_party → parties(party_id),
 -- recurring_id → recurrences(recurrence_id)) are documentation only;

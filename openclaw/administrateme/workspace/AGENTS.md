@@ -185,7 +185,7 @@ Bootstrap §8 (prompt 16) concatenates this file into `~/Chief/AGENTS.md`.
 Per-member morning digest delivered around the member's wake time
 (default 06:30 local in member's timezone per [BUILD.md §1202]). Gathers
 today's calendar events (respecting privacy filtering), due commitments
-+ tasks, due recurrences, overnight inbox count, streak status, reward
++ tasks, due recurrences, overnight Triage count, streak status, reward
 stats. Validation-guarded: every claimed calendar event / commitment /
 task id is verified against projections post-composition; any
 fabrication zeroes the message with sentinel "No morning brief
@@ -221,7 +221,7 @@ Proactive pack at `packs/pipelines/morning_digest/` with
 
 1. Gather projection state: today's calendar events
    (privacy-filtered), due commitments, today's tasks, due
-   recurrences, inbox count, streak status, reward stats.
+   recurrences, Triage count, streak status, reward stats.
 2. Resolve member's `profile_format` from the profile loader.
 3. Call `compose_morning_digest@v3` with the gathered payload.
 4. Validation guard: every id in the skill's `claimed_event_ids`
@@ -258,7 +258,7 @@ member's fog window. **Deterministic — never invokes LLM** per
 [BUILD.md §1297-1302] and operating rule 20 ([BUILD.md §124]). Picks a
 template from persona's `paralysis_templates.yaml`. Emits
 `paralysis.triggered` with template id + single-action framing. The event is an
-inbox/activity surface; it is not an external delivery request.
+Today/activity surface; it is not an external delivery request.
 
 ## Triggers
 
@@ -267,7 +267,7 @@ installation fallback; profile fog-window overrides win when configured.
 
 ## Approval gate
 
-None. This program has no outbound side effect; output is a scoped inbox and
+None. This program has no outbound side effect; output is a scoped Today/activity
 activity event surfaced on demand.
 
 ## Escalation
@@ -297,14 +297,14 @@ per [BUILD.md §1297-1302]:
    template for the same member but different members get different
    templates.
 4. Emit `paralysis.triggered` v1 with `member_id`, `template_id`,
-   `template_text`, `triggered_at`. Surface is the scoped inbox and activity
+   `template_text`, `triggered_at`. Surface is the scoped Today and activity
    feed.
 
 ## What NOT to do
 
 - **Do NOT invoke an LLM.** Template selection is a deterministic
   YAML lookup per [BUILD.md §1297-1302] + operating rule 20. Binding.
-- **Do NOT convert the scoped inbox event into an implicit message.**
+- **Do NOT convert the scoped activity event into an implicit message.**
 - **Do NOT emit when pre-conditions fail.** All defensive-skip cases
   (recent completion, energy not low, outside fog window, missing
   profile, empty persona templates) silently advance the bus.

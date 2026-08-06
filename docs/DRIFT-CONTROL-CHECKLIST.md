@@ -86,7 +86,7 @@ Every outbound delivery MUST gate on `InstanceConfig.observation_mode`. Specific
 
 **Anchored to:** `[VISION §"channel-native"]`, `[§8 OpenClaw boundaries]`, `[§8.9 skill runner only outbound]`.
 
-The console is for surfaces specific to the household (an inbox, a calendar, an admin view). Channel-native behavior (sending iMessages, voicemail transcription, calendar invites) lives in OpenClaw plugins. The boundary is:
+The console is for surfaces specific to the household (Triage, Calendar, and member/settings views). Channel-native behavior (sending iMessages, voicemail transcription, calendar invites) lives in OpenClaw plugins. The boundary is:
 
 - **In AdministrateMe:** the projection that decides "this member needs a reminder" + the pipeline that composes it
 - **In OpenClaw:** the channel adapter that actually sends the iMessage / SMS / push

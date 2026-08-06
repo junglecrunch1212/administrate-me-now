@@ -41,7 +41,7 @@ sender (the party who hosted, gave the gift, or did the favor).
 `suggested_text` is a 1–4 sentence draft the principal can edit and
 send — concrete enough to acknowledge the specific kindness, short
 enough that handing it off to a handwritten card or a quick text
-doesn't feel forced. The urgency value drives the inbox surface's
+doesn't feel forced. The urgency value drives the Triage candidate's
 sort order: `today` for a same-day acknowledgement (e.g. "they had us
 over last night"); `this_week` is the default for hosting
 hospitality; `this_month` for non-time-sensitive significant gifts;

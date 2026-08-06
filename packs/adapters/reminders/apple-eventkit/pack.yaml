@@ -50,9 +50,9 @@ triggers:
 # `adapter.*` schemas come from prompt 11a c1
 # (adminme/events/schemas/adapters.py); `reminder.list_item.synced` is
 # new in prompt 11c c1 (adminme/events/schemas/reminders.py).
-# `reminder.dispatched`, `task.created`, `commitment.proposed` are
-# CONSUMED from upstream pipelines (this adapter writes them OUT to
-# iCloud); they live in adminme/events/schemas/domain.py and ingest.py.
+# `reminder.dispatched` and `task.created` are consumed only after they are
+# official household state. Unconfirmed proposal events are deliberately not
+# subscribed; Triage must resolve and route them first.
 # Registration happens at module import time per DECISIONS.md §D7.
 depends_on:
   event_types:
@@ -62,7 +62,6 @@ depends_on:
     - reminder.list_item.synced
     - reminder.dispatched
     - task.created
-    - commitment.proposed
 
 # Events emitted by THIS adapter (distinct from `depends_on`, which lists
 # every event type the adapter touches in either direction). Documented

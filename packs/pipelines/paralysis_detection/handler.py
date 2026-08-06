@@ -18,7 +18,7 @@ Pre-conditions per [BUILD.md §1300]: zero completions in prior 2
 hours AND energy level ≤ low AND now within member's fog window.
 Any miss → defensive skip (no event emits, no error raises).
 
-The surface is a scoped inbox/activity event, not an external notification.
+The surface is a scoped Today/activity event, not an external notification.
 
 Constructor-injection loaders preserve deterministic read-model boundaries.
 The ``energy_loader`` returns ``dict | None`` per [BUILD.md §1299]; absent

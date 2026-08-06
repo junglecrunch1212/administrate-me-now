@@ -524,7 +524,7 @@ Status: **OPEN, resolves at 11c-ii orientation. No build blocker until then.**
 
 ### UT-20: iCloud Shared List invitation acceptance is async out-of-band — OPEN
 
-Surfaced 2026-04-29-B by Amendment-2 (memo §5.7). Bootstrap §8 (lists auto-seed sub-step) emits `list.share_invited` events for each invited family member's Apple ID; bridges emit `list.shared` when their adapter sees the list appear post-acceptance. Pending shares surface in the inbox after bootstrap. The async pattern is unavoidable — Apple's iCloud Shared List acceptance happens out of band on each invitee's device, not via API. Final design lands at 11b refactor (Apple Reminders dual-deployment shape) and 16 refactor (bootstrap §8 lists auto-seed sub-step).
+Surfaced 2026-04-29-B by Amendment-2 (memo §5.7). Bootstrap §8 (lists auto-seed sub-step) emits `list.share_invited` events for each invited family member's Apple ID; bridges emit `list.shared` when their adapter sees the list appear post-acceptance. Pending human action surfaces in Triage after bootstrap per D26. The async pattern is unavoidable — Apple's iCloud Shared List acceptance happens out of band on each invitee's device, not via API. Final design lands at 11b refactor (Apple Reminders dual-deployment shape) and 16 refactor (bootstrap §8 lists auto-seed sub-step).
 
 Status: **OPEN, resolves at 11b / 16 refactor. No build blocker until then.**
 
@@ -713,5 +713,4 @@ This rule was made explicit by James 2026-04-28 after a Partner session produced
 ## End of handoff document
 
 Partner: steps 1–6 before any real work. Orient before acting.
-
 

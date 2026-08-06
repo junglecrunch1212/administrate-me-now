@@ -14,7 +14,7 @@ flowchart LR
     S --> L["Encrypted append-only event log"]
     L --> B["Durable event bus"]
     B --> R["6 reactive pipelines"]
-    B --> X["13 projections"]
+    B --> X["13 domain projections + Triage"]
     X --> API["6 product namespaces"]
     X --> W["2 bidirectional workbooks"]
     X --> Q["Scoped domain search and activity"]
@@ -30,7 +30,7 @@ flowchart LR
 | Concern | Owner | Gate 6 rule |
 |---|---|---|
 | Household truth and history | AdministrateMe event log | Append first; preserve owner, visibility, sensitivity, source, correlation, and causation. |
-| Replay and reads | Thirteen AdministrateMe projections | Deterministic apply, checkpoint resume, scoped queries, rebuild from event zero. |
+| Replay and reads | Thirteen domain projections plus derived Triage | Deterministic apply, checkpoint resume, scoped queries, rebuild from event zero. |
 | Member knowledge | `member_knowledge` plus Cat-D bridge | Explicit Apple Notes, Voice Memos, and optional adult Obsidian sources only; never generic conversation memory. |
 | Semantic search | `vector_search` | Domain records only; privileged material is never embedded and owner scope is enforced. |
 | Scheduling | OpenClaw automations | AdministrateMe stores program contracts and trigger evidence but runs no product cron. |

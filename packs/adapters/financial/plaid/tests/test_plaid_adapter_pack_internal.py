@@ -719,7 +719,7 @@ def test_fetch_institution_health_emits_transient_on_degraded_product() -> None:
     """A non-``HEALTHY`` per-product status surfaces as one
     ``adapter.error`` per degraded product, ``severity=transient`` +
     ``error_kind=api_changed`` per the prompt §7 deliverable. ``HEALTHY``
-    products produce no events — the adapter must not flood the inbox on
+    products produce no events — the adapter must not flood operator diagnostics on
     healthy institutions."""
     status_response = {
         "institution": {
@@ -771,7 +771,7 @@ def test_fetch_institution_health_emits_transient_on_degraded_product() -> None:
 
 def test_fetch_institution_health_silent_on_all_healthy() -> None:
     """The common case — all sub-product statuses ``HEALTHY`` — must
-    produce zero ``adapter.error`` events. Otherwise the inbox would
+    produce zero ``adapter.error`` events. Otherwise operator diagnostics would
     fill with noise from healthy institutions."""
     status_response = {
         "institution": {

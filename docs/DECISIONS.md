@@ -164,6 +164,10 @@ Personal knowledge captures live in each family member's own tooling on their ow
 
 The Capture product (`:3335`) is a **read surface** over the resulting knowledge layer + the CRM projections — not an input pipeline. Quick-capture prefix routing, triage queues, and central voice-note ingest are explicitly retired.
 
+**Partially superseded by D26:** Capture remains read-only and quick-capture /
+central voice ingest remain retired. D26 reintroduces Triage as a separate,
+member-owned adjudication surface for derived proposals, not as Capture ingest.
+
 Tasks, commitments, recurrences, and relationships flow through the existing reactive pipelines (`commitment_extraction`, `recurrence_extraction`, `relationship_summarization`), with `note.*` and `voice_note.*` added to their subscription lists. There is no "polling" of Capture; pipelines react to events as they always have.
 
 Connector packs for non-Apple knowledge sources (Notion, Logseq, Roam, etc.) install on bridges as `kind: adapter, subkind: knowledge-source` packs.
@@ -277,7 +281,7 @@ Phase A v1 inventory cleanup:
 - **Lob (postal mail).** Cat-E. **DEFERRED to v2 community pack.** Removed from Phase A L1 inventory.
 - **Privacy.com (virtual cards).** Cat-E. **DEFERRED to v2 community pack.** Removed from Phase A L1 inventory.
 - **CalDAV (separate adapter).** **REMOVED from v1 per [D22].** Apple Calendar covers iCloud calendars; Google Calendar covers Google calendars; a CalDAV-server adapter is unnecessary for v1 Apple-using or Google-using households. v2 community pack if a non-iCloud-non-Google CalDAV server is needed.
-- **Google Drive.** **DEFERRED to v2.** The Drive-as-document-source role is covered for Apple-using households by Apple Notes (prose) per [D17]; Google-Workspace-only households can defer document ingestion to a later prompt without blocking the v1 CRM/inbox/lists/calendars/finance core.
+- **Google Drive.** **DEFERRED to v2.** The Drive-as-document-source role is covered for Apple-using households by Apple Notes (prose) per [D17]; Google-Workspace-only households can defer document ingestion to a later prompt without blocking the v1 CRM/Triage/lists/calendars/finance core.
 - **iOS Shortcuts webhooks.** **REMOVED.** Functionally retired by [D17] — knowledge-source ingestion via member bridges supersedes the Shortcuts webhook pattern. The webhook adapter pattern remains available in the framework (any Cat-A/B/C/D/E adapter can run a webhook receiver as its inbound source) but iOS Shortcuts as a named v1 adapter is retired.
 - **iCloud (as separate adapter).** **CLARIFIED.** iCloud is not its own adapter; it is accessed via the Apple Reminders / Apple Notes / iMessage / Apple Calendar / Apple Contacts adapters' use of the relevant Apple ID. The `iCloud` row formerly in L1 inventory is removed.
 - **Apple Reminders.** **CLARIFIED to dual-deployment per [D18].** Central variant on CoS Apple ID + bridge variant per member Apple ID.
@@ -288,6 +292,91 @@ Phase A v1 inventory cleanup:
 **Net inventory delta:** −5 (CalDAV, Drive, Shortcuts, iCloud, Lob/Privacy.com as Phase A entries) +3 (Apple Calendar, Apple Contacts, Google Contacts) = −2 v1 line items + 1 multi-capability cross-cat extension (Apple Notes gains checklist B-half).
 
 **Modifies prompts 11b (Apple Calendar dual-deployment + Google Tasks central + CalDAV removed), 11c-ii (Apple Notes-checklists B-half), and adds new prompts 11e (Contacts) + 11f (lists projection) + 11g (Home Assistant).**
+
+### D26 — Triage is the human gate for derived household candidates
+
+**Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** D17 only where
+it retired every triage queue, and the older Inbox surface semantics in BUILD,
+PATTERNS, the console reference, and Gate 7.
+
+The stable adult surface previously labeled **Inbox** is now **Triage**. Triage
+contains only extracted or inferred candidates that require a member to
+confirm, enrich, reroute, or dismiss them. It does not mix already-official
+tasks or other operational work into the review queue. `Today` and
+`Scoreboard` remain the surfaces for official open work.
+
+Source observations remain facts and never wait in Triage merely because they
+arrived: an email received, provider calendar event observed, reminder synced,
+or list item read from its authoritative provider is appended and projected as
+an observation. A model- or rule-derived candidate that would create or change
+household truth, or request an external provider write, must instead emit a
+proposal. No extractor may emit the target canonical event directly.
+
+Triage supports candidate targets for tasks, commitments, calendar events,
+reminders, lists, list items, and proposed CRM identifier links. Confirmation uses a closed typed
+materializer. Local task/commitment targets emit their canonical events only
+after confirmation. External targets require an explicit member, provider,
+provider account, and destination calendar/list route; confirmation emits a
+governed `external_sync.write_requested` command, and the calendar/list
+projection changes only after the provider write is observed back as fact.
+Allowlist, domain governance, rate limit, final privacy/content policy,
+observation mode, and terminal auditing remain mandatory.
+
+`triage.item.proposed`, `.enriched`, `.confirmed`, and `.dismissed` form the
+generic lifecycle. Existing `commitment.proposed` and
+`household.action.proposed` events are projected into the same queue during
+migration. A dedicated encrypted `triage` projection is the fourteenth
+registered read model; the original thirteen domain-truth projection
+capabilities remain intact. Triage is derived and rebuildable, never a source
+of truth.
+
+Canonical paths and bindings use `triage` (`/member/triage`,
+`/api/core/v1/triage`, `/adminme-triage`, and
+`administrateme.dashboard.triage`). The old `inbox` paths and OpenClaw names
+may remain as explicitly deprecated compatibility aliases for pinned clients,
+but they do not appear in navigation or new documentation. This rename does
+not alter external-provider Inbox folders, email inbox terminology, or the
+legacy internal task workflow status named `inbox`.
+
+### D27 — Today is a deterministic Daily Brief; routines are ordered occurrences
+
+**Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** the flat
+`{stream, summary, activeIdx, energy, streak, whatNow}` Today-stream contract
+in BUILD, the task-only profile examples, and prompt 14b's former Node-console
+rendering instructions. It does not supersede any event-authority, scope,
+privacy, governance, observation, or OpenClaw boundary.
+
+Today is a read-time composition over authorized projections. Its default Day
+Brief groups the member's local-day calendar, executable Tasks and
+Commitments, provider List Items, ordered Routine occurrences, actionable
+Interactions, and pending Triage questions without copying them into a new
+store. The one-item Carousel is a presentation of that same typed composition.
+`What Now?` deterministically selects an event in progress or beginning within
+30 minutes before falling back to the explained work ranking. No model chooses
+the order or implies an outcome.
+
+Carousel `Later` changes browser position only. Task/Commitment completion,
+provider List Item completion, calendar attendance/missed outcomes, and
+Routine step outcomes use separate typed, idempotent commands. Elapsed
+calendar time is not attendance evidence. A linked routine step is not a Task
+completion and never completes its linked Task implicitly.
+
+A Routine is a distinct ordered execution aggregate housed in the existing
+`recurrences` projection because it shares recurrence scheduling, not because
+it is interchangeable with a Recurrence template. `routine.defined@v1`
+records an owner-scoped member, IANA timezone, RFC 5545 rule, local time
+window, and contiguous ordered steps. `routine.step_outcome_recorded@v1`
+records an explicit `completed` or `skipped` outcome for one step of one dated
+occurrence. The projection derives the current step and closed status; it does
+not emit events. Steps must be handled in order. This adds no fifteenth
+projection and does not collapse Tasks, Recurrences, calendar events, or
+scheduler jobs.
+
+The member portal and pinned OpenClaw dashboard consume the same
+`deterministic-daily-brief-v1` contract. Process acceptance must prove local
+time, scope filtering, typed action routing, optimistic concurrency,
+idempotent retries, ordered Routine progression, replay, and a model-free
+path before Today behavior is considered complete.
 
 ---
 

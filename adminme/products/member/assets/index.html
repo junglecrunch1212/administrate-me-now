@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="light">
     <link rel="icon" href="data:,">
     <title>AdministrateMe · Household</title>
-    <link rel="stylesheet" href="/member-assets/member.css">
-    <script src="/member-assets/member.js" defer></script>
+    <link rel="stylesheet" href="/member-assets/member.css?v=__ASSET_VERSION__">
+    <script src="/member-assets/member.js?v=__ASSET_VERSION__" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to household view</a>
@@ -60,8 +60,8 @@
       </aside>
     </div>
 
-    <button id="chat-open" class="chat-fab" type="button" aria-controls="chat-panel" aria-expanded="false">
-      <span aria-hidden="true">✦</span> Ask the CoS
+    <button id="chat-open" class="chat-fab" type="button" aria-label="Ask the household CoS" title="Ask the household CoS" aria-controls="chat-panel" aria-expanded="false">
+      <span aria-hidden="true">✦</span><span class="chat-fab-label">Ask the CoS</span>
     </button>
 
     <dialog id="evidence-dialog" aria-labelledby="evidence-title">

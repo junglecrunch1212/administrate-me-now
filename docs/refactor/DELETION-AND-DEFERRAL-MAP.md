@@ -54,7 +54,7 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 - `member_knowledge` and `vector_search`: domain read models, not generic OpenClaw memory.
 - Recurrences: domain meaning, not scheduler duplication.
 - Product route/ownership contracts when services become namespaces.
-- All thirteen projection capabilities, six product functions, five adapter categories, six pack kinds, five profiles, and four personas.
+- All thirteen domain projection capabilities plus the Triage adjudication projection, six product functions, five adapter categories, six pack kinds, five profiles, and four personas.
 - Event schemas, governance, normalization, workbook semantics, and meaningful tests unless a cited migration proves replacement compatibility.
 - Historical prompts/memos as provenance; they lose authority but are not erased.
 

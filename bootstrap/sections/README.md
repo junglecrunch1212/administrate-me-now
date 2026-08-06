@@ -11,7 +11,7 @@ when its version and input digest have not changed.
 4. Profile assignment and behavior preview
 5. Keychain/secure-provider credential references
 6. Plaid sandbox selection and Link state
-7. Household and CRM seed data, with Inbox follow-ups for skips
+7. Household and CRM seed data, with Triage follow-ups for skips
 8. Channels, shared tools, adapters, permissions, and launchd definitions
 9. Observation briefing, trust-period contract, and canonical proof
 10. Per-member Apple bridge enrollment, or an explicit non-Apple skip

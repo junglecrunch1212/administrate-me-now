@@ -102,6 +102,9 @@ run_cli() {
   resolve_active_release
   local python_bin
   python_bin="$(select_python)"
-  ADMINME_REPOSITORY_ROOT="$ACTIVE_RELEASE_ROOT" \
-    "$python_bin" -m bootstrap.cli --instance-root "$ADMINME_INSTANCE_ROOT" "${forwarded[@]}"
+  (
+    cd "$ACTIVE_RELEASE_ROOT"
+    ADMINME_REPOSITORY_ROOT="$ACTIVE_RELEASE_ROOT" \
+      "$python_bin" -m bootstrap.cli --instance-root "$ADMINME_INSTANCE_ROOT" "${forwarded[@]}"
+  )
 }

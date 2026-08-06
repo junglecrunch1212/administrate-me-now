@@ -18,6 +18,7 @@ from adminme.events.registry import registry
 
 ExternalProvider = Literal[
     "google_calendar",
+    "google_tasks",
     "apple_calendar",
     "apple_reminders",
     "apple_notes",

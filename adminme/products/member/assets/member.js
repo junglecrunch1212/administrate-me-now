@@ -1,6 +1,14 @@
 "use strict";
 
-const state = { bootstrap: null, surface: null, controller: null, assistantNode: null };
+const state = {
+  bootstrap: null,
+  surface: null,
+  controller: null,
+  assistantNode: null,
+  todayView: "brief",
+  carouselIndex: 0,
+  carouselItems: [],
+};
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
   const node = document.createElement(tag);
@@ -20,7 +28,8 @@ async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(typeof body.detail === "string" ? body.detail : "That view is unavailable.");
+    const detail = typeof body.detail === "string" ? body.detail : body.detail?.reason;
+    const error = new Error(detail || "That view is unavailable.");
     error.status = response.status;
     error.body = body;
     throw error;
@@ -79,6 +88,110 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
   return section;
 }
 
+async function reloadActiveSurface() {
+  const active = currentSurface();
+  if (active.startsWith("quest:")) return;
+  renderSurface(await api(`/api/member/v1/surfaces/${encodeURIComponent(active)}`));
+}
+
+async function decideTriage(item, action, buttons) {
+  buttons.forEach((button) => { button.disabled = true; });
+  const banner = $("#state-banner"); banner.hidden = false;
+  banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
+  try {
+    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null }),
+    });
+    banner.textContent = action === "approve" ? "Confirmed. The routed household record is now being materialized." : "Dismissed. No household record or provider write was created.";
+    await reloadActiveSurface();
+  } catch (error) {
+    banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+async function enrichTriage(item, buttons) {
+  const title = window.prompt("Confirm or correct the title", item.title || "");
+  if (title == null) return;
+  let targetKind = item.target_kind;
+  if (item.source_kind !== "commitment_proposal") {
+    targetKind = window.prompt("Target type (task, commitment, calendar_event, reminder, list, list_item, or party_identifier)", item.target_kind);
+    if (targetKind == null) return;
+  }
+  const external = ["calendar_event", "reminder", "list", "list_item"].includes(targetKind);
+  const candidateUpdates = {};
+  let route = item.route || { member_id: state.bootstrap.member.id };
+  if (item.source_kind !== "commitment_proposal") {
+    const member = window.prompt("Destination household member ID", route.member_id || state.bootstrap.member.id);
+    if (member == null) return;
+    route = { ...route, member_id: member };
+  } else {
+    route = null;
+  }
+  if (targetKind === "commitment" && item.source_kind !== "commitment_proposal") {
+    const owedTo = window.prompt("Party ID this commitment is owed to", item.candidate?.owed_to_party_id || "");
+    if (owedTo == null) return;
+    candidateUpdates.owed_to_party_id = owedTo;
+  }
+  if (targetKind === "calendar_event") {
+    const start = window.prompt("Start date/time (ISO 8601 with time zone)", item.candidate?.start || item.candidate?.due || "");
+    if (start == null) return;
+    const end = window.prompt("End date/time (ISO 8601 with time zone)", item.candidate?.end || "");
+    if (end == null) return;
+    candidateUpdates.start = start;
+    candidateUpdates.end = end;
+  }
+  if (external) {
+    const provider = window.prompt("Provider (google_calendar, google_tasks, apple_calendar, or apple_reminders)", route?.provider || "");
+    if (provider == null) return;
+    const account = window.prompt("Provider account ID", route?.provider_account_id || "");
+    if (account == null) return;
+    const container = targetKind === "list" ? route?.container_external_id || null : window.prompt("Destination calendar or list ID", route?.container_external_id || "");
+    if (container == null && targetKind !== "list") return;
+    route = { member_id: route.member_id, provider, provider_account_id: account, container_external_id: container || null };
+  }
+  buttons.forEach((button) => { button.disabled = true; });
+  const banner = $("#state-banner"); banner.hidden = false; banner.textContent = "Saving the enrichment without creating official household state…";
+  try {
+    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, title, target_kind: targetKind, candidate_updates: candidateUpdates, route }),
+    });
+    banner.textContent = "Enrichment saved. Review the candidate once more before confirming it.";
+    await reloadActiveSurface();
+  } catch (error) {
+    banner.textContent = `${error.message} The candidate was not changed.`;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function triageSurface(items) {
+  const fragment = document.createDocumentFragment();
+  const intro = document.createElement("section"); intro.className = "hero-card";
+  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "Nothing becomes household truth by inference alone.", "action-title"), text("p", "Review extracted candidates, add missing routing details, then confirm or dismiss. Provider observations remain facts and do not wait here."));
+  fragment.append(intro);
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Awaiting your decision"));
+  if (!Array.isArray(items) || items.length === 0) {
+    section.append(text("p", "Triage is clear. No extracted candidates are waiting for you.", "empty")); fragment.append(section); return fragment;
+  }
+  const list = document.createElement("ul"); list.className = "item-list";
+  for (const item of items) {
+    const li = document.createElement("li"); li.className = "item triage-item";
+    li.append(text("strong", item.title), text("span", `${String(item.target_kind).replaceAll("_", " ")} · ${item.source_kind.replaceAll("_", " ")}`, "meta"));
+    if (item.reasons?.length) li.append(text("small", item.reasons.join(" · ")));
+    const row = document.createElement("div"); row.className = "button-row";
+    const enrich = text("button", item.source_kind === "commitment_proposal" ? "Edit" : "Enrich", "button button-quiet");
+    const approve = text("button", "Confirm", "button button-primary");
+    const dismiss = text("button", "Dismiss", "button button-quiet");
+    const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id));
+    const buttons = [enrich, approve, dismiss]; buttons.forEach((button) => { button.type = "button"; });
+    enrich.addEventListener("click", () => enrichTriage(item, buttons)); approve.addEventListener("click", () => decideTriage(item, "approve", buttons)); dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
+    row.append(enrich, approve, dismiss, evidence); li.append(row); list.append(li);
+  }
+  section.append(list); fragment.append(section); return fragment;
+}
+
 function rankedItems(value) {
   if (!value) return [];
   if (Array.isArray(value.items)) return value.items;
@@ -114,9 +227,9 @@ function whatNowCard(value, mode) {
   progress.setAttribute("aria-valuenow", "34"); progress.setAttribute("aria-valuemin", "0"); progress.setAttribute("aria-valuemax", "100");
   progress.append(document.createElement("span"));
   section.append(progress);
-  if (item.last_event_id && item.id) {
+  if (item.last_event_id && item.id && ["task", "commitment"].includes(item.kind)) {
     const row = document.createElement("div"); row.className = "button-row";
-    for (const action of ["complete", "defer", "snooze", "block"]) {
+    for (const action of ["complete", "defer", "block"].filter((value) => (item.actions || []).includes(value))) {
       const button = text("button", action[0].toUpperCase() + action.slice(1), action === "complete" ? "button button-primary" : "button button-quiet");
       button.type = "button";
       button.addEventListener("click", () => advanceAction(item, action, section));
@@ -151,18 +264,324 @@ async function advanceAction(item, action, section) {
   }
 }
 
+function titleCase(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function todayItemMeta(item) {
+  return [item.time_label, item.context, item.status ? titleCase(item.status) : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function setBanner(message) {
+  const banner = $("#state-banner");
+  banner.hidden = false;
+  banner.textContent = message;
+}
+
+async function executeTodayAction(item, action, container) {
+  if (action === "evidence") {
+    if (item.evidence_event_id || item.last_event_id) await showEvidence(item.evidence_event_id || item.last_event_id);
+    return;
+  }
+  if (action === "open_triage") {
+    location.href = "/member/triage";
+    return;
+  }
+  if (action === "open_chat") {
+    $("#chat-open").click();
+    return;
+  }
+  const buttons = container.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    if (["task", "commitment", "recurrence"].includes(item.kind) && action === "complete") {
+      setBanner("Recording that finish and rebuilding the rest of today…");
+      await api("/api/member/v1/lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          item_kind: item.kind,
+          item_id: item.id,
+          action: "complete",
+          expected_last_event_id: item.last_event_id,
+          request_id: crypto.randomUUID(),
+          note: "Completed from Today",
+        }),
+      });
+      setBanner("Recorded. Today has been recalculated from household truth.");
+    } else if (item.kind === "calendar_event" && ["attended", "missed"].includes(action)) {
+      setBanner("Recording this calendar outcome without changing the event itself…");
+      await api(`/api/member/v1/calendar/${encodeURIComponent(item.id)}/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          request_id: crypto.randomUUID(),
+          expected_last_event_id: item.last_event_id,
+          outcome: action,
+        }),
+      });
+      setBanner(action === "attended" ? "Attendance recorded." : "Missed event recorded. Nothing else was inferred.");
+    } else if (item.kind === "routine" && ["complete_step", "skip_step"].includes(action)) {
+      const step = item.current_step;
+      setBanner(action === "complete_step" ? "Recording this routine step…" : "Skipping only this step and keeping the routine moving…");
+      await api(`/api/member/v1/routines/${encodeURIComponent(item.id)}/occurrences/${encodeURIComponent(item.occurrence_date)}/steps/${encodeURIComponent(step.step_id)}/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          request_id: crypto.randomUUID(),
+          expected_last_event_id: item.last_event_id,
+          outcome: action === "complete_step" ? "completed" : "skipped",
+        }),
+      });
+      setBanner(action === "complete_step" ? "Step recorded. Here is the next one." : "Step skipped without changing any linked task.");
+    } else if (item.kind === "list_item" && action === "complete_external") {
+      setBanner("Requesting completion through the reminder provider…");
+      await api("/api/member/v1/external-sync/commands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          provider: item.provider,
+          provider_account_id: item.provider_account_id,
+          operation: "complete_reminder",
+          target_external_id: item.item_external_id,
+          expected_provider_revision: item.provider_revision,
+          payload: {
+            member_id: state.bootstrap.member.id,
+            item_external_id: item.item_external_id,
+            list_external_id: item.list_external_id,
+          },
+          request_id: crypto.randomUUID(),
+        }),
+      });
+      setBanner("Completion requested. It will leave Today after the provider confirms it.");
+    }
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} Nothing was implied as complete.`);
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function actionButton(item, action, container) {
+  const labels = {
+    complete: "Done",
+    complete_external: "Done",
+    complete_step: "Step done",
+    skip_step: "Skip step",
+    attended: "Attended",
+    missed: "Missed",
+    open_triage: "Review",
+    open_chat: "Talk it through",
+    evidence: "Why this is here",
+  };
+  const primary = ["complete", "complete_external", "complete_step", "attended", "open_triage"].includes(action);
+  const button = text("button", labels[action] || titleCase(action), action === "evidence" ? "link-button" : `button ${primary ? "button-primary" : "button-quiet"}`);
+  button.type = "button";
+  button.addEventListener("click", () => executeTodayAction(item, action, container));
+  return button;
+}
+
+function todayItem(item, { interactive = true } = {}) {
+  const li = document.createElement("li");
+  li.className = `day-item day-item-${String(item.kind).replaceAll("_", "-")}`;
+  const body = document.createElement("div");
+  body.className = "day-item-body";
+  body.append(text("strong", item.title || "Household item"));
+  const meta = todayItemMeta(item);
+  if (meta) body.append(text("span", meta, "meta"));
+  if (item.micro_step) body.append(text("small", item.micro_step));
+  li.append(body);
+  if (interactive) {
+    const row = document.createElement("div");
+    row.className = "day-item-actions";
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
+    for (const action of actions) row.append(actionButton(item, action, li));
+    if (actions.length) li.append(row);
+  }
+  return li;
+}
+
+function daySection(title, items, emptyCopy) {
+  const section = document.createElement("section");
+  section.className = "card day-section";
+  const heading = document.createElement("div");
+  heading.className = "section-heading";
+  heading.append(text("h2", title), text("span", `${items.length}`, "count-badge"));
+  section.append(heading);
+  if (!items.length) {
+    section.append(text("p", emptyCopy, "empty compact-empty"));
+    return section;
+  }
+  const list = document.createElement("ol");
+  list.className = "day-list";
+  for (const item of items) list.append(todayItem(item));
+  section.append(list);
+  return section;
+}
+
+function todayViewControls(data) {
+  const controls = document.createElement("div");
+  controls.className = "today-controls";
+  const switcher = document.createElement("div");
+  switcher.className = "view-switcher";
+  switcher.setAttribute("role", "group");
+  switcher.setAttribute("aria-label", "Today view");
+  for (const [view, label] of [["brief", "Day Brief"], ["carousel", "Carousel"]]) {
+    const button = text("button", label, "view-button");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(state.todayView === view));
+    button.addEventListener("click", () => {
+      state.todayView = view;
+      if (view === "carousel") state.carouselIndex = 0;
+      renderToday(data);
+    });
+    switcher.append(button);
+  }
+  const whatNow = text("button", "What Now?", "button button-primary what-now-button");
+  whatNow.type = "button";
+  whatNow.addEventListener("click", () => {
+    const first = data.brief?.carousel?.recommended_item || data.brief?.what_now?.horizons?.right_now;
+    const match = state.carouselItems.findIndex((item) => item.kind === first?.kind && item.id === first?.id);
+    state.carouselIndex = match >= 0 ? match : 0;
+    state.todayView = "carousel";
+    renderToday(data);
+    $(".carousel-card")?.focus();
+  });
+  controls.append(switcher, whatNow);
+  return controls;
+}
+
+function briefHero(brief) {
+  const section = document.createElement("section");
+  section.className = "hero-card day-hero";
+  section.append(
+    text("p", `${brief.daypart} briefing`, "eyebrow"),
+    text("h2", "Here is the shape of your day.", "action-title"),
+    text("p", brief.summary_text, "brief-summary"),
+  );
+  if (brief.next_event) {
+    const next = document.createElement("div");
+    next.className = "next-event";
+    next.append(text("span", "NEXT ON THE CLOCK", "meta"), text("strong", brief.next_event.title), text("span", brief.next_event.time_label, "meta"));
+    section.append(next);
+  }
+  const stats = document.createElement("dl");
+  stats.className = "brief-stats";
+  for (const [label, value] of [["Events", brief.stats.events], ["Moves", brief.stats.moves], ["Messages", brief.stats.messages], ["Decisions", brief.stats.questions]]) {
+    stats.append(text("div", "", "stat"));
+    stats.lastElementChild.append(text("dt", label), text("dd", value));
+  }
+  section.append(stats);
+  return section;
+}
+
+function renderDayBrief(brief) {
+  const fragment = document.createDocumentFragment();
+  fragment.append(briefHero(brief));
+  const grid = document.createElement("div");
+  grid.className = "brief-grid";
+  grid.append(
+    daySection("On the clock", brief.schedule || [], "No timed events are on the calendar today."),
+    daySection("Moves for today", brief.plan || [], "No planned moves are due today."),
+  );
+  fragment.append(grid);
+  if ((brief.questions || []).length || (brief.messages || []).length) {
+    const attention = document.createElement("div");
+    attention.className = "brief-grid";
+    attention.append(
+      daySection("Needs a decision", brief.questions || [], "No clarifying decisions are waiting."),
+      daySection("Messages to notice", brief.messages || [], "No message needs a response right now."),
+    );
+    fragment.append(attention);
+  }
+  return fragment;
+}
+
+function renderCarousel(brief) {
+  const items = state.carouselItems;
+  const section = document.createElement("section");
+  section.className = "hero-card carousel-card";
+  section.tabIndex = -1;
+  if (!items.length) {
+    section.append(text("p", "WHAT NOW", "eyebrow"), text("h2", "You are caught up for now.", "action-title"), text("p", "Pause, or choose something gently on purpose."));
+    return section;
+  }
+  state.carouselIndex = Math.min(Math.max(state.carouselIndex, 0), items.length - 1);
+  const item = items[state.carouselIndex];
+  section.append(
+    text("p", `${titleCase(item.kind)} · ${state.carouselIndex + 1} of ${items.length}`, "eyebrow"),
+    text("h2", item.title || "Take the next small step", "action-title"),
+    text("p", item.micro_step || "Open it and decide only the first move.", "microstep"),
+  );
+  const meta = todayItemMeta(item);
+  if (meta) section.append(text("p", meta, "meta carousel-meta"));
+  const progress = document.createElement("div");
+  progress.className = "progress-track carousel-progress";
+  progress.setAttribute("role", "progressbar");
+  progress.setAttribute("aria-label", "Carousel position");
+  progress.setAttribute("aria-valuenow", String(state.carouselIndex + 1));
+  progress.setAttribute("aria-valuemin", "1");
+  progress.setAttribute("aria-valuemax", String(items.length));
+  const fill = document.createElement("span");
+  fill.style.width = `${((state.carouselIndex + 1) / items.length) * 100}%`;
+  progress.append(fill);
+  section.append(progress);
+  const row = document.createElement("div");
+  row.className = "button-row carousel-actions";
+  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
+    row.append(actionButton(item, action, section));
+  }
+  if (items.length > 1) {
+    const later = text("button", "Later", "button button-quiet");
+    later.type = "button";
+    later.title = "Move to the next card without changing this item's due date or status.";
+    later.addEventListener("click", () => {
+      state.carouselIndex = (state.carouselIndex + 1) % items.length;
+      renderToday(state.surface);
+    });
+    row.append(later);
+  }
+  if (item.evidence_event_id || item.last_event_id) row.append(actionButton(item, "evidence", section));
+  section.append(row);
+  if (items.length > 1) {
+    const navigation = document.createElement("div");
+    navigation.className = "carousel-navigation";
+    const back = text("button", "← Previous", "link-button");
+    back.type = "button";
+    back.addEventListener("click", () => {
+      state.carouselIndex = (state.carouselIndex - 1 + items.length) % items.length;
+      renderToday(state.surface);
+    });
+    navigation.append(back, text("small", "Later only changes this view. Defer changes household truth and is always explicit."));
+    section.append(navigation);
+  }
+  return section;
+}
+
+function renderToday(data) {
+  const root = $("#surface");
+  const brief = data.brief;
+  root.replaceChildren();
+  $("#mode-label").textContent = brief?.date_label || "Your daily briefing";
+  root.append(todayViewControls(data));
+  root.append(state.todayView === "carousel" ? renderCarousel(brief) : renderDayBrief(brief));
+}
+
 function renderSurface(data) {
   state.surface = data;
   const root = $("#surface");
   root.setAttribute("aria-busy", "false");
   root.replaceChildren();
   $("#page-title").textContent = data.label;
-  $("#mode-label").textContent = `${data.mode} · ${data.member_id}`;
+  $("#mode-label").textContent = "Private member view";
   if (data.surface === "today") {
-    root.append(whatNowCard(data.what_now, data.mode), card("Open lists", data.lists, "No open list items."));
-  } else if (data.surface === "inbox") {
-    const grid = document.createElement("div"); grid.className = "card-grid";
-    grid.append(card("Needs review", data.review), card("Open work", data.tasks)); root.append(grid);
+    state.carouselItems = [...(data.brief?.carousel?.items || [])];
+    state.carouselIndex = 0;
+    renderToday(data);
+  } else if (data.surface === "triage") {
+    root.append(triageSurface(data.items));
   } else if (data.surface === "people") {
     root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
   } else if (data.surface === "knowledge") {
@@ -184,7 +603,7 @@ function renderSurface(data) {
 function renderQuest(data) {
   const root = $("#surface"); root.setAttribute("aria-busy", "false"); root.replaceChildren();
   $("#page-title").textContent = data.surface.title;
-  $("#mode-label").textContent = `${data.mode} · temporary lens`;
+  $("#mode-label").textContent = "Temporary lens";
   if (data.state === "degraded") {
     const unavailable = document.createElement("section"); unavailable.className = "state-card";
     unavailable.append(text("h2", "This lens is waiting on a capability."), text("p", "The underlying household records are unchanged."));

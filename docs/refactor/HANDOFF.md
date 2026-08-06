@@ -17,6 +17,121 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 Today Daily Brief and execution correction
+
+This amendment **MODERNIZES** Today into the member's deterministic CoS Day
+Sheet while **PRESERVING** the now/hour/daypart/day/week ranker, distinct
+domain types, and event-sourced authority. The default Day Brief now composes
+the configured local date, calendar, executable tasks and commitments,
+provider list items, individual recurrences, ordered Routine occurrences,
+actionable messages, and pending
+clarifying decisions from authorized projections. The former raw “Open lists”
+card and internal carousel/profile/member label are removed.
+
+Day Brief, Carousel, and What Now are explicit member controls over the same
+brief. What Now opens an in-progress or next-30-minute timed event first, then
+falls back to the deterministic work ranking. Carousel
+offers only actions valid for that item's type; `Later` changes only the card
+position. Task/commitment lifecycle remains canonical, Apple Reminders uses
+the existing governed external-write request, trackable recurrence completion
+emits `recurrence.completed`, and calendar attendance/missed state emits an
+idempotent, member-confirmed `calendar.event_outcome_recorded`. Calendar time
+alone is not attendance proof and list items/recurrences are not coerced into
+tasks. The pinned OpenClaw Today binding consumes this same brief rather than a
+parallel model-owned summary.
+
+D27 completes the previously reported Routine gap without coercing related
+objects. `routine.defined` records an owner-scoped RFC 5545 schedule, IANA
+timezone, local time window, and contiguous ordered steps. Today shows the
+current step with `Step done` and `Skip step`; either action emits one
+idempotent `routine.step_outcome_recorded` fact for the dated occurrence.
+Optimistic concurrency enforces step order. A linked Task is provenance only
+and remains unchanged. These tables live inside the existing rebuildable
+`recurrences` projection, so the registry remains exactly fourteen
+projections.
+
+Executable evidence is in `tests/unit/test_today_brief.py`,
+`tests/unit/test_what_now_gate6.py`,
+`tests/unit/test_projection_calendars.py`, and the process-level Today slice in
+`tests/acceptance/test_gate7_household_experience.py`. Rendered evidence and
+machine-readable browser assertions are retained under
+`docs/refactor/evidence/gate-7/visual/`.
+
+Final local verification on 2026-08-06: the complete Python/bridge suite
+passed with 1,335 tests; strict acceptance passed with 23 tests under
+`--runxfail`; Ruff, mypy, invariants, and diff hygiene passed; the pinned
+OpenClaw contract and 14 plugin tests passed; and the Gate 7 production-browser
+harness passed all 81 assertions with no failed result or leaked fixture
+process.
+
+The former known boundary is now closed by D27 and its projection/process
+tests. Routine definition authoring belongs in a later Settings workflow; the
+Today execution contract itself is complete for definitions already present
+in household truth.
+
+## 2026-08-06 Triage surface and adjudication correction
+
+This amendment **MODERNIZES** the former Inbox into the canonical Triage
+surface under D26. Triage is a private, deterministic projection containing
+only unresolved extracted/derived candidates; already-official tasks stay on
+Today and Scoreboard. Existing commitment proposals and OpenClaw household
+action proposals are aggregated during migration, while new generic
+`triage.item.*` events cover task, commitment, calendar-event, reminder, list,
+list-item, and CRM identifier-link targets.
+
+Member confirmation passes through a closed typed materializer. Local targets
+emit canonical events only after confirmation. External targets require an
+explicit household member, provider account, and destination container before
+a governed `external_sync.write_requested` event can be emitted; the provider
+observation remains the fact that updates calendar/list projections. The Apple
+Reminders adapter no longer consumes unconfirmed `commitment.proposed` events.
+Legacy Inbox HTTP/OpenClaw bindings remain deprecated aliases but are absent
+from new navigation. `tests/acceptance/test_triage_vertical_slice.py` proves
+the production composition from proposal through human confirmation to one
+official task.
+
+Local release evidence on 2026-08-06: the complete root suite passed with
+1,324 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
+and mypy passed across 189 production/bootstrap source files; both invariant scripts
+passed; and the exact pinned OpenClaw contract, TypeScript check, 14 plugin
+tests, and build passed. The Triage process proof also covers idempotent
+enrichment/confirmation/dismissal, private-scope isolation, CRM visibility,
+Apple Calendar routing, Google Tasks routing, replay, and the rule that an
+external write command cannot fabricate a provider observation.
+
+## 2026-08-06 personal Google OAuth activation repair
+
+The live Mac activation proved that the Google packs' service-account-only
+credential resolver could not enroll a personal Gmail account. This amendment
+adds a shared secret-reference resolver for existing 1Password references and
+instance-bound macOS Keychain references, installed-user OAuth factories for
+Gmail and Google Tasks (matching Calendar), and a local consent helper that
+stores only refresh credentials in Keychain. Gmail remains read-only; Calendar
+and Tasks remain governed by observation mode and the external-write seams.
+Pack-level regression coverage passes with 29 tests and Ruff is clean.
+
+## 2026-08-06 live release-switch hardening
+
+The first guarded Triage activation attempt rolled back automatically when
+launchd retained the previous immutable release definition during a reload
+race. The repair waits for the old job to disappear, then verifies the loaded
+program, working directory, and repository-root environment against the new
+plist before health can pass. Stable wrappers also change into the validated
+active release before importing bootstrap code, and LaunchAgents now provide
+the exact state directory through `ADMINME_INSTANCE_DIR`, preventing live
+model-skill pipelines from degrading on an unresolved instance path. The
+post-switch gate tolerates only bounded projection/Gateway/plugin/cron/listener
+startup transients before requiring the complete Doctor and synthetic round
+trip; structural and security failures still roll back immediately. These
+changes **MODERNIZE** service switching while **PRESERVING** rollback, release
+immutability, secret-free argument lists, and fail-closed readiness.
+
+Live visual validation also proved that stable asset URLs allowed a signed-in
+browser to retain the pre-Triage JavaScript across an immutable release switch.
+Member HTML now injects one content-derived version into both CSS and JavaScript
+URLs and serves the shell/assets with `Cache-Control: no-store`, so browser code
+and server APIs cannot straddle releases.
+
 ## 2026-08-05 live activation hardening
 
 The production Mac rehearsal additionally proved and repaired three operational
@@ -47,8 +162,9 @@ select each other's plugin paths. Bootstrap explicitly writes and validates
 `gateway.mode=local` before launchd starts the pinned Gateway.
 Optional unconfigured member chat remains explicitly blocked in capability
 health but no longer blocks the deterministic runtime's global readiness.
-Resumed installs reload existing user LaunchAgents before kickstart, ensuring
-the plist's current immutable release is the process actually under test.
+Resumed installs reload existing user LaunchAgents before kickstart; the later
+2026-08-06 hardening above adds the required unload wait and exact loaded-job
+verification.
 
 This **MODERNIZES** installer/package compatibility while **PRESERVING** the
 reviewed-source boundary, fail-closed first-run behavior, one pinned OpenClaw

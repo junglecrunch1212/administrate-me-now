@@ -16,7 +16,7 @@ flowchart LR
     V --> API
     G --> T["Signed, typed domain tool call"]
     T --> API
-    API --> E["Encrypted event log and 13 projections"]
+    API --> E["Encrypted event log and 13 domain projections + Triage"]
     MP --> Q["Atomic data-only temporary view specs"]
     Q --> API
 ```
@@ -68,12 +68,12 @@ device/ambient audiences are rejected. A child audience additionally requires
 `child` compatibility plus the child query/action allowlists. Every read and
 action repeats visibility, role, capability, and domain authorization. Expiry
 or archive removes navigation; bookmarks show a calm unavailable shell with no
-spec or domain payload. The underlying log and all thirteen projections remain
+spec or domain payload. The underlying log and all fourteen registered projections remain
 unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Inbox, People, Knowledge, Finance, Calendar, Scoreboard,
+- Adults: Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard,
   Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.

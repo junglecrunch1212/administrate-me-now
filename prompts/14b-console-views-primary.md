@@ -1,71 +1,101 @@
-# Prompt 14b: Primary console views (Today, Inbox, CRM, Capture, Finance)
+# Prompt 14b: Primary member surfaces and deterministic Daily Brief
 
-**Phase:** BUILD.md L5 — views. Implements CONSOLE_PATTERNS.md §5 partial, §6, §7, §8.
-**Depends on:** Prompt 14a.
-**Estimated duration:** 5-6 hours.
-**Stop condition:** Five views render with real projection data; compiled JSX profile views load per member; calendar privacy filtering works.
+**Phase:** v2 Gate 7 member experience; reconciles BUILD L5 through D17,
+D18, D26, and D27.
+**Depends on:** production composition root, authorized projections, member
+session/scope enforcement, and the pinned OpenClaw plugin seam.
+**Estimated duration:** 7–9 hours.
+**Stop condition:** Today, Triage, People, Knowledge, and Finance render from
+the one Python runtime; Today actions round-trip through typed events; strict
+process and browser gates pass.
 
 ## Read first
 
-1. `ADMINISTRATEME_CONSOLE_REFERENCE.html` — open in browser, click through Today, Inbox, CRM, Capture, Finance. These are your design reference; match tone.
-2. `ADMINISTRATEME_CONSOLE_PATTERNS.md` §6 (privacy filter for privileged), §7 (HIDDEN_FOR_CHILD nav).
-3. `ADMINISTRATEME_REFERENCE_EXAMPLES.md` §6 (profile pack with compiled JSX views).
+1. `docs/SYSTEM_INVARIANTS.md`, especially domain separation, read-time
+   calendar merging, and child/view-as scope.
+2. `docs/DECISIONS.md` D17, D18, D26, and D27.
+3. `docs/refactor/UX-BEHAVIOR-CONTRACT.md` and
+   `docs/refactor/BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md`.
+4. `ADMINISTRATEME_CONSOLE_REFERENCE.html` only as historical interaction
+   vocabulary; do not copy its client-only authorization, mock household data,
+   `innerHTML`, Inbox semantics, or false Node application topology.
 
 ## Objective
 
-Implement routes + compiled-JSX-loading for five views. Hand off data-loading to Python product APIs; the Node console is a rendering layer.
+Implement the primary authenticated member surfaces as read models and narrow
+typed command routes served by the one long-lived AdministrateMe Python
+runtime. Browser assets may be built with Node, but Node is not a second
+application runtime. OpenClaw owns generic chat and model routing; the pinned
+plugin may consume the same deterministic surface contracts.
 
-## Out of scope
+## Required surfaces
 
-- Calendar view and Scoreboard — prompt 14c.
-- Reward toast UX — prompt 14d.
+### Today
 
-## Deliverables
+- Compose `deterministic-daily-brief-v1` at read time in the configured IANA
+  timezone. Do not create a Daily Brief store.
+- Include authorized local-day calendar events, Tasks, Commitments, provider
+  List Items, individual Recurrences, ordered Routine occurrences, actionable
+  Interactions, and pending Triage questions as distinct kinds.
+- Default to Day Brief and provide an explicit one-item Carousel over the same
+  records. `Later` changes only the browser index.
+- `What Now?` chooses an in-progress/next-30-minute calendar event first, then
+  the deterministic explained work ranking. No LLM orders or completes work.
+- Route each state change through its own idempotent event command. Calendar
+  time is not attendance. Routine steps are ordered, dated outcomes and do not
+  implicitly complete linked Tasks.
+- The pinned OpenClaw Today binding consumes this same contract.
 
-### Profile JSX compilation
+### Triage
 
-`console/scripts/compile-profiles.js` — esbuild-based. Takes `~/.adminme/packs/profiles/<id>/views/*.jsx` and produces `~/.adminme/packs/profiles/<id>/compiled/*.ssr.js` + `*.client.js` + CSS.
+- Show derived candidates awaiting the member's confirm, enrich/reroute, or
+  dismiss decision per D26. Raw observations and official open work do not
+  enter this queue.
+- Show source evidence and exact target routing before confirmation.
+- Keep old Inbox paths only as explicitly deprecated, non-navigational aliases.
 
-### Routes
+### People, Knowledge, and Finance
 
-- `console/routes/today.js` — loads compiled today.ssr.js for viewMember's profile; renders with data from `/core/today-stream`.
-- `console/routes/inbox.js` — renders unified inbox; approval action POSTs back through guardedWrite to `/comms/inbox/*/approve`.
-- `console/routes/crm.js` — Party detail page; lists of parties; search.
-- `console/routes/capture.js` — quick-capture form + recent captures.
-- `console/routes/finance.js` — dashboard widget (data from `/automation/...` and `/core/...`).
+- People is the scope-filtered CRM surface over Parties, Relationships,
+  Interactions, Commitments, and evidence.
+- Knowledge is the read surface over member/household knowledge, Artifacts, and
+  Lists. It has no quick-capture prefix router, direct voice upload, or Triage
+  mutation. Provider List Items remain distinct from Tasks.
+- Finance is scope-filtered and principal/adult-only where required. It must
+  not expose mock or privileged values.
 
-### Privacy filter application
+## Authorization and privacy
 
-Every data-loading path that might include privileged content runs results through the privacy-filter middleware (§6) BEFORE sending to the client. Privileged events that aren't in the viewer's scope → redacted to busy-block placeholders for calendar; hidden entirely for inbox/CRM depending on sensitivity.
+- Navigation is UX; every page, JSON read, and command route authorizes again
+  on the server.
+- `authMember` authorizes writes and `viewMember` selects only an allowed read.
+  View-as never grants the viewed member's write authority.
+- Child sessions receive Today and Scoreboard only. Private calendar content is
+  redacted server-side before composition.
+- Inputs and evidence use safe DOM text assignment. No household identifier,
+  credential, or exemplar person appears in platform code or tests.
 
-### HIDDEN_FOR_CHILD nav
+## Process acceptance
 
-Middleware (§7): for child sessions, route dispatch only allows today + scoreboard; other routes return 403. Also suppresses nav links in rendered views.
+Tests must start the production composition root and prove:
 
-### Tests
+- local-time deterministic replay of the Daily Brief;
+- task/commitment/list/recurrence/routine/calendar/message/question separation;
+- ordered Routine complete/skip progression, stale-write refusal, idempotent
+  retry, and projection rebuild equivalence;
+- member-confirmed calendar outcome and no elapsed-time inference;
+- child, cross-owner, and view-as denial;
+- portal/OpenClaw contract equality;
+- responsive Day Brief/Carousel/What Now controls with no browser, console,
+  accessibility, or overflow failures.
 
-Per route, integration tests with mocked Python APIs.
-
-## Verification
-
-```bash
-cd console && npm test
-cd ..
-
-# Live check
-poetry run uvicorn adminme.products.core.main:app --port 3333 &
-poetry run uvicorn adminme.products.comms.main:app --port 3334 &
-node console/server.js &
-sleep 3
-open http://localhost:3330/today
-open http://localhost:3330/inbox
-# etc.
-kill %1 %2 %3
-
-git commit -m "phase 14b: primary console views"
-```
+Run the supported root, strict acceptance, Ruff, mypy, invariant, pinned
+OpenClaw, and Gate 7 browser suites. Retain rendered and machine-readable
+evidence under `docs/refactor/evidence/gate-7/`.
 
 ## Stop
 
-> Today, Inbox, CRM, Capture, Finance all render. Privacy filters apply. Child sessions see only today + scoreboard. Ready for 14c.
-
+> Primary member surfaces are production-composed and scope-safe. Today is a
+> deterministic local Daily Brief with typed one-item execution, including
+> ordered Routine occurrences. Triage is the only derived-candidate human gate.
+> No second runtime, model decision path, or copied truth store was added.

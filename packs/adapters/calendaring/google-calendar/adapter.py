@@ -15,15 +15,13 @@ outbound ``create_event`` calls ``events.insert`` wrapped through
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import shutil
-import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
 from adminme.adapters.emission import write_adapter_event
+from adminme.adapters.credentials import resolve_json_credentials
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -52,20 +50,8 @@ ServiceFactory = Callable[[dict[str, Any], list[str], str], Any]
 a fake; production lazily imports the Google SDK."""
 
 
-def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
-    """Read service-account JSON from an ``op://`` reference; mirrors Gmail."""
-    if not op_ref or not op_ref.startswith("op://"):
-        raise ValueError(f"invalid op-ref: {op_ref!r}")
-    op_bin = shutil.which("op")
-    if op_bin is None:
-        raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
-    proc = subprocess.run(
-        [op_bin, "read", "--no-newline", op_ref],
-        check=True,
-        capture_output=True,
-        timeout=15,
-    )
-    return json.loads(proc.stdout.decode("utf-8"))
+def _default_credentials_resolver(reference: str) -> dict[str, Any]:
+    return resolve_json_credentials(reference)
 
 
 def _default_service_factory(
@@ -381,11 +367,12 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         )
         calendar_id = self._config.get("calendar_id")
         user_email = self._config.get("user_email")
-        if not isinstance(op_ref, str) or not op_ref.startswith("op://"):
+        if not isinstance(op_ref, str) or not op_ref.startswith(
+            ("op://", "keychain://")
+        ):
             raise ValueError(
                 "oauth_credentials_ref or service_account_key_ref must be a "
-                "1Password reference "
-                "(op://<vault>/<item>/<field>)"
+                "1Password or macOS Keychain reference"
             )
         if not isinstance(calendar_id, str) or not calendar_id:
             raise ValueError("calendar_id must be a non-empty string")

@@ -583,9 +583,9 @@ async def test_health_check_detects_signed_out():
 
 ## 2. Pipeline: `commitment_extraction`
 
-**What it is.** A pipeline that consumes every `messaging.received` event, runs a skill to detect whether the message contains a commitment (a promise-bearing statement — "I'll call you Tuesday," "can you send the form by Friday?"), and if so, proposes one by emitting a `commitment.proposed` event that the inbox surfaces for principal approval.
+**What it is.** A pipeline that consumes every `messaging.received` event, runs a skill to detect whether the message contains a commitment (a promise-bearing statement — "I'll call you Tuesday," "can you send the form by Friday?"), and if so, proposes one by emitting a `commitment.proposed` event that the Triage surfaces for principal approval.
 
-**Why this pipeline is the reference example.** It's the most-used and architecturally typical pipeline: event-triggered, skill-backed, emits a proposed-state event that a human confirms, with observation-mode awareness and explicit confidence thresholds. It's also the pipeline with the highest stakes for false positives (too many bad proposals → inbox fatigue → principal ignores the real ones).
+**Why this pipeline is the reference example.** It's the most-used and architecturally typical pipeline: event-triggered, skill-backed, emits a proposed-state event that a human confirms, with observation-mode awareness and explicit confidence thresholds. It's also the pipeline with the highest stakes for false positives (too many bad proposals → Triage fatigue → principal ignores the real ones).
 
 **Pack root.** `~/.adminme/packs/pipelines/commitment-extraction/`
 
@@ -2036,7 +2036,7 @@ async def search(tenant_id: str, query: str, limit: int = 40) -> list[dict]:
 
 ## 5. Event type: `commitment.proposed`
 
-**What it is.** An event emitted by the `commitment_extraction` pipeline (and occasionally by other sources: manual user entry, voice capture) proposing a commitment. A `commitment.proposed` event is a proposal, not a confirmation. It enters the commitments projection as a `pending` commitment that the inbox surfaces to a principal for approval.
+**What it is.** An event emitted by the `commitment_extraction` pipeline (and occasionally by other sources: manual user entry, voice capture) proposing a commitment. A `commitment.proposed` event is a proposal, not a confirmation. It enters the commitments projection as a `pending` commitment that the Triage surfaces to a principal for approval.
 
 **Why this event type is the reference example.** It's the most upstream event in the Hearth commitment flow and demonstrates the full event-shape contract: required envelope fields, payload schema, source provenance, relationships to other events, version compatibility.
 
@@ -2141,7 +2141,7 @@ async def search(tenant_id: str, query: str, limit: int = 40) -> list[dict]:
         "classify_reasons": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Human-readable classification reasons from the skill. Shown in the inbox proposal card."
+          "description": "Human-readable classification reasons from the skill. Shown in the Triage proposal card."
         }
       }
     }
@@ -2192,14 +2192,14 @@ async def search(tenant_id: str, query: str, limit: int = 40) -> list[dict]:
 
 Who reads `commitment.proposed` events:
 
-- **`commitments` projection** — inserts a row in `commitments` with `status='pending'`. The inbox reads from this projection.
-- **`inbox_surface` projection** — appends a proposal card to the relevant member's inbox list.
+- **`commitments` projection** — inserts a row in `commitments` with `status='pending'`. Triage reads the unconfirmed subset through its own derived projection.
+- **`triage` projection** — appends a proposal card to the relevant member's Triage queue; it never copies already-official tasks into the queue.
 - **`noise_filtering` pipeline** — does not re-process proposals, but tracks proposal rate per source-interaction to detect loops.
 - **Test fixtures** — many other pipelines' tests include `commitment.proposed` events as setup to exercise downstream flows.
 
 ### Downstream events this triggers (directly or indirectly)
 
-- `commitment.confirmed` (when a principal approves the proposal in the inbox)
+- `commitment.confirmed` (when a principal approves the proposal in the Triage)
 - `commitment.dismissed` (when a principal dismisses)
 - `commitment.edited` (when a principal edits before approving)
 - `commitment.expired` (background job: proposals older than 14 days that weren't acted on)
@@ -2219,7 +2219,7 @@ When a breaking schema change is needed:
 
 ### Failure modes
 
-- **Orphaned proposal.** `owed_by_member_id` refers to a member that was removed. The commitments projection handler should insert the row anyway (non-destructive), but the inbox surface filters it out (member deleted → no inbox).
+- **Orphaned proposal.** `owed_by_member_id` refers to a member that was removed. The commitments projection handler should insert the row anyway (non-destructive), but the Triage surface filters it out (member deleted → no Triage).
 - **Dangling source_event_id.** The referenced messaging event doesn't exist or was in a namespace the reader doesn't have. Should be rare; fail open (show the proposal without the source preview).
 - **Confidence out of range.** Schema enforces 0.0-1.0; a skill that returns 1.1 fails validation at emission time, before the event hits the log.
 
@@ -2639,7 +2639,7 @@ data:
   tasks:
     - id: t-001
       time: "now · 09:42"
-      context: "from inbox · kate"
+      context: "from Triage · kate"
       title: "Text Kate back about Saturday kitchen walk-through"
       micro_step: "Open iMessage, pick 'yes 2pm' or 'Sunday better,' send."
       meta: [["low energy", "blush"], ["tiny", "teal"], ["social", "dim"]]

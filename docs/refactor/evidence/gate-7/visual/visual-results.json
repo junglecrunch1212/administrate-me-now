@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-05T00:11:55.410Z",
+  "generated_at": "2026-08-06T14:28:58.414Z",
   "status": "PASS",
-  "browser": "installed Microsoft Edge via playwright-core@1.62.0",
+  "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
     "1440x1000",
     "1280x900",
@@ -11,6 +11,7 @@
     "390x844"
   ],
   "states": [
+    "day-brief",
     "carousel",
     "compressed",
     "child",
@@ -39,24 +40,39 @@
       "detail": "Today"
     },
     {
-      "name": "today carousel mode",
+      "name": "Today defaults to Day Brief",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.1 decision.Events0Moves0Messages0Decisions1On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today.Needs a decision1Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice0No message needs a response right now."
     },
     {
-      "name": "/member/inbox HTTP",
+      "name": "Today offers Carousel and What Now",
+      "status": "PASS",
+      "detail": "Day BriefCarouselWhat Now?"
+    },
+    {
+      "name": "Today hides internal profile and member identifiers",
+      "status": "PASS",
+      "detail": "Thursday, August 6"
+    },
+    {
+      "name": "Today Carousel is interactive",
+      "status": "PASS",
+      "detail": "Day BriefCarouselWhat Now?Clarifying Question · 1 of 1Reply to the household messageCheck the proposed fact, correct it if needed, then confirm or dismiss.commitment · Waiting For YouReviewWhy this is here"
+    },
+    {
+      "name": "/member/triage HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/inbox title",
+      "name": "/member/triage title",
       "status": "PASS",
-      "detail": "Inbox"
+      "detail": "Triage"
     },
     {
-      "name": "inbox carousel mode",
+      "name": "triage member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/people HTTP",
@@ -69,9 +85,9 @@
       "detail": "People"
     },
     {
-      "name": "people carousel mode",
+      "name": "people member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/knowledge HTTP",
@@ -84,9 +100,9 @@
       "detail": "Knowledge"
     },
     {
-      "name": "knowledge carousel mode",
+      "name": "knowledge member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/finance HTTP",
@@ -99,9 +115,9 @@
       "detail": "Finance"
     },
     {
-      "name": "finance carousel mode",
+      "name": "finance member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/calendar HTTP",
@@ -114,9 +130,9 @@
       "detail": "Calendar"
     },
     {
-      "name": "calendar carousel mode",
+      "name": "calendar member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/scoreboard HTTP",
@@ -129,9 +145,9 @@
       "detail": "Scoreboard"
     },
     {
-      "name": "scoreboard carousel mode",
+      "name": "scoreboard member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "/member/settings HTTP",
@@ -144,9 +160,9 @@
       "detail": "Settings"
     },
     {
-      "name": "settings carousel mode",
+      "name": "settings member context",
       "status": "PASS",
-      "detail": "carousel · visual_principal"
+      "detail": "Private member view"
     },
     {
       "name": "eight principal navigation items",
@@ -226,9 +242,9 @@
       "detail": "Today"
     },
     {
-      "name": "compressed profile",
+      "name": "tablet Day Brief default",
       "status": "PASS",
-      "detail": "compressed · visual_adult"
+      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "observation mode visible",
@@ -336,12 +352,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_b15e7b2fbed042a6 HTTP",
+      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_b15e7b2fbed042a6 title",
+      "name": "/member/quests/view_3a9b4c64d4314556 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -356,19 +372,19 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_b15e7b2fbed042a6 HTTP",
+      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_b15e7b2fbed042a6 title",
+      "name": "/member/quests/view_3a9b4c64d4314556 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
     {
       "name": "archived quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayInboxPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriagePeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "expiring quest created",
@@ -378,7 +394,7 @@
     {
       "name": "expired quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayInboxPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriagePeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "/member/today HTTP",
@@ -505,7 +521,7 @@
     {
       "name": "domain view remains usable during model loss",
       "status": "PASS",
-      "detail": "Decision queueYour queue is clear. Leave it that way for a minute.Open listsNo open list items."
+      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "no browser console errors",
@@ -529,77 +545,81 @@
     }
   ],
   "screenshots": {
+    "surface-today-day-brief-desktop.png": {
+      "bytes": 163679,
+      "sha256": "e468c616c6eab83e6414eebaa17b3560c9b7378701157552e1b49717cd19b849"
+    },
     "surface-today-carousel-desktop.png": {
-      "bytes": 89736,
-      "sha256": "0047944c8607d0666b189841dcecf9cca4cba134f024ebf60d2c609ec7b412b1"
+      "bytes": 125055,
+      "sha256": "30e5ab7a5874420c736c4582761ea2881cb3e9845e84881af591b466137fd799"
     },
-    "surface-inbox-carousel-desktop.png": {
-      "bytes": 81139,
-      "sha256": "2ad235036db11e7cc8de2cfe7242fe903607a3c6546f10f0e4cb5e497e050cdf"
+    "surface-triage-desktop.png": {
+      "bytes": 137903,
+      "sha256": "a1eb109129f7a04e2a4e846c124b6d08c2a0814a56a2bc3fac19a755c4e8f368"
     },
-    "surface-people-carousel-desktop.png": {
-      "bytes": 85831,
-      "sha256": "934236abc4e3132467b3ab5c4e63f7404dd9c49ab43980c54c029e73435b8175"
+    "surface-people-desktop.png": {
+      "bytes": 109581,
+      "sha256": "8d019b7331e3368370fc2825fc505576a3377162df5dae43be7e70f2b6890a69"
     },
-    "surface-knowledge-carousel-desktop.png": {
-      "bytes": 90384,
-      "sha256": "59db415c8ddb47da5cc3dae1a1ebaa1e0494cb886fedc2f89b787e5e9068cbf3"
+    "surface-knowledge-desktop.png": {
+      "bytes": 111566,
+      "sha256": "25249686af26b68448cdbe77a2bd0c20c5ac472a96362ed8e0eeb54137fa3a7e"
     },
-    "surface-finance-carousel-desktop.png": {
-      "bytes": 76248,
-      "sha256": "3f0079f46839735ad6e59d3413d1f9b6db2c622996ecb0194053451b531b36f4"
+    "surface-finance-desktop.png": {
+      "bytes": 94364,
+      "sha256": "d3c6cd59745eb034866c006e06e03c249be2b0b3014dd8b2fa1b4e5e68a6bb00"
     },
-    "surface-calendar-carousel-desktop.png": {
-      "bytes": 75580,
-      "sha256": "f95b008171d41c9b419d169992f2a658035153d61aaa4525e67d4136f9241dd6"
+    "surface-calendar-desktop.png": {
+      "bytes": 92848,
+      "sha256": "0c38013d9c9ba9d57c69bfa832d9babee8b3aa28fcffbe7a2f7ffe1fa464fe87"
     },
-    "surface-scoreboard-carousel-desktop.png": {
-      "bytes": 87583,
-      "sha256": "ae4c20cdffcf1062e3cf8b0ce4ec92dd7eb728971d8d7bfe555d267c64ee5ee6"
+    "surface-scoreboard-desktop.png": {
+      "bytes": 107701,
+      "sha256": "e6d394bf1eae4d19e4ebfbe2337c81aadfd29028d57f6254d60ef49fab245045"
     },
-    "surface-settings-carousel-desktop.png": {
-      "bytes": 160717,
-      "sha256": "bf075fe247130b1d1a9f9dc27cbe0dcadf208c66c99ee7abcfb519cc6cff4e38"
+    "surface-settings-desktop.png": {
+      "bytes": 231060,
+      "sha256": "3ac87eacb6237f22dc11f482ef81888ed0a2d114726b0b8bf684d4a13dced526"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 69213,
-      "sha256": "9088836c6c18173485c4619bc81f07340733be4e7cc000b6f9372ecdab6b25a6"
+      "bytes": 115655,
+      "sha256": "619dbd52ab234813b60f15a18e362203081f3e57edc8a64e9fd56aee8ebca496"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 64212,
-      "sha256": "762fcc6bd352ea7d5fe6d018587d6ea029621f8830dd37fd2e17ceea3f687f4d"
+      "bytes": 99441,
+      "sha256": "26c00e36846dd1f5264054ad3fa43c7d4c485adac5da3e44e86f0099ccb785c0"
     },
     "quest-private-compressed.png": {
-      "bytes": 151177,
-      "sha256": "748fc3469e05d326567d1dcf665b320303035be5ea2a2b20bbd247e3332faba9"
+      "bytes": 183619,
+      "sha256": "045370e6422acceedde0120e8e1d2725f4102eb18e2cf8e30ffd2eaecef61a7a"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 181388,
-      "sha256": "eafbc7523e343443b4e54bf5205ab2a41475c2b1d32b026fc54a10e2a2c3905a"
+      "bytes": 220605,
+      "sha256": "5de7630310903b728da63f9d62fe4abb2d7e551e20c6959a5b77f0b7b0b6ec3d"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 89935,
-      "sha256": "2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820"
+      "bytes": 103261,
+      "sha256": "ff3babfb94783c14812e987d094d0e77b2b592d0f76cb83363f498dd4b70a66c"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 89935,
-      "sha256": "2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820"
+      "bytes": 103259,
+      "sha256": "c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 45540,
-      "sha256": "eae42ea4cdcbd9c5a25b11d049f3b112c6c8ac8971d2d27e06c8046f43a92948"
+      "bytes": 109524,
+      "sha256": "64fbdebc9cb10059567085eebe5ac52b6ea2cb333f77485b1566a42f955429c2"
     },
     "mode-child-scoreboard-narrow.png": {
-      "bytes": 43721,
-      "sha256": "8461521294324ca91bf5407ff78fd65b20ae307e66661807e5d10e8b412eb106"
+      "bytes": 50258,
+      "sha256": "ab79a691ed199334963158713f607680ec7a4d7787449bad783cb0da3b6b3746"
     },
     "shared-screen-scoreboard.png": {
-      "bytes": 73231,
-      "sha256": "0ee50d530f1961d63f4d7ace9b21e8a1d51c06112e875729c1f84c8b12a4277f"
+      "bytes": 82792,
+      "sha256": "b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 71641,
-      "sha256": "546a85e439586c0a18143ea49f0123020a7a07c573a22e7cb143131a708dd305"
+      "bytes": 126320,
+      "sha256": "1330770b89c26dcc3c9dec9c38f641e9df248a6f46657567c6b2d70cf1e403de"
     }
   },
   "console_errors": [],

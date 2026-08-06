@@ -15,11 +15,13 @@ from adminme.projections.recurrences import handlers
 
 class RecurrencesProjection(Projection):
     name = "recurrences"
-    version = 1
+    version = 2
     subscribes_to = [
         "recurrence.added",
         "recurrence.completed",
         "recurrence.updated",
+        "routine.defined",
+        "routine.step_outcome_recorded",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 

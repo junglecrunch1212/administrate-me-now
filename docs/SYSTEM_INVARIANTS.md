@@ -40,7 +40,7 @@ Projections at L3 are read-only consumers of the event log; they synthesize stat
 2. Projections **never write back to the event log** — they are strictly read-only consumers; a projection emitting an event is a bug. [arch §4, BUILD.md §L3]
 3. Projection handlers are deterministic: no wall-clock reads, no random, no UUID generation, no network calls, no calls to other projections, no calls to the event log beyond the cursor advance — `apply(event)` is a pure function over `(state, event)`. [arch §4]
 4. Each projection has a `name`, a `version` integer (bumped to trigger rebuild), an event-type subscription list, a durable cursor, an idempotent `apply(event)`, and a `rebuild()`. [arch §4]
-5. There are exactly **12 v1 projections**: `parties`, `interactions`, `artifacts`, `commitments`, `tasks`, `recurrences`, `calendars`, `places_assets_accounts`, `money`, `vector_search`, `xlsx_workbooks`, `member_knowledge`; adding a thirteenth requires an ADR. The 12th projection `member_knowledge` was added by the Conception-C architecture amendment per D17 (see `docs/04-architecture-amendment-knowledge-vaults-and-member-bridges.md`). [arch §1, arch §4, D17]
+5. There are exactly **14 registered projections**: the original twelve (`parties`, `interactions`, `artifacts`, `commitments`, `tasks`, `recurrences`, `calendars`, `places_assets_accounts`, `money`, `vector_search`, `xlsx_workbooks`, `member_knowledge`), `lists` as the thirteenth domain projection per D18, and `triage` as the fourteenth derived adjudication projection per D26. The original thirteen domain-truth capabilities remain intact; Triage is rebuildable proposal state and never authoritative household truth. [arch §1, arch §4, D17, D18, D26]
 6. Plugin-provided projections namespace their tables under the plugin's dotted id; they never share table names with core projections, and the projection schema is not part of the authority model (authority is checked at Session construction, not at projection-row level). [arch §4, arch §6]
 7. Projection schemas never embed hardcoded tenant identity; all tenant-specific values come from row data populated by events, which in turn originate in the instance's config/bootstrap. [BUILD.md §CRITICAL OPERATING RULES rule 4, arch §4]
 
@@ -67,6 +67,7 @@ Commitments, tasks, and recurrences are three distinct projections with three di
 5. A **Recurrence** is a template (RFC 5545 RRULE string) with `next_occurrence`, `lead_time_days`, and a `trackable` flag; recurrences generate scheduled occurrences but **are not tasks themselves** — a recurrence firing does not automatically produce a task row unless a pipeline explicitly materializes it. [arch §4 table row 3.6]
 6. Commitments are never completed by a recurrence firing; they complete only on explicit `commitment.confirmed` / `commitment.completed` or on task completion whose downstream fulfillment logic decides so. [BUILD.md §3.4, BUILD.md §3.6]
 7. Every LLM-produced proposal (commitment, recurrence, thank-you, artifact-classification) carries `source_skill@version` provenance; direct LLM writes to live state are prohibited — the LLM proposes, the human confirms. [arch §5, BUILD.md §CRITICAL OPERATING RULES rule 6]
+8. A **Routine** is an ordered, time-windowed recurring execution aggregate, not a Task or a Recurrence completion alias. Its definition and per-occurrence step outcomes are typed events projected inside `recurrences`; only the current pending step may be completed or skipped, and a linked Task is never completed implicitly. Routine support does not add a projection or permit a model to order steps. [D27, AC-05, AC-06, AC-18]
 
 ## Section 5: Calendar and its relationship to tasks/recurrences
 
@@ -126,7 +127,7 @@ Security is defense-in-depth across the session layer, scope enforcement at ever
 **HIDDEN_FOR_CHILD:**
 
 17. Admin surfaces are enforced two ways for child sessions: a **client-side nav filter** (canonical list in `console/lib/nav.js`) AND a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES`); client-side is UX, server-side is security, and the two arrays are deliberately independent. [arch §6, CONSOLE_PATTERNS.md §7]
-18. Child sessions see only `today` and `scoreboard` in the nav; `/api/inbox`, `/api/crm`, `/api/capture`, `/api/finance`, `/api/calendar`, `/api/settings`, `/api/tasks`, `/api/chat`, and `/api/tools` all return 403 for children regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7]
+18. Child sessions see only `today` and `scoreboard` in the nav; direct requests for Triage, People/CRM, Knowledge, Finance, Calendar, Settings, adult lifecycle, and adult OpenClaw tools fail closed regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7, D26]
 
 **Bridge sovereignty:**
 
@@ -199,7 +200,7 @@ The bootstrap wizard is a textual/Rich TUI that runs once per instance and leave
 2. Bootstrap is **resumable** via encrypted `~/.adminme/bootstrap-answers.yaml.enc` AND the event log; re-running `adminme bootstrap` reads the answers file and jumps to the first incomplete section. [arch §10]
 3. Successfully completed sections are **idempotent on re-run**: events are already in the log, config files are not rewritten from stale answers, and no user-visible side effect repeats. [arch §10]
 4. Observation mode is **enabled by default** at the end of §9 of the wizard; the tenant must explicitly opt out after reviewing the suppressed-action log. [arch §6, arch §10]
-5. Only **§1 Environment preflight** aborts on failure; all later sections create inbox tasks for skipped sub-items rather than blocking wizard progress — incomplete setup is always resolvable via the normal task flow. [arch §10]
+5. Only **§1 Environment preflight** aborts on failure; all later sections create explicit follow-up tasks for skipped sub-items rather than blocking wizard progress — incomplete setup is always resolvable through Today/normal task flow. [arch §10, D26]
 
 ## Section 12: Tenant isolation
 

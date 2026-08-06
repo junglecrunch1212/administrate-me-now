@@ -311,7 +311,7 @@ class PlaidAdapter(InboundDataAdapter):
         await self._emit_authenticated(ctx, item_access_token_ref)
 
         # One institution-health probe at startup so the operator sees a
-        # current DEGRADED / DOWN status in their inbox without waiting
+        # current DEGRADED / DOWN status in Settings without waiting
         # for the first backstop tick. The probe is best-effort and
         # routes any SDK exception through the same 7-tuple defensive
         # catch as ``/transactions/sync``.

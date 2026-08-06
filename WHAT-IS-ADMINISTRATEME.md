@@ -57,7 +57,7 @@ Not for sales. For your aunt's birthday and your kid's pediatrician and your han
 
 #### 4. Unified communications
 
-iMessage. Email. SMS. WhatsApp. Telegram. Discord. Voice. AdministrateMe pulls inbound across all of them into one inbox. It composes outbound through OpenClaw on your behalf when you authorize, drafts replies you can approve, and never sends without your sign-off until you've run the system in observation mode long enough to trust it.
+iMessage. Email. SMS. WhatsApp. Telegram. Discord. Voice. AdministrateMe records inbound communication as scoped facts and puts only extracted action candidates into Triage. It composes outbound through OpenClaw on your behalf when you authorize, drafts replies you can approve, and never sends without your sign-off until you've run the system in observation mode long enough to trust it.
 
 #### 5. A working-memory and capture system
 
@@ -236,7 +236,8 @@ The L2 contract is the most-cited invariant cluster in the codebase. See `docs/S
 
 Deterministic pure functions from event subsets to read-model state. Each projection has a `name`, `version` (bumped to trigger rebuild), event-type subscription list, durable cursor, idempotent `apply(event)`, and a `rebuild()` that truncates and replays from event 0 producing state equivalent to the live cursor.
 
-**13 projections** (post-amendment 2026-05-04):
+**14 registered projections**: thirteen domain-truth capabilities plus the
+derived Triage adjudication read model (D26):
 
 | # | Projection | Owns | Notable property |
 |---|---|---|---|
@@ -253,6 +254,7 @@ Deterministic pure functions from event subsets to read-model state. Each projec
 | 3.11 | `xlsx_workbooks` | Two Excel workbooks on disk | **Bidirectional projection** — forward daemon regenerates, reverse daemon detects edits and emits events |
 | 3.12 | `member_knowledge` | Per-member personal knowledge | Populated by member-bridge ingest; private to the owning member |
 | 3.13 | `lists` | First-class shopping/wishlist/etc. lists | Per [D18], distinct from tasks |
+| 3.14 | `triage` | Pending extracted/derived candidates | Rebuildable human gate; never authoritative household truth |
 
 **Hard rules on projections** (per `SYSTEM_INVARIANTS.md §2`):
 - Pure function of `(state, event)` — no wall-clock reads, no random, no UUID generation, no network calls, no calls to other projections beyond cursor advance.
@@ -317,7 +319,7 @@ Two surface families:
 | Product | Owns |
 |---|---|
 | Core (:3333) | tasks, commitments, recurrences, scoreboard, whatnow, rewards, paralysis, digests, custody brief, emergency protocols |
-| Comms (:3334) | inbox aggregation, propose/commit outbound, approval queue, batch windows |
+| Comms (:3334) | communication interactions, extraction proposals, governed outbound, batch windows |
 | Capture (:3335) | quick-capture, voice notes, triage queue, recipes, CRM Parties/Places/Assets/Accounts surfaces, semantic search |
 | Automation (:3336) | Plaid integration, financial projections, budget enforcement, subscription audit, Home Assistant bridge |
 | Bridge (:3337) | per-member bridge ingest endpoint; receives knowledge events from member Mac Minis |
@@ -341,7 +343,7 @@ The console **never reads the event log directly**, **never writes projections d
 11. Observation mode enforcement (final outbound filter)
 12. Error handling with correlation IDs
 
-**Eight nav surfaces** in the console: today, inbox, crm, capture, finance, calendar, scoreboard, settings. Child role sees only today + scoreboard (enforced both client-side and server-side).
+**Eight nav surfaces** in the console: today, triage, people, knowledge, finance, calendar, scoreboard, settings. Child role sees only today + scoreboard (enforced both client-side and server-side).
 
 ### OpenClaw integration: the four seams
 
@@ -478,7 +480,7 @@ Prompts 00 through 18 produce:
 
 - The L2 event log + bus with SQLCipher-backed storage
 - The ~60 typed event-type schemas with upcasters
-- All 13 projections with their handlers, schemas, queries, and rebuild logic
+- All thirteen domain projections plus the derived Triage projection, with handlers, schemas, queries, and rebuild logic
 - L4 pipeline runner + ~18 reactive and proactive pipelines
 - L4 skill runner wrapping OpenClaw's skill system
 - L1 adapters in their five-category taxonomy
@@ -558,7 +560,7 @@ flowchart TB
         BUS["In-process asyncio bus<br/>(per-subscriber offsets,<br/>durable)"]:::l2
     end
 
-    subgraph L3["L3 — Projections (13)"]
+    subgraph L3["L3 — Projections (13 domain + Triage)"]
         CRM["CRM spine:<br/>parties / interactions /<br/>artifacts / commitments"]:::l3
         DOMAIN["Domain:<br/>tasks / recurrences /<br/>calendars / lists"]:::l3
         OPS["Ops:<br/>money / places-assets-accounts /<br/>vector_search / member_knowledge"]:::l3
@@ -572,8 +574,8 @@ flowchart TB
     end
 
     subgraph L5["L5 — Surfaces"]
-        CORE["Core :3333<br/>(tasks/digests/<br/>scoreboard/whatnow)"]:::l5
-        COMMS["Comms :3334<br/>(inbox/approve/<br/>send)"]:::l5
+        CORE["Core :3333<br/>(Triage/tasks/digests/<br/>scoreboard/whatnow)"]:::l5
+        COMMS["Comms :3334<br/>(interactions/commitments/<br/>send)"]:::l5
         CAPTURE["Capture :3335<br/>(quick-cap/voice/<br/>CRM surfaces)"]:::l5
         AUTO["Automation :3336<br/>(plaid/budget/<br/>HA bridge)"]:::l5
         BRIDGEP["Bridge :3337<br/>(member-bridge<br/>ingest endpoint)"]:::l5
@@ -644,7 +646,7 @@ Every claim in this document is sourced from your codebase's constitutional docs
 
 - **One-liner / short / landing copy:** distilled from `ADMINISTRATEME_BUILD.md` opening section + `ADMINISTRATEME_FIELD_MANUAL.md` chapter 1
 - **Five-layer architecture:** `docs/architecture-summary.md` §1 + `docs/SYSTEM_INVARIANTS.md` §1-§15
-- **13 projections:** `docs/architecture-summary.md` §4 table (post-amendment-2)
+- **14 registered projections (13 domain + Triage):** `docs/architecture-summary.md` §4 table and D26
 - **Pipeline list:** `docs/architecture-summary.md` §5 + `ADMINISTRATEME_BUILD.md` §L4
 - **OpenClaw four seams:** `docs/SYSTEM_INVARIANTS.md` §8 + `docs/openclaw-cheatsheet.md`
 - **Security model:** `docs/SYSTEM_INVARIANTS.md` §6 + `ADMINISTRATEME_CONSOLE_PATTERNS.md` §1-§12

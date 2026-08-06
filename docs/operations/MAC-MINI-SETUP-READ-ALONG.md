@@ -665,7 +665,7 @@ Restore rehearsal uses only the exact path printed by backup:
 ```
 
 Restore stages and authenticates the archive, checks SQLCipher, rebuilds all
-thirteen projections, preserves rollback state, and returns the old state if
+fourteen registered projections (thirteen domain truth plus Triage), preserves rollback state, and returns the old state if
 post-restore Doctor fails. Never unzip or edit a backup manually.
 
 ## Stage 12: the five-to-seven-day trust period

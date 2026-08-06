@@ -30,7 +30,7 @@ voicemail / calendar / capture-note triggers) by the
 `commitment_extraction` pipeline. The downstream `extract_commitment_fields`
 skill only runs when this skill returns confidence ≥ the configured
 `min_confidence`, so the safer failure mode is to under-flag — a false
-negative loses one proposal; a false positive pollutes the inbox.
+negative loses one proposal; a false positive pollutes Triage.
 
 ## What counts as a commitment
 

@@ -114,13 +114,12 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
         assert proposal["confirmed_at"] is None
         assert proposal["source_interaction_id"] == interaction_id
         assert proposal["source_skill"] == "commitment_extraction"
-        inbox = client.get("/api/core/v1/inbox", headers=AUTH).json()
-        assert {(item["kind"], item["id"]) for item in inbox["items"]} >= {
-            ("commitment_proposal", commitment_id),
-            ("task", "task_fixture_secondary"),
+        triage = client.get("/api/core/v1/triage", headers=AUTH).json()
+        assert {(item["kind"], item["id"]) for item in triage["items"]} == {
+            ("commitment", commitment_id),
         }
         proposal_item = next(
-            item for item in inbox["items"] if item["id"] == commitment_id
+            item for item in triage["items"] if item["id"] == commitment_id
         )
         assert proposal_item["actions"] == ["edit", "approve", "dismiss"]
 
@@ -498,7 +497,7 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
                 ).status_code
                 == 503
             )
-            assert client.get("/api/core/v1/inbox", headers=AUTH).status_code == 503
+            assert client.get("/api/core/v1/triage", headers=AUTH).status_code == 503
             assert client.get("/api/core/v1/what-now", headers=AUTH).status_code == 503
         finally:
             runtime.projections = original_projections

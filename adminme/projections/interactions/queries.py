@@ -43,6 +43,32 @@ def recent(
     return filter_rows(session, [dict(row) for row in rows])
 
 
+def recent_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Recent interactions owned by or explicitly resolved to one member."""
+
+    rows = conn.execute(
+        """
+        SELECT DISTINCT i.*
+          FROM interactions i
+          LEFT JOIN interaction_participants p
+            ON p.tenant_id = i.tenant_id
+           AND p.interaction_id = i.interaction_id
+         WHERE i.tenant_id = ?
+           AND (i.owner_scope = ? OR p.party_id = ?)
+         ORDER BY i.occurred_at DESC
+         LIMIT ?
+        """,
+        (session.tenant_id, f"private:{member_id}", member_id, limit),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
+
+
 def recent_with(
     conn: sqlcipher3.Connection,
     session: Session,

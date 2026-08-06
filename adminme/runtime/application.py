@@ -318,6 +318,8 @@ class AdministrateMeRuntime:
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
+        self.triage_command_locks: dict[str, asyncio.Lock] = {}
+        self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -399,6 +401,11 @@ class AdministrateMeRuntime:
                                 "commitment.*",
                                 "communication.*",
                                 "task.*",
+                                "triage.*",
+                                "calendar.event_outcome_recorded",
+                                "recurrence.completed",
+                                "routine.*",
+                                "identifier.added",
                                 "household.action.*",
                                 "external_sync.*",
                             ],
@@ -553,7 +560,7 @@ class AdministrateMeRuntime:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""
 
         payload = event["payload"]
-        if payload.get("provider") != "google_calendar":
+        if payload.get("provider") not in {"google_calendar", "google_tasks"}:
             return
         if self.adapters is None:
             raise RuntimeError("adapter supervisor unavailable")

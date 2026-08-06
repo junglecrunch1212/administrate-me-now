@@ -22,6 +22,7 @@ from adminme.lib.session import Session, build_internal_session
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.interactions.queries import (
     closeness_signals,
+    recent_for_member,
     recent_with,
     thread,
 )
@@ -218,6 +219,45 @@ async def test_recent_with_window(rig: dict[str, Any]) -> None:
     got = recent_with(conn, _S("tenant-a"), party_id="a@example.com", days=30)
     assert len(got) == 1
     assert got[0]["occurred_at"] == recent
+
+
+async def test_recent_for_member_requires_owner_or_resolved_participant(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    fixtures = [
+        ("private:member-a", "external-a", "external-b", "owned"),
+        ("shared:household", "member-a", "external-c", "participant"),
+        ("private:member-b", "external-d", "external-e", "other-member"),
+    ]
+    for owner_scope, sender, recipient, subject in fixtures:
+        await log.append(
+            _envelope(
+                "messaging.received",
+                {
+                    "source_channel": "gmail",
+                    "from_identifier": sender,
+                    "to_identifier": recipient,
+                    "subject": subject,
+                    "received_at": "2026-04-10T10:00:00Z",
+                },
+                owner_scope=owner_scope,
+            )
+        )
+    last = await log.latest_event_id()
+    assert last is not None
+    await bus.notify(last)
+    await _wait_idle(bus, "projection:interactions")
+
+    session = build_internal_session("member-a", "principal", "tenant-a")
+    rows = recent_for_member(
+        runner.connection("interactions"),
+        session,
+        member_id="member-a",
+    )
+    assert {row["subject"] for row in rows} == {"owned", "participant"}
 
 
 async def test_thread_returns_ordered_by_occurred_at(rig: dict[str, Any]) -> None:

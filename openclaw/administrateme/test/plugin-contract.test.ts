@@ -121,7 +121,7 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(9);
-    expect([...runtime.commands]).toHaveLength(7);
+    expect([...runtime.commands]).toHaveLength(8);
     expect([...runtime.gateways]).toHaveLength(11);
     expect(runtime.services).toHaveLength(1);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);

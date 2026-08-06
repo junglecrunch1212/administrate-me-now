@@ -46,8 +46,8 @@ poetry run python - <<'PY'
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES
 
 names = {projection.name for projection in DEFAULT_PROJECTION_CLASSES}
-if len(names) != 13:
-    raise SystemExit(f"expected exactly 13 projections, found {len(names)}: {sorted(names)}")
+if len(names) != 14:
+    raise SystemExit(f"expected exactly 14 projections, found {len(names)}: {sorted(names)}")
 PY
 
 echo "ADMINISTRATEME ARCHITECTURE NEGATIVE CHECKS: PASS"

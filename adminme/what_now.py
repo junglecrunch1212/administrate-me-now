@@ -54,8 +54,17 @@ def rank_what_now(
     member_id: str,
     profile: dict[str, Any] | None,
     as_of: datetime,
+    list_items: list[dict[str, Any]] | None = None,
+    recurrences: list[dict[str, Any]] | None = None,
+    routines: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Rank the same visible rows identically for the same ``as_of`` instant."""
+    """Rank authorized executable work identically for the same instant.
+
+    Calendar events shape the Day Brief rather than competing with household
+    work. Provider list items and trackable recurrences are distinct candidate
+    kinds with their own interaction contracts; they are never coerced into
+    tasks merely to make the ranker simpler.
+    """
 
     as_of = as_of.astimezone(timezone.utc)
     behavior = _profile_behavior(profile)
@@ -92,6 +101,16 @@ def rank_what_now(
                 "title": row["description"],
                 "last_event_id": row.get("last_event_id"),
                 "due": row.get("due_at"),
+                "status": status,
+                "micro_step": (
+                    "Open the thread and write only the first honest sentence."
+                    if row.get("kind") == "reply"
+                    else "Open the commitment and do only the first concrete move."
+                ),
+                "energy": "communication" if row.get("kind") == "reply" else None,
+                "effort": "15 min",
+                "context": "commitment",
+                "actions": ["complete", "block", "evidence"],
                 "_score": score,
                 "_due": due,
                 "explanation": {
@@ -147,6 +166,13 @@ def rank_what_now(
                 "title": row["title"],
                 "last_event_id": row.get("last_event_id"),
                 "due": row.get("due_date"),
+                "status": status,
+                "micro_step": row.get("micro_script")
+                or "Open it and do only the first visible step.",
+                "energy": energy,
+                "effort": f"{effort} min",
+                "context": domain,
+                "actions": ["complete", "defer", "block", "evidence"],
                 "_score": score,
                 "_due": due,
                 "explanation": {
@@ -165,6 +191,154 @@ def rank_what_now(
                     "nudge_state": "profile_penalty" if nudge_penalty else "clear",
                     "recent_outcomes": outcome_bias,
                     "obligation": "household task, not a commitment",
+                },
+            }
+        )
+
+    for row in list_items or []:
+        due = _parse_time(row.get("due_at"))
+        urgency_score, urgency_reason = _urgency(due, as_of)
+        priority_score = {1: 125, 5: 50, 9: 0, 0: 0}.get(
+            int(row.get("priority") or 0), 0
+        )
+        provider = str(row.get("provider") or "external_list")
+        actions = ["evidence"]
+        if provider == "apple_reminders":
+            actions.insert(0, "complete_external")
+        candidates.append(
+            {
+                "id": f"{row['list_external_id']}:{row['item_external_id']}",
+                "kind": "list_item",
+                "title": row["title"],
+                "last_event_id": row.get("last_event_id"),
+                "due": row.get("due_at"),
+                "status": "open",
+                "micro_step": "Open the reminder and do only the first physical step.",
+                "energy": "unknown",
+                "effort": "short",
+                "context": row.get("list_name") or "list",
+                "actions": actions,
+                "provider": row.get("provider"),
+                "provider_account_id": row.get("provider_account_id"),
+                "list_external_id": row.get("list_external_id"),
+                "item_external_id": row.get("item_external_id"),
+                "provider_revision": row.get("provider_revision"),
+                "_score": 450 + urgency_score + priority_score + outcome_bias,
+                "_due": due,
+                "explanation": {
+                    "available_time": available,
+                    "temporal_horizon": urgency_reason,
+                    "priority_urgency": urgency_score + priority_score,
+                    "energy": "unknown",
+                    "effort_minutes": 15,
+                    "context_location": row.get("list_name") or "list",
+                    "dependencies_waiting": [],
+                    "relationship_consequence": None,
+                    "profile_behavior": profile.get("id") if profile else None,
+                    "quiet_hours": in_quiet_hours,
+                    "nudge_state": "profile_penalty" if nudge_penalty else "clear",
+                    "recent_outcomes": outcome_bias,
+                    "obligation": "provider list item, not a household task",
+                },
+            }
+        )
+
+    for row in recurrences or []:
+        if not row.get("trackable"):
+            continue
+        due = _parse_time(row.get("next_occurrence"))
+        urgency_score, urgency_reason = _urgency(due, as_of)
+        kind = str(row.get("kind") or "routine")
+        candidates.append(
+            {
+                "id": row["recurrence_id"],
+                "kind": "recurrence",
+                "title": kind.replace("_", " ").strip().title(),
+                "last_event_id": row.get("last_event_id"),
+                "due": row.get("next_occurrence"),
+                "status": "due",
+                "micro_step": row.get("notes") or "Start the first repeatable step.",
+                "energy": "routine",
+                "effort": "repeatable",
+                "context": "routine",
+                "actions": ["complete", "evidence"],
+                "_score": 475 + urgency_score + outcome_bias,
+                "_due": due,
+                "explanation": {
+                    "available_time": available,
+                    "temporal_horizon": urgency_reason,
+                    "priority_urgency": urgency_score,
+                    "energy": "routine",
+                    "effort_minutes": 15,
+                    "context_location": "routine",
+                    "dependencies_waiting": [],
+                    "relationship_consequence": None,
+                    "profile_behavior": profile.get("id") if profile else None,
+                    "quiet_hours": in_quiet_hours,
+                    "nudge_state": "profile_penalty" if nudge_penalty else "clear",
+                    "recent_outcomes": outcome_bias,
+                    "obligation": "trackable recurrence, not a task or commitment",
+                },
+            }
+        )
+
+    for row in routines or []:
+        current_step = row.get("current_step")
+        if not isinstance(current_step, dict):
+            continue
+        start = _parse_time(row.get("window_start_at"))
+        end = _parse_time(row.get("window_end_at"))
+        status = str(row.get("status") or "upcoming")
+        if status == "in_progress":
+            window_score = 900
+        elif status == "overdue":
+            window_score = 750
+        elif start is not None and start <= as_of + timedelta(minutes=30):
+            window_score = 650
+        else:
+            window_score = 200
+        candidates.append(
+            {
+                "id": row["routine_id"],
+                "kind": "routine",
+                "title": row["title"],
+                "last_event_id": row.get("last_event_id"),
+                "evidence_event_id": row.get("evidence_event_id")
+                or row.get("last_event_id"),
+                "due": row.get("window_start_at"),
+                "window_start_at": row.get("window_start_at"),
+                "window_end_at": row.get("window_end_at"),
+                "time_label": row.get("time_label"),
+                "status": status,
+                "micro_step": current_step.get("micro_step")
+                or current_step.get("title")
+                or "Start only this step.",
+                "energy": "routine",
+                "effort": f"step {int(current_step.get('position', 0)) + 1} of {row.get('total_steps', 1)}",
+                "context": "ordered routine",
+                "actions": ["complete_step", "skip_step", "evidence"],
+                "occurrence_date": row["occurrence_date"],
+                "current_step": current_step,
+                "steps": row.get("steps") or [],
+                "completed_steps": row.get("completed_steps", 0),
+                "skipped_steps": row.get("skipped_steps", 0),
+                "total_steps": row.get("total_steps", 0),
+                "_score": 575 + window_score + outcome_bias,
+                "_due": start or end,
+                "explanation": {
+                    "available_time": available,
+                    "temporal_horizon": f"routine_window_{status}",
+                    "priority_urgency": window_score,
+                    "energy": "routine",
+                    "effort_minutes": None,
+                    "context_location": "ordered routine",
+                    "dependencies_waiting": [],
+                    "relationship_consequence": None,
+                    "profile_behavior": profile.get("id") if profile else None,
+                    "quiet_hours": in_quiet_hours,
+                    "nudge_state": "profile_penalty" if nudge_penalty else "clear",
+                    "recent_outcomes": outcome_bias,
+                    "obligation": "routine occurrence, not a task or recurrence completion",
                 },
             }
         )
@@ -200,6 +374,7 @@ def rank_what_now(
         "generated_by": "deterministic-ranker-v2",
         "as_of": as_of.isoformat(),
         "profile_id": profile.get("id") if profile else None,
+        "ranked": ordered,
         "horizons": horizons,
         "planning_horizons": {
             "now": at(0),

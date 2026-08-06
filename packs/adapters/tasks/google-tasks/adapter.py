@@ -20,14 +20,12 @@ gate accepts it.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import shutil
-import subprocess
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
 from adminme.adapters.emission import write_adapter_event
+from adminme.adapters.credentials import resolve_json_credentials
 from adminme.events.schemas.lists import ListItemAddedV1  # noqa: F401 — type-reference for pack-internal test guards
 from adminme.lib.adapters import (
     ChangeEnvelope,
@@ -60,21 +58,8 @@ ServiceFactory = Callable[[dict[str, Any], list[str], str], Any]
 fake; production lazily imports the Google SDK."""
 
 
-def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
-    """Read service-account JSON from an ``op://`` reference; mirrors the
-    Gmail / Google Calendar resolvers."""
-    if not op_ref or not op_ref.startswith("op://"):
-        raise ValueError(f"invalid op-ref: {op_ref!r}")
-    op_bin = shutil.which("op")
-    if op_bin is None:
-        raise RuntimeError(f"1Password CLI `op` not on PATH; cannot resolve {op_ref!r}")
-    proc = subprocess.run(
-        [op_bin, "read", "--no-newline", op_ref],
-        check=True,
-        capture_output=True,
-        timeout=15,
-    )
-    return json.loads(proc.stdout.decode("utf-8"))
+def _default_credentials_resolver(reference: str) -> dict[str, Any]:
+    return resolve_json_credentials(reference)
 
 
 def _default_service_factory(
@@ -83,12 +68,28 @@ def _default_service_factory(
     subject_email: str,
 ) -> Any:
     """Build Tasks v1 service; lazy import keeps SDK out of CI."""
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
-    creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
-    if subject_email:
-        creds = creds.with_subject(subject_email)
+    if {"client_id", "client_secret", "refresh_token"} <= credentials_json.keys():
+        from google.oauth2.credentials import Credentials
+
+        creds = Credentials(
+            token=None,
+            refresh_token=str(credentials_json["refresh_token"]),
+            token_uri=str(
+                credentials_json.get("token_uri")
+                or "https://oauth2.googleapis.com/token"
+            ),
+            client_id=str(credentials_json["client_id"]),
+            client_secret=str(credentials_json["client_secret"]),
+            scopes=scopes,
+        )
+    else:
+        from google.oauth2.service_account import Credentials
+
+        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+        if subject_email:
+            creds = creds.with_subject(subject_email)
     return build("tasks", "v1", credentials=creds, cache_discovery=False)
 
 
@@ -182,14 +183,17 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
     async def start(self, *, ctx: AdapterContext) -> None:
         """Authenticate, emit ``adapter.authenticated``, run poll loop."""
-        op_ref = self._config.get("service_account_key_ref")
+        op_ref = self._config.get("oauth_credentials_ref") or self._config.get(
+            "service_account_key_ref"
+        )
         tasklist_id = self._config.get("tasklist_id")
         user_email = self._config.get("user_email")
         member_id = self._config.get("member_id")
-        if not isinstance(op_ref, str) or not op_ref.startswith("op://"):
+        if not isinstance(op_ref, str) or not op_ref.startswith(
+            ("op://", "keychain://")
+        ):
             raise ValueError(
-                "service_account_key_ref must be a 1Password reference "
-                "(op://<vault>/<item>/<field>)"
+                "credential must be a 1Password reference or macOS Keychain reference"
             )
         if not isinstance(tasklist_id, str) or not tasklist_id:
             raise ValueError("tasklist_id must be a non-empty string")
@@ -258,6 +262,11 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             if not isinstance(task_id, str) or not task_id:
                 continue
             if task_id in self._seen_inbound:
+                continue
+            title = task.get("title")
+            if not isinstance(title, str) or not title.strip():
+                _log.warning("skipping titleless Google task %s", task_id)
+                self._seen_inbound[task_id] = str(task.get("updated") or "")
                 continue
             await self._emit_list_item_added(
                 ctx=ctx, tasklist_id=tasklist_id, task=task

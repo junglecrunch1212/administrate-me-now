@@ -81,7 +81,7 @@ class IdentityMergeSuggestedV1(BaseModel):
     """Heuristic merge suggestion from ``identity_resolution`` (prompt 10b-i)
     when an unresolved identifier scores above the merge threshold against
     an existing party. NEVER auto-applied — the suggestion lands in the
-    inbox for human approval per [BUILD.md §1130]."""
+    Triage for human approval per [BUILD.md §1130]."""
 
     model_config = {"extra": "forbid"}
     surviving_party_id: str = Field(min_length=1)

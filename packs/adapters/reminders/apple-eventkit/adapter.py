@@ -11,13 +11,15 @@ only the outbound supervised task in c3; the concurrent inbound +
 outbound supervision in ``start()`` lands in commit 4.
 
 Bidirectional sync model [BUILD.md APPLE REMINDERS BIDIRECTIONAL —
-DETAILED SPEC]. The adapter consumes three upstream event types and
+DETAILED SPEC]. The adapter consumes two confirmed upstream event types and
 translates each into an ``EKReminder`` write to the configured
 household list:
 
   - ``reminder.dispatched`` → title = ``composed_text``, priority = high (1)
   - ``task.created``        → title = ``title``, priority = medium (5)
-  - ``commitment.proposed`` → title = ``text_summary``, priority by ``urgency``
+
+Unconfirmed commitment and extraction proposals never enter this adapter;
+they remain in Triage until a member confirms and routes them.
 
 Each successful save emits one ``reminder.list_item.synced`` v1 event
 with ``direction="outbound"`` and ``causation_id`` set to the upstream
@@ -152,20 +154,8 @@ _OUTBOUND_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "reminder.dispatched",
         "task.created",
-        "commitment.proposed",
     }
 )
-
-# EventKit priority ordinal scale per
-# ``docs/reference/apple-eventkit/ekreminder.md``: 0=none, 1=high,
-# 5=medium, 9=low. The Reminders adapter maps urgency strings on
-# ``commitment.proposed`` to these ordinals.
-_PRIORITY_BY_URGENCY: dict[str, Literal[0, 1, 5, 9]] = {
-    "today": 1,
-    "this_week": 5,
-    "this_month": 9,
-    "no_rush": 0,
-}
 
 MemberRoleResolver = Callable[[str], str]
 """Maps ``member_id`` → role string (``"adult"`` / ``"child"`` /
@@ -547,8 +537,8 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
         """Append an upstream event to the outbound queue.
 
         The supervisor's event-bus subscription routes
-        ``reminder.dispatched`` / ``task.created`` /
-        ``commitment.proposed`` events to this method; any other
+        ``reminder.dispatched`` / ``task.created`` events to this method;
+        any other
         ``type`` is filtered + dropped (this adapter does not write
         ``crm.surfaced`` / ``digest.composed`` / etc. — those route
         elsewhere per §6 out-of-scope). Drained on each
@@ -1029,21 +1019,6 @@ class AppleEventKitAdapter(ExternalStateMirrorAdapter):
                 "notes": notes,
                 "due_at": payload.get("due"),
                 "priority": 5,  # medium — tasks default to medium urgency
-            }
-        if event_type == "commitment.proposed":
-            summary = str(payload.get("text_summary") or "").strip()
-            owner = str(payload.get("owed_by_member_id") or "").strip()
-            if not summary or not owner:
-                return None
-            urgency = str(payload.get("urgency") or "this_week")
-            preview = payload.get("source_message_preview")
-            notes = preview[:2000] if isinstance(preview, str) and preview else None
-            return {
-                "member_id": owner,
-                "title": summary[:500],
-                "notes": notes,
-                "due_at": payload.get("suggested_due"),
-                "priority": _PRIORITY_BY_URGENCY.get(urgency, 5),
             }
         return None
 

@@ -95,8 +95,10 @@ The installer writes two user LaunchAgents:
 
 Neither runs as root. Their argument lists contain no secret. The launcher
 retrieves a required value from Keychain into process memory/environment and
-never prints it. OpenClaw binds `127.0.0.1:18789`; the one AdministrateMe
-process binds `127.0.0.1:3330`. Tailscale Serve remains the sole future edge.
+never prints it. The runtime receives the exact instance-state directory as
+`ADMINME_INSTANCE_DIR`; model skills must not infer it from a developer
+checkout. OpenClaw binds `127.0.0.1:18789`; the one AdministrateMe process
+binds `127.0.0.1:3330`. Tailscale Serve remains the sole future edge.
 
 The selected household IANA timezone drives the five OpenClaw standing orders.
 The reconciler owns only `administrateme-*` names, rejects declaration drift or
@@ -121,7 +123,7 @@ OAuth opens the provider's own page. Confirm the expected provider and least
 privilege before granting access. OpenClaw owns assistant-provider credentials.
 Plaid is sandbox-only during bootstrap. Home Assistant and optional providers
 remain disabled until explicitly selected. A skipped noncritical subsection
-becomes an Inbox follow-up; it never becomes false completion.
+becomes a Triage follow-up; it never becomes false completion.
 
 ## Daily operations
 
@@ -138,7 +140,14 @@ for the deployment, with each process separately reported as `running`,
 are safe. Launchd restarts a crashed process with a throttle; persistent crash
 loops surface as failed/degraded rather than green. Every stable wrapper reads
 the validated active-release pointer and invokes that release's isolated
-Python environment; it does not depend on an IDE or a developer checkout venv.
+Python environment from that release's working directory; it cannot import a
+developer checkout merely because the operator invoked the wrapper there.
+Upgrade/start waits for the previous launchd definition to unload and verifies
+the newly loaded program, working directory, and repository-root environment
+against the candidate plist before accepting health. Post-switch validation
+may retry only the bounded projection/Gateway/plugin/cron/listener startup
+checks; it then requires the complete Doctor, including the canonical
+synthetic round trip. Every other failed check causes immediate rollback.
 
 For a bug report, create a secret-redacted machine report:
 
@@ -172,10 +181,11 @@ Restore only a file inside the configured backup directory:
 ```
 
 Restore decrypts and authenticates into a staging directory, rejects links and
-path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 13
-projections/workbooks from the event log, then and only then replaces active
-state. The previous state moves to the `rollback` directory. If post-restore
-Doctor fails, the previous state is automatically put back.
+path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 14
+registered projections (13 domain projections plus Triage) and workbooks from
+the event log, then and only then replaces active state. The previous state
+moves to the `rollback` directory. If post-restore Doctor fails, the previous
+state is automatically put back.
 
 ## Upgrade and rollback
 
