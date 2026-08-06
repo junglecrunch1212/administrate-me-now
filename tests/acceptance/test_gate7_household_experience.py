@@ -378,6 +378,10 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert ".calendar-board-layout { grid-template-columns: minmax(0, 1fr); }" in (
             css_asset.text
         )
+        assert (
+            ".reminder-add-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }"
+            in css_asset.text
+        )
         assets = (
             js_asset.text
             + css_asset.text

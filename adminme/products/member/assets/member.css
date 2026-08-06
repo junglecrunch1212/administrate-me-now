@@ -396,6 +396,9 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .calendar-source-heading .calendar-lens-switcher { justify-content: flex-start; }
   .calendar-board-layout { grid-template-columns: minmax(0, 1fr); }
   .calendar-event-detail { position: static; min-height: 0; }
+  .reminder-add-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reminder-add-form > :first-child { grid-column: 1 / -1; }
+  .reminder-add-form .button { width: 100%; }
 }
 
 @media (max-width: 720px) {
