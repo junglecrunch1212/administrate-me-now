@@ -57,7 +57,11 @@ if [[ "${ADMINME_TEST_MODE:-0}" == "1" ]]; then
   export ADMINME_INSTANCE_ROOT="$INSTANCE_ROOT"
   export ADMINME_REPOSITORY_ROOT="$REPOSITORY_ROOT"
   python_bin="$(command -v python3 || command -v python)"
-  "$python_bin" -m bootstrap.cli --instance-root "$INSTANCE_ROOT" bootstrap "${PASSTHROUGH[@]}"
+  if ((${#PASSTHROUGH[@]})); then
+    "$python_bin" -m bootstrap.cli --instance-root "$INSTANCE_ROOT" bootstrap "${PASSTHROUGH[@]}"
+  else
+    "$python_bin" -m bootstrap.cli --instance-root "$INSTANCE_ROOT" bootstrap
+  fi
   exit $?
 fi
 
@@ -197,5 +201,10 @@ fi
 
 export ADMINME_INSTANCE_ROOT="$INSTANCE_ROOT"
 export ADMINME_REPOSITORY_ROOT="$release_dir"
-"$release_dir/.venv/bin/python" -m bootstrap.cli \
-  --instance-root "$INSTANCE_ROOT" bootstrap "${PASSTHROUGH[@]}"
+if ((${#PASSTHROUGH[@]})); then
+  "$release_dir/.venv/bin/python" -m bootstrap.cli \
+    --instance-root "$INSTANCE_ROOT" bootstrap "${PASSTHROUGH[@]}"
+else
+  "$release_dir/.venv/bin/python" -m bootstrap.cli \
+    --instance-root "$INSTANCE_ROOT" bootstrap
+fi
