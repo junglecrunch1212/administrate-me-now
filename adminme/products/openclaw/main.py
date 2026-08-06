@@ -1047,12 +1047,16 @@ async def standing_order(
 async def dashboard_today(body: ContextRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
     runtime = _runtime(request)
+    surface = build_surface(runtime, session, "today")
     events: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(limit=250):
         events.append(event)
     visible = filter_rows(session, events)[-20:]
     result = {
-        "today": core._what_now(runtime, session),
+        # Preserve the pinned dashboard's established What Now key while
+        # publishing the same complete deterministic Day Brief as the portal.
+        "today": surface["what_now"],
+        "brief": surface["brief"],
         "activity": [
             {
                 "event_id": event["event_id"],

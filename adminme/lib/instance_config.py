@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -35,6 +36,7 @@ class InstanceConfig:
 
     instance_dir: Path
     tenant_id: str
+    timezone: str
 
     # Core event log
     event_log_path: Path
@@ -101,12 +103,24 @@ def load_instance_config(instance_dir: Path) -> InstanceConfig:
         tenant_id = data.get("tenant_id")
         if not tenant_id:
             raise RuntimeError(f"tenant_id missing from {config_yaml}")
+        timezone_name = data.get("timezone", "Etc/UTC")
     else:
         tenant_id = f"tenant-{instance_dir.name}"
+        timezone_name = "Etc/UTC"
+
+    if not isinstance(timezone_name, str) or not timezone_name:
+        raise RuntimeError(f"timezone missing from {config_yaml}")
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise RuntimeError(
+            f"timezone in {config_yaml} is not a recognized IANA zone: {timezone_name}"
+        ) from exc
 
     return InstanceConfig(
         instance_dir=instance_dir,
         tenant_id=tenant_id,
+        timezone=timezone_name,
         event_log_path=instance_dir / "events" / "events.db",
         bus_checkpoint_path=instance_dir / "events" / "bus_checkpoints.db",
         projection_checkpoint_path=instance_dir / "projections" / "_checkpoints.db",

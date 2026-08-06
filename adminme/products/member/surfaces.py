@@ -5,17 +5,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
 from adminme.lib.session import Session
 from adminme.products.core import main as core
+from adminme.today import compose_daily_brief
 from adminme.projections.artifacts.queries import linked_to, list_recent
+from adminme.projections.calendars.queries import today as calendar_today
 from adminme.projections.calendars.queries import week
 from adminme.projections.commitments.queries import by_party
 from adminme.projections.interactions.queries import (
     closeness_signals,
     recent,
+    recent_for_member,
     recent_with,
 )
 from adminme.projections.lists.queries import open_items_for_member
@@ -160,10 +164,43 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
         "semantics": experience_semantics(runtime, session),
     }
     if surface == "today":
-        base["what_now"] = core._what_now(runtime, session)
-        base["lists"] = open_items_for_member(
-            runtime.projections.connection("lists"), session, member_id=member
-        )[:8]
+        what_now = core._what_now(runtime, session)
+        calendar_events = calendar_today(
+            runtime.projections.connection("calendars"),
+            session,
+            member_party_id=member,
+            today_iso=now.astimezone(
+                ZoneInfo(runtime.settings.instance.timezone)
+            ).date().isoformat(),
+            tz_name=runtime.settings.instance.timezone,
+        )
+        interactions = (
+            []
+            if session.auth_role == "child"
+            else recent_for_member(
+                runtime.projections.connection("interactions"),
+                session,
+                member_id=member,
+                limit=30,
+            )
+        )
+        questions = (
+            []
+            if session.auth_role == "child"
+            else pending_triage(
+                runtime.projections.connection("triage"), session, member_id=member
+            )
+        )
+        base["what_now"] = what_now
+        base["brief"] = compose_daily_brief(
+            member_id=member,
+            timezone_name=runtime.settings.instance.timezone,
+            as_of=now,
+            what_now=what_now,
+            calendar_events=calendar_events,
+            interactions=interactions,
+            triage_items=questions,
+        )
     elif surface == "triage":
         base["items"] = pending_triage(
             runtime.projections.connection("triage"), session, member_id=member

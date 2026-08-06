@@ -319,6 +319,7 @@ class AdministrateMeRuntime:
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
+        self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -401,6 +402,8 @@ class AdministrateMeRuntime:
                                 "communication.*",
                                 "task.*",
                                 "triage.*",
+                                "calendar.event_outcome_recorded",
+                                "recurrence.completed",
                                 "identifier.added",
                                 "household.action.*",
                                 "external_sync.*",

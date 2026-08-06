@@ -1,6 +1,14 @@
 "use strict";
 
-const state = { bootstrap: null, surface: null, controller: null, assistantNode: null };
+const state = {
+  bootstrap: null,
+  surface: null,
+  controller: null,
+  assistantNode: null,
+  todayView: "brief",
+  carouselIndex: 0,
+  carouselItems: [],
+};
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
   const node = document.createElement(tag);
@@ -219,9 +227,9 @@ function whatNowCard(value, mode) {
   progress.setAttribute("aria-valuenow", "34"); progress.setAttribute("aria-valuemin", "0"); progress.setAttribute("aria-valuemax", "100");
   progress.append(document.createElement("span"));
   section.append(progress);
-  if (item.last_event_id && item.id) {
+  if (item.last_event_id && item.id && ["task", "commitment"].includes(item.kind)) {
     const row = document.createElement("div"); row.className = "button-row";
-    for (const action of ["complete", "defer", "snooze", "block"]) {
+    for (const action of ["complete", "defer", "block"].filter((value) => (item.actions || []).includes(value))) {
       const button = text("button", action[0].toUpperCase() + action.slice(1), action === "complete" ? "button button-primary" : "button button-quiet");
       button.type = "button";
       button.addEventListener("click", () => advanceAction(item, action, section));
@@ -256,15 +264,307 @@ async function advanceAction(item, action, section) {
   }
 }
 
+function titleCase(value) {
+  return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function todayItemMeta(item) {
+  return [item.time_label, item.context, item.status ? titleCase(item.status) : null]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function setBanner(message) {
+  const banner = $("#state-banner");
+  banner.hidden = false;
+  banner.textContent = message;
+}
+
+async function executeTodayAction(item, action, container) {
+  if (action === "evidence") {
+    if (item.evidence_event_id || item.last_event_id) await showEvidence(item.evidence_event_id || item.last_event_id);
+    return;
+  }
+  if (action === "open_triage") {
+    location.href = "/member/triage";
+    return;
+  }
+  if (action === "open_chat") {
+    $("#chat-open").click();
+    return;
+  }
+  const buttons = container.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    if (["task", "commitment", "recurrence"].includes(item.kind) && action === "complete") {
+      setBanner("Recording that finish and rebuilding the rest of today…");
+      await api("/api/member/v1/lifecycle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          item_kind: item.kind,
+          item_id: item.id,
+          action: "complete",
+          expected_last_event_id: item.last_event_id,
+          request_id: crypto.randomUUID(),
+          note: "Completed from Today",
+        }),
+      });
+      setBanner("Recorded. Today has been recalculated from household truth.");
+    } else if (item.kind === "calendar_event" && ["attended", "missed"].includes(action)) {
+      setBanner("Recording this calendar outcome without changing the event itself…");
+      await api(`/api/member/v1/calendar/${encodeURIComponent(item.id)}/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          request_id: crypto.randomUUID(),
+          expected_last_event_id: item.last_event_id,
+          outcome: action,
+        }),
+      });
+      setBanner(action === "attended" ? "Attendance recorded." : "Missed event recorded. Nothing else was inferred.");
+    } else if (item.kind === "list_item" && action === "complete_external") {
+      setBanner("Requesting completion through the reminder provider…");
+      await api("/api/member/v1/external-sync/commands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          provider: item.provider,
+          provider_account_id: item.provider_account_id,
+          operation: "complete_reminder",
+          target_external_id: item.item_external_id,
+          expected_provider_revision: item.provider_revision,
+          payload: {
+            member_id: state.bootstrap.member.id,
+            item_external_id: item.item_external_id,
+            list_external_id: item.list_external_id,
+          },
+          request_id: crypto.randomUUID(),
+        }),
+      });
+      setBanner("Completion requested. It will leave Today after the provider confirms it.");
+    }
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} Nothing was implied as complete.`);
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function actionButton(item, action, container) {
+  const labels = {
+    complete: "Done",
+    complete_external: "Done",
+    attended: "Attended",
+    missed: "Missed",
+    open_triage: "Review",
+    open_chat: "Talk it through",
+    evidence: "Why this is here",
+  };
+  const primary = ["complete", "complete_external", "attended", "open_triage"].includes(action);
+  const button = text("button", labels[action] || titleCase(action), action === "evidence" ? "link-button" : `button ${primary ? "button-primary" : "button-quiet"}`);
+  button.type = "button";
+  button.addEventListener("click", () => executeTodayAction(item, action, container));
+  return button;
+}
+
+function todayItem(item, { interactive = true } = {}) {
+  const li = document.createElement("li");
+  li.className = `day-item day-item-${String(item.kind).replaceAll("_", "-")}`;
+  const body = document.createElement("div");
+  body.className = "day-item-body";
+  body.append(text("strong", item.title || "Household item"));
+  const meta = todayItemMeta(item);
+  if (meta) body.append(text("span", meta, "meta"));
+  if (item.micro_step) body.append(text("small", item.micro_step));
+  li.append(body);
+  if (interactive) {
+    const row = document.createElement("div");
+    row.className = "day-item-actions";
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
+    for (const action of actions) row.append(actionButton(item, action, li));
+    if (actions.length) li.append(row);
+  }
+  return li;
+}
+
+function daySection(title, items, emptyCopy) {
+  const section = document.createElement("section");
+  section.className = "card day-section";
+  const heading = document.createElement("div");
+  heading.className = "section-heading";
+  heading.append(text("h2", title), text("span", `${items.length}`, "count-badge"));
+  section.append(heading);
+  if (!items.length) {
+    section.append(text("p", emptyCopy, "empty compact-empty"));
+    return section;
+  }
+  const list = document.createElement("ol");
+  list.className = "day-list";
+  for (const item of items) list.append(todayItem(item));
+  section.append(list);
+  return section;
+}
+
+function todayViewControls(data) {
+  const controls = document.createElement("div");
+  controls.className = "today-controls";
+  const switcher = document.createElement("div");
+  switcher.className = "view-switcher";
+  switcher.setAttribute("role", "group");
+  switcher.setAttribute("aria-label", "Today view");
+  for (const [view, label] of [["brief", "Day Brief"], ["carousel", "Carousel"]]) {
+    const button = text("button", label, "view-button");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(state.todayView === view));
+    button.addEventListener("click", () => {
+      state.todayView = view;
+      if (view === "carousel") state.carouselIndex = 0;
+      renderToday(data);
+    });
+    switcher.append(button);
+  }
+  const whatNow = text("button", "What Now?", "button button-primary what-now-button");
+  whatNow.type = "button";
+  whatNow.addEventListener("click", () => {
+    const first = data.brief?.carousel?.recommended_item || data.brief?.what_now?.horizons?.right_now;
+    const match = state.carouselItems.findIndex((item) => item.kind === first?.kind && item.id === first?.id);
+    state.carouselIndex = match >= 0 ? match : 0;
+    state.todayView = "carousel";
+    renderToday(data);
+    $(".carousel-card")?.focus();
+  });
+  controls.append(switcher, whatNow);
+  return controls;
+}
+
+function briefHero(brief) {
+  const section = document.createElement("section");
+  section.className = "hero-card day-hero";
+  section.append(
+    text("p", `${brief.daypart} briefing`, "eyebrow"),
+    text("h2", "Here is the shape of your day.", "action-title"),
+    text("p", brief.summary_text, "brief-summary"),
+  );
+  if (brief.next_event) {
+    const next = document.createElement("div");
+    next.className = "next-event";
+    next.append(text("span", "NEXT ON THE CLOCK", "meta"), text("strong", brief.next_event.title), text("span", brief.next_event.time_label, "meta"));
+    section.append(next);
+  }
+  const stats = document.createElement("dl");
+  stats.className = "brief-stats";
+  for (const [label, value] of [["Events", brief.stats.events], ["Moves", brief.stats.moves], ["Messages", brief.stats.messages], ["Decisions", brief.stats.questions]]) {
+    stats.append(text("div", "", "stat"));
+    stats.lastElementChild.append(text("dt", label), text("dd", value));
+  }
+  section.append(stats);
+  return section;
+}
+
+function renderDayBrief(brief) {
+  const fragment = document.createDocumentFragment();
+  fragment.append(briefHero(brief));
+  const grid = document.createElement("div");
+  grid.className = "brief-grid";
+  grid.append(
+    daySection("On the clock", brief.schedule || [], "No timed events are on the calendar today."),
+    daySection("Moves for today", brief.plan || [], "No planned moves are due today."),
+  );
+  fragment.append(grid);
+  if ((brief.questions || []).length || (brief.messages || []).length) {
+    const attention = document.createElement("div");
+    attention.className = "brief-grid";
+    attention.append(
+      daySection("Needs a decision", brief.questions || [], "No clarifying decisions are waiting."),
+      daySection("Messages to notice", brief.messages || [], "No message needs a response right now."),
+    );
+    fragment.append(attention);
+  }
+  return fragment;
+}
+
+function renderCarousel(brief) {
+  const items = state.carouselItems;
+  const section = document.createElement("section");
+  section.className = "hero-card carousel-card";
+  section.tabIndex = -1;
+  if (!items.length) {
+    section.append(text("p", "WHAT NOW", "eyebrow"), text("h2", "You are caught up for now.", "action-title"), text("p", "Pause, or choose something gently on purpose."));
+    return section;
+  }
+  state.carouselIndex = Math.min(Math.max(state.carouselIndex, 0), items.length - 1);
+  const item = items[state.carouselIndex];
+  section.append(
+    text("p", `${titleCase(item.kind)} · ${state.carouselIndex + 1} of ${items.length}`, "eyebrow"),
+    text("h2", item.title || "Take the next small step", "action-title"),
+    text("p", item.micro_step || "Open it and decide only the first move.", "microstep"),
+  );
+  const meta = todayItemMeta(item);
+  if (meta) section.append(text("p", meta, "meta carousel-meta"));
+  const progress = document.createElement("div");
+  progress.className = "progress-track carousel-progress";
+  progress.setAttribute("role", "progressbar");
+  progress.setAttribute("aria-label", "Carousel position");
+  progress.setAttribute("aria-valuenow", String(state.carouselIndex + 1));
+  progress.setAttribute("aria-valuemin", "1");
+  progress.setAttribute("aria-valuemax", String(items.length));
+  const fill = document.createElement("span");
+  fill.style.width = `${((state.carouselIndex + 1) / items.length) * 100}%`;
+  progress.append(fill);
+  section.append(progress);
+  const row = document.createElement("div");
+  row.className = "button-row carousel-actions";
+  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
+    row.append(actionButton(item, action, section));
+  }
+  if (items.length > 1) {
+    const later = text("button", "Later", "button button-quiet");
+    later.type = "button";
+    later.title = "Move to the next card without changing this item's due date or status.";
+    later.addEventListener("click", () => {
+      state.carouselIndex = (state.carouselIndex + 1) % items.length;
+      renderToday(state.surface);
+    });
+    row.append(later);
+  }
+  if (item.evidence_event_id || item.last_event_id) row.append(actionButton(item, "evidence", section));
+  section.append(row);
+  if (items.length > 1) {
+    const navigation = document.createElement("div");
+    navigation.className = "carousel-navigation";
+    const back = text("button", "← Previous", "link-button");
+    back.type = "button";
+    back.addEventListener("click", () => {
+      state.carouselIndex = (state.carouselIndex - 1 + items.length) % items.length;
+      renderToday(state.surface);
+    });
+    navigation.append(back, text("small", "Later only changes this view. Defer changes household truth and is always explicit."));
+    section.append(navigation);
+  }
+  return section;
+}
+
+function renderToday(data) {
+  const root = $("#surface");
+  const brief = data.brief;
+  root.replaceChildren();
+  $("#mode-label").textContent = brief?.date_label || "Your daily briefing";
+  root.append(todayViewControls(data));
+  root.append(state.todayView === "carousel" ? renderCarousel(brief) : renderDayBrief(brief));
+}
+
 function renderSurface(data) {
   state.surface = data;
   const root = $("#surface");
   root.setAttribute("aria-busy", "false");
   root.replaceChildren();
   $("#page-title").textContent = data.label;
-  $("#mode-label").textContent = `${data.mode} · ${data.member_id}`;
+  $("#mode-label").textContent = "Private member view";
   if (data.surface === "today") {
-    root.append(whatNowCard(data.what_now, data.mode), card("Open lists", data.lists, "No open list items."));
+    state.carouselItems = [...(data.brief?.carousel?.items || [])];
+    state.carouselIndex = 0;
+    renderToday(data);
   } else if (data.surface === "triage") {
     root.append(triageSurface(data.items));
   } else if (data.surface === "people") {
@@ -288,7 +588,7 @@ function renderSurface(data) {
 function renderQuest(data) {
   const root = $("#surface"); root.setAttribute("aria-busy", "false"); root.replaceChildren();
   $("#page-title").textContent = data.surface.title;
-  $("#mode-label").textContent = `${data.mode} · temporary lens`;
+  $("#mode-label").textContent = "Temporary lens";
   if (data.state === "degraded") {
     const unavailable = document.createElement("section"); unavailable.className = "state-card";
     unavailable.append(text("h2", "This lens is waiting on a capability."), text("p", "The underlying household records are unchanged."));

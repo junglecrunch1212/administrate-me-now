@@ -96,3 +96,51 @@ def test_ranker_is_deterministic_explained_and_feedback_sensitive(
         after_feedback["horizons"]["right_now"]["id"]
         != first["horizons"]["right_now"]["id"]
     )
+
+
+def test_ranker_preserves_list_and_recurrence_semantics() -> None:
+    ranked = rank_what_now(
+        [],
+        [],
+        member_id="member-a",
+        profile=None,
+        as_of=AS_OF,
+        list_items=[
+            {
+                "list_external_id": "groceries",
+                "item_external_id": "milk",
+                "title": "Pick up milk",
+                "due_at": "2034-03-02T12:15:00Z",
+                "priority": 1,
+                "provider": "apple_reminders",
+                "provider_account_id": "icloud-a",
+                "provider_revision": "rev-1",
+                "list_name": "Errands",
+                "last_event_id": "event-list",
+            }
+        ],
+        recurrences=[
+            {
+                "recurrence_id": "rec-medicine",
+                "kind": "take_medicine",
+                "next_occurrence": "2034-03-02T12:10:00Z",
+                "trackable": 1,
+                "notes": "Put the dose beside a glass of water.",
+                "last_event_id": "event-recurrence",
+            },
+            {
+                "recurrence_id": "rec-non-trackable",
+                "kind": "birthday",
+                "next_occurrence": "2034-03-02T12:05:00Z",
+                "trackable": 0,
+                "last_event_id": "event-hidden",
+            },
+        ],
+    )
+
+    by_kind = {item["kind"]: item for item in ranked["ranked"]}
+    assert set(by_kind) == {"list_item", "recurrence"}
+    assert by_kind["list_item"]["actions"] == ["complete_external", "evidence"]
+    assert by_kind["recurrence"]["actions"] == ["complete", "evidence"]
+    assert by_kind["recurrence"]["id"] == "rec-medicine"
+    assert by_kind["list_item"]["id"] == "groceries:milk"

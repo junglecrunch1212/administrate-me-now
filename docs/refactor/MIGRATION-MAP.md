@@ -1,5 +1,16 @@
 # Migration map
 
+Today semantics update (2026-08-06): Today is **MODERNIZED COMPLETE IN CODE**
+from a raw What Now plus “Open lists” surface into one deterministic Daily
+Brief shared by the member portal and pinned OpenClaw dashboard. It composes
+authorized projections at read time, in the configured household timezone,
+and adds explicit Day Brief/Carousel/What Now controls. What Now uses a fixed
+in-progress/next-30-minute calendar guard before the existing work ranker. Typed interaction
+contracts preserve task, commitment, list-item, recurrence, calendar,
+message, and clarifying-question boundaries. `Later` is view-only; actual
+completion/outcome operations remain idempotent event commands. This adds no
+second summary store and no model decision path.
+
 Personal Google OAuth update (2026-08-06): the Gmail, Google Calendar, and
 Google Tasks activation rows are **KEEP/HARDEN COMPLETE IN CODE** for personal
 accounts. Existing `op://` service-account deployments remain supported;
@@ -54,8 +65,8 @@ projection, scheduler, workflow, or copied record store.
 
 | Gate 7 subsystem | Final class | Executable result |
 |---|---|---|
-| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, and governed review/lifecycle bindings. |
-| Member/child experience | REWRITE COMPLETE | Python-served portal has adult eight-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence. |
+| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, governed review/lifecycle bindings, and the same deterministic Daily Brief contract as the portal. |
+| Member/child experience | REWRITE COMPLETE | Python-served portal has adult eight-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence; Today supplies a Day Brief, explicit Carousel, and deterministic What Now without exposing internal mode/member labels. |
 | Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
 | Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
 | Browser runtime | KEEP DELETED NODE / ADD STATIC PYTHON SURFACE | No Node app server, service worker, local transcript/cache, provider SDK, model picker, admin console, plugin manager, or terminal. |

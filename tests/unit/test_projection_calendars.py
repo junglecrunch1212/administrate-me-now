@@ -280,6 +280,46 @@ async def test_today_filters_by_member_and_window(rig: dict[str, Any]) -> None:
     assert uids == {"ev-today-m1"}
 
 
+async def test_today_uses_the_members_iana_timezone_boundary(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    event_id = await log.append(
+        _envelope(
+            "calendar.event_added",
+            _added_payload(
+                external_event_id="ev-local-evening",
+                start="2026-04-25T22:00:00-04:00",
+                end="2026-04-25T23:00:00-04:00",
+            ),
+        )
+    )
+    await bus.notify(event_id)
+    await _wait_for_checkpoint(bus, "projection:calendars", event_id)
+
+    conn = runner.connection("calendars")
+    new_york_day = today(
+        conn,
+        _S("tenant-a"),
+        member_party_id="m1",
+        today_iso="2026-04-25",
+        tz_name="America/New_York",
+    )
+    utc_day = today(
+        conn,
+        _S("tenant-a"),
+        member_party_id="m1",
+        today_iso="2026-04-25",
+        tz_name="Etc/UTC",
+    )
+    assert [row["external_uid"] for row in new_york_day] == [
+        "ev-local-evening"
+    ]
+    assert utc_day == []
+
+
 async def test_busy_slots_merges_events_and_availability(
     rig: dict[str, Any],
 ) -> None:

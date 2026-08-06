@@ -82,7 +82,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C005 | Working memory/member knowledge | VISION thesis; BUILD D17; ARCH §§4/9 | `member_knowledge` absent; Cat-D bridge incomplete | PRESERVE | AC-04, AC-08 |
 | C006 | Sensor/signal/action layer | VISION thesis; BUILD adapters/Automation | Plaid, calendars, lists, HA assets present; not composed | PRESERVE | AC-07, AC-10 |
 | C007 | Closed observe-to-outcome-to-next-action loop | VISION mental model; FIELD daily use; DIAGRAMS flows | No process test closes loop | PRESERVE | AC-03, AC-06 |
-| C008 | now/hour/daypart/day/week/longer horizons | FIELD workflows; BUILD Core/what-now; HTML Today | No what-now API/engine | PRESERVE | AC-06 |
+| C008 | now/hour/daypart/day/week/longer horizons | FIELD workflows; BUILD Core/what-now; HTML Today | Deterministic ranker plus local-time Daily Brief in portal and pinned OpenClaw; typed explanation and feedback process tests | PRESERVE/MODERNIZE COMPLETE | AC-06, AC-18 |
 | C009 | CRM spine: Parties, Identifiers, Memberships, Relationships, Interactions, Commitments, Artifacts | BUILD L3; ARCH §4 | Schemas/projections partly present; vertical slice incomplete | PRESERVE | AC-03, AC-04 |
 | C010 | Event fact, calendar event, task, commitment, list item, recurrence, scheduler job remain distinct | BUILD projection semantics and D18; ARCH §4; DIAGRAMS | Separate schemas exist for several; no global semantic gate | PRESERVE | AC-05 |
 | C011 | `parties` capability | BUILD §3.1; ARCH §4 | code/schema present, not default-registered | PRESERVE | AC-07 |
@@ -161,7 +161,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C069 | `adminme-ops.xlsx` and `adminme-finance.xlsx` are bidirectional, rebuildable projections | BUILD xlsx; DIAGRAMS; FIELD manual workflows | forward/reverse/sidecar code; platform-specific failures | PRESERVE/HARDEN | AC-13 |
 | C070 | Protected/derived cells, reverse-diff events, sidecar, locks, conflict visibility, Plaid authority, replay equivalence | BUILD xlsx contract; EXAMPLES | substantial tests, some blocked/failing on Windows | PRESERVE/HARDEN | AC-13 |
 | C071 | Today, Triage, CRM/People, Capture/Knowledge, Finance, Calendar, Scoreboard, Settings | D26 supersedes BUILD L5 / HTML Inbox semantics; ARCH §9 | Production portal and pinned OpenClaw bindings | MODERNIZE COMPLETE: Triage contains candidates only; legacy Inbox aliases are compatibility-only | AC-18, AC-24 |
-| C072 | Carousel/compressed/child modes | BUILD profiles; HTML; ARCH §8 | HTML reference rendered and exercised by Gate 1 harness; production app absent | PRESERVE | AC-18 |
+| C072 | Carousel/compressed/child modes | BUILD profiles; HTML; ARCH §8 | Production portal uses server-derived profiles/roles; Today has an explicit Day Brief/Carousel switch, one-item execution, bounded progress, and view-only Later semantics | PRESERVE/MODERNIZE COMPLETE | AC-18 |
 | C073 | Calendar privacy redaction | PATTERNS §6; HTML | Python scope tests; no real route/UI | PRESERVE | AC-08, AC-18 |
 | C074 | Dual-path reward toast with dedupe | PATTERNS §8; HTML; BUILD | reward pipeline assets; no UI/SSE | PRESERVE | AC-18 |
 | C075 | Observation/degraded banners and evidence/provenance views | PATTERNS §§9/11; HTML; selected Vellum | mock only | PRESERVE/MODERNIZE | AC-14, AC-18 |

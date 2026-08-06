@@ -17,6 +17,51 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 Today Daily Brief and execution correction
+
+This amendment **MODERNIZES** Today into the member's deterministic CoS Day
+Sheet while **PRESERVING** the now/hour/daypart/day/week ranker, distinct
+domain types, and event-sourced authority. The default Day Brief now composes
+the configured local date, calendar, executable tasks and commitments,
+provider list items, trackable recurrences, actionable messages, and pending
+clarifying decisions from authorized projections. The former raw “Open lists”
+card and internal carousel/profile/member label are removed.
+
+Day Brief, Carousel, and What Now are explicit member controls over the same
+brief. What Now opens an in-progress or next-30-minute timed event first, then
+falls back to the deterministic work ranking. Carousel
+offers only actions valid for that item's type; `Later` changes only the card
+position. Task/commitment lifecycle remains canonical, Apple Reminders uses
+the existing governed external-write request, trackable recurrence completion
+emits `recurrence.completed`, and calendar attendance/missed state emits an
+idempotent, member-confirmed `calendar.event_outcome_recorded`. Calendar time
+alone is not attendance proof and list items/recurrences are not coerced into
+tasks. The pinned OpenClaw Today binding consumes this same brief rather than a
+parallel model-owned summary.
+
+Executable evidence is in `tests/unit/test_today_brief.py`,
+`tests/unit/test_what_now_gate6.py`,
+`tests/unit/test_projection_calendars.py`, and the process-level Today slice in
+`tests/acceptance/test_gate7_household_experience.py`. Rendered evidence and
+machine-readable browser assertions are retained under
+`docs/refactor/evidence/gate-7/visual/`.
+
+Final local verification on 2026-08-06: the complete Python/bridge suite
+passed with 1,330 tests; strict acceptance passed with 23 tests under
+`--runxfail`; Ruff, mypy, invariants, and diff hygiene passed; the pinned
+OpenClaw contract and 14 plugin tests passed; and the Gate 7 production-browser
+harness passed all 81 assertions with no failed result or leaked fixture
+process.
+
+Known boundary, reported rather than hidden: the current domain has trackable
+recurrence templates and task `recurring_id` links, but it does not yet have a
+typed multi-step routine occurrence with ordered steps and a time window.
+Today therefore completes one trackable recurrence occurrence; it does not
+fabricate a routine group from unrelated tasks. A true stepwise routine must
+be added as versioned recurrence/routine semantics without collapsing tasks or
+adding a second source of truth, and requires its own process acceptance before
+that behavior can be claimed.
+
 ## 2026-08-06 Triage surface and adjudication correction
 
 This amendment **MODERNIZES** the former Inbox into the canonical Triage

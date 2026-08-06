@@ -8,35 +8,38 @@ Run from the repository root:
 npm.cmd run test:gate7 --prefix tools/console-reference-harness
 ```
 
-The harness starts credential-free loopback fixtures, uses installed Microsoft Edge through pinned Playwright, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.
+The harness starts credential-free loopback fixtures, uses Google Chrome via playwright-core@1.62.0, exercises every domain surface and role boundary, streams the OpenClaw fixture, evaluates private/promoted/expired/archived quest states, and checks responsive/reduced-motion/keyboard naming invariants.
 
 ## Checks
 
 - PASS: canonical fixture seeded
 - PASS: /member/today HTTP
 - PASS: /member/today title
-- PASS: today carousel mode
-- PASS: /member/inbox HTTP
-- PASS: /member/inbox title
-- PASS: inbox carousel mode
+- PASS: Today defaults to Day Brief
+- PASS: Today offers Carousel and What Now
+- PASS: Today hides internal profile and member identifiers
+- PASS: Today Carousel is interactive
+- PASS: /member/triage HTTP
+- PASS: /member/triage title
+- PASS: triage member context
 - PASS: /member/people HTTP
 - PASS: /member/people title
-- PASS: people carousel mode
+- PASS: people member context
 - PASS: /member/knowledge HTTP
 - PASS: /member/knowledge title
-- PASS: knowledge carousel mode
+- PASS: knowledge member context
 - PASS: /member/finance HTTP
 - PASS: /member/finance title
-- PASS: finance carousel mode
+- PASS: finance member context
 - PASS: /member/calendar HTTP
 - PASS: /member/calendar title
-- PASS: calendar carousel mode
+- PASS: calendar member context
 - PASS: /member/scoreboard HTTP
 - PASS: /member/scoreboard title
-- PASS: scoreboard carousel mode
+- PASS: scoreboard member context
 - PASS: /member/settings HTTP
 - PASS: /member/settings title
-- PASS: settings carousel mode
+- PASS: settings member context
 - PASS: eight principal navigation items
 - PASS: desktop named controls
 - PASS: desktop no horizontal overflow
@@ -46,7 +49,7 @@ The harness starts credential-free loopback fixtures, uses installed Microsoft E
 - PASS: desktop keyboard focus indicator
 - PASS: /member/today HTTP
 - PASS: /member/today title
-- PASS: compressed profile
+- PASS: tablet Day Brief default
 - PASS: observation mode visible
 - PASS: adult OpenClaw stream rendered
 - PASS: browser stores no transcript, session, cache, worker, or service credential
@@ -58,12 +61,12 @@ The harness starts credential-free loopback fixtures, uses installed Microsoft E
 - PASS: tablet reduced-motion keyboard focus indicator
 - PASS: reduced motion honored
 - PASS: private quest created
-- PASS: /member/quests/view_b15e7b2fbed042a6 HTTP
-- PASS: /member/quests/view_b15e7b2fbed042a6 title
+- PASS: /member/quests/view_f1312242a20547e4 HTTP
+- PASS: /member/quests/view_f1312242a20547e4 title
 - PASS: private quest undiscoverable
 - PASS: quest promoted by explicit review
-- PASS: /member/quests/view_b15e7b2fbed042a6 HTTP
-- PASS: /member/quests/view_b15e7b2fbed042a6 title
+- PASS: /member/quests/view_f1312242a20547e4 HTTP
+- PASS: /member/quests/view_f1312242a20547e4 title
 - PASS: archived quest has no navigation entry
 - PASS: expiring quest created
 - PASS: expired quest has no navigation entry
@@ -93,21 +96,22 @@ The harness starts credential-free loopback fixtures, uses installed Microsoft E
 
 ## Screenshots
 
-- `surface-today-carousel-desktop.png` — 89736 bytes, SHA-256 `0047944c8607d0666b189841dcecf9cca4cba134f024ebf60d2c609ec7b412b1`
-- `surface-inbox-carousel-desktop.png` — 81139 bytes, SHA-256 `2ad235036db11e7cc8de2cfe7242fe903607a3c6546f10f0e4cb5e497e050cdf`
-- `surface-people-carousel-desktop.png` — 85831 bytes, SHA-256 `934236abc4e3132467b3ab5c4e63f7404dd9c49ab43980c54c029e73435b8175`
-- `surface-knowledge-carousel-desktop.png` — 90384 bytes, SHA-256 `59db415c8ddb47da5cc3dae1a1ebaa1e0494cb886fedc2f89b787e5e9068cbf3`
-- `surface-finance-carousel-desktop.png` — 76248 bytes, SHA-256 `3f0079f46839735ad6e59d3413d1f9b6db2c622996ecb0194053451b531b36f4`
-- `surface-calendar-carousel-desktop.png` — 75580 bytes, SHA-256 `f95b008171d41c9b419d169992f2a658035153d61aaa4525e67d4136f9241dd6`
-- `surface-scoreboard-carousel-desktop.png` — 87583 bytes, SHA-256 `ae4c20cdffcf1062e3cf8b0ce4ec92dd7eb728971d8d7bfe555d267c64ee5ee6`
-- `surface-settings-carousel-desktop.png` — 160717 bytes, SHA-256 `bf075fe247130b1d1a9f9dc27cbe0dcadf208c66c99ee7abcfb519cc6cff4e38`
-- `mode-compressed-observation-tablet.png` — 69213 bytes, SHA-256 `9088836c6c18173485c4619bc81f07340733be4e7cc000b6f9372ecdab6b25a6`
-- `adult-chat-streamed-tablet.png` — 64212 bytes, SHA-256 `762fcc6bd352ea7d5fe6d018587d6ea029621f8830dd37fd2e17ceea3f687f4d`
-- `quest-private-compressed.png` — 151177 bytes, SHA-256 `748fc3469e05d326567d1dcf665b320303035be5ea2a2b20bbd247e3332faba9`
-- `quest-promoted-carousel.png` — 181388 bytes, SHA-256 `eafbc7523e343443b4e54bf5205ab2a41475c2b1d32b026fc54a10e2a2c3905a`
-- `quest-archived-bookmark.png` — 89935 bytes, SHA-256 `2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820`
-- `quest-expired-bookmark.png` — 89935 bytes, SHA-256 `2810a61cc86853856e0460dc7fe424d71c9eb1bd8bc9b0f5ce93fc0fc93e3820`
-- `mode-child-today-narrow.png` — 45540 bytes, SHA-256 `eae42ea4cdcbd9c5a25b11d049f3b112c6c8ac8971d2d27e06c8046f43a92948`
-- `mode-child-scoreboard-narrow.png` — 43721 bytes, SHA-256 `8461521294324ca91bf5407ff78fd65b20ae307e66661807e5d10e8b412eb106`
-- `shared-screen-scoreboard.png` — 73231 bytes, SHA-256 `0ee50d530f1961d63f4d7ace9b21e8a1d51c06112e875729c1f84c8b12a4277f`
-- `adult-chat-degraded-domain-healthy.png` — 71641 bytes, SHA-256 `546a85e439586c0a18143ea49f0123020a7a07c573a22e7cb143131a708dd305`
+- `surface-today-day-brief-desktop.png` — 163679 bytes, SHA-256 `e468c616c6eab83e6414eebaa17b3560c9b7378701157552e1b49717cd19b849`
+- `surface-today-carousel-desktop.png` — 125055 bytes, SHA-256 `30e5ab7a5874420c736c4582761ea2881cb3e9845e84881af591b466137fd799`
+- `surface-triage-desktop.png` — 137903 bytes, SHA-256 `a1eb109129f7a04e2a4e846c124b6d08c2a0814a56a2bc3fac19a755c4e8f368`
+- `surface-people-desktop.png` — 109581 bytes, SHA-256 `8d019b7331e3368370fc2825fc505576a3377162df5dae43be7e70f2b6890a69`
+- `surface-knowledge-desktop.png` — 111566 bytes, SHA-256 `25249686af26b68448cdbe77a2bd0c20c5ac472a96362ed8e0eeb54137fa3a7e`
+- `surface-finance-desktop.png` — 94364 bytes, SHA-256 `d3c6cd59745eb034866c006e06e03c249be2b0b3014dd8b2fa1b4e5e68a6bb00`
+- `surface-calendar-desktop.png` — 92848 bytes, SHA-256 `0c38013d9c9ba9d57c69bfa832d9babee8b3aa28fcffbe7a2f7ffe1fa464fe87`
+- `surface-scoreboard-desktop.png` — 107701 bytes, SHA-256 `e6d394bf1eae4d19e4ebfbe2337c81aadfd29028d57f6254d60ef49fab245045`
+- `surface-settings-desktop.png` — 231060 bytes, SHA-256 `3ac87eacb6237f22dc11f482ef81888ed0a2d114726b0b8bf684d4a13dced526`
+- `mode-compressed-observation-tablet.png` — 115653 bytes, SHA-256 `0e7d4f2f89d7ca8911d1fdcb567a77350f7dd46ecae2613005a77994d5a9ad32`
+- `adult-chat-streamed-tablet.png` — 99441 bytes, SHA-256 `26c00e36846dd1f5264054ad3fa43c7d4c485adac5da3e44e86f0099ccb785c0`
+- `quest-private-compressed.png` — 183619 bytes, SHA-256 `045370e6422acceedde0120e8e1d2725f4102eb18e2cf8e30ffd2eaecef61a7a`
+- `quest-promoted-carousel.png` — 220605 bytes, SHA-256 `5de7630310903b728da63f9d62fe4abb2d7e551e20c6959a5b77f0b7b0b6ec3d`
+- `quest-archived-bookmark.png` — 103259 bytes, SHA-256 `c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f`
+- `quest-expired-bookmark.png` — 103261 bytes, SHA-256 `ff3babfb94783c14812e987d094d0e77b2b592d0f76cb83363f498dd4b70a66c`
+- `mode-child-today-narrow.png` — 109524 bytes, SHA-256 `64fbdebc9cb10059567085eebe5ac52b6ea2cb333f77485b1566a42f955429c2`
+- `mode-child-scoreboard-narrow.png` — 50258 bytes, SHA-256 `ab79a691ed199334963158713f607680ec7a4d7787449bad783cb0da3b6b3746`
+- `shared-screen-scoreboard.png` — 82792 bytes, SHA-256 `4c4138c5d5c63e44655a8f8d2e86be7096f987966cef672c6b1eb4d8cb4e30ad`
+- `adult-chat-degraded-domain-healthy.png` — 126320 bytes, SHA-256 `1330770b89c26dcc3c9dec9c38f641e9df248a6f46657567c6b2d70cf1e403de`

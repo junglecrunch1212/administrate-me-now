@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 
@@ -20,6 +21,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 
 from adminme.events.envelope import EventEnvelope, Sensitivity
+from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
 from adminme.lib.scope import allowed_read
 from adminme.lib.session import Session
@@ -42,6 +44,11 @@ from adminme.products.openclaw.main import (
     _task_lifecycle,
 )
 from adminme.projections.parties.queries import get_party
+from adminme.projections.calendars.queries import (
+    get_calendar_event,
+    get_calendar_outcome,
+)
+from adminme.projections.recurrences.queries import get_recurrence
 from adminme.projections.triage.queries import get_item as get_triage_item
 from adminme.temporary_surfaces import (
     CHILD_ACTIONS,
@@ -95,7 +102,7 @@ class TemporaryActionRequest(BaseModel):
 
 class MemberLifecycleRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    item_kind: Literal["task", "commitment"]
+    item_kind: Literal["task", "commitment", "recurrence"]
     item_id: str = Field(min_length=1, max_length=160)
     action: Literal["complete", "defer", "snooze", "block", "unblock"]
     expected_last_event_id: str = Field(min_length=1)
@@ -103,6 +110,13 @@ class MemberLifecycleRequest(BaseModel):
     until: str | None = None
     reason: str | None = Field(default=None, max_length=500)
     note: str | None = Field(default=None, max_length=500)
+
+
+class CalendarOutcomeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1)
+    outcome: Literal["attended", "missed"]
 
 
 class ExternalWriteRequest(BaseModel):
@@ -1047,12 +1061,293 @@ def _visible_spec(
     return spec
 
 
+def _member_command_fingerprint(
+    item_kind: str, item_id: str, body: BaseModel
+) -> str:
+    canonical = json.dumps(
+        {
+            "item_kind": item_kind,
+            "item_id": item_id,
+            "body": body.model_dump(mode="json"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _prior_member_command(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    request_id: str,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "event log unavailable")
+    key = f"member-command:{event_type}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior["raw_ref"] != f"request-sha256:{fingerprint}":
+        raise HTTPException(409, "idempotency key conflicts with prior action body")
+    return prior
+
+
+async def _guard_member_write(
+    runtime: Any, session: Session, event_type: str, payload: dict[str, Any]
+) -> None:
+    if runtime.guarded_write is None:
+        raise HTTPException(503, "write authorization unavailable")
+    decision = await runtime.guarded_write.check(session, event_type, payload)
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {"reason": decision.reason, "correlation_id": decision.correlation_id},
+        )
+
+
+def _member_command_event(
+    session: Session,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    request_id: str,
+    fingerprint: str,
+    causation_id: str,
+    owner_scope: str,
+    visibility_scope: str,
+    sensitivity: Sensitivity,
+) -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type=event_type,
+        schema_version=1,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
+        sensitivity=sensitivity,
+        correlation_id=session.correlation_id,
+        causation_id=causation_id,
+        actor_identity=session.auth_member_id,
+        idempotency_key=(
+            f"member-command:{event_type}:{session.auth_member_id}:{request_id}"
+        ),
+        raw_ref=f"request-sha256:{fingerprint}",
+        payload=payload,
+    )
+
+
+async def _complete_recurrence(
+    body: MemberLifecycleRequest, request: Request, session: Session
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "routine completion is unavailable while viewing another member"
+        )
+    if body.action != "complete":
+        raise HTTPException(422, "trackable recurrences support completion only")
+    runtime = _runtime(request)
+    fingerprint = _member_command_fingerprint("recurrence", body.item_id, body)
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type="recurrence.completed",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "event_id": prior["event_id"],
+            "duplicate": True,
+            "recurrence": get_recurrence(
+                runtime.projections.connection("recurrences"),
+                session,
+                recurrence_id=body.item_id,
+            ),
+            "what_now": core._what_now(runtime, session),
+        }
+    row = get_recurrence(
+        runtime.projections.connection("recurrences"),
+        session,
+        recurrence_id=body.item_id,
+    )
+    if row is None:
+        raise HTTPException(404, "trackable recurrence not found")
+    owned = (
+        (row["linked_kind"] == "party" and row["linked_id"] == session.auth_member_id)
+        or (row["linked_kind"] == "household" and session.auth_role == "principal")
+    )
+    if not owned or not row.get("trackable"):
+        raise HTTPException(404, "trackable recurrence not found")
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "recurrence changed; refresh before completing it")
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "recurrence_id": body.item_id,
+        "completed_at": now,
+        "completed_by_party_id": session.auth_member_id,
+        "occurrence_date": str(row["next_occurrence"])[:10],
+    }
+    await _guard_member_write(runtime, session, "recurrence.completed", payload)
+    event = _member_command_event(
+        session,
+        event_type="recurrence.completed",
+        payload=payload,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+        causation_id=row["last_event_id"],
+        owner_scope=row["owner_scope"],
+        visibility_scope=row["visibility_scope"],
+        sensitivity=cast(Sensitivity, row.get("sensitivity") or "normal"),
+    )
+    try:
+        event_id = await runtime.events.write(event)
+    except IdempotencyConflict as exc:
+        raise HTTPException(409, "idempotency key conflicts with prior action body") from exc
+    await runtime.wait_for_projection("recurrences", event_id)
+    return {
+        "event_id": event_id,
+        "duplicate": False,
+        "recurrence": get_recurrence(
+            runtime.projections.connection("recurrences"),
+            session,
+            recurrence_id=body.item_id,
+        ),
+        "what_now": core._what_now(runtime, session),
+    }
+
+
+def _calendar_belongs_to_member(row: dict[str, Any], member_id: str) -> bool:
+    if row.get("member_id") == member_id or row.get("owner_party") == member_id:
+        return True
+    try:
+        attendees = json.loads(row.get("attendees_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return any(
+        attendee == member_id
+        or (
+            isinstance(attendee, dict)
+            and attendee.get("party_id") == member_id
+        )
+        for attendee in attendees
+    )
+
+
+async def _record_calendar_outcome(
+    calendar_event_id: str,
+    body: CalendarOutcomeRequest,
+    request: Request,
+    session: Session,
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "calendar outcomes are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    fingerprint = _member_command_fingerprint(
+        "calendar_event", calendar_event_id, body
+    )
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type="calendar.event_outcome_recorded",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "event_id": prior["event_id"],
+            "duplicate": True,
+            "brief": build_surface(runtime, session, "today")["brief"],
+        }
+    row = get_calendar_event(
+        runtime.projections.connection("calendars"),
+        session,
+        calendar_event_id=calendar_event_id,
+    )
+    if row is None or not _calendar_belongs_to_member(row, session.auth_member_id):
+        raise HTTPException(404, "calendar event not found")
+    if row["calendar_source"] not in {"google_calendar", "apple_calendar"}:
+        raise HTTPException(409, "this calendar source cannot record an outcome")
+    prior_outcome = get_calendar_outcome(
+        runtime.projections.connection("calendars"),
+        session,
+        member_id=session.auth_member_id,
+        calendar_source=row["calendar_source"],
+        external_uid=row["external_uid"],
+    )
+    if prior_outcome is not None:
+        raise HTTPException(
+            409, "a calendar outcome is already recorded; use a correction flow"
+        )
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "calendar event changed; refresh before recording it")
+    try:
+        start = datetime.fromisoformat(str(row["start_at"]).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(409, "calendar event has an invalid start time") from exc
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) < start.astimezone(timezone.utc):
+        raise HTTPException(409, "attendance cannot be recorded before the event starts")
+    payload = {
+        "member_id": session.auth_member_id,
+        "provider": row["calendar_source"],
+        "external_event_id": row["external_uid"],
+        "outcome": body.outcome,
+        "attendance_status": body.outcome,
+        "evidence": "member_confirmation",
+        "confidence": 1.0,
+        "recorded_at": EventEnvelope.now_utc_iso(),
+        "linked_item_kind": row.get("linked_item_kind"),
+        "linked_item_id": row.get("linked_item_id"),
+        "completion_policy": row.get("completion_policy") or "manual",
+    }
+    await _guard_member_write(
+        runtime, session, "calendar.event_outcome_recorded", payload
+    )
+    event = _member_command_event(
+        session,
+        event_type="calendar.event_outcome_recorded",
+        payload=payload,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+        causation_id=row["last_event_id"],
+        owner_scope=row["owner_scope"],
+        visibility_scope=row["visibility_scope"],
+        sensitivity=cast(Sensitivity, row.get("sensitivity") or "normal"),
+    )
+    try:
+        event_id = await runtime.events.write(event)
+    except IdempotencyConflict as exc:
+        raise HTTPException(409, "idempotency key conflicts with prior action body") from exc
+    for projection in ("calendars", "tasks", "commitments"):
+        await runtime.wait_for_projection(projection, event_id)
+    return {
+        "event_id": event_id,
+        "duplicate": False,
+        "brief": build_surface(runtime, session, "today")["brief"],
+    }
+
+
 async def _execute_lifecycle(
     body: MemberLifecycleRequest,
     request: Request,
     session: Session,
 ) -> dict[str, Any]:
     runtime = _runtime(request)
+    if body.item_kind == "recurrence":
+        lock = runtime.today_command_locks.setdefault(
+            f"{session.tenant_id}:recurrence:{body.item_id}", asyncio.Lock()
+        )
+        async with lock:
+            return await _complete_recurrence(body, request, session)
     if body.item_kind == "task":
         actor_id, signed_session_key = runtime.member_chat_binding(
             session.auth_member_id
@@ -1347,7 +1642,25 @@ async def member_lifecycle(
     body: MemberLifecycleRequest, request: Request, session: SessionDep
 ) -> dict[str, Any]:
     result = await _execute_lifecycle(body, request, session)
-    return {**result, "next_action": result.get("what_now")}
+    brief = build_surface(_runtime(request), session, "today")["brief"]
+    return {**result, "next_action": result.get("what_now"), "brief": brief}
+
+
+@router.post("/api/member/v1/calendar/{calendar_event_id}/outcome")
+async def record_calendar_outcome(
+    calendar_event_id: str,
+    body: CalendarOutcomeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    lock = runtime.today_command_locks.setdefault(
+        f"{session.tenant_id}:calendar:{calendar_event_id}", asyncio.Lock()
+    )
+    async with lock:
+        return await _record_calendar_outcome(
+            calendar_event_id, body, request, session
+        )
 
 
 @router.post("/api/member/v1/temporary-surfaces", status_code=201)

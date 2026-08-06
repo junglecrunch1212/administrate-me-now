@@ -20,6 +20,8 @@ from adminme.products.commitment_service import (
     prior_command,
 )
 from adminme.projections.commitments.queries import active_for_member
+from adminme.projections.lists.queries import open_items_for_member
+from adminme.projections.recurrences.queries import for_member as recurrences_for_member
 from adminme.projections.tasks.queries import open_for_member as open_tasks
 from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.what_now import rank_what_now
@@ -55,6 +57,16 @@ def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
         session,
         member_party_id=session.view_member_id,
     )
+    list_items = open_items_for_member(
+        runtime.projections.connection("lists"),
+        session,
+        member_id=session.view_member_id,
+    )
+    recurrences = recurrences_for_member(
+        runtime.projections.connection("recurrences"),
+        session,
+        member_party_id=session.view_member_id,
+    )
     profile = runtime.extensions.profile_for(session.view_member_id)
     return rank_what_now(
         tasks,
@@ -62,6 +74,8 @@ def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
         member_id=session.view_member_id,
         profile=profile,
         as_of=datetime.now(timezone.utc).replace(second=0, microsecond=0),
+        list_items=list_items,
+        recurrences=recurrences,
     )
 
 
