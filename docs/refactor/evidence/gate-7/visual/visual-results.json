@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-06T18:06:17.823Z",
+  "generated_at": "2026-08-06T20:57:01.745Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -30,6 +30,14 @@
       "detail": 200
     },
     {
+      "name": "calendar fixture seeded",
+      "status": "PASS",
+      "detail": {
+        "seeded": 7,
+        "last_event_id": "ev_01KZCDTDKK0006"
+      }
+    },
+    {
       "name": "/member/today HTTP",
       "status": "PASS",
       "detail": 200
@@ -42,7 +50,7 @@
     {
       "name": "Today defaults to Day Brief",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.1 decision.Events0Moves0Messages0Decisions1On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today.Needs a decision1Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice0No message needs a response right now."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.2 timed events, 1 decision.NEXT ON THE CLOCKHousehold context dayAll dayEvents2Moves0Messages0Decisions1Time guardrailsOpen now until 8:00 PM.On the clock2Household context dayAll day · Household context · In ProgressGet only what you need for this event ready.AttendedMissedWhy this is hereReviewed appointment1:00 PM–2:00 PM · Provider location · Awaiting OutcomeWrap up and record whether you attended.AttendedMissedWhy this is hereMoves for today0No planned moves are due today.Needs a decision1Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice0No message needs a response right now."
     },
     {
       "name": "Today offers Carousel and What Now",
@@ -57,7 +65,7 @@
     {
       "name": "Today Carousel is interactive",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?Clarifying Question · 1 of 1Reply to the household messageCheck the proposed fact, correct it if needed, then confirm or dismiss.commitment · Waiting For YouReviewWhy this is here"
+      "detail": "Day BriefCarouselWhat Now?Calendar Event · 1 of 3Household context dayGet only what you need for this event ready.All day · Household context · In ProgressAttendedMissedLaterWhy this is here← PreviousLater only changes this view. Defer changes household truth and is always explicit."
     },
     {
       "name": "/member/triage HTTP",
@@ -190,9 +198,54 @@
       "detail": "Calendar"
     },
     {
-      "name": "calendar member context",
+      "name": "Calendar identifies deterministic policy",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "Private · deterministic calendar policy"
+    },
+    {
+      "name": "Calendar defaults to a spatial Week",
+      "status": "PASS",
+      "detail": "CALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Aug 3–9, 2026DayWeekMonthAgendaFind timeCalendar settingsCalendars in viewShow only what is useful right now. This is a private display filter; household rules remain active.Capacity colorsCalendar colorsPersonalPersonal · Hard blockHousehold contextFamily Context · ContextShow allCapacity only2 of 2 visibleWeek at a glanceHardSoftContextGuardrailBufferEtc/UTCMon3Tue4Wed5Thu6Fri7Sat8Sun9all-dayHousehold context day6 AM7 AM8 AM9 AM10 AM11 AM12 PM1 PM2 PM3 PM4 PM5 PM6 PM7 PM8 PM9 PM10 PMProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowReviewed appointment1:00 PM · Hard blockProtected morningWork windowEVENT DETAILSelect a calendar itemOpen an item to see its source, effect, buffers, duplicate copies, and evidence without leaving the calendar.Conflicts and pressureNo buffered hard conflict or soft-load pressure is visible."
+    },
+    {
+      "name": "Calendar exposes source and capacity lenses",
+      "status": "PASS",
+      "detail": "Calendars in viewShow only what is useful right now. This is a private display filter; household rules remain active.Capacity colorsCalendar colorsPersonalPersonal · Hard blockHousehold contextFamily Context · ContextShow allCapacity only2 of 2 visible"
+    },
+    {
+      "name": "Calendar separates all-day and timed events",
+      "status": "PASS",
+      "detail": "Week at a glanceHardSoftContextGuardrailBufferEtc/UTCMon3Tue4Wed5Thu6Fri7Sat8Sun9all-dayHousehold context day6 AM7 AM8 AM9 AM10 AM11 AM12 PM1 PM2 PM3 PM4 PM5 PM6 PM7 PM8 PM9 PM10 PMProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowReviewed appointment1:00 PM · Hard blockProtected morningWork window"
+    },
+    {
+      "name": "Calendar visibility is view-only",
+      "status": "PASS",
+      "detail": "Calendars in viewShow only what is useful right now. This is a private display filter; household rules remain active.Capacity colorsCalendar colorsPersonalPersonal · Hard blockHousehold contextFamily Context · ContextShow allCapacity only1 of 2 visible"
+    },
+    {
+      "name": "Calendar detail preserves timezone and buffer provenance",
+      "status": "PASS",
+      "detail": "EVENT DETAILReviewed appointmentHard blockWhenThu 1:00 PM–2:00 PMCalendarPersonalPurposePersonalBuffer30 min before · 15 min afterLocationProvider locationProviderGoogle CalendarWhy it behaves this waypersonal calendar This time is unavailable unless the rule is changed.View evidence"
+    },
+    {
+      "name": "Calendar Month is an anchored six-week grid",
+      "status": "PASS",
+      "detail": "August 2026"
+    },
+    {
+      "name": "Calendar Agenda remains available",
+      "status": "PASS",
+      "detail": "AgendaThursday, August 6Household context dayAll day · ContextReviewed appointment1:00 PM · Hard block"
+    },
+    {
+      "name": "Find time offers explicit duration",
+      "status": "PASS",
+      "detail": "Find a workable windowHard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.30 min60 min90 min120 minEarliest fit · Fri, Aug 710:00 AM–11:00 AMClearMon, Aug 1010:00 AM–11:00 AMClearTue, Aug 1110:00 AM–11:00 AMClearWed, Aug 1210:00 AM–11:00 AMClearThu, Aug 1310:00 AM–11:00 AMClearFri, Aug 1410:00 AM–11:00 AMClearMon, Aug 1710:00 AM–11:00 AMClearTue, Aug 1810:00 AM–11:00 AMClearWed, Aug 1910:00 AM–11:00 AMClear"
+    },
+    {
+      "name": "Calendar policy editing is progressively disclosed",
+      "status": "PASS",
+      "detail": "CALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Calendar policyDayWeekMonthAgendaFind timeCalendar settingsHousehold time guardrailsThese recurring windows shape availability before any suggested opening is shown.Protected morningMon, Tue, Wed, Thu, Fri · 00:00–10:00Hard blockWork windowMon, Tue, Wed, Thu, Fri · 10:30–17:00ContextPreparation and recovery buffersRemote0 min before · 0 min afterAppointment30 min before · 15 min afterMedical0 min before · 0 min afterHandoff0 min before · 0 min afterDeep Work0 min before · 0 min afterCalendar routing and capacityProvider access is factual. Purpose, capacity effect, and approved write destinations are explicit household policy.Review or change calendar rulesPersonalOwner · can writePurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Approved Triage write destinationHousehold contextReader · read onlyPurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Read-only provider calendarSave reviewed rules"
     },
     {
       "name": "/member/scoreboard HTTP",
@@ -324,7 +377,7 @@
     {
       "name": "tablet Day Brief default",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "observation mode visible",
@@ -432,12 +485,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_21d21d12befd4809 HTTP",
+      "name": "/member/quests/view_d7e1a5794a4d49bd HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_21d21d12befd4809 title",
+      "name": "/member/quests/view_d7e1a5794a4d49bd title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -452,19 +505,19 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_21d21d12befd4809 HTTP",
+      "name": "/member/quests/view_d7e1a5794a4d49bd HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_21d21d12befd4809 title",
+      "name": "/member/quests/view_d7e1a5794a4d49bd title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
     {
       "name": "archived quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriageCommsRemindersPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsRemindersCalendarPeopleKnowledgeFinanceScoreboardSettings"
     },
     {
       "name": "expiring quest created",
@@ -474,7 +527,7 @@
     {
       "name": "expired quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriageCommsRemindersPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsRemindersCalendarPeopleKnowledgeFinanceScoreboardSettings"
     },
     {
       "name": "/member/today HTTP",
@@ -601,7 +654,7 @@
     {
       "name": "domain view remains usable during model loss",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "no browser console errors",
@@ -626,80 +679,84 @@
   ],
   "screenshots": {
     "surface-today-day-brief-desktop.png": {
-      "bytes": 165636,
-      "sha256": "3be528f314405dc624e3f63ab44b06b6f1d155dd5b8ef2c22989e54613de58a1"
+      "bytes": 214236,
+      "sha256": "6b635466464849c425cf3c2285a098706fb4430e98b812031e4c87c625efb63e"
     },
     "surface-today-carousel-desktop.png": {
-      "bytes": 127545,
-      "sha256": "6b27cd1946ada2dab71177a9aa6ca1fbfe6d0f8ab0094085bd67db60db30d96d"
+      "bytes": 133202,
+      "sha256": "4ec90cdcda39f3bfa7aed08945c223b0837df687831a30fc265ab3851874bb14"
     },
     "surface-triage-desktop.png": {
-      "bytes": 140384,
-      "sha256": "213abd7f18af35251bb54d53ebab3c0e44f5e8d65062a39e2f5e9929a0028d6a"
+      "bytes": 140243,
+      "sha256": "9139dc4631c1645f779dedfd448128f884878c1cdfdd057a96d5773adadf4e7d"
     },
     "surface-comms-focus-desktop.png": {
-      "bytes": 236742,
-      "sha256": "5667580e70c51cc18ce8ef78b92d2ed2714c8e3091bc3454a9a2f2f3e250d21a"
+      "bytes": 236780,
+      "sha256": "872d68fe125853de22b5dee0cf5a363227923cfd92cc8ae00a114d42f2e75b11"
     },
     "surface-reminders-desktop.png": {
-      "bytes": 199166,
-      "sha256": "f1b33ae1e0b2b4c34698bbfc526b2fec5038cecc4f1e639f5d11b3700a96bf05"
+      "bytes": 199170,
+      "sha256": "5a24126228f4c8a47c3275b1f1ca2b77effbcfa385f612d15cd4f025c4ed5aef"
     },
     "surface-people-desktop.png": {
-      "bytes": 112110,
-      "sha256": "6102bf1bf09d60973d8c4298eda4909b6f81d495c2421f5c5e38386f152a91cf"
+      "bytes": 112271,
+      "sha256": "f9aad39be7ebd9906881c5a4e468a705100d243e6d6f883e222f71781e7889a8"
     },
     "surface-knowledge-desktop.png": {
-      "bytes": 114071,
-      "sha256": "fa2fdf459d069a4c30e7b13b007ba081125cc18c1b0506fb49fd48b8b1320792"
+      "bytes": 114145,
+      "sha256": "e4f9aeb9bbe7ad60f6cdc4b62606cc561a40a85f7bc72f54b12f35b58e664021"
     },
     "surface-finance-desktop.png": {
-      "bytes": 96776,
-      "sha256": "fdc4e299fe2665da327b0d8e93cf42257055bacb490114cbfebf9845cab991ba"
+      "bytes": 96877,
+      "sha256": "8c299b3520a16646b963a6af408e3597a03b105e662f97e10ae617e398027f4b"
     },
-    "surface-calendar-desktop.png": {
-      "bytes": 95431,
-      "sha256": "8eceba6613a58769405c1694e1e7b9a533d3b1daa00a09633dcb42bd885c5324"
+    "surface-calendar-week-desktop.png": {
+      "bytes": 314096,
+      "sha256": "a51d1052c98d3282c57fd68b201d0056a4bd2255e96280ff4e224f6209e6d8f4"
+    },
+    "surface-calendar-month-desktop.png": {
+      "bytes": 197610,
+      "sha256": "41bb4c26d73e5b6bcc3dc52b00ee5b4a8c0b2b8ff18c5e81c4f5fd2720219f44"
     },
     "surface-scoreboard-desktop.png": {
-      "bytes": 110256,
-      "sha256": "083b832f76e434a03e40dd704936eb964e04045634fa82dc83d75e96126bd010"
+      "bytes": 110285,
+      "sha256": "65cc77fdee481d7ea2075a9e9dc8f828a5cbfcd0bac0d9ced93c363e7c9632aa"
     },
     "surface-settings-desktop.png": {
-      "bytes": 233643,
-      "sha256": "f6e2858a8c4015b84a25191c561b6b6639143f336c47484c0ed1073a12f01f26"
+      "bytes": 233675,
+      "sha256": "561ac57435d86e9a627a1814ba99a91bc8ab00c282f33f1f1ab3a7534f279c07"
     },
     "surface-comms-focus-narrow.png": {
-      "bytes": 149977,
-      "sha256": "8c3c78e4c67969fa0e559a0deaf846aeb41933fdc714493530bc30c50a8df251"
+      "bytes": 150304,
+      "sha256": "7013073ca06eeac6382856fc832f06902a13081f0942f1f5f12b75e5c960b198"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 117952,
-      "sha256": "933e9430e80c8cef1d540bf3a052dbe5907bff698b0a7ed328198785e75588dc"
+      "bytes": 126432,
+      "sha256": "2c6272f58b5a0cb9e9c2aeb0c3d13473c1320e9b60b10709b9af08862acb432f"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 101793,
-      "sha256": "f25c424e432cce4a992ef68a2e2117b6a07f7a991f81e16f66c81052ff2a20e1"
+      "bytes": 109493,
+      "sha256": "68fae741f19e68ec6f355402390e2f6307f1f1c22ad2c7f17129334faf561e82"
     },
     "quest-private-compressed.png": {
-      "bytes": 186227,
-      "sha256": "53e5863222a89bf93f9e30f50182220122a3433320ac431d3b3487f14103e7a9"
+      "bytes": 186221,
+      "sha256": "a3cffc285744dd3cd256e7c11683a8c645388e7ad927662bf9a67681529d7455"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 223300,
-      "sha256": "17a92e0d8088455c1fdba19831dff0d1341203d8ac100f4129abfdfcd42b0f66"
+      "bytes": 200154,
+      "sha256": "498bd5847ba02db6dabda12994dbc36d65b04d20882003e59c7b72950537ab38"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 105893,
-      "sha256": "c3e0dd99afe37e3ce50ce652a3d19bcbf2c8bac26eb7af86fc714aadbd68b0fb"
+      "bytes": 105943,
+      "sha256": "369ef0fb43cfa507d26d3c0e09235087bcd892d7f777f11e3042411c465cef27"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 105894,
-      "sha256": "2d099bc35a14d2efed984fceffd2297148a714b6dc0722d224cebedd730392f9"
+      "bytes": 105943,
+      "sha256": "369ef0fb43cfa507d26d3c0e09235087bcd892d7f777f11e3042411c465cef27"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 84637,
-      "sha256": "2f026a0d0f2446fa45dfa8e0df37f3d70385e353c7afdbde1c3f46739590ac00"
+      "bytes": 92591,
+      "sha256": "5c895a8b463d4a23600d7b3a12983d3b017fbec55cef81015446beab083cc432"
     },
     "mode-child-scoreboard-narrow.png": {
       "bytes": 49989,
@@ -710,8 +767,8 @@
       "sha256": "b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 128354,
-      "sha256": "34cebce2a94803b6f7991d070fdea754207271c8211885a95347c0bfac35bdfb"
+      "bytes": 168026,
+      "sha256": "373f57c749f492eef9a06ea5b1f97388fb63a56c15dd32af39baebe678eef7ec"
     }
   },
   "console_errors": [],

@@ -780,8 +780,12 @@ async def test_discovery_syncs_each_calendar_and_observes_capabilities_once() ->
     assert await adapter._poll_once(ctx=ctx) == 2
     assert await adapter._poll_once(ctx=ctx) == 0
 
-    observed = [call for call in event_log.calls if call["type"] == "calendar.source_observed"]
-    snapshots = [call for call in event_log.calls if call["type"] == "calendar.event_added"]
+    observed = [
+        call for call in event_log.calls if call["type"] == "calendar.source_observed"
+    ]
+    snapshots = [
+        call for call in event_log.calls if call["type"] == "calendar.event_added"
+    ]
     assert len(observed) == 2
     assert observed[0]["payload"]["write_events"] is True
     assert observed[1]["payload"]["write_events"] is False
@@ -789,6 +793,55 @@ async def test_discovery_syncs_each_calendar_and_observes_capabilities_once() ->
         "calendar-a",
         "calendar-b",
     }
+
+
+async def test_provider_revision_idempotency_survives_adapter_restart() -> None:
+    entry = {
+        "id": "calendar-a",
+        "summary": "Personal",
+        "accessRole": "owner",
+        "primary": True,
+        "selected": True,
+    }
+    event = _make_event(
+        event_id="event-restart",
+        summary="Stable provider snapshot",
+        updated="2026-05-18T14:05:00Z",
+    )
+    event["created"] = "2026-05-18T14:00:00Z"
+    event["etag"] = '"provider-revision-2"'
+    event_log = _FakeEventLog()
+
+    for _ in range(2):
+        service = _FakeCalendarService(
+            calendar_list_pages=[{"items": [entry]}],
+            list_pages=[{"items": [event]}],
+        )
+        adapter = GoogleCalendarAdapter(
+            config={
+                "oauth_credentials_ref": "keychain://calendar/account-a",
+                "calendar_id": "calendar-a",
+                "discover_calendars": True,
+                "member_id": "member-a",
+                "provider_account_id": "account-a",
+            }
+        )
+        adapter._service = service
+        await adapter._poll_once(ctx=_seed_ctx(adapter, event_log))
+
+    snapshots = [
+        call
+        for call in event_log.calls
+        if call["type"] in {"calendar.event_added", "calendar.event_updated"}
+    ]
+    assert [call["type"] for call in snapshots] == [
+        "calendar.event_updated",
+        "calendar.event_updated",
+    ]
+    assert snapshots[0]["idempotency_key"] == snapshots[1]["idempotency_key"]
+    assert snapshots[0]["idempotency_key"].startswith(
+        "google-calendar:provider-revision:"
+    )
 
 
 async def test_google_popup_reminder_maps_to_canonical_alert_alarm() -> None:
