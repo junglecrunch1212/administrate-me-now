@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import (
@@ -28,6 +29,11 @@ from adminme.events.schemas.reminder_context import (
     ContextKind,
     ContextSource,
     CueOperator,
+)
+from adminme.events.schemas.calendar_policy import (
+    CalendarRuleConfiguredV1,
+    CalendarSchedulePolicyConfiguredV1,
+    ScheduleWindowV1,
 )
 from adminme.lib.scope import allowed_read
 from adminme.lib.session import Session
@@ -134,6 +140,63 @@ class CalendarOutcomeRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1)
     outcome: Literal["attended", "missed"]
+
+
+class CalendarRuleRequest(BaseModel):
+    """A principal-approved interpretation of one observed calendar."""
+
+    model_config = {"extra": "forbid"}
+    source_member_id: str = Field(min_length=1, max_length=240)
+    provider: Literal["google_calendar", "apple_calendar"]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    calendar_external_id: str = Field(min_length=1, max_length=1000)
+    purpose: Literal[
+        "personal",
+        "work",
+        "household",
+        "coparenting",
+        "property",
+        "family_context",
+        "holidays",
+        "test",
+        "other",
+    ]
+    effect: Literal["hard_block", "soft_hold", "context", "ignore"]
+    tentative_effect: Literal[
+        "hard_block", "soft_hold", "context", "ignore"
+    ] = "soft_hold"
+    caregiving_load: Literal[
+        "hard_block", "soft_hold", "context", "ignore"
+    ] = "ignore"
+    caregiving_summary_values: list[str] = Field(default_factory=list, max_length=20)
+    buffer_kind: Literal[
+        "auto",
+        "none",
+        "remote",
+        "appointment",
+        "medical",
+        "handoff",
+        "deep_work",
+    ] = "auto"
+    write_target: bool = False
+    destination_kind: Literal[
+        "personal", "work", "household", "coparenting", "property"
+    ] | None = None
+    enabled: bool = True
+
+
+class CalendarOnboardingRequest(BaseModel):
+    """Complete deterministic calendar policy for one household member."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    member_id: str = Field(min_length=1, max_length=240)
+    timezone: str = Field(min_length=1, max_length=240)
+    rules: list[CalendarRuleRequest] = Field(min_length=1, max_length=80)
+    windows: list[ScheduleWindowV1] = Field(default_factory=list, max_length=40)
+    buffer_minutes: dict[str, int] = Field(default_factory=dict)
+    accepted_chores_required: bool = True
+    one_confirm_write: bool = True
 
 
 class RoutineStepOutcomeRequest(BaseModel):
@@ -520,8 +583,49 @@ def _require_configured_external_route(
                 and config.get("member_id") == target_member
                 and (config.get("provider_account_id") or config.get("user_email"))
                 == provider_account_id
-                and config.get(container_key) == container_external_id
+                and (
+                    config.get(container_key) == container_external_id
+                    or (
+                        provider == "google_calendar"
+                        and bool(config.get("discover_calendars"))
+                        and container_external_id
+                        not in set(config.get("exclude_calendar_ids") or [])
+                        and (
+                            not config.get("include_calendar_ids")
+                            or container_external_id
+                            in set(config.get("include_calendar_ids") or [])
+                        )
+                    )
+                )
             ):
+                if provider == "google_calendar" and config.get(
+                    "discover_calendars"
+                ):
+                    if runtime.projections is None:
+                        raise HTTPException(503, "calendar projection unavailable")
+                    row = runtime.projections.connection("calendars").execute(
+                        """
+                        SELECT 1 FROM calendar_member_rules r
+                        JOIN calendar_sources s
+                          ON s.tenant_id=r.tenant_id
+                         AND s.provider=r.provider
+                         AND s.provider_account_id=r.provider_account_id
+                         AND s.calendar_external_id=r.calendar_external_id
+                        WHERE r.tenant_id=? AND r.subject_member_id=?
+                          AND r.provider='google_calendar'
+                          AND r.provider_account_id=?
+                          AND r.calendar_external_id=?
+                          AND r.enabled=1 AND r.write_target=1 AND s.write_events=1
+                        """,
+                        (
+                            runtime.settings.instance.tenant_id,
+                            target_member,
+                            provider_account_id,
+                            container_external_id,
+                        ),
+                    ).fetchone()
+                    if row is None:
+                        continue
                 return
         raise HTTPException(
             422, "the Google provider route is not configured for this member"
@@ -2122,6 +2226,137 @@ async def surface(
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
     return build_surface(_runtime(request), session, surface)
+
+
+@router.post("/api/member/v1/calendar/onboarding", status_code=202)
+async def configure_calendar_policy(
+    body: CalendarOnboardingRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Record principal-approved calendar semantics without model decisions."""
+
+    require_principal(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.event_log is None:
+        raise HTTPException(503, "calendar policy storage is unavailable")
+    if body.member_id not in runtime.settings.member_roles:
+        raise HTTPException(422, "calendar policy member is not configured")
+    if runtime.settings.member_roles[body.member_id] == "device":
+        raise HTTPException(422, "a device cannot own calendar policy")
+    try:
+        ZoneInfo(body.timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(422, "calendar policy timezone is not an IANA zone") from exc
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    now = EventEnvelope.now_utc_iso()
+    conn = runtime.projections.connection("calendars")
+    source_rows = conn.execute(
+        "SELECT * FROM calendar_sources WHERE tenant_id=?",
+        (session.tenant_id,),
+    ).fetchall()
+    sources = {
+        (
+            str(row["member_id"]),
+            str(row["provider"]),
+            str(row["provider_account_id"]),
+            str(row["calendar_external_id"]),
+        ): dict(row)
+        for row in source_rows
+    }
+    routes: set[tuple[str, str, str, str]] = set()
+    envelopes: list[EventEnvelope] = []
+    for index, requested in enumerate(body.rules):
+        route = (
+            requested.source_member_id,
+            requested.provider,
+            requested.provider_account_id,
+            requested.calendar_external_id,
+        )
+        if route in routes:
+            raise HTTPException(422, "calendar policy contains a duplicate source")
+        routes.add(route)
+        source = sources.get(route)
+        if source is None:
+            raise HTTPException(422, "calendar source has not been observed")
+        if requested.write_target and not bool(source.get("write_events")):
+            raise HTTPException(422, "write destination is not provider-writable")
+        route_hash = hashlib.sha256("\x1f".join(route).encode("utf-8")).hexdigest()[:20]
+        payload = CalendarRuleConfiguredV1.model_validate(
+            {
+                **requested.model_dump(mode="json"),
+                "rule_id": f"calendar-rule-{body.member_id}-{route_hash}",
+                "subject_member_id": body.member_id,
+                "configured_at": now,
+            }
+        ).model_dump(mode="json")
+        envelopes.append(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000) + index,
+                tenant_id=session.tenant_id,
+                type="calendar.rule.configured",
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="member-calendar",
+                source_account_id=session.auth_member_id,
+                owner_scope=f"private:{body.member_id}",
+                visibility_scope=f"private:{body.member_id}",
+                sensitivity="normal",
+                correlation_id=session.correlation_id,
+                causation_id=source.get("last_event_id"),
+                actor_identity=session.auth_member_id,
+                idempotency_key=(
+                    f"calendar-onboarding:{body.member_id}:{body.request_id}:rule:{route_hash}"
+                ),
+                raw_ref=f"request-sha256:{fingerprint}",
+                payload=payload,
+            )
+        )
+    schedule_payload = CalendarSchedulePolicyConfiguredV1.model_validate(
+        {
+            "member_id": body.member_id,
+            "timezone": body.timezone,
+            "windows": [window.model_dump(mode="json") for window in body.windows],
+            "buffer_minutes": body.buffer_minutes,
+            "accepted_chores_required": body.accepted_chores_required,
+            "one_confirm_write": body.one_confirm_write,
+            "configured_at": now,
+        }
+    ).model_dump(mode="json")
+    envelopes.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000) + len(envelopes),
+            tenant_id=session.tenant_id,
+            type="calendar.schedule_policy.configured",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-calendar",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{body.member_id}",
+            visibility_scope=f"private:{body.member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=(
+                f"calendar-onboarding:{body.member_id}:{body.request_id}:schedule"
+            ),
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=schedule_payload,
+        )
+    )
+    event_ids = await runtime.events.write_batch(envelopes)
+    await runtime.wait_for_projection("calendars", event_ids[-1])
+    return {
+        "accepted": True,
+        "member_id": body.member_id,
+        "event_ids": event_ids,
+        "rule_count": len(body.rules),
+        "deterministic": True,
+    }
 
 
 @router.post("/api/member/v1/comms/{interaction_id}/commands")

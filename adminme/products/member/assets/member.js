@@ -15,6 +15,7 @@ const state = {
   remindersAccount: "all",
   remindersList: "all",
   reminderItem: null,
+  calendarView: "week",
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -173,7 +174,7 @@ async function enrichTriage(item, buttons) {
   }
 }
 
-function triageSurface(items) {
+function triageSurface(items, calendarDestinations = []) {
   const fragment = document.createDocumentFragment();
   const intro = document.createElement("section"); intro.className = "hero-card";
   intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "Nothing becomes household truth by inference alone.", "action-title"), text("p", "Review extracted candidates, add missing routing details, then confirm or dismiss. Provider observations remain facts and do not wait here."));
@@ -187,6 +188,11 @@ function triageSurface(items) {
     const li = document.createElement("li"); li.className = "item triage-item";
     li.append(text("strong", item.title), text("span", `${String(item.target_kind).replaceAll("_", " ")} · ${item.source_kind.replaceAll("_", " ")}`, "meta"));
     if (item.reasons?.length) li.append(text("small", item.reasons.join(" · ")));
+    if (item.target_kind === "calendar_event") {
+      const route = item.route || {};
+      const destination = calendarDestinations.find((candidate) => candidate.provider === route.provider && candidate.provider_account_id === route.provider_account_id && candidate.calendar_external_id === route.container_external_id);
+      li.append(text("small", destination ? `Will write to ${destination.calendar_name || titleCase(destination.destination_kind)} after this confirmation.` : "Choose one approved calendar destination before confirming.", destination ? "calendar-route-ready" : "calendar-route-missing"));
+    }
     const row = document.createElement("div"); row.className = "button-row";
     const enrich = text("button", item.source_kind === "commitment_proposal" ? "Edit" : "Enrich", "button button-quiet");
     const approve = text("button", "Confirm", "button button-primary");
@@ -942,6 +948,72 @@ function reminderProviderTruth(cockpit) {
   if (!(cockpit.accounts || []).length) section.append(text("p", "No reminder account is connected yet.", "empty")); return section;
 }
 
+function calendarTime(value, options = {}) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit", ...options }).format(new Date(value));
+}
+
+function calendarHero(cockpit) {
+  const section = document.createElement("section"); section.className = "hero-card calendar-hero";
+  const counts = cockpit.counts || {};
+  section.append(text("p", "CALENDAR REASONING", "eyebrow"), text("h2", "Your time, without every calendar competing for attention.", "action-title"), text("p", "Provider facts stay intact. Approved rules decide what blocks, what warns, what is context, and where one confirmed Triage item may be written."));
+  const stats = document.createElement("div"); stats.className = "calendar-stats";
+  for (const [label, value] of [["Hard blocks", counts.hard_block], ["Soft load", counts.soft_hold], ["Context", counts.context], ["Duplicates grouped", counts.duplicates_collapsed], ["Conflicts", counts.conflicts]]) { const node = document.createElement("div"); node.append(text("strong", value || 0), text("span", label)); stats.append(node); }
+  section.append(stats); return section;
+}
+
+function calendarControls() {
+  const controls = document.createElement("section"); controls.className = "calendar-controls card";
+  const switcher = document.createElement("div"); switcher.className = "view-switcher";
+  for (const [id, label] of [["day", "Day"], ["week", "Week"], ["find", "Find time"], ["rules", "Rules"]]) { const button = text("button", label, "view-button"); button.type = "button"; button.setAttribute("aria-pressed", String(state.calendarView === id)); button.addEventListener("click", () => { state.calendarView = id; renderCalendar(state.surface); }); switcher.append(button); }
+  controls.append(switcher); return controls;
+}
+
+function calendarEventList(cockpit) {
+  const section = document.createElement("section"); section.className = "card calendar-agenda"; section.append(text("h2", state.calendarView === "day" ? "Today" : "The next seven days"));
+  const today = new Date().toDateString();
+  const events = (cockpit.events || []).filter((event) => state.calendarView !== "day" || new Date(event.start_at).toDateString() === today);
+  if (!events.length) { section.append(text("p", "No effective events in this lens. Context calendars and provider records remain connected.", "empty")); return section; }
+  const list = document.createElement("ol"); list.className = "calendar-events";
+  for (const event of events) { const li = document.createElement("li"); li.className = `calendar-event calendar-effect-${event.effect}`; const heading = document.createElement("div"); heading.className = "calendar-event-heading"; heading.append(text("strong", event.title), text("span", titleCase(event.effect), `pill calendar-effect-pill calendar-effect-${event.effect}`)); li.append(heading, text("span", event.all_day ? `${new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(new Date(event.start_at))} · all day` : `${calendarTime(event.start_at)}–${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(event.end_at))}`, "meta")); if (event.source_calendars?.length) li.append(text("small", event.source_calendars.join(" · "))); if (event.why?.length) li.append(text("small", event.why.join(" "), "calendar-why")); if (event.duplicate_collapsed) li.append(text("small", `${event.copy_count} provider copies grouped as one effective event.`, "calendar-duplicate")); list.append(li); }
+  section.append(list); return section;
+}
+
+function calendarFindTime(cockpit) {
+  const fragment = document.createDocumentFragment();
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Open windows"), text("p", "Hard blocks, buffers, and protected household time are already removed. Soft load is shown separately so you choose deliberately.", "state-note"));
+  const windows = cockpit.open_windows || [];
+  if (!windows.length) section.append(text("p", "No unprotected 20-minute window appears in this range.", "empty")); else { const list = document.createElement("ul"); list.className = "time-windows"; for (const window of windows.slice(0, 24)) { const li = document.createElement("li"); li.append(text("strong", calendarTime(window.start_at, { month: "short", day: "numeric", weekday: undefined })), text("span", `until ${calendarTime(window.end_at, { weekday: undefined })}`, "meta")); list.append(li); } section.append(list); }
+  const conditional = document.createElement("section"); conditional.className = "card"; conditional.append(text("h2", "Only if accepted")); for (const window of cockpit.conditional_windows || []) conditional.append(text("p", `${window.label}: ${calendarTime(window.start_at)}–${calendarTime(window.end_at, { weekday: undefined })}`, "calendar-conditional")); if (!(cockpit.conditional_windows || []).length) conditional.append(text("p", "No conditional household window in this range.", "empty"));
+  fragment.append(section, conditional); return fragment;
+}
+
+function calendarConflictPanel(cockpit) {
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Conflicts and pressure"));
+  if (!(cockpit.conflicts || []).length) section.append(text("p", "No buffered hard conflict or soft-load pressure is visible.", "empty"));
+  for (const conflict of cockpit.conflicts || []) { const row = document.createElement("div"); row.className = `calendar-conflict calendar-${conflict.kind}`; row.append(text("strong", `${titleCase(conflict.kind)} · ${conflict.minutes} minutes`), text("span", conflict.why, "state-note")); section.append(row); }
+  return section;
+}
+
+function calendarRuleEditor(cockpit, data) {
+  const section = document.createElement("section"); section.className = "card calendar-rules"; section.append(text("h2", "Calendar rules"), text("p", "These are explicit household policy, not model guesses. Re-saving replaces each route deterministically.", "state-note"));
+  const form = document.createElement("form"); form.className = "calendar-rule-form";
+  const existing = new Map((cockpit.rules || []).map((rule) => [`${rule.provider}|${rule.provider_account_id}|${rule.calendar_external_id}`, rule]));
+  for (const source of cockpit.sources || []) { const key = `${source.provider}|${source.provider_account_id}|${source.calendar_external_id}`; const rule = existing.get(key) || {}; const row = document.createElement("fieldset"); row.dataset.source = JSON.stringify(source); row.append(text("legend", source.calendar_name || "Calendar"), text("small", `${titleCase(source.access_role)} · ${source.write_events ? "can write" : "read only"}`, "meta")); const purpose = document.createElement("select"); purpose.dataset.field = "purpose"; for (const value of ["personal", "work", "household", "coparenting", "property", "family_context", "holidays", "test", "other"]) { const option = new Option(titleCase(value), value); option.selected = (rule.purpose || "other") === value; purpose.append(option); } const effect = document.createElement("select"); effect.dataset.field = "effect"; for (const value of ["hard_block", "soft_hold", "context", "ignore"]) { const option = new Option(titleCase(value), value); option.selected = (rule.effect || "context") === value; effect.append(option); } const write = document.createElement("input"); write.type = "checkbox"; write.dataset.field = "write"; write.checked = Boolean(rule.write_target); write.disabled = !source.write_events; const writeLabel = document.createElement("label"); writeLabel.append(write, document.createTextNode(" approved write destination")); row.append(purpose, effect, writeLabel); form.append(row); }
+  const save = text("button", "Save reviewed rules", "button button-primary"); save.type = "submit"; form.append(save);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; const rules = [...form.querySelectorAll("fieldset")].map((row) => { const source = JSON.parse(row.dataset.source); const old = existing.get(`${source.provider}|${source.provider_account_id}|${source.calendar_external_id}`) || {}; const writeTarget = row.querySelector('[data-field="write"]').checked; const purpose = row.querySelector('[data-field="purpose"]').value; const writableKinds = ["personal", "work", "household", "coparenting", "property"]; return { source_member_id: source.member_id, provider: source.provider, provider_account_id: source.provider_account_id, calendar_external_id: source.calendar_external_id, purpose, effect: row.querySelector('[data-field="effect"]').value, tentative_effect: old.tentative_effect || "soft_hold", caregiving_load: old.caregiving_load || "ignore", caregiving_summary_values: old.caregiving_summary_values || [], buffer_kind: old.buffer_kind || "auto", write_target: writeTarget, destination_kind: writeTarget ? (old.destination_kind || (writableKinds.includes(purpose) ? purpose : "personal")) : null, enabled: true }; }); try { await api("/api/member/v1/calendar/onboarding", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), member_id: data.member_id, timezone: cockpit.timezone, rules, windows: cockpit.schedule_policy?.windows || [], buffer_minutes: cockpit.schedule_policy?.buffer_minutes || {}, accepted_chores_required: cockpit.schedule_policy?.accepted_chores_required ?? true, one_confirm_write: cockpit.schedule_policy?.one_confirm_write ?? true }) }); setBanner("Calendar rules saved. Availability was recalculated from provider facts."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Calendar rules were not changed.`); save.disabled = false; } });
+  section.append(form); return section;
+}
+
+function renderCalendar(data) {
+  const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit || {};
+  $("#mode-label").textContent = "Private · deterministic calendar policy";
+  root.append(calendarHero(cockpit), calendarControls());
+  if (state.calendarView === "find") root.append(calendarFindTime(cockpit), calendarConflictPanel(cockpit));
+  else if (state.calendarView === "rules") root.append(calendarRuleEditor(cockpit, data));
+  else root.append(calendarEventList(cockpit), calendarConflictPanel(cockpit));
+}
+
 function renderReminders(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
   $("#mode-label").textContent = "Private · provider-backed · deterministic";
@@ -967,7 +1039,7 @@ function renderSurface(data) {
     state.carouselIndex = 0;
     renderToday(data);
   } else if (data.surface === "triage") {
-    root.append(triageSurface(data.items));
+    root.append(triageSurface(data.items, data.calendar_destinations));
   } else if (data.surface === "comms") {
     renderComms(data);
   } else if (data.surface === "reminders") {
@@ -979,7 +1051,7 @@ function renderSurface(data) {
   } else if (data.surface === "finance") {
     root.append(card("Recent money movement", data.flows, "Finance is connected, with no visible movement in this period."));
   } else if (data.surface === "calendar") {
-    root.append(card("This week", data.events, "The calendar is connected and this week is open."));
+    renderCalendar(data);
   } else if (data.surface === "scoreboard") {
     const score = data.scoreboard || {};
     const hero = document.createElement("section"); hero.className = "hero-card";

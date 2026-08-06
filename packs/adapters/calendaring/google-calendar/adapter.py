@@ -15,6 +15,8 @@ outbound ``create_event`` calls ``events.insert`` wrapped through
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar, Literal
@@ -338,6 +340,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._seen_inbound: dict[str, str] = {}
         self._sync_token: str | None = None
         self._initial_sync_complete = False
+        self._sync_tokens: dict[str, str] = {}
+        self._initial_sync_calendars: set[str] = set()
+        self._seen_calendar_sources: dict[str, str] = {}
         self._known_events: dict[str, dict[str, Any]] = {}
         self._elapsed_outcomes: set[str] = set()
         # [§6.20, PM-27] observation seam slots; Phase A leaves unset.
@@ -374,8 +379,12 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "oauth_credentials_ref or service_account_key_ref must be a "
                 "1Password or macOS Keychain reference"
             )
-        if not isinstance(calendar_id, str) or not calendar_id:
-            raise ValueError("calendar_id must be a non-empty string")
+        if not self._config.get("discover_calendars") and (
+            not isinstance(calendar_id, str) or not calendar_id
+        ):
+            raise ValueError(
+                "calendar_id must be a non-empty string unless discover_calendars is enabled"
+            )
         if self._config.get("service_account_key_ref") and (
             not isinstance(user_email, str) or "@" not in user_email
         ):
@@ -435,21 +444,142 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             raise RuntimeError(
                 "Google Calendar service not initialized; call start() first"
             )
-        calendar_id = str(self._config["calendar_id"])
+        calendar_id = str(self._config.get("calendar_id") or "")
         # Compatibility for the v1 fixture suite. Production v2 configs are
         # member-bound and use durable incremental synchronization below.
         if not self._config.get("member_id"):
             return await self._poll_once_v1(ctx=ctx, calendar_id=calendar_id)
+        entries = self._fetch_calendar_entries() if self._config.get(
+            "discover_calendars"
+        ) else [
+            {
+                "id": calendar_id,
+                "summary": self._config.get("calendar_name") or calendar_id,
+                "accessRole": "owner",
+                "primary": calendar_id == "primary",
+                "selected": True,
+                "hidden": False,
+                "timeZone": self._config.get("timezone"),
+                "defaultReminders": [],
+            }
+        ]
+        emitted = 0
+        for entry in entries:
+            await self._emit_calendar_source(ctx=ctx, entry=entry)
+            emitted += await self._poll_calendar_once(
+                ctx=ctx,
+                calendar_id=str(entry["id"]),
+                calendar_name=str(
+                    entry.get("summaryOverride")
+                    or entry.get("summary")
+                    or entry["id"]
+                ),
+            )
+        return emitted
+
+    def _fetch_calendar_entries(self) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "maxResults": 250,
+                "showDeleted": False,
+                "showHidden": True,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            response = self._service.calendarList().list(**params).execute()
+            records.extend(response.get("items") or [])
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        include = {
+            str(value)
+            for value in self._config.get("include_calendar_ids") or []
+            if str(value)
+        }
+        exclude = {
+            str(value)
+            for value in self._config.get("exclude_calendar_ids") or []
+            if str(value)
+        }
+        return [
+            entry
+            for entry in records
+            if isinstance(entry.get("id"), str)
+            and entry["id"] not in exclude
+            and (not include or entry["id"] in include)
+        ]
+
+    async def _emit_calendar_source(
+        self, *, ctx: AdapterContext, entry: dict[str, Any]
+    ) -> None:
+        role_map = {
+            "none": "none",
+            "freeBusyReader": "free_busy",
+            "reader": "reader",
+            "writer": "writer",
+            "owner": "owner",
+        }
+        role = role_map.get(str(entry.get("accessRole") or "none"), "none")
+        calendar_id = str(entry["id"])
+        observed = {
+            "calendar_name": str(
+                entry.get("summaryOverride") or entry.get("summary") or calendar_id
+            ),
+            "access_role": role,
+            "primary": bool(entry.get("primary")),
+            "selected": bool(entry.get("selected")),
+            "hidden": bool(entry.get("hidden")),
+            "timezone": entry.get("timeZone"),
+            "color_id": entry.get("colorId"),
+            "default_reminders": list(entry.get("defaultReminders") or []),
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(observed, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if self._seen_calendar_sources.get(calendar_id) == fingerprint:
+            return
+        await self._append(
+            ctx=ctx,
+            event_type="calendar.source_observed",
+            payload={
+                "member_id": str(self._config["member_id"]),
+                "provider": "google_calendar",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id")
+                    or self._config.get("user_email")
+                ),
+                "calendar_external_id": calendar_id,
+                **observed,
+                "read_details": role in {"reader", "writer", "owner"},
+                "read_free_busy": role != "none",
+                "write_events": role in {"writer", "owner"},
+                "observed_at": ctx.now_factory().isoformat(),
+            },
+        )
+        self._seen_calendar_sources[calendar_id] = fingerprint
+
+    async def _poll_calendar_once(
+        self, *, ctx: AdapterContext, calendar_id: str, calendar_name: str
+    ) -> int:
+        sync_token = self._sync_tokens.get(calendar_id)
+        if not self._config.get("discover_calendars") and self._sync_token:
+            sync_token = self._sync_token
         events, next_sync_token, incremental = self._fetch_event_changes(
             calendar_id=calendar_id,
             now=ctx.now_factory(),
+            sync_token=sync_token,
         )
         emitted = 0
-        was_initial_sync_complete = self._initial_sync_complete
+        was_initial_sync_complete = calendar_id in self._initial_sync_calendars
+        if not self._config.get("discover_calendars"):
+            was_initial_sync_complete = self._initial_sync_complete
         for event in events:
             event_id = str(event.get("id") or "")
             if not event_id:
                 continue
+            event_key = f"{calendar_id}:{event_id}"
             if event.get("status") == "cancelled":
                 await self._append(
                     ctx=ctx,
@@ -476,7 +606,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         ctx=ctx, event_id=event_id, outcome="cancelled", source=event
                     )
                     emitted += 1
-                self._known_events.pop(event_id, None)
+                self._known_events.pop(event_key, None)
             else:
                 kind = (
                     "calendar.event_updated" if incremental else "calendar.event_added"
@@ -485,10 +615,13 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     ctx=ctx,
                     event_type=kind,
                     calendar_id=calendar_id,
+                    calendar_name=calendar_name,
                     event=event,
                 )
                 private = (event.get("extendedProperties") or {}).get("private", {})
-                self._known_events[event_id] = {
+                self._known_events[event_key] = {
+                    "calendar_id": calendar_id,
+                    "event_id": event_id,
                     "end": _extract_when(event.get("end")),
                     "linked_item_kind": private.get("adminme_linked_kind"),
                     "linked_item_id": private.get("adminme_linked_id"),
@@ -496,13 +629,15 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         "adminme_completion_policy", "manual"
                     ),
                 }
-            self._seen_inbound[event_id] = str(
+            self._seen_inbound[event_key] = str(
                 event.get("etag") or event.get("updated") or ""
             )
             emitted += 1
         if was_initial_sync_complete:
             now = ctx.now_factory()
             for known_id, known in self._known_events.items():
+                if known.get("calendar_id") != calendar_id:
+                    continue
                 end_at = _parse_google_when(known.get("end"))
                 if (
                     end_at is not None
@@ -510,12 +645,19 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     and known_id not in self._elapsed_outcomes
                 ):
                     await self._emit_calendar_outcome(
-                        ctx=ctx, event_id=known_id, outcome="elapsed", source=known
+                        ctx=ctx,
+                        event_id=str(known.get("event_id") or known_id),
+                        outcome="elapsed",
+                        source=known,
                     )
                     self._elapsed_outcomes.add(known_id)
                     emitted += 1
-        self._sync_token = next_sync_token
-        self._initial_sync_complete = True
+        if next_sync_token:
+            self._sync_tokens[calendar_id] = next_sync_token
+        self._initial_sync_calendars.add(calendar_id)
+        if not self._config.get("discover_calendars"):
+            self._sync_token = next_sync_token
+            self._initial_sync_complete = True
         return emitted
 
     async def _emit_calendar_outcome(
@@ -568,21 +710,21 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         return emitted
 
     def _fetch_event_changes(
-        self, *, calendar_id: str, now: Any
+        self, *, calendar_id: str, now: Any, sync_token: str | None = None
     ) -> tuple[list[dict[str, Any]], str | None, bool]:
         records: list[dict[str, Any]] = []
         page_token: str | None = None
-        incremental = self._sync_token is not None
-        next_sync_token: str | None = self._sync_token
+        incremental = sync_token is not None
+        next_sync_token: str | None = sync_token
         while True:
             params: dict[str, Any] = {
                 "calendarId": calendar_id,
                 "maxResults": self.PAGE_SIZE,
                 "showDeleted": True,
-                "singleEvents": False,
+                "singleEvents": True,
             }
-            if self._sync_token:
-                params["syncToken"] = self._sync_token
+            if sync_token:
+                params["syncToken"] = sync_token
             else:
                 lookback = int(self._config.get("sync_lookback_days", 90))
                 lookahead = int(self._config.get("sync_lookahead_days", 730))
@@ -594,9 +736,13 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 response = self._service.events().list(**params).execute()
             except BaseException as exc:
                 status = getattr(getattr(exc, "resp", None), "status", None)
-                if status == 410 and self._sync_token is not None:
-                    self._sync_token = None
-                    return self._fetch_event_changes(calendar_id=calendar_id, now=now)
+                if status == 410 and sync_token is not None:
+                    self._sync_tokens.pop(calendar_id, None)
+                    if not self._config.get("discover_calendars"):
+                        self._sync_token = None
+                    return self._fetch_event_changes(
+                        calendar_id=calendar_id, now=now, sync_token=None
+                    )
                 raise
             records.extend(response.get("items") or [])
             page_token = response.get("nextPageToken")
@@ -658,6 +804,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         ctx: AdapterContext,
         event_type: str,
         calendar_id: str,
+        calendar_name: str | None = None,
         event: dict[str, Any],
     ) -> None:
         start = event.get("start") or {}
@@ -695,7 +842,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     or self._config.get("user_email")
                 ),
                 "calendar_external_id": calendar_id,
-                "calendar_name": self._config.get("calendar_name"),
+                "calendar_name": calendar_name or self._config.get("calendar_name"),
                 "external_event_id": str(event.get("id") or ""),
                 "ical_uid": event.get("iCalUID"),
                 "provider_revision": event.get("etag"),

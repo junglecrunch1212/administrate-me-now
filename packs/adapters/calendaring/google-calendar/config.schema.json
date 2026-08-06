@@ -3,10 +3,21 @@
   "title": "Google Calendar adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["calendar_id", "member_id", "provider_account_id"],
+  "required": ["member_id", "provider_account_id"],
   "oneOf": [
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref", "user_email"] }
+  ],
+  "allOf": [
+    {
+      "anyOf": [
+        { "required": ["calendar_id"] },
+        {
+          "required": ["discover_calendars"],
+          "properties": { "discover_calendars": { "const": true } }
+        }
+      ]
+    }
   ],
   "properties": {
     "service_account_key_ref": {
@@ -33,6 +44,23 @@
       "type": "string",
       "minLength": 1,
       "description": "Google Calendar id (e.g. 'primary' or a calendar-list entry id) the adapter polls and writes to."
+    },
+    "discover_calendars": {
+      "type": "boolean",
+      "default": false,
+      "description": "Discover and synchronize the authorized account's calendar list. Calendar capability facts are projected separately from per-member scheduling rules."
+    },
+    "include_calendar_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Optional allowlist applied after calendar-list discovery."
+    },
+    "exclude_calendar_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "description": "Optional quarantine list for test, probe, or otherwise irrelevant calendars."
     },
     "user_email": {
       "type": "string",

@@ -23,6 +23,9 @@ from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.calendars.queries import (
     busy_slots,
     by_source,
+    list_sources,
+    rules_for_member,
+    schedule_policy_for_member,
     today,
 )
 from adminme.projections.runner import ProjectionRunner
@@ -106,6 +109,160 @@ def _added_payload(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def _v2_envelope(calendar_id: str, *, summary: str) -> EventEnvelope:
+    return EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id="tenant-a",
+        type="calendar.event_added",
+        schema_version=2,
+        occurred_at=EventEnvelope.now_utc_iso(),
+        source_adapter="test",
+        source_account_id="test-acct",
+        owner_scope="shared:household",
+        visibility_scope="shared:household",
+        sensitivity="normal",
+        payload={
+            "member_id": "m1",
+            "provider": "google_calendar",
+            "provider_account_id": "account-a",
+            "calendar_external_id": calendar_id,
+            "calendar_name": calendar_id,
+            "external_event_id": "same-provider-event-id",
+            "summary": summary,
+            "start": "2026-04-25T14:00:00Z",
+            "end": "2026-04-25T15:00:00Z",
+            "updated_at": "2026-04-20T12:00:00Z",
+        },
+    )
+
+
+async def test_v2_calendar_identity_is_route_scoped(rig: dict[str, Any]) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(_v2_envelope("calendar-a", summary="First copy"))
+    last = await log.append(_v2_envelope("calendar-b", summary="Second copy"))
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:calendars", last)
+
+    rows = runner.connection("calendars").execute(
+        """
+        SELECT calendar_external_id, summary FROM calendar_events
+         WHERE tenant_id=? AND external_uid=? ORDER BY calendar_external_id
+        """,
+        ("tenant-a", "same-provider-event-id"),
+    ).fetchall()
+    assert [(row["calendar_external_id"], row["summary"]) for row in rows] == [
+        ("calendar-a", "First copy"),
+        ("calendar-b", "Second copy"),
+    ]
+
+
+async def test_v3_migration_rekeys_existing_routed_calendar_rows(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    event_id = await log.append(_v2_envelope("calendar-a", summary="Before upgrade"))
+    await bus.notify(event_id)
+    await _wait_for_checkpoint(bus, "projection:calendars", event_id)
+    conn = runner.connection("calendars")
+    current = conn.execute(
+        "SELECT calendar_event_id FROM calendar_events WHERE tenant_id=?",
+        ("tenant-a",),
+    ).fetchone()[0]
+    conn.execute(
+        "UPDATE calendar_events SET calendar_event_id=? WHERE tenant_id=?",
+        ("cal_google_calendar_same-provider-event-id", "tenant-a"),
+    )
+
+    CalendarsProjection().migrate_schema(conn)
+
+    migrated = conn.execute(
+        "SELECT calendar_event_id FROM calendar_events WHERE tenant_id=?",
+        ("tenant-a",),
+    ).fetchone()[0]
+    assert migrated == current
+
+
+async def test_calendar_directory_rules_and_schedule_project(rig: dict[str, Any]) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    observed_at = "2026-04-20T12:00:00Z"
+    await log.append(
+        _envelope(
+            "calendar.source_observed",
+            {
+                "member_id": "m1",
+                "provider": "google_calendar",
+                "provider_account_id": "account-a",
+                "calendar_external_id": "calendar-a",
+                "calendar_name": "Personal",
+                "access_role": "owner",
+                "read_details": True,
+                "read_free_busy": True,
+                "write_events": True,
+                "observed_at": observed_at,
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "calendar.rule.configured",
+            {
+                "rule_id": "calendar-rule-personal",
+                "subject_member_id": "m1",
+                "source_member_id": "m1",
+                "provider": "google_calendar",
+                "provider_account_id": "account-a",
+                "calendar_external_id": "calendar-a",
+                "purpose": "personal",
+                "effect": "hard_block",
+                "tentative_effect": "soft_hold",
+                "caregiving_load": "ignore",
+                "buffer_kind": "auto",
+                "write_target": True,
+                "destination_kind": "personal",
+                "configured_at": observed_at,
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "calendar.schedule_policy.configured",
+            {
+                "member_id": "m1",
+                "timezone": "America/New_York",
+                "windows": [
+                    {
+                        "days": [0, 1, 2, 3, 4],
+                        "start_local": "09:00",
+                        "end_local": "10:00",
+                        "kind": "protected",
+                        "effect": "hard_block",
+                        "label": "Protected morning",
+                    }
+                ],
+                "buffer_minutes": {"remote_before": 10},
+                "configured_at": observed_at,
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:calendars", last)
+
+    conn = runner.connection("calendars")
+    session = _S("tenant-a")
+    assert list_sources(conn, session, member_id="m1")[0]["write_events"] == 1
+    assert rules_for_member(conn, session, member_id="m1")[0]["effect"] == "hard_block"
+    policy = schedule_policy_for_member(conn, session, member_id="m1")
+    assert policy is not None
+    assert policy["windows"][0]["label"] == "Protected morning"
+    assert policy["buffer_minutes"] == {"remote_before": 10}
 
 
 async def test_calendar_event_added_inserts_row(rig: dict[str, Any]) -> None:

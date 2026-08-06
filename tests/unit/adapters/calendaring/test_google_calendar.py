@@ -157,17 +157,42 @@ class _FakeCalendarService:
         self,
         *,
         list_pages: list[dict[str, Any]] | None = None,
+        calendar_list_pages: list[dict[str, Any]] | None = None,
         insert_response: dict[str, Any] | None = None,
         raises: BaseException | None = None,
     ) -> None:
         self._list_pages = list(list_pages or [])
+        self._calendar_list_pages = list(calendar_list_pages or [])
         self._insert_response = insert_response or {"id": "gcal-evt-out-001"}
         self._raises = raises
         self.list_calls: list[dict[str, Any]] = []
         self.insert_calls: list[dict[str, Any]] = []
+        self.calendar_list_calls: list[dict[str, Any]] = []
 
     def events(self) -> "_FakeEventsResource":
         return _FakeEventsResource(self)
+
+    def calendarList(self) -> "_FakeCalendarListResource":
+        return _FakeCalendarListResource(self)
+
+
+class _FakeCalendarListResource:
+    def __init__(self, service: _FakeCalendarService) -> None:
+        self._service = service
+
+    def list(self, **kwargs: Any) -> "_FakeCalendarListRequest":
+        self._service.calendar_list_calls.append(kwargs)
+        return _FakeCalendarListRequest(self._service)
+
+
+class _FakeCalendarListRequest:
+    def __init__(self, service: _FakeCalendarService) -> None:
+        self._service = service
+
+    def execute(self) -> dict[str, Any]:
+        if self._service._calendar_list_pages:
+            return dict(self._service._calendar_list_pages.pop(0))
+        return {"items": []}
 
 
 class _FakeEventsResource:
@@ -712,6 +737,58 @@ async def test_poll_emit_payload_validates_against_calendar_event_added_v1() -> 
     assert instance.attendees == [
         {"email": "alice@example.test", "responseStatus": "accepted"}
     ]
+
+
+async def test_discovery_syncs_each_calendar_and_observes_capabilities_once() -> None:
+    entries = [
+        {
+            "id": "calendar-a",
+            "summary": "Personal",
+            "accessRole": "owner",
+            "primary": True,
+            "selected": True,
+        },
+        {
+            "id": "calendar-b",
+            "summary": "Context",
+            "accessRole": "reader",
+            "selected": True,
+        },
+    ]
+    service = _FakeCalendarService(
+        calendar_list_pages=[{"items": entries}, {"items": entries}],
+        list_pages=[
+            {"items": [_make_event(event_id="event-a", summary="First")]},
+            {"items": [_make_event(event_id="event-b", summary="Second")]},
+            {"items": []},
+            {"items": []},
+        ],
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "discover_calendars": True,
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter._service = service
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+
+    assert await adapter._poll_once(ctx=ctx) == 2
+    assert await adapter._poll_once(ctx=ctx) == 0
+
+    observed = [call for call in event_log.calls if call["type"] == "calendar.source_observed"]
+    snapshots = [call for call in event_log.calls if call["type"] == "calendar.event_added"]
+    assert len(observed) == 2
+    assert observed[0]["payload"]["write_events"] is True
+    assert observed[1]["payload"]["write_events"] is False
+    assert {call["payload"]["calendar_external_id"] for call in snapshots} == {
+        "calendar-a",
+        "calendar-b",
+    }
 
 
 # ===========================================================================

@@ -73,7 +73,7 @@ unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Triage, Comms, Reminders, People, Knowledge, Finance, Calendar,
+- Adults: Today, Triage, Comms, Reminders, Calendar, People, Knowledge, Finance,
   Scoreboard, Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.
@@ -83,6 +83,14 @@ unchanged.
   cap.
 - Child: warm language/rewards, no Comms/adult communications, Reminders, CRM, finance,
   knowledge, settings, or operator control.
+
+Calendar is the deterministic time-capacity cockpit, not a raw provider list.
+Calendar-list observations record capabilities; principal-approved per-member
+rules separately classify hard blocks, soft load, context, quarantine,
+caregiving markers, buffers, write destinations, and recurring household
+guardrails. Duplicate copies retain source provenance and render once. The same
+effective-event contract drives Calendar, Today, and Triage route validation;
+no model chooses availability or a write destination.
 
 The page route and data route each enforce the role allowlist. Navigation
 hiding is presentation only. All untrusted values are assigned with
