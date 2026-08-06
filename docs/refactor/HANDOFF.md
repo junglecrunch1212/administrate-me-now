@@ -17,6 +17,30 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 deterministic household Calendar reconciliation
+
+The Calendar product now **MODERNIZES** the earlier single-primary-calendar
+and naïve every-observation-is-busy behavior. Google calendar-list discovery
+records provider account, calendar, access role, and exact read/write
+capability. Calendar event identity is scoped to provider/account/calendar so
+legitimate duplicate copies coexist in the encrypted log and projection;
+`iCalUID` plus occurrence time groups them only in the member read model.
+
+Principal-approved `calendar.rule.configured` and
+`calendar.schedule_policy.configured` events supply the entire decision input
+for hard blocks, soft load, context, quarantine, tentative/caregiving effects,
+buffers, protected household windows, conflict/pressure detection, and open
+windows. `deterministic-household-calendar-v1` contains no model seam. Calendar
+now provides Day, Week, Find time, and Rules views; Today consumes the same
+effective events, while Triage offers only reviewed writable destinations and
+retains the one-confirmation plus independent-governance write contract.
+
+Code/process evidence is `tests/unit/test_calendar_reasoning.py`, the Calendars
+v3 projection tests, Google multi-calendar discovery tests, and the Gate 7
+onboarding/Calendar/Today/Triage process slice. Live account discovery, policy
+seeding, and provider propagation remain AC-27 production evidence until the
+reviewed commit is deployed and browser-simulated on the Mac.
+
 ## 2026-08-06 live native-message reconciliation repair
 
 The Reminders activation restart exposed a pre-existing Comms poison event:

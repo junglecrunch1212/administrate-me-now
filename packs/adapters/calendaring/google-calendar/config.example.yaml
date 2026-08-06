@@ -6,6 +6,9 @@
 
 service_account_key_ref: op://AdministrateMe/google-calendar-sandbox/service-account-json
 calendar_id: primary
+discover_calendars: true
+# Optional quarantine for test/probe calendars:
+# exclude_calendar_ids: [test-calendar-id]
 user_email: sandbox@example.test
 poll_interval_s: 60
 sensitivity_floor: normal

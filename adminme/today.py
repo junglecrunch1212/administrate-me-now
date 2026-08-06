@@ -70,10 +70,11 @@ def _calendar_item(
     actions = ["evidence"]
     if not outcome and state in {"in_progress", "awaiting_outcome"}:
         actions = ["attended", "missed", "evidence"]
+    effect = str(row.get("effect") or "hard_block")
     return {
-        "id": row["calendar_event_id"],
+        "id": row.get("calendar_event_id") or row.get("id"),
         "kind": "calendar_event",
-        "title": row.get("summary") or row.get("title_redacted") or "Busy",
+        "title": row.get("summary") or row.get("title") or row.get("title_redacted") or "Busy",
         "start_at": row.get("start_at"),
         "end_at": row.get("end_at"),
         "all_day": bool(row.get("all_day")),
@@ -83,6 +84,8 @@ def _calendar_item(
         else _time_label(start, end, zone),
         "status": state,
         "context": row.get("location") or row.get("calendar_name") or "calendar",
+        "effect": effect,
+        "why": row.get("why") or [],
         "micro_step": (
             "Wrap up and record whether you attended."
             if state == "awaiting_outcome"
@@ -91,8 +94,10 @@ def _calendar_item(
         "actions": actions,
         "last_event_id": row.get("last_event_id"),
         "evidence_event_id": row.get("outcome_event_id") or row.get("last_event_id"),
-        "provider": row.get("calendar_source"),
-        "external_event_id": row.get("external_uid"),
+        "provider": row.get("calendar_source") or row.get("provider"),
+        "external_event_id": row.get("external_uid")
+        or row.get("external_event_id")
+        or row.get("id"),
         "linked_item_kind": row.get("linked_item_kind"),
         "linked_item_id": row.get("linked_item_id"),
         "completion_policy": row.get("completion_policy") or "manual",
@@ -162,6 +167,7 @@ def compose_daily_brief(
     calendar_events: list[dict[str, Any]],
     interactions: list[dict[str, Any]],
     triage_items: list[dict[str, Any]],
+    calendar_guidance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose a complete Day Sheet from already-authorized rows."""
 
@@ -286,6 +292,7 @@ def compose_daily_brief(
             ),
         },
         "what_now": what_now,
+        "calendar_guidance": calendar_guidance or {},
     }
 
 

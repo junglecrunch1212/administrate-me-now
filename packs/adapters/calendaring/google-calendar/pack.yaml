@@ -35,6 +35,7 @@ depends_on:
     - calendar.event_added
     - calendar.event_updated
     - calendar.event_deleted
+    - calendar.source_observed
 
 events_emitted:
   - adapter.error
@@ -43,6 +44,7 @@ events_emitted:
   - calendar.event_added
   - calendar.event_updated
   - calendar.event_deleted
+  - calendar.source_observed
 
 config:
   schema: config.schema.json
@@ -58,7 +60,7 @@ config:
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted]
+    event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.source_observed]
 write_capabilities:
   - create_event
   - update_event

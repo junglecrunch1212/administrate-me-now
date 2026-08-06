@@ -1,4 +1,4 @@
-"""Authorized read models for the eight constitutional household surfaces."""
+"""Authorized read models for the ten constitutional household surfaces."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
+from adminme.calendar import compose_calendar_cockpit
 from adminme.comms import compose_comms_cockpit
 from adminme.reminders import (
     APPLE_OPERATIONS,
@@ -20,8 +21,14 @@ from adminme.lib.session import Session
 from adminme.products.core import main as core
 from adminme.today import compose_daily_brief
 from adminme.projections.artifacts.queries import linked_to, list_recent
-from adminme.projections.calendars.queries import today as calendar_today
-from adminme.projections.calendars.queries import week
+from adminme.projections.calendars.queries import (
+    events_in_range,
+    list_sources,
+    rules_for_member,
+    schedule_policy_for_member,
+    today as calendar_today,
+    week,
+)
 from adminme.projections.commitments.queries import by_party
 from adminme.projections.interactions.queries import (
     closeness_signals,
@@ -57,10 +64,10 @@ ADULT_SURFACES = (
     "triage",
     "comms",
     "reminders",
+    "calendar",
     "people",
     "knowledge",
     "finance",
-    "calendar",
     "scoreboard",
     "settings",
 )
@@ -436,14 +443,32 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
     }
     if surface == "today":
         what_now = core._what_now(runtime, session)
+        zone = ZoneInfo(runtime.settings.instance.timezone)
+        local_now = now.astimezone(zone)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_end = local_start + timedelta(days=1)
+        calendar_conn = runtime.projections.connection("calendars")
         calendar_events = calendar_today(
-            runtime.projections.connection("calendars"),
+            calendar_conn,
             session,
             member_party_id=member,
             today_iso=now.astimezone(ZoneInfo(runtime.settings.instance.timezone))
             .date()
             .isoformat(),
             tz_name=runtime.settings.instance.timezone,
+        )
+        calendar_cockpit = compose_calendar_cockpit(
+            member_id=member,
+            timezone_name=runtime.settings.instance.timezone,
+            as_of=now,
+            range_start=local_start,
+            range_end=local_end,
+            events=calendar_events,
+            sources=list_sources(calendar_conn, session),
+            rules=rules_for_member(calendar_conn, session, member_id=member),
+            schedule_policy=schedule_policy_for_member(
+                calendar_conn, session, member_id=member
+            ),
         )
         interactions = (
             []
@@ -468,9 +493,14 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             timezone_name=runtime.settings.instance.timezone,
             as_of=now,
             what_now=what_now,
-            calendar_events=calendar_events,
+            calendar_events=calendar_cockpit["events"],
             interactions=interactions,
             triage_items=questions,
+            calendar_guidance={
+                "current_guardrail": calendar_cockpit["current_guardrail"],
+                "open_windows": calendar_cockpit["open_windows"],
+                "counts": calendar_cockpit["counts"],
+            },
         )
     elif surface == "triage":
         base["items"] = pending_triage(
@@ -481,6 +511,20 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             "human_gate_required": True,
             "states": ["pending_review", "confirmed", "dismissed"],
         }
+        calendar_conn = runtime.projections.connection("calendars")
+        base["calendar_destinations"] = compose_calendar_cockpit(
+            member_id=member,
+            timezone_name=runtime.settings.instance.timezone,
+            as_of=now,
+            range_start=now,
+            range_end=now + timedelta(days=30),
+            events=[],
+            sources=list_sources(calendar_conn, session),
+            rules=rules_for_member(calendar_conn, session, member_id=member),
+            schedule_policy=schedule_policy_for_member(
+                calendar_conn, session, member_id=member
+            ),
+        )["write_destinations"]
     elif surface == "comms":
         interactions_conn = runtime.projections.connection("interactions")
         rows = recent_for_member(
@@ -555,11 +599,32 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             end_iso=now.isoformat().replace("+00:00", "Z"),
         )
     elif surface == "calendar":
-        base["events"] = week(
-            runtime.projections.connection("calendars"),
+        calendar_conn = runtime.projections.connection("calendars")
+        zone = ZoneInfo(runtime.settings.instance.timezone)
+        range_start = now.astimezone(zone).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        range_end = range_start + timedelta(days=7)
+        rows = events_in_range(
+            calendar_conn,
             session,
             member_party_id=member,
-            start_date_iso=now.isoformat().replace("+00:00", "Z"),
+            range_start_iso=range_start.astimezone(timezone.utc).isoformat(),
+            range_end_iso=range_end.astimezone(timezone.utc).isoformat(),
+        )
+        base["events"] = rows
+        base["cockpit"] = compose_calendar_cockpit(
+            member_id=member,
+            timezone_name=runtime.settings.instance.timezone,
+            as_of=now,
+            range_start=range_start,
+            range_end=range_end,
+            events=rows,
+            sources=list_sources(calendar_conn, session),
+            rules=rules_for_member(calendar_conn, session, member_id=member),
+            schedule_policy=schedule_policy_for_member(
+                calendar_conn, session, member_id=member
+            ),
         )
     elif surface == "scoreboard":
         tasks = open_for_member(

@@ -404,10 +404,10 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             "triage",
             "comms",
             "reminders",
+            "calendar",
             "people",
             "knowledge",
             "finance",
-            "calendar",
             "scoreboard",
             "settings",
         ]
@@ -1219,3 +1219,106 @@ def test_child_safe_promotion_expiry_and_degraded_chat_keep_domain_views_usable(
         after_events = client.portal.call(_events, runtime)
         assert len(after_events) == len(before_events) + 1
         assert after_events[-1]["type"] == "temporary_surface.expired"
+
+
+def test_calendar_onboarding_drives_calendar_today_and_triage_routes(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        source_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="calendar.source_observed",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-calendar-fixture",
+                source_account_id="credential-free",
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                actor_identity=PRINCIPAL,
+                payload={
+                    "member_id": PRINCIPAL,
+                    "provider": "google_calendar",
+                    "provider_account_id": "gate7-calendar-account",
+                    "calendar_external_id": "calendar-personal",
+                    "calendar_name": "Personal",
+                    "access_role": "owner",
+                    "primary": True,
+                    "selected": True,
+                    "read_details": True,
+                    "read_free_busy": True,
+                    "write_events": True,
+                    "observed_at": now.isoformat(),
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "calendars", source_event)
+        configured = client.post(
+            "/api/member/v1/calendar/onboarding",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-calendar-onboarding-1",
+                "member_id": PRINCIPAL,
+                "timezone": "Etc/UTC",
+                "rules": [
+                    {
+                        "source_member_id": PRINCIPAL,
+                        "provider": "google_calendar",
+                        "provider_account_id": "gate7-calendar-account",
+                        "calendar_external_id": "calendar-personal",
+                        "purpose": "personal",
+                        "effect": "hard_block",
+                        "tentative_effect": "soft_hold",
+                        "write_target": True,
+                        "destination_kind": "personal",
+                    }
+                ],
+                "windows": [
+                    {
+                        "days": [0, 1, 2, 3, 4],
+                        "start_local": "00:00",
+                        "end_local": "10:00",
+                        "kind": "protected",
+                        "effect": "hard_block",
+                        "label": "Protected morning",
+                    }
+                ],
+                "buffer_minutes": {
+                    "remote_before": 10,
+                    "remote_after": 5,
+                },
+                "accepted_chores_required": True,
+                "one_confirm_write": True,
+            },
+        )
+        assert configured.status_code == 202, configured.text
+        assert configured.json()["deterministic"] is True
+
+        calendar = client.get(
+            "/api/member/v1/surfaces/calendar", headers=HEADERS[PRINCIPAL]
+        )
+        assert calendar.status_code == 200, calendar.text
+        cockpit = calendar.json()["cockpit"]
+        assert cockpit["contract"] == "deterministic-household-calendar-v1"
+        assert cockpit["onboarding"]["state"] == "complete"
+        assert cockpit["provider_truth"]["model_decisions"] is False
+        assert cockpit["write_destinations"][0]["destination_kind"] == "personal"
+
+        today = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert "current_guardrail" in today["brief"]["calendar_guidance"]
+        triage = client.get(
+            "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert triage["calendar_destinations"][0]["calendar_external_id"] == (
+            "calendar-personal"
+        )
