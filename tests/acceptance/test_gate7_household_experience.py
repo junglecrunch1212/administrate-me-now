@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -247,9 +248,20 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert dashboard_root.status_code == 307
         assert dashboard_root.headers["location"] == "/member"
         member_page = client.get("/member/today", headers=HEADERS[ADULT])
+        css_asset = client.get("/member-assets/member.css")
+        js_asset = client.get("/member-assets/member.js")
+        asset_versions = re.findall(
+            r"/member-assets/member\.(?:css|js)\?v=([0-9a-f]{12})",
+            member_page.text,
+        )
+        assert len(asset_versions) == 2
+        assert len(set(asset_versions)) == 1
+        assert member_page.headers["cache-control"] == "no-store"
+        assert css_asset.headers["cache-control"] == "no-store"
+        assert js_asset.headers["cache-control"] == "no-store"
         assets = (
-            client.get("/member-assets/member.js").text
-            + client.get("/member-assets/member.css").text
+            js_asset.text
+            + css_asset.text
             + client.get("/member-assets/index.html").text
         )
         persisted_events = json.dumps(

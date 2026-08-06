@@ -86,6 +86,10 @@ Activity feed entries are evidence-rich summaries of typed events. Notifications
 
 Gate 1 reference evidence is complete at `docs/refactor/evidence/console-reference/run-manifest.json`: the exact baseline HTML was rendered at fixed desktop and narrow viewports, all twelve declared behaviors were exercised, and the transcript/DOM/console results were retained. This proves the reference vocabulary only. Quick-prefix Capture, direct voice ingest, Capture-owned triage, client-only authorization, and other items named in the superseded column remain superseded and are not restored by this evidence. D26's separate Triage adjudication surface does not restore Capture as an ingest product. Later implementation acceptance uses these captures as vocabulary evidence while the superseded-flow table controls semantics. Pixel equality is not required; behavior, hierarchy, privacy, responsiveness, and accessibility are.
 
+The member shell binds its stylesheet and JavaScript to a shared content hash
+and serves both HTML and assets with `no-store`. An immutable runtime release
+must never run against a browser-cached client bundle from another release.
+
 ## Gate 2 implementation status
 
 Gate 2 establishes the server-side route topology and truthful system health needed by the future UI: `/api/core`, `/api/comms`, `/api/capture`, `/api/automation`, `/api/bridge`, and `/api/system` share one application. It does not claim AC-18: the Gate 1 captures remain immutable design evidence, and the real browser application, role-aware navigation, accessibility, and all interaction states remain later work.

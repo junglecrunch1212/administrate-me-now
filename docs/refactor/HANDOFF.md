@@ -74,6 +74,12 @@ trip; structural and security failures still roll back immediately. These
 changes **MODERNIZE** service switching while **PRESERVING** rollback, release
 immutability, secret-free argument lists, and fail-closed readiness.
 
+Live visual validation also proved that stable asset URLs allowed a signed-in
+browser to retain the pre-Triage JavaScript across an immutable release switch.
+Member HTML now injects one content-derived version into both CSS and JavaScript
+URLs and serves the shell/assets with `Cache-Control: no-store`, so browser code
+and server APIs cannot straddle releases.
+
 ## 2026-08-05 live activation hardening
 
 The production Mac rehearsal additionally proved and repaired three operational

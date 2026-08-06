@@ -55,6 +55,18 @@ from adminme.temporary_surfaces import (
 router = APIRouter(tags=["member-portal"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
 ASSET_ROOT = Path(__file__).with_name("assets")
+_MEMBER_INDEX = (ASSET_ROOT / "index.html").read_text(encoding="utf-8")
+_MEMBER_ASSET_VERSION = hashlib.sha256(
+    (ASSET_ROOT / "member.css").read_bytes() + (ASSET_ROOT / "member.js").read_bytes()
+).hexdigest()[:12]
+
+
+def _member_index_response() -> Response:
+    return Response(
+        content=_MEMBER_INDEX.replace("__ASSET_VERSION__", _MEMBER_ASSET_VERSION),
+        media_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class ChatRequest(BaseModel):
@@ -1108,13 +1120,13 @@ async def member_page(
         authorize_surface(session, "triage")
         return RedirectResponse(url="/member/triage", status_code=308)
     authorize_surface(session, surface)
-    return FileResponse(ASSET_ROOT / "index.html", media_type="text/html")
+    return _member_index_response()
 
 
 @router.get("/member/quests/{stable_id}")
 async def temporary_surface_page(
     stable_id: str, request: Request, session: SessionDep
-) -> FileResponse:
+) -> Response:
     runtime = _runtime(request)
     await _expire_due(runtime, session)
     spec = runtime.temporary_surfaces.get(stable_id)
@@ -1124,7 +1136,7 @@ async def temporary_surface_page(
         _visible_spec(runtime, session, stable_id)
     elif spec.owner_member_id != session.auth_member_id:
         raise HTTPException(404, "temporary surface not found")
-    return FileResponse(ASSET_ROOT / "index.html", media_type="text/html")
+    return _member_index_response()
 
 
 @router.get("/member-assets/{filename}")
@@ -1132,7 +1144,11 @@ async def member_asset(filename: str) -> FileResponse:
     if filename not in {"member.css", "member.js"}:
         raise HTTPException(404, "asset not found")
     media = "text/css" if filename.endswith(".css") else "text/javascript"
-    return FileResponse(ASSET_ROOT / filename, media_type=media)
+    return FileResponse(
+        ASSET_ROOT / filename,
+        media_type=media,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/api/member/v1/bootstrap")
