@@ -1,13 +1,10 @@
--- Lists projection schema — 13th projection per [D18].
+-- Lists projection schema — provider mirrors and contextual reminder cues.
 --
 -- Per ADMINISTRATEME_BUILD.md §L3 and SYSTEM_INVARIANTS.md §2.
 --
--- Subscribes to ``list_item.added@v1`` only. The other three list_item
--- event types (updated/completed/deleted) have no first-party producers
--- on main yet; declaring subscriptions without producers would break
--- rebuild correctness per UT-27-style discipline. Follow-up sub-prompts
--- (11b-i-β / 11b-iv-β) ship the producers and a paired 11f-β extends
--- subscriptions then.
+-- Subscribes to canonical list/list-item transitions plus scoped context
+-- facts and member-authored cue rules. Provider facts remain authoritative;
+-- cues affect only deterministic presentation/notification eligibility.
 --
 -- Composite PK ``(tenant_id, list_external_id, item_external_id)``
 -- guards against ``item_external_id`` collisions across source
@@ -42,6 +39,10 @@ CREATE TABLE IF NOT EXISTS list_items (
     tags_json         TEXT,
     parent_external_id TEXT,
     sort_order        INTEGER,
+    provider_position TEXT,
+    source_links_json TEXT NOT NULL DEFAULT '[]',
+    provider_data_json TEXT NOT NULL DEFAULT '{}',
+    read_only_reason  TEXT,
     linked_item_kind  TEXT,
     linked_item_id    TEXT,
     completion_policy TEXT NOT NULL DEFAULT 'manual',
@@ -85,3 +86,55 @@ CREATE TABLE IF NOT EXISTS lists (
 
 CREATE INDEX IF NOT EXISTS idx_lists_tenant_member
     ON lists(tenant_id, member_id, provider);
+
+CREATE TABLE IF NOT EXISTS reminder_cues (
+    tenant_id TEXT NOT NULL,
+    cue_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    list_external_id TEXT NOT NULL,
+    item_external_id TEXT NOT NULL,
+    signal_key TEXT NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    operator TEXT NOT NULL,
+    expected_state TEXT,
+    expected_number REAL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    configured_at TEXT NOT NULL,
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    sensitivity TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, cue_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reminder_cues_member_item
+    ON reminder_cues(tenant_id, member_id, list_external_id, item_external_id);
+
+CREATE TABLE IF NOT EXISTS context_signals (
+    tenant_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    signal_key TEXT NOT NULL,
+    signal_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    state TEXT NOT NULL,
+    numeric_value REAL,
+    unit TEXT,
+    latitude REAL,
+    longitude REAL,
+    accuracy_meters REAL,
+    observed_at TEXT NOT NULL,
+    expires_at TEXT,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    owner_scope TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    sensitivity TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, member_id, signal_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_signals_member_kind
+    ON context_signals(tenant_id, member_id, kind, observed_at);

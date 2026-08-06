@@ -66,6 +66,11 @@
         "description": "Member-isolated deterministic communications cockpit and provider capability state."
       },
       {
+        "id": "reminders.cockpit",
+        "method": "administrateme.dashboard.reminders",
+        "description": "Member-isolated deterministic reminder lenses, provider truth, and contextual cue state."
+      },
+      {
         "id": "crm.people",
         "method": "administrateme.dashboard.people",
         "description": "Scope-filtered CRM people and interaction context."

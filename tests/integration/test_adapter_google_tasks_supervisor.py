@@ -76,7 +76,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
-from adminme.events.schemas.lists import ListItemAddedV1
+from adminme.events.schemas.lists import ListItemV3
 from adminme.lib.adapters import (
     CommunicationAdapter,
     ExternalStateMirrorAdapter,
@@ -259,23 +259,22 @@ def test_supervisor_write_capabilities_gate_through_loader() -> None:
     touched — the gate rejects the operation BEFORE the impl is
     dispatched."""
     adapter = _make_adapter()
-    assert GoogleTasksAdapter.write_capabilities == ["create_task"]
+    assert "create_task" in GoogleTasksAdapter.write_capabilities
+    assert "complete_task" in GoogleTasksAdapter.write_capabilities
     assert hasattr(adapter, "apply_write")
     assert callable(adapter.apply_write)
 
     op = WriteOperation(
-        kind="update_task",
+        kind="set_native_priority",
         target_external_id="gtask-1",
         payload={},
     )
     with pytest.raises(WriteCapabilityError):
         asyncio.run(adapter.apply_write(op))
 
-    # The defense-in-depth check inside ``_apply_write_impl`` also
-    # rejects ``delete_task`` directly (the gate would catch it first
-    # in production; this asserts the inner guard is wired correctly).
+    # A second undeclared provider fantasy remains gated independently.
     delete_op = WriteOperation(
-        kind="delete_task",
+        kind="add_native_geofence",
         target_external_id="gtask-2",
         payload={},
     )
@@ -318,11 +317,11 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
 
     emitted = asyncio.run(adapter._poll_once(ctx=ctx))
 
-    assert emitted == 1
+    assert emitted == 2
     added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
-    instance = ListItemAddedV1.model_validate(payload)
+    instance = ListItemV3.model_validate(payload)
     assert instance.member_id == "member-integration-001"
     assert instance.list_external_id == "tasklist-primary"
     assert instance.item_external_id == "gtask-integration-001"
@@ -330,7 +329,8 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
     assert instance.title == "Integration emit"
     assert instance.notes == "Integration round-trip"
     # F-7: no native priority on Google Tasks → medium default.
-    assert instance.priority == 5
+    assert instance.priority == 0
+    assert instance.provider == "google_tasks"
     assert instance.completed is False
     assert instance.sync_cycle_id == "corr-integration-1"
     # Re-poll on the same id is a no-op per the inbound dedupe gate

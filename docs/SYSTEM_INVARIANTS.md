@@ -127,7 +127,7 @@ Security is defense-in-depth across the session layer, scope enforcement at ever
 **HIDDEN_FOR_CHILD:**
 
 17. Admin surfaces are enforced two ways for child sessions: a **client-side nav filter** (canonical list in `console/lib/nav.js`) AND a **server-side prefix blocklist** (`CHILD_BLOCKED_API_PREFIXES`); client-side is UX, server-side is security, and the two arrays are deliberately independent. [arch §6, CONSOLE_PATTERNS.md §7]
-18. Child sessions see only `today` and `scoreboard` in the nav; direct requests for Triage, Comms, People/CRM, Knowledge, Finance, Calendar, Settings, adult lifecycle, and adult OpenClaw tools fail closed regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7, D26, D28]
+18. Child sessions see only `today` and `scoreboard` in the nav; direct requests for Triage, Comms, Reminders, People/CRM, Knowledge, Finance, Calendar, Settings, adult lifecycle, and adult OpenClaw tools fail closed regardless of UI state. [arch §6, CONSOLE_PATTERNS.md §7, D26, D28, D29]
 
 **Bridge sovereignty:**
 
@@ -151,6 +151,23 @@ or create canonical work. [D26, D28]
 an exact-account capability check and the full external-write approval,
 privacy, observation, and terminal-outcome chain. View-as cannot mutate Comms.
 [D28]
+
+**Reminders scope and determinism:**
+
+24. A reminder/list item remains provider-owned and member/account/list scoped.
+The Lists projection is a rebuildable mirror, not a second provider truth, and
+it cannot be collapsed into Task, Commitment, calendar-event, recurrence, or
+scheduler-job state. [D18, D29]
+
+25. Now/Scheduled/Places/Anytime/Completed and all contextual activation are
+fixed code over typed, authorized, expiring facts. Models may extract a typed
+candidate through the pinned OpenClaw seam, but never rank, activate, locate,
+complete, move, or materialize a reminder. [D6, D26, D29]
+
+26. Reminder writes expose only the exact provider/account capability and pass
+allowlist, governance, rate limit, independent approvals, content/privacy,
+observation, optimistic concurrency, and terminal outcome reconciliation.
+Provider limitations may not be filled with invented parity. [D29]
 
 ## Section 7: Pipelines — reactive and proactive
 

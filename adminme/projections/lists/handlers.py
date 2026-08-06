@@ -39,6 +39,12 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         apply_list_item_snapshot(envelope, conn)
     elif event_type == "list_item.deleted":
         apply_list_item_deleted(envelope, conn)
+    elif event_type == "context.signal.observed":
+        apply_context_signal(envelope, conn)
+    elif event_type == "reminder.cue.configured":
+        apply_reminder_cue(envelope, conn)
+    elif event_type == "reminder.cue.cleared":
+        clear_reminder_cue(envelope, conn)
 
 
 def apply_list_changed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
@@ -115,10 +121,11 @@ def apply_list_item_snapshot(
             provider, provider_account_id, list_name, list_color, title, notes,
             url, due_at, priority, completed, completion_at, start_json, due_json,
             alarms_json, recurrence_json, flagged, tags_json, parent_external_id,
-            sort_order, linked_item_kind, linked_item_id, completion_policy,
+            sort_order, provider_position, source_links_json, provider_data_json,
+            read_only_reason, linked_item_kind, linked_item_id, completion_policy,
             provider_revision, last_modified_at, sync_cycle_id,
             owner_scope, visibility_scope, sensitivity, last_event_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(tenant_id, list_external_id, item_external_id) DO UPDATE SET
             member_id=excluded.member_id, provider=excluded.provider,
             provider_account_id=excluded.provider_account_id,
@@ -130,7 +137,12 @@ def apply_list_item_snapshot(
             alarms_json=excluded.alarms_json, recurrence_json=excluded.recurrence_json,
             flagged=excluded.flagged, tags_json=excluded.tags_json,
             parent_external_id=excluded.parent_external_id,
-            sort_order=excluded.sort_order, linked_item_kind=excluded.linked_item_kind,
+            sort_order=excluded.sort_order,
+            provider_position=excluded.provider_position,
+            source_links_json=excluded.source_links_json,
+            provider_data_json=excluded.provider_data_json,
+            read_only_reason=excluded.read_only_reason,
+            linked_item_kind=excluded.linked_item_kind,
             linked_item_id=excluded.linked_item_id,
             completion_policy=excluded.completion_policy,
             provider_revision=excluded.provider_revision,
@@ -163,6 +175,10 @@ def apply_list_item_snapshot(
             None if p.get("tags") is None else _json(p.get("tags"), []),
             p.get("parent_external_id"),
             p.get("sort_order"),
+            p.get("provider_position"),
+            _json(p.get("source_links"), []),
+            _json(p.get("provider_data"), {}),
+            p.get("read_only_reason"),
             p.get("linked_item_kind"),
             p.get("linked_item_id"),
             p.get("completion_policy", "manual"),
@@ -187,4 +203,106 @@ def apply_list_item_deleted(
     conn.execute(
         "DELETE FROM list_items WHERE tenant_id=? AND list_external_id=? AND item_external_id=?",
         (envelope["tenant_id"], p["list_external_id"], p["item_external_id"]),
+    )
+
+
+def apply_context_signal(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """
+        INSERT INTO context_signals (
+            tenant_id, member_id, signal_key, signal_id, source, kind, state,
+            numeric_value, unit, latitude, longitude, accuracy_meters,
+            observed_at, expires_at, attributes_json, owner_scope,
+            visibility_scope, sensitivity, last_event_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(tenant_id, member_id, signal_key) DO UPDATE SET
+            signal_id=excluded.signal_id, source=excluded.source,
+            kind=excluded.kind, state=excluded.state,
+            numeric_value=excluded.numeric_value, unit=excluded.unit,
+            latitude=excluded.latitude, longitude=excluded.longitude,
+            accuracy_meters=excluded.accuracy_meters,
+            observed_at=excluded.observed_at, expires_at=excluded.expires_at,
+            attributes_json=excluded.attributes_json,
+            owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            sensitivity=excluded.sensitivity, last_event_id=excluded.last_event_id
+        WHERE excluded.observed_at >= context_signals.observed_at
+        """,
+        (
+            envelope["tenant_id"],
+            p["member_id"],
+            p["signal_key"],
+            p["signal_id"],
+            p["source"],
+            p["kind"],
+            p["state"],
+            p.get("numeric_value"),
+            p.get("unit"),
+            p.get("latitude"),
+            p.get("longitude"),
+            p.get("accuracy_meters"),
+            _iso(p["observed_at"]),
+            _iso(p.get("expires_at")),
+            _json(p.get("attributes"), {}),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_reminder_cue(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        """
+        INSERT INTO reminder_cues (
+            tenant_id, cue_id, member_id, provider, provider_account_id,
+            list_external_id, item_external_id, signal_key, source, kind,
+            operator, expected_state, expected_number, enabled, configured_at,
+            owner_scope, visibility_scope, sensitivity, last_event_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(tenant_id, cue_id) DO UPDATE SET
+            member_id=excluded.member_id, provider=excluded.provider,
+            provider_account_id=excluded.provider_account_id,
+            list_external_id=excluded.list_external_id,
+            item_external_id=excluded.item_external_id,
+            signal_key=excluded.signal_key, source=excluded.source,
+            kind=excluded.kind, operator=excluded.operator,
+            expected_state=excluded.expected_state,
+            expected_number=excluded.expected_number, enabled=excluded.enabled,
+            configured_at=excluded.configured_at, owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            sensitivity=excluded.sensitivity, last_event_id=excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            p["cue_id"],
+            p["member_id"],
+            p["provider"],
+            p["provider_account_id"],
+            p["list_external_id"],
+            p["item_external_id"],
+            p["signal_key"],
+            p["source"],
+            p["kind"],
+            p["operator"],
+            p.get("expected_state"),
+            p.get("expected_number"),
+            1 if p.get("enabled", True) else 0,
+            _iso(p["configured_at"]),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def clear_reminder_cue(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    p = envelope["payload"]
+    conn.execute(
+        "DELETE FROM reminder_cues WHERE tenant_id=? AND cue_id=? AND member_id=?",
+        (envelope["tenant_id"], p["cue_id"], p["member_id"]),
     )

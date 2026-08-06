@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 import shutil
 import subprocess
 from typing import Any, Callable, ClassVar, Literal
@@ -116,7 +117,7 @@ class HomeAssistantAdapter(OutboundActionAdapter):
         {
             "kind": "Cat-C",
             "runtime": "central",
-            "event_families": ["ha.state_changed"],
+            "event_families": ["ha.state_changed", "context.signal.observed"],
             "observation_mode_required": False,
         },
     ]
@@ -264,6 +265,7 @@ class HomeAssistantAdapter(OutboundActionAdapter):
             if prior is not None and prior == last_changed:
                 continue
             await self._emit_state_changed(ctx=ctx, state=state)
+            await self._emit_reminder_context(ctx=ctx, state=state)
             self._seen_states[entity_id] = last_changed
             emitted += 1
         return emitted
@@ -304,6 +306,69 @@ class HomeAssistantAdapter(OutboundActionAdapter):
                 "source": "home_assistant",
             },
         )
+
+    async def _emit_reminder_context(
+        self, *, ctx: AdapterContext, state: dict[str, Any]
+    ) -> None:
+        """Emit only explicitly member-bound, allowlisted reminder signals."""
+        entity_id = str(state.get("entity_id") or "")
+        mappings = self._config.get("reminder_context_signals") or []
+        for mapping in mappings:
+            if not isinstance(mapping, dict) or mapping.get("entity_id") != entity_id:
+                continue
+            member_id = str(mapping.get("member_id") or "")
+            if not member_id:
+                continue
+            observed_text = str(
+                state.get("last_updated")
+                or state.get("last_changed")
+                or ctx.now_factory().isoformat()
+            )
+            try:
+                observed = datetime.fromisoformat(observed_text.replace("Z", "+00:00"))
+            except ValueError:
+                observed = ctx.now_factory()
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            ttl_seconds = int(mapping.get("ttl_seconds") or 300)
+            raw_state = str(state.get("state") or "")
+            try:
+                numeric_value: float | None = float(raw_state)
+            except ValueError:
+                numeric_value = None
+            attributes = dict(state.get("attributes") or {})
+            allowed_attributes = {
+                str(key): attributes[key]
+                for key in mapping.get("attribute_allowlist") or []
+                if key in attributes
+            }
+            payload = {
+                "signal_id": ctx.correlation_id_factory(),
+                "signal_key": str(mapping.get("signal_key") or f"ha:{entity_id}"),
+                "member_id": member_id,
+                "source": "home_assistant",
+                "kind": str(mapping.get("kind") or "device_state"),
+                "state": raw_state,
+                "numeric_value": numeric_value,
+                "unit": attributes.get("unit_of_measurement"),
+                "latitude": attributes.get("latitude"),
+                "longitude": attributes.get("longitude"),
+                "accuracy_meters": attributes.get("gps_accuracy"),
+                "observed_at": observed.isoformat(),
+                "expires_at": (observed + timedelta(seconds=ttl_seconds)).isoformat(),
+                "attributes": allowed_attributes,
+            }
+            try:
+                await write_adapter_event(
+                    ctx,
+                    adapter_name=self.name,
+                    sensitivity_floor=self.sensitivity_floor,
+                    config={**self._config, "member_id": member_id},
+                    event_type="context.signal.observed",
+                    payload=payload,
+                )
+            except Exception:  # noqa: BLE001 — best-effort sibling emission
+                _log.exception("home-assistant reminder context emission failed")
 
     async def execute_action(self, request: ActionRequest) -> ActionResult:
         """Cat-E entry: POST /api/services/<domain>/<service>.

@@ -25,6 +25,7 @@ The three tests below cover the contract:
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,39 @@ from adminme.projections.lists import ListsProjection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
 
 TEST_KEY = b"L" * 32
+
+
+def test_existing_lists_database_receives_v3_columns_before_use() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE list_items (
+            tenant_id TEXT NOT NULL, list_external_id TEXT NOT NULL,
+            item_external_id TEXT NOT NULL, member_id TEXT NOT NULL,
+            list_name TEXT NOT NULL, title TEXT NOT NULL, notes TEXT,
+            due_at TEXT, priority INTEGER NOT NULL, completed INTEGER NOT NULL,
+            last_modified_at TEXT NOT NULL, sync_cycle_id TEXT NOT NULL,
+            owner_scope TEXT NOT NULL, visibility_scope TEXT NOT NULL,
+            sensitivity TEXT NOT NULL, last_event_id TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, list_external_id, item_external_id)
+        )
+        """
+    )
+    projection = ListsProjection()
+    conn.executescript(projection.schema_path.read_text(encoding="utf-8"))
+    projection.migrate_schema(conn)
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(list_items)")}
+    assert {
+        "provider_position",
+        "source_links_json",
+        "provider_data_json",
+        "read_only_reason",
+    } <= columns
+    tables = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert {"reminder_cues", "context_signals"} <= tables
 
 
 def _envelope(
@@ -135,7 +169,7 @@ def test_lists_projection_registered_in_runner() -> None:
     # registry seam so a future refactor cannot silently rename them.
     instance = ListsProjection()
     assert instance.name == "lists"
-    assert instance.version == 2
+    assert instance.version == 3
     assert list(instance.subscribes_to) == [
         "list.created",
         "list.updated",
@@ -145,6 +179,9 @@ def test_lists_projection_registered_in_runner() -> None:
         "list_item.completed",
         "list_item.uncompleted",
         "list_item.deleted",
+        "context.signal.observed",
+        "reminder.cue.configured",
+        "reminder.cue.cleared",
     ]
     assert instance.schema_path.name == "schema.sql"
 

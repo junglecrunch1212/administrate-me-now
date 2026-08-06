@@ -8,3 +8,10 @@ base_url: https://homeassistant.local:8123
 access_token_ref: op://AdministrateMe/home-assistant-sandbox/long-lived-token
 poll_interval_s: 60
 sensitivity_floor: normal
+reminder_context_signals:
+  - entity_id: person.member_sandbox
+    member_id: member-sandbox
+    signal_key: presence:home
+    kind: presence
+    ttl_seconds: 300
+    attribute_allowlist: []

@@ -27,6 +27,7 @@ export function registerDashboard(api: OpenClawPluginApi, runtime: PluginRuntime
     ["administrateme.dashboard.today", "/api/openclaw/v1/dashboard/today"],
     ["administrateme.dashboard.triage", "/api/openclaw/v1/dashboard/triage"],
     ["administrateme.dashboard.comms", "/api/openclaw/v1/dashboard/comms"],
+    ["administrateme.dashboard.reminders", "/api/openclaw/v1/dashboard/reminders"],
     ["administrateme.dashboard.people", "/api/openclaw/v1/dashboard/people"],
     ["administrateme.dashboard.knowledge", "/api/openclaw/v1/dashboard/knowledge"],
     ["administrateme.dashboard.finance", "/api/openclaw/v1/dashboard/finance"],

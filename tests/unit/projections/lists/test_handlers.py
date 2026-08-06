@@ -210,6 +210,65 @@ def test_apply_event_dispatch_only_for_subscribed_type() -> None:
     assert count == 1
 
 
+def test_context_signal_and_reminder_cue_round_trip_idempotently() -> None:
+    conn = _conn()
+    signal = _envelope(
+        event_type="context.signal.observed",
+        event_id="evt-signal",
+        owner_scope="private:m1",
+        visibility_scope="private:m1",
+        payload={
+            "signal_id": "signal-001",
+            "member_id": "m1",
+            "signal_key": "presence:home",
+            "source": "home_assistant",
+            "kind": "presence",
+            "state": "present",
+            "numeric_value": None,
+            "unit": None,
+            "latitude": None,
+            "longitude": None,
+            "accuracy_meters": None,
+            "observed_at": "2026-08-06T14:00:00Z",
+            "expires_at": "2026-08-06T14:05:00Z",
+            "attributes": {"entity": "person.member"},
+        },
+    )
+    cue = _envelope(
+        event_type="reminder.cue.configured",
+        event_id="evt-cue",
+        owner_scope="private:m1",
+        visibility_scope="private:m1",
+        payload={
+            "cue_id": "cue-home-001",
+            "member_id": "m1",
+            "provider": "google_tasks",
+            "provider_account_id": "account-a",
+            "list_external_id": "list-A",
+            "item_external_id": "item-1",
+            "signal_key": "presence:home",
+            "source": "home_assistant",
+            "kind": "presence",
+            "operator": "equals",
+            "expected_state": "present",
+            "expected_number": None,
+            "enabled": True,
+            "configured_at": "2026-08-06T13:00:00Z",
+        },
+    )
+    handlers.apply_event(signal, conn)
+    handlers.apply_event(signal, conn)
+    handlers.apply_event(cue, conn)
+    handlers.apply_event(cue, conn)
+
+    signal_row = conn.execute("SELECT * FROM context_signals").fetchone()
+    cue_row = conn.execute("SELECT * FROM reminder_cues").fetchone()
+    assert signal_row is not None and signal_row["state"] == "present"
+    assert signal_row["attributes_json"] == '{"entity":"person.member"}'
+    assert cue_row is not None and cue_row["operator"] == "equals"
+    assert conn.execute("SELECT count(*) FROM reminder_cues").fetchone()[0] == 1
+
+
 def test_apply_list_item_added_distinct_lists_distinct_rows() -> None:
     conn = _conn()
     # Same item_external_id but two different list_external_ids — composite

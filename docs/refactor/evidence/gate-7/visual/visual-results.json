@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-06T15:53:38.208Z",
+  "generated_at": "2026-08-06T18:06:17.823Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -42,7 +42,7 @@
     {
       "name": "Today defaults to Day Brief",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.1 decision.Events0Moves0Messages0Decisions1On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today.Needs a decision1Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice0No message needs a response right now."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.1 decision.Events0Moves0Messages0Decisions1On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today.Needs a decision1Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice0No message needs a response right now."
     },
     {
       "name": "Today offers Carousel and What Now",
@@ -108,6 +108,31 @@
       "name": "Comms quiet lens is interactive",
       "status": "PASS",
       "detail": "Conversations0Nothing in this lens. Try All, another account, or enjoy the quiet."
+    },
+    {
+      "name": "/member/reminders HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/reminders title",
+      "status": "PASS",
+      "detail": "Reminders"
+    },
+    {
+      "name": "Reminders identifies deterministic provider truth",
+      "status": "PASS",
+      "detail": "Private · provider-backed · deterministic"
+    },
+    {
+      "name": "Reminders exposes stable activation lenses",
+      "status": "PASS",
+      "detail": "REMINDERS COCKPITNothing is asking to be remembered right now.Time, place, and context cues are deterministic lenses over provider-owned reminders. A reminder never silently becomes a task, promise, or calendar event.Now0Scheduled0Places0Anytime0Now 0Scheduled 0Places 0Anytime 0Completed 0All accountsAll listsNow remindersNothing in this lens. Your provider truth is unchanged.Choose one reminderThe cockpit carries the remembering. You only need to decide about one item at a time.Quick addCapture it now; enrich it only if useful.Connect a writable Apple Reminders or Google Tasks account in Settings.What each provider can really doNo reminder account is connected yet."
+    },
+    {
+      "name": "Reminders does not invent a writable provider",
+      "status": "PASS",
+      "detail": "Quick addCapture it now; enrich it only if useful.Connect a writable Apple Reminders or Google Tasks account in Settings."
     },
     {
       "name": "/member/people HTTP",
@@ -200,9 +225,9 @@
       "detail": "Private member view"
     },
     {
-      "name": "nine principal navigation items",
+      "name": "ten principal navigation items",
       "status": "PASS",
-      "detail": 9
+      "detail": 10
     },
     {
       "name": "desktop named controls",
@@ -299,7 +324,7 @@
     {
       "name": "tablet Day Brief default",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "observation mode visible",
@@ -407,12 +432,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_5f5e1cd3ecbe4602 HTTP",
+      "name": "/member/quests/view_21d21d12befd4809 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_5f5e1cd3ecbe4602 title",
+      "name": "/member/quests/view_21d21d12befd4809 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -427,19 +452,19 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_5f5e1cd3ecbe4602 HTTP",
+      "name": "/member/quests/view_21d21d12befd4809 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_5f5e1cd3ecbe4602 title",
+      "name": "/member/quests/view_21d21d12befd4809 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
     {
       "name": "archived quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriageCommsPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsRemindersPeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "expiring quest created",
@@ -449,7 +474,7 @@
     {
       "name": "expired quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriageCommsPeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsRemindersPeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "/member/today HTTP",
@@ -576,7 +601,7 @@
     {
       "name": "domain view remains usable during model loss",
       "status": "PASS",
-      "detail": "Day BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Day BriefCarouselWhat Now?evening briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Events0Moves0Messages0Decisions0On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "no browser console errors",
@@ -601,76 +626,80 @@
   ],
   "screenshots": {
     "surface-today-day-brief-desktop.png": {
-      "bytes": 164421,
-      "sha256": "62419a2558793761066e358978a49d5a12e8e7664b7be94c26e3a77a6fd0cd78"
+      "bytes": 165636,
+      "sha256": "3be528f314405dc624e3f63ab44b06b6f1d155dd5b8ef2c22989e54613de58a1"
     },
     "surface-today-carousel-desktop.png": {
-      "bytes": 125972,
-      "sha256": "e546995e3552dafb4c747e5665ac990e47fdb8b15dd0ea3b8ce8eaeeb6130c3e"
+      "bytes": 127545,
+      "sha256": "6b27cd1946ada2dab71177a9aa6ca1fbfe6d0f8ab0094085bd67db60db30d96d"
     },
     "surface-triage-desktop.png": {
-      "bytes": 138977,
-      "sha256": "97bedc57e00040d53926b1cfb4af6101bf449ed1dcd9f425988e45e6550d7208"
+      "bytes": 140384,
+      "sha256": "213abd7f18af35251bb54d53ebab3c0e44f5e8d65062a39e2f5e9929a0028d6a"
     },
     "surface-comms-focus-desktop.png": {
-      "bytes": 235145,
-      "sha256": "f412add64ba5ab7a3a2bfd7f2b83f13b0ec113fd7eb197f21cdb629d8dd2b2e4"
+      "bytes": 236742,
+      "sha256": "5667580e70c51cc18ce8ef78b92d2ed2714c8e3091bc3454a9a2f2f3e250d21a"
+    },
+    "surface-reminders-desktop.png": {
+      "bytes": 199166,
+      "sha256": "f1b33ae1e0b2b4c34698bbfc526b2fec5038cecc4f1e639f5d11b3700a96bf05"
     },
     "surface-people-desktop.png": {
-      "bytes": 110636,
-      "sha256": "1ca981d7d27bcf343f5faa8d8bc03f0d2ac1c3281abb57d238dc36baecd2f0db"
+      "bytes": 112110,
+      "sha256": "6102bf1bf09d60973d8c4298eda4909b6f81d495c2421f5c5e38386f152a91cf"
     },
     "surface-knowledge-desktop.png": {
-      "bytes": 112453,
-      "sha256": "df50d710bd1ca07be633330340ca6e311196fee515d831b4bc3271d4528a46d6"
+      "bytes": 114071,
+      "sha256": "fa2fdf459d069a4c30e7b13b007ba081125cc18c1b0506fb49fd48b8b1320792"
     },
     "surface-finance-desktop.png": {
-      "bytes": 95320,
-      "sha256": "335a2594ef5fde91ec26c40548121a4c881f1192e9738518e56ef11e4880ed3e"
+      "bytes": 96776,
+      "sha256": "fdc4e299fe2665da327b0d8e93cf42257055bacb490114cbfebf9845cab991ba"
     },
     "surface-calendar-desktop.png": {
-      "bytes": 93865,
-      "sha256": "a9dc79e7d344067435e946e7ef601311630f04db0c7000eae3f208328c56e34c"
+      "bytes": 95431,
+      "sha256": "8eceba6613a58769405c1694e1e7b9a533d3b1daa00a09633dcb42bd885c5324"
     },
     "surface-scoreboard-desktop.png": {
-      "bytes": 108708,
-      "sha256": "98829d3cf75d4b163c57907b3a76ea96b4a0b4d1deeaaf0479240e553b1d6563"
+      "bytes": 110256,
+      "sha256": "083b832f76e434a03e40dd704936eb964e04045634fa82dc83d75e96126bd010"
     },
     "surface-settings-desktop.png": {
-      "bytes": 232172,
-      "sha256": "ae98df7467bc2bb0168e809e25f04bc64337759fc241887eadc1dbf7a2217ffe"
+      "bytes": 233643,
+      "sha256": "f6e2858a8c4015b84a25191c561b6b6639143f336c47484c0ed1073a12f01f26"
     },
     "surface-comms-focus-narrow.png": {
-      "bytes": 149307,
-      "sha256": "71fc76fc58f4d1c9bb33a6adb4992a7757855f53250d0114041c213608ec87f3"
+      "bytes": 149977,
+      "sha256": "8c3c78e4c67969fa0e559a0deaf846aeb41933fdc714493530bc30c50a8df251"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 116484,
-      "sha256": "46995722fe8132110893dee4738fd3997c6fd9c9758888cc71183c7400e67d01"
+      "bytes": 117952,
+      "sha256": "933e9430e80c8cef1d540bf3a052dbe5907bff698b0a7ed328198785e75588dc"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 100561,
-      "sha256": "22a7ffc1a37bf71f4367d7e6bafa4a1ddfd4fc3d1262bd978e5fd2dae3db221d"
+      "bytes": 101793,
+      "sha256": "f25c424e432cce4a992ef68a2e2117b6a07f7a991f81e16f66c81052ff2a20e1"
     },
     "quest-private-compressed.png": {
-      "bytes": 184671,
-      "sha256": "e08427e9a2569c396823b3c9c66a4cf44c1470362194f5737dea2c105cfac467"
+      "bytes": 186227,
+      "sha256": "53e5863222a89bf93f9e30f50182220122a3433320ac431d3b3487f14103e7a9"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 221581,
-      "sha256": "0a9c8b6025c094a1906d448a270597cc3537e6d294f07b3218a93d7fa9da2dca"
+      "bytes": 223300,
+      "sha256": "17a92e0d8088455c1fdba19831dff0d1341203d8ac100f4129abfdfcd42b0f66"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 104301,
-      "sha256": "15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77"
+      "bytes": 105893,
+      "sha256": "c3e0dd99afe37e3ce50ce652a3d19bcbf2c8bac26eb7af86fc714aadbd68b0fb"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 104301,
-      "sha256": "15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77"
+      "bytes": 105894,
+      "sha256": "2d099bc35a14d2efed984fceffd2297148a714b6dc0722d224cebedd730392f9"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 84695,
-      "sha256": "709986338162d729ffb07b13ef12ccd0a6cfdfb2c942612e54defbab31a4dc03"
+      "bytes": 84637,
+      "sha256": "2f026a0d0f2446fa45dfa8e0df37f3d70385e353c7afdbde1c3f46739590ac00"
     },
     "mode-child-scoreboard-narrow.png": {
       "bytes": 49989,
@@ -678,11 +707,11 @@
     },
     "shared-screen-scoreboard.png": {
       "bytes": 82792,
-      "sha256": "4c4138c5d5c63e44655a8f8d2e86be7096f987966cef672c6b1eb4d8cb4e30ad"
+      "sha256": "b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 127341,
-      "sha256": "f6639c2dff848d0811db6af15523f45028f8de61b90c3053841afcf6ffea3cd7"
+      "bytes": 128354,
+      "sha256": "34cebce2a94803b6f7991d070fdea754207271c8211885a95347c0bfac35bdfb"
     }
   },
   "console_errors": [],

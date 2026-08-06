@@ -51,7 +51,7 @@ import pytest
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.registry import registry
-from adminme.events.schemas.lists import ListItemAddedV1
+from adminme.events.schemas.lists import ListItemAddedV1, ListItemV3
 from adminme.lib.adapters import (
     ExternalStateMirrorAdapter,
     WriteCapabilityError,
@@ -297,8 +297,18 @@ def test_write_capabilities_declared_asymmetrically() -> None:
     of scope per the parent draft and intentionally NOT declared. A
     declared-but-not-implemented kind would fail the validator's
     method-presence rule per memo 05 §3.4."""
-    assert GoogleTasksAdapter.write_capabilities == ["create_task"]
-    assert len(GoogleTasksAdapter.write_capabilities) == 1
+    assert GoogleTasksAdapter.write_capabilities == [
+        "create_list",
+        "update_list",
+        "delete_list",
+        "create_task",
+        "update_task",
+        "delete_task",
+        "complete_task",
+        "uncomplete_task",
+        "move_task",
+        "clear_completed_tasks",
+    ]
 
 
 # ===========================================================================
@@ -315,7 +325,7 @@ async def test_apply_write_gate_raises_on_undeclared_kind() -> None:
     draft; deferred to 11b-iv-β)."""
     adapter = _make_adapter()
     operation = WriteOperation(
-        kind="update_task",
+        kind="set_native_priority",
         target_external_id="gtask-1",
         payload={},
     )
@@ -637,10 +647,10 @@ async def test_poll_once_emits_list_item_added_on_first_observation() -> None:
 
     emitted = await adapter._poll_once(ctx=ctx)
 
-    assert emitted == 1
+    assert emitted == 2  # list discovery + item discovery
     added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
-    assert added_calls[0]["schema_version"] == 1
+    assert added_calls[0]["schema_version"] == 3
     assert added_calls[0]["payload"]["item_external_id"] == "gtask-inbound-001"
 
 
@@ -664,7 +674,7 @@ async def test_poll_once_skips_already_seen_task_id() -> None:
     first = await adapter._poll_once(ctx=ctx)
     second = await adapter._poll_once(ctx=ctx)
 
-    assert first == 1
+    assert first == 2
     assert second == 0  # already seen → not re-emitted
     added_calls = [c for c in event_log.calls if c["type"] == "list_item.added"]
     assert len(added_calls) == 1
@@ -703,19 +713,21 @@ async def test_poll_emit_payload_validates_against_list_item_added_v1() -> None:
     payload = added_call["payload"]
     # Round-trip via strict validation — any extra field would raise
     # pydantic.ValidationError under ``extra="forbid"``.
-    instance = ListItemAddedV1.model_validate(payload)
+    instance = ListItemV3.model_validate(payload)
     assert instance.member_id == "member-001"
     assert instance.list_external_id == "tasklist-primary"
     assert instance.item_external_id == "gtask-validate-001"
     assert instance.list_name == "Primary list"
     assert instance.title == "Schema check"
     assert instance.notes == "quarterly review prep"
-    assert instance.priority == 5
+    assert instance.provider == "google_tasks"
+    assert instance.due is not None and instance.due.day == 20
+    assert instance.priority == 0
     assert instance.completed is False
     assert instance.sync_cycle_id == "corr-gtasks-test"
 
 
-async def test_poll_emit_priority_defaults_to_medium_per_F7() -> None:
+async def test_poll_emit_priority_is_unspecified_per_google_contract() -> None:
     """F-7 (SOFT/new for 11b-iv): Google Tasks API does NOT carry a
     priority field; the ``ListItemAddedV1`` schema requires ``priority:
     Literal[0, 1, 5, 9]``. The adapter maps EVERY emission to
@@ -736,7 +748,7 @@ async def test_poll_emit_priority_defaults_to_medium_per_F7() -> None:
     await adapter._poll_once(ctx=ctx)
 
     added_call = next(c for c in event_log.calls if c["type"] == "list_item.added")
-    assert added_call["payload"]["priority"] == 5
+    assert added_call["payload"]["priority"] == 0
 
 
 async def test_poll_emit_completed_derives_from_task_status() -> None:
@@ -809,6 +821,88 @@ async def test_apply_write_create_task_body_shape() -> None:
     assert body["title"] == "Pick up dry cleaning"
     assert body["notes"] == "By 5pm"
     assert body["due"] == "2026-05-20T00:00:00.000Z"
+
+
+class _DispatchRequest:
+    def __init__(self, response: dict[str, Any] | None = None) -> None:
+        self.response = response or {}
+        self.headers: dict[str, str] = {}
+
+    def execute(self) -> dict[str, Any]:
+        return self.response
+
+
+class _DispatchResource:
+    def __init__(self, calls: list[tuple[str, dict[str, Any]]]) -> None:
+        self.calls = calls
+
+    def __getattr__(self, name: str) -> Any:
+        def invoke(**kwargs: Any) -> _DispatchRequest:
+            self.calls.append((name, kwargs))
+            return _DispatchRequest(
+                {"id": kwargs.get("task") or kwargs.get("tasklist")}
+            )
+
+        return invoke
+
+
+class _DispatchService:
+    def __init__(self) -> None:
+        self.task_calls: list[tuple[str, dict[str, Any]]] = []
+        self.list_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def tasks(self) -> _DispatchResource:
+        return _DispatchResource(self.task_calls)
+
+    def tasklists(self) -> _DispatchResource:
+        return _DispatchResource(self.list_calls)
+
+
+@pytest.mark.parametrize(
+    ("kind", "target", "payload", "resource", "method"),
+    [
+        ("update_task", "task-a", {"title": "Changed"}, "task", "patch"),
+        ("delete_task", "task-a", {}, "task", "delete"),
+        ("complete_task", "task-a", {}, "task", "patch"),
+        ("uncomplete_task", "task-a", {}, "task", "patch"),
+        (
+            "move_task",
+            "task-a",
+            {"destination_list_external_id": "list-b", "previous": "task-z"},
+            "task",
+            "move",
+        ),
+        ("clear_completed_tasks", None, {}, "task", "clear"),
+        ("create_list", None, {"title": "Errands"}, "list", "insert"),
+        ("update_list", "list-a", {"title": "Home"}, "list", "patch"),
+        ("delete_list", "list-a", {}, "list", "delete"),
+    ],
+)
+async def test_supported_writes_dispatch_to_exact_google_resource(
+    kind: str,
+    target: str | None,
+    payload: dict[str, Any],
+    resource: str,
+    method: str,
+) -> None:
+    service = _DispatchService()
+    adapter = _make_adapter(service=service)  # type: ignore[arg-type]
+    result = await adapter.apply_write(
+        WriteOperation(
+            kind=kind,
+            target_external_id=target,
+            payload={"tasklist_id": "list-a", **payload},
+        )
+    )
+    calls = service.task_calls if resource == "task" else service.list_calls
+    assert calls[0][0] == method
+    assert result.applied is True
+    if kind == "move_task":
+        assert calls[0][1]["destinationTasklist"] == "list-b"
+
+
+def test_list_item_added_v3_registry_preserves_google_provider_fields() -> None:
+    assert registry.get("list_item.added", 3) is ListItemV3
 
 
 # ===========================================================================

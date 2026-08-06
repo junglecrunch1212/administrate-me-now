@@ -24,6 +24,7 @@ disable the HTTP endpoint (tests do this).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from dataclasses import dataclass, field
@@ -275,11 +276,14 @@ class AdapterSupervisor:
         manage = getattr(communication_adapter, "manage_message", None)
         if not callable(manage):
             raise ValueError(f"{provider} does not implement {operation}")
-        result = await manage(
+        pending_result = manage(
             operation=operation,
             native_message_id=payload.get("native_message_id")
             or payload.get("target_external_id"),
         )
+        if not inspect.isawaitable(pending_result):
+            raise RuntimeError("communication adapter manage_message must be async")
+        result = await pending_result
         if not isinstance(result, dict):
             raise RuntimeError("communication adapter returned an invalid result")
         return result

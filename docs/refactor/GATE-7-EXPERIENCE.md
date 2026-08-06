@@ -73,7 +73,7 @@ unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Triage, Comms, People, Knowledge, Finance, Calendar,
+- Adults: Today, Triage, Comms, Reminders, People, Knowledge, Finance, Calendar,
   Scoreboard, Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.
@@ -81,7 +81,7 @@ unchanged.
   progress, bounded decisions, immediate outcome-to-recalculated-next action.
 - Compressed: minimalist/dense queue, restrained animation, strict proactive
   cap.
-- Child: warm language/rewards, no Comms/adult communications, CRM, finance,
+- Child: warm language/rewards, no Comms/adult communications, Reminders, CRM, finance,
   knowledge, settings, or operator control.
 
 The page route and data route each enforce the role allowlist. Navigation

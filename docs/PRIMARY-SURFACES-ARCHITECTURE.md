@@ -129,6 +129,25 @@ nullable/unsupported instead of being falsely synthesized. Priority is the
 public EventKit flag/priority representation. These are platform API limits,
 not hidden database fields AdministrateMe should bypass.
 
+## Google Tasks contract
+
+The central Google Tasks adapter discovers authorized task lists and mirrors
+task/list identity, etag, title, notes, date-only due value, completion and
+completion time, nesting, opaque position, source links, hidden/deleted state,
+web link, and assignment provenance. It supports task-list CRUD plus task
+create/update/delete/complete/uncomplete/move and clear-completed where the
+exact resource permits the operation. Polling includes completed, deleted,
+hidden, and assigned records so replay can derive transitions and tombstones
+instead of presenting an open-only partial truth.
+
+Google explicitly discards the time portion of `due`; AdministrateMe preserves
+that as a floating all-day scheduled date. Google Tasks exposes no native
+priority, alarm, recurrence, or geofence fields, so those controls are neither
+sent nor synthesized. Assigned and recurrent tasks have provider-enforced
+write restrictions; assignment metadata is read-only provenance. Google
+Tasks list items remain list items and never silently become AdministrateMe
+Tasks, Commitments, calendar events, or scheduler jobs.
+
 ## Apple Notes contract and hard boundary
 
 Apple publishes no Notes data framework comparable to EventKit. Supported
@@ -188,6 +207,7 @@ violations.
 | Google Calendar | Rich events, incremental changes, cancellations | Create/update/delete/move/respond with etag | Cancelled and elapsed outcomes | Use Google API, not duplicate EventKit writes |
 | iCloud Apple Calendar | Rich EventKit events | Create/update/delete/move, alarms, recurrence | Elapsed outcomes | No attendee mutation/conference parity |
 | Apple Reminders | Lists and full public EKReminder state | List and reminder CRUD, completion, dates, recurrence, geofences | Complete/uncomplete linked work | UI-only tags/subtasks/sections are not public EventKit data |
+| Google Tasks | Task lists; tasks including date, completion, nesting, position, links, assignment provenance, tombstones | List CRUD; task CRUD, completion, move, clear completed with etag | Provider completion/uncompletion transitions | Due is date-only; no priority, alarm, recurrence, or geofence API |
 | Apple Notes | Accounts, folders, HTML notes, dates, lock/share observations | Supported note/folder scripting CRUD | Note edits are activity evidence, not task completion | No public Notes framework; several features are read/write inaccessible |
 
 ## Official platform references
@@ -195,6 +215,10 @@ violations.
 - [Apple EventKit](https://developer.apple.com/documentation/eventkit)
 - [Apple: creating events and reminders](https://developer.apple.com/documentation/eventkit/creating-events-and-reminders)
 - [Apple: creating a recurring event](https://developer.apple.com/documentation/eventkit/creating-a-recurring-event)
+- [Apple EKReminder](https://developer.apple.com/documentation/eventkit/ekreminder)
+- [Apple EKStructuredLocation](https://developer.apple.com/documentation/eventkit/ekstructuredlocation)
+- [Google Tasks Task resource](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks)
+- [Google Tasks Tasklists resource](https://developers.google.com/workspace/tasks/reference/rest/v1/tasklists)
 - [Google Calendar Events resource](https://developers.google.com/workspace/calendar/api/v3/reference/events)
 - [Google Calendar incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync)
 - [Google Calendar resource versions and etags](https://developers.google.com/calendar/api/guides/version-resources)

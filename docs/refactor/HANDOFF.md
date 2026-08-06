@@ -17,6 +17,35 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 deterministic Reminders cockpit
+
+Reminders is now the tenth stable adult surface after Comms. The portal and
+pinned OpenClaw dashboard consume `deterministic-reminders-cockpit-v1`, a
+read-time composition over the existing Lists projection. It exposes explained
+Now/Scheduled/Places/Anytime/Completed lenses, member/account/list filters,
+quick add, provider-native item actions, exact capability/limitation remedies,
+and source provenance without a model ranking or a new truth store.
+
+List snapshots advance additively to v3 for lossless Google opaque position,
+source links, provider metadata, and assignment write restrictions. The Lists
+projection version advances to 3 and also stores typed, member-scoped,
+expiring context facts plus explicit reminder cue rules; the production
+projection count remains fourteen. Google Tasks advances from create-only and
+single-list/open-item polling to supported list/task CRUD, completion,
+uncompletion, move, clear-completed, list discovery, completed/deleted/hidden/
+assigned observation, and transition events. Google remains date-only with no
+native priority/alarm/recurrence/geofence fields. Apple EventKit retains its
+existing richer date/alarm/recurrence/geofence support and its explicit
+Reminders.app-only feature ceiling.
+
+All portal mutations are self-only, exact-account capability checked,
+field-allowlisted, optimistic, independently OpenClaw-approved,
+governance/rate-limit/content-privacy guarded, observation-aware, idempotent,
+and reconciled only by provider terminal evidence. This is a **MODERNIZE**
+change under D29/C099; it does not change Task, Commitment, calendar,
+recurrence, scheduler, or projection-count semantics. Live provider propagation
+remains separate acceptance evidence.
+
 ## 2026-08-06 Comms live projection migration repair
 
 The first production activation of D28 exposed an ordering defect that fresh

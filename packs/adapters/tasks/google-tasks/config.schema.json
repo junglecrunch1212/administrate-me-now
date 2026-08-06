@@ -24,6 +24,31 @@
       "minLength": 1,
       "description": "Google Tasks tasklist id (e.g. '@default') the adapter polls and writes to. Maps to ListItemAddedV1.list_external_id."
     },
+    "provider_account_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable non-secret account identifier stored in reminder provenance; defaults to user_email."
+    },
+    "account_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Member-facing label for this account."
+    },
+    "include_all_tasklists": {
+      "type": "boolean",
+      "default": true,
+      "description": "Discover and mirror all task lists instead of only tasklist_id."
+    },
+    "show_assigned": {
+      "type": "boolean",
+      "default": true,
+      "description": "Include assigned tasks and preserve their read-only assignment provenance."
+    },
+    "assigned_tasks_read_only": {
+      "type": "boolean",
+      "default": true,
+      "description": "Conservatively disable writes for tasks whose assignmentInfo carries provider restrictions."
+    },
     "user_email": {
       "type": "string",
       "format": "email",
