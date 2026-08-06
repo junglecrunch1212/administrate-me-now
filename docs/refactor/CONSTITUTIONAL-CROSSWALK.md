@@ -1,5 +1,12 @@
 # Constitutional crosswalk
 
+Personal Google OAuth amendment (2026-08-06): C035/C046/C050 are
+**MODERNIZED** so the three central Google adapters can resolve independently
+authorized installed-user credentials from the instance-bound macOS Keychain.
+This **PRESERVES** secret-free configuration, least-privilege Gmail read scope,
+event-log truth, per-member ownership, observation-mode write suppression, and
+the allowlist/governance/privacy ordering for eventual provider writes.
+
 Live activation amendment (2026-08-05): C046/C080/C082 are **HARDENED** by an
 authenticated probe of the AdministrateMe-owned Gateway, truthful launchd race
 handling, and backup treatment of generated OpenClaw discovery links as cache.

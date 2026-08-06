@@ -56,6 +56,7 @@ pyobjc-framework-Quartz = { version = "*", markers = "sys_platform == 'darwin'" 
 # Shared utilities
 pyyaml = "*"
 tzdata = "*"
+google-auth-oauthlib = "^1.4.0"
 
 [tool.poetry.group.llm]
 optional = true

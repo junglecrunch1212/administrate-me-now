@@ -1,5 +1,12 @@
 # Migration map
 
+Personal Google OAuth update (2026-08-06): the Gmail, Google Calendar, and
+Google Tasks activation rows are **KEEP/HARDEN COMPLETE IN CODE** for personal
+accounts. Existing `op://` service-account deployments remain supported;
+`keychain://` installed-user credentials are now resolved without raw secrets
+in config, arguments, or environment variables. Gmail accepts OAuth while
+remaining read-only, and Calendar/Tasks retain governed observation seams.
+
 Live activation hardening update (2026-08-05): the OpenClaw activation,
 launchd, and backup rows are **HARDEN COMPLETE** for authenticated managed-RPC
 probing, the macOS RunAtLoad/kickstart race, and generated OpenClaw plugin-skill

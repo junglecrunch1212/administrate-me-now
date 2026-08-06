@@ -16,8 +16,8 @@
     },
     "oauth_credentials_ref": {
       "type": "string",
-      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
-      "description": "1Password reference to installed-app OAuth JSON containing client_id, client_secret, and refresh_token. Configure one independently authorized instance for each member account."
+      "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
+      "description": "Secure-provider reference to installed-app OAuth JSON containing client_id, client_secret, and refresh_token. Configure one independently authorized instance for each member account."
     },
     "member_id": {
       "type": "string",

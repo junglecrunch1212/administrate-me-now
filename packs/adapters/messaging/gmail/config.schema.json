@@ -3,12 +3,21 @@
   "title": "Gmail adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["service_account_key_ref", "user_email"],
+  "required": ["user_email"],
+  "oneOf": [
+    { "required": ["oauth_credentials_ref"] },
+    { "required": ["service_account_key_ref"] }
+  ],
   "properties": {
     "service_account_key_ref": {
       "type": "string",
       "pattern": "^op://[^/]+/[^/]+/[^/]+$",
       "description": "1Password reference to the service-account JSON (op://<vault>/<item>/<field>). NEVER a raw secret per ADMINISTRATEME_BUILD.md §L1."
+    },
+    "oauth_credentials_ref": {
+      "type": "string",
+      "pattern": "^keychain://[^/]+/[^/]+$",
+      "description": "macOS Keychain reference to installed-user OAuth credentials."
     },
     "user_email": {
       "type": "string",

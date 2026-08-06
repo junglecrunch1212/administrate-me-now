@@ -39,10 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
-import shutil
-import subprocess
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -54,6 +51,7 @@ from adminme.adapters.base import (
     SensitivityFloor,
 )
 from adminme.adapters.emission import write_adapter_event
+from adminme.adapters.credentials import resolve_json_credentials
 from adminme.lib.adapters import (
     CommunicationAdapter,
     InboundEnvelope,
@@ -84,27 +82,8 @@ subject email. Tests inject a fake; production uses ``google-auth`` /
 ``google-api-python-client`` (lazily imported)."""
 
 
-def _default_credentials_resolver(op_ref: str) -> dict[str, Any]:
-    """Read service-account JSON from a 1Password reference.
-
-    Production shells out to ``op read``. Tests inject their own resolver;
-    test-looking references are never interpreted as credentials here.
-    """
-    if not op_ref or not op_ref.startswith("op://"):
-        raise ValueError(f"invalid op-ref: {op_ref!r}")
-    op_bin = shutil.which("op")
-    if op_bin is None:
-        raise RuntimeError(
-            "1Password CLI `op` not on PATH; cannot resolve "
-            f"{op_ref!r} (install and sign in to the 1Password CLI)"
-        )
-    proc = subprocess.run(
-        [op_bin, "read", "--no-newline", op_ref],
-        check=True,
-        capture_output=True,
-        timeout=15,
-    )
-    return json.loads(proc.stdout.decode("utf-8"))
+def _default_credentials_resolver(reference: str) -> dict[str, Any]:
+    return resolve_json_credentials(reference)
 
 
 def _default_service_factory(
@@ -115,12 +94,25 @@ def _default_service_factory(
     """Build a Gmail API service. ``google-auth`` and
     ``google-api-python-client`` are imported lazily so tests can
     substitute a fake without the deps being installed in CI."""
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
-    creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
-    if subject_email:
-        creds = creds.with_subject(subject_email)
+    if {"client_id", "client_secret", "refresh_token"} <= credentials_json.keys():
+        from google.oauth2.credentials import Credentials
+
+        creds = Credentials(
+            token=None,
+            refresh_token=str(credentials_json["refresh_token"]),
+            token_uri=str(credentials_json.get("token_uri") or "https://oauth2.googleapis.com/token"),
+            client_id=str(credentials_json["client_id"]),
+            client_secret=str(credentials_json["client_secret"]),
+            scopes=scopes,
+        )
+    else:
+        from google.oauth2.service_account import Credentials
+
+        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+        if subject_email:
+            creds = creds.with_subject(subject_email)
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
 
@@ -263,12 +255,11 @@ class GmailAdapter(CommunicationAdapter):
         reference, emit ``adapter.authenticated``, then enter the
         polling loop until ``stop()`` is invoked (or ``max_poll_cycles``
         is exhausted, in tests)."""
-        op_ref = self._config.get("service_account_key_ref")
+        op_ref = self._config.get("oauth_credentials_ref") or self._config.get("service_account_key_ref")
         user_email = self._config.get("user_email")
-        if not isinstance(op_ref, str) or not op_ref.startswith("op://"):
+        if not isinstance(op_ref, str) or not op_ref.startswith(("op://", "keychain://")):
             raise ValueError(
-                "service_account_key_ref must be a 1Password reference "
-                "(op://<vault>/<item>/<field>)"
+                "credential must be a 1Password reference or macOS Keychain reference"
             )
         if not isinstance(user_email, str) or "@" not in user_email:
             raise ValueError("user_email must be a valid email address")

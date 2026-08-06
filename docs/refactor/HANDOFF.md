@@ -17,6 +17,17 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 personal Google OAuth activation repair
+
+The live Mac activation proved that the Google packs' service-account-only
+credential resolver could not enroll a personal Gmail account. This amendment
+adds a shared secret-reference resolver for existing 1Password references and
+instance-bound macOS Keychain references, installed-user OAuth factories for
+Gmail and Google Tasks (matching Calendar), and a local consent helper that
+stores only refresh credentials in Keychain. Gmail remains read-only; Calendar
+and Tasks remain governed by observation mode and the external-write seams.
+Pack-level regression coverage passes with 29 tests and Ruff is clean.
+
 ## 2026-08-05 live activation hardening
 
 The production Mac rehearsal additionally proved and repaired three operational
