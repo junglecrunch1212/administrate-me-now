@@ -7,12 +7,12 @@ import hashlib
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     RedirectResponse,
@@ -2217,7 +2217,11 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
 
 @router.get("/api/member/v1/surfaces/{surface}")
 async def surface(
-    surface: str, request: Request, session: SessionDep
+    surface: str,
+    request: Request,
+    session: SessionDep,
+    calendar_date: date | None = Query(default=None, alias="date"),
+    view: Literal["day", "week", "month", "agenda", "find", "rules"] = "week",
 ) -> dict[str, Any]:
     if surface == "inbox":
         return {
@@ -2225,7 +2229,13 @@ async def surface(
             "deprecated_alias": "inbox",
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
-    return build_surface(_runtime(request), session, surface)
+    return build_surface(
+        _runtime(request),
+        session,
+        surface,
+        calendar_anchor=calendar_date,
+        calendar_view=view,
+    )
 
 
 @router.post("/api/member/v1/calendar/onboarding", status_code=202)

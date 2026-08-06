@@ -127,6 +127,10 @@ def test_composer_groups_duplicates_and_applies_capacity_rules() -> None:
     duplicate = next(item for item in cockpit["events"] if item["duplicate_collapsed"])
     assert duplicate["effect"] == "hard_block"
     assert duplicate["copy_count"] == 2
+    assert {route["calendar_external_id"] for route in duplicate["source_routes"]} == {
+        "calendar-personal",
+        "calendar-shared",
+    }
     assert cockpit["write_destinations"][0]["destination_kind"] == "personal"
     assert cockpit["provider_truth"]["model_decisions"] is False
 

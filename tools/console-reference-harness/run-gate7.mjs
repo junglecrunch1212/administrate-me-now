@@ -146,6 +146,13 @@ async function seed(baseUrl) {
     },
   );
   record("canonical fixture seeded", message.response.ok, message.response.status);
+  const calendar = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-calendar",
+    identities.principal,
+    "POST",
+  );
+  record("calendar fixture seeded", calendar.response.ok && calendar.value.seeded === 7, calendar.value);
 }
 
 async function newContext(browser, identity, viewport, reducedMotion = "no-preference") {
@@ -172,7 +179,11 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
 
 async function screenshot(page, name) {
   const path = join(evidenceDir, name);
-  await page.screenshot({ path, fullPage: true });
+  await page.screenshot({
+    path,
+    fullPage: true,
+    style: ".skip-link { display: none !important; }",
+  });
   const metadata = await stat(path);
   const digest = createHash("sha256").update(await readFile(path)).digest("hex");
   screenshots[name] = { bytes: metadata.size, sha256: digest };
@@ -291,6 +302,32 @@ async function run() {
         record("Reminders exposes stable activation lenses", await principal.page.getByRole("button", { name: /^Now/ }).count() === 1 && await principal.page.getByRole("button", { name: /^Places/ }).count() === 1, await principal.page.locator("#surface").textContent());
         record("Reminders does not invent a writable provider", (await principal.page.locator(".reminder-quick-add").textContent()).includes("Connect a writable"), await principal.page.locator(".reminder-quick-add").textContent());
         await screenshot(principal.page, "surface-reminders-desktop.png");
+      } else if (surface === "calendar") {
+        record("Calendar identifies deterministic policy", await principal.page.locator("#mode-label").textContent() === "Private · deterministic calendar policy", await principal.page.locator("#mode-label").textContent());
+        record("Calendar defaults to a spatial Week", await principal.page.locator(".calendar-time-grid").count() === 1 && await principal.page.getByRole("button", { name: "Week" }).getAttribute("aria-pressed") === "true", await principal.page.locator("#surface").textContent());
+        record("Calendar exposes source and capacity lenses", await principal.page.locator(".calendar-source-filter").count() === 2 && await principal.page.getByRole("button", { name: "Capacity colors" }).getAttribute("aria-pressed") === "true", await principal.page.locator(".calendar-source-panel").textContent());
+        record("Calendar separates all-day and timed events", await principal.page.locator(".calendar-all-day-cell .calendar-event-block").count() === 1 && await principal.page.locator(".calendar-day-lane .calendar-event-block").count() === 1, await principal.page.locator(".calendar-board").textContent());
+        const hardCount = await principal.page.locator(".calendar-stat-hard dd").textContent();
+        const householdVisibility = principal.page.locator(".calendar-source-filter input").nth(1);
+        await householdVisibility.uncheck();
+        record("Calendar visibility is view-only", await principal.page.locator(".calendar-all-day-cell .calendar-event-block").count() === 0 && await principal.page.locator(".calendar-stat-hard dd").textContent() === hardCount, await principal.page.locator(".calendar-source-panel").textContent());
+        await householdVisibility.check();
+        await principal.page.locator(".calendar-day-lane .calendar-event-block").click();
+        record("Calendar detail preserves timezone and buffer provenance", (await principal.page.locator(".calendar-event-detail").textContent()).includes("1:00 PM") && (await principal.page.locator(".calendar-event-detail").textContent()).includes("30 min before · 15 min after"), await principal.page.locator(".calendar-event-detail").textContent());
+        await screenshot(principal.page, "surface-calendar-week-desktop.png");
+        await principal.page.getByRole("button", { name: "Month" }).click();
+        await principal.page.locator(".calendar-month-grid").waitFor();
+        record("Calendar Month is an anchored six-week grid", await principal.page.locator(".calendar-month-day").count() === 42, await principal.page.locator(".calendar-range-title").textContent());
+        await screenshot(principal.page, "surface-calendar-month-desktop.png");
+        await principal.page.getByRole("button", { name: "Agenda" }).click();
+        await principal.page.locator(".calendar-agenda").waitFor();
+        record("Calendar Agenda remains available", await principal.page.locator(".calendar-agenda-day").count() >= 1, await principal.page.locator(".calendar-agenda").textContent());
+        await principal.page.getByRole("button", { name: "Find time" }).click();
+        await principal.page.locator(".calendar-find").waitFor();
+        record("Find time offers explicit duration", await principal.page.getByRole("button", { name: "60 min" }).getAttribute("aria-pressed") === "true", await principal.page.locator(".calendar-find").textContent());
+        await principal.page.getByRole("button", { name: "Calendar settings" }).click();
+        await principal.page.locator(".calendar-policy-overview").waitFor();
+        record("Calendar policy editing is progressively disclosed", await principal.page.locator(".calendar-rule-disclosure").getAttribute("open") === null && await principal.page.getByText("Protected morning", { exact: true }).count() === 1, await principal.page.locator("#surface").textContent());
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);

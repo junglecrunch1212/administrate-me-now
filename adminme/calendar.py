@@ -329,6 +329,15 @@ def compose_calendar_cockpit(
         representative["source_calendars"] = sorted(
             {str(item.get("calendar_name") or "Calendar") for item in copies}
         )
+        representative["source_routes"] = [
+            {
+                "provider": item.get("provider"),
+                "provider_account_id": item.get("provider_account_id"),
+                "calendar_external_id": item.get("calendar_external_id"),
+                "calendar_name": item.get("calendar_name") or "Calendar",
+            }
+            for item in copies
+        ]
         representative["duplicate_collapsed"] = len(copies) > 1
         effective.append(representative)
     effective.sort(key=lambda item: (item["start_at"], item["end_at"], item["cluster_id"]))

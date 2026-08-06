@@ -368,6 +368,9 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert css_asset.headers["cache-control"] == "no-store"
         assert js_asset.headers["cache-control"] == "no-store"
         assert "Time guardrails" in js_asset.text
+        assert "Month at a glance" in js_asset.text
+        assert "Calendars in view" in js_asset.text
+        assert "calendar-time-grid" in css_asset.text
         assets = (
             js_asset.text
             + css_asset.text
@@ -1312,6 +1315,32 @@ def test_calendar_onboarding_drives_calendar_today_and_triage_routes(
         assert cockpit["onboarding"]["state"] == "complete"
         assert cockpit["provider_truth"]["model_decisions"] is False
         assert cockpit["write_destinations"][0]["destination_kind"] == "personal"
+
+        month = client.get(
+            "/api/member/v1/surfaces/calendar?view=month&date=2026-08-13",
+            headers=HEADERS[PRINCIPAL],
+        )
+        assert month.status_code == 200, month.text
+        assert month.json()["calendar_view"] == "month"
+        assert month.json()["calendar_anchor"] == "2026-08-13"
+        assert month.json()["cockpit"]["range"]["start_at"].startswith(
+            "2026-07-27T00:00:00"
+        )
+        assert month.json()["cockpit"]["range"]["end_at"].startswith(
+            "2026-09-07T00:00:00"
+        )
+
+        day = client.get(
+            "/api/member/v1/surfaces/calendar?view=day&date=2026-08-13",
+            headers=HEADERS[PRINCIPAL],
+        )
+        assert day.status_code == 200, day.text
+        assert day.json()["cockpit"]["range"]["start_at"].startswith(
+            "2026-08-13T00:00:00"
+        )
+        assert day.json()["cockpit"]["range"]["end_at"].startswith(
+            "2026-08-14T00:00:00"
+        )
 
         today = client.get(
             "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]

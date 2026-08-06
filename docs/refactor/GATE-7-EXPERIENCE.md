@@ -92,6 +92,16 @@ guardrails. Duplicate copies retain source provenance and render once. The same
 effective-event contract drives Calendar, Today, and Triage route validation;
 no model chooses availability or a write destination.
 
+The member Calendar uses anchored Day and Week time grids, a six-week Month,
+a fourteen-day Agenda, and duration-aware Find time. Calendars can be hidden
+or recolored by source for visual focus, but those controls are explicitly
+presentation-only: every authorized fact continues to participate in the
+approved capacity rules. Household guardrails sit behind event blocks,
+all-day facts have a separate lane, and event detail progressively discloses
+buffers, provider provenance, duplicate copies, and evidence. Rules and
+recurring policy are separated from daily browsing and require an explicit
+settings disclosure.
+
 The page route and data route each enforce the role allowlist. Navigation
 hiding is presentation only. All untrusted values are assigned with
 `textContent`; the production portal contains no `innerHTML` rendering seam.
