@@ -489,9 +489,37 @@ function briefHero(brief) {
   return section;
 }
 
+function todayCalendarGuidance(brief) {
+  const guidance = brief.calendar_guidance || {};
+  const section = document.createElement("section");
+  section.className = "card day-calendar-guidance";
+  section.append(text("h2", "Time guardrails"));
+  const current = guidance.current_guardrail;
+  if (current) {
+    const currentRow = document.createElement("p");
+    currentRow.append(text("strong", current.label || titleCase(current.kind)));
+    const effect = current.effect === "hard_block" ? "Protected" : titleCase(current.effect);
+    currentRow.append(text("span", ` · ${effect} until ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(current.end_at))}`, "meta"));
+    section.append(currentRow);
+    if (current.effect === "context") section.append(text("p", "Context only — it does not block your time.", "state-note"));
+  }
+  const now = new Date();
+  const opening = (guidance.open_windows || []).find((window) => new Date(window.end_at) > now);
+  if (opening) {
+    const start = new Date(opening.start_at);
+    const end = new Date(opening.end_at);
+    const isOpen = start <= now;
+    section.append(text("p", isOpen ? `Open now until ${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(end)}.` : `Next opening: ${calendarTime(start)}–${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(end)}.`, "calendar-open-now"));
+  }
+  const softLoad = Number(guidance.counts?.soft_hold || 0);
+  if (softLoad) section.append(text("p", `${softLoad} soft-load ${softLoad === 1 ? "item is" : "items are"} visible. It warns without silently blocking your day.`, "state-note"));
+  if (!current && !opening && !softLoad) section.append(text("p", "No calendar guardrail needs attention right now.", "empty compact-empty"));
+  return section;
+}
+
 function renderDayBrief(brief) {
   const fragment = document.createDocumentFragment();
-  fragment.append(briefHero(brief));
+  fragment.append(briefHero(brief), todayCalendarGuidance(brief));
   const grid = document.createElement("div");
   grid.className = "brief-grid";
   grid.append(
