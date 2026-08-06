@@ -7,6 +7,8 @@ links. Arbitrary state links remain fail-closed and excluded generated links are
 reconstructed by the pinned runtime rather than restored as trusted state.
 SQLite's disposable `-wal`/`-shm` cleanup race is likewise excluded only after
 service quiescence; the database and every other durable file remain required.
+Central launchd startup now follows the runtime-before-Gateway dependency and
+proves runtime readiness before allowing OpenClaw plugin registration.
 
 Mac bootstrap compatibility update (2026-08-05): the build/package and
 bootstrap rows are **HARDEN COMPLETE** for Homebrew 6 metadata, external pinned

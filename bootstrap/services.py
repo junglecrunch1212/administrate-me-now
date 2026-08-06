@@ -82,7 +82,7 @@ class ServiceManager:
         return path
 
     def start(self) -> ServiceStatus:
-        for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
+        for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
             self._validate_plist(label)
         if self.test_mode:
             self._write_test_state(
@@ -91,7 +91,7 @@ class ServiceManager:
             return self.status()
         uid = int(getattr(os, "getuid", lambda: 0)())
         domain = f"gui/{uid}"
-        for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
+        for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
             path = self.paths.launch_agent_dir / f"{label}.plist"
             if self._launchctl_loaded(label):
                 completed = subprocess.run(
@@ -128,6 +128,17 @@ class ServiceManager:
                 raise RuntimeError(
                     f"launchd could not start {label}: {kickstart.stderr.strip()}"
                 )
+            if label == RUNTIME_LABEL:
+                runtime = self._runtime_health()
+                for _ in range(30):
+                    if runtime in {"healthy", "observation_only"}:
+                        break
+                    time.sleep(1)
+                    runtime = self._runtime_health()
+                if runtime not in {"healthy", "observation_only"}:
+                    raise RuntimeError(
+                        "AdministrateMe runtime did not become ready before OpenClaw startup"
+                    )
         result = self.status()
         for _ in range(30):
             if result.status in {"healthy", "failed"}:
