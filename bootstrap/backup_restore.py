@@ -199,13 +199,17 @@ class BackupManager:
             if not path.is_file():
                 continue
             relative = Path("state") / path.relative_to(self.paths.instance_dir)
-            files.append(
-                {
-                    "path": relative.as_posix(),
-                    "size": path.stat().st_size,
-                    "sha256": sha256_file(path),
-                }
-            )
+            try:
+                size = path.stat().st_size
+                digest = sha256_file(path)
+            except FileNotFoundError:
+                # SQLite removes quiesced shared-memory and WAL sidecars after
+                # the directory walk can already have observed them. They are
+                # never durable state; any other disappearing file fails closed.
+                if path.name.endswith(("-shm", "-wal")):
+                    continue
+                raise
+            files.append({"path": relative.as_posix(), "size": size, "sha256": digest})
         manifest: dict[str, Any] = {
             "format": "administrateme-backup-manifest-v1",
             "created_at": datetime.now(timezone.utc).isoformat(),

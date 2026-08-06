@@ -24,7 +24,9 @@ edges: the managed Gateway RPC probe now receives its Keychain-backed token
 without persisting it, launchd startup tolerates the documented RunAtLoad versus
 kickstart race only when the job is verifiably loaded, and encrypted backup
 omits only OpenClaw's generated `plugin-skills` links while continuing to reject
-all other links. The complete root suite passes with 1,314 tests.
+all other links. Quiesced backup also tolerates SQLite removing only disposable
+`-wal`/`-shm` sidecars between enumeration and hashing; durable files remain
+fail-closed. The complete root suite passes with 1,314 tests.
 
 ## 2026-08-05 Mac bootstrap compatibility repair
 

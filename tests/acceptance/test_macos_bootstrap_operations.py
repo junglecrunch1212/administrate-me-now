@@ -69,6 +69,20 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     plugin_skills = paths.instance_dir / "openclaw" / "runtime" / "plugin-skills"
     plugin_skills.mkdir(parents=True, exist_ok=True)
     (plugin_skills / "generated-skill").symlink_to(REPO_ROOT / "packs" / "skills")
+    transient = paths.instance_dir / "events" / "events.db-shm"
+    transient.write_bytes(b"transient sqlite state")
+    original_stat = Path.stat
+    transient_stats = 0
+
+    def remove_transient_on_stat(path: Path, *args, **kwargs):
+        nonlocal transient_stats
+        if path == transient:
+            transient_stats += 1
+        if path == transient and transient_stats == 2:
+            path.unlink(missing_ok=True)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", remove_transient_on_stat)
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
     backup = manager.create()
     assert backup["encrypted"] is True
