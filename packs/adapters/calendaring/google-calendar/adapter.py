@@ -65,9 +65,9 @@ def _default_service_factory(
     from googleapiclient.discovery import build
 
     if {"client_id", "client_secret", "refresh_token"} <= credentials_json.keys():
-        from google.oauth2.credentials import Credentials
+        from google.oauth2.credentials import Credentials as UserCredentials
 
-        creds = Credentials(
+        creds: Any = UserCredentials(
             token=None,
             refresh_token=str(credentials_json["refresh_token"]),
             token_uri=str(
@@ -79,9 +79,13 @@ def _default_service_factory(
             scopes=scopes,
         )
     else:
-        from google.oauth2.service_account import Credentials
+        from google.oauth2.service_account import (
+            Credentials as ServiceAccountCredentials,
+        )
 
-        creds = Credentials.from_service_account_info(credentials_json, scopes=scopes)
+        creds = ServiceAccountCredentials.from_service_account_info(
+            credentials_json, scopes=scopes
+        )
         if subject_email:
             creds = creds.with_subject(subject_email)
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
@@ -274,8 +278,8 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
-    # capabilities. One Cat-B entry declaring the EXISTING on-main
-    # ``calendar.event_added`` family — NO new schema per [D7].
+    # capabilities. One Cat-B entry declaring the registered provider-event
+    # and calendar-directory families used by the runtime.
     capabilities: ClassVar[list[Any]] = [
         {
             "kind": "Cat-B",
@@ -284,6 +288,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "calendar.event_added",
                 "calendar.event_updated",
                 "calendar.event_deleted",
+                "calendar.source_observed",
             ],
         },
     ]
@@ -449,20 +454,22 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         # member-bound and use durable incremental synchronization below.
         if not self._config.get("member_id"):
             return await self._poll_once_v1(ctx=ctx, calendar_id=calendar_id)
-        entries = self._fetch_calendar_entries() if self._config.get(
-            "discover_calendars"
-        ) else [
-            {
-                "id": calendar_id,
-                "summary": self._config.get("calendar_name") or calendar_id,
-                "accessRole": "owner",
-                "primary": calendar_id == "primary",
-                "selected": True,
-                "hidden": False,
-                "timeZone": self._config.get("timezone"),
-                "defaultReminders": [],
-            }
-        ]
+        entries = (
+            self._fetch_calendar_entries()
+            if self._config.get("discover_calendars")
+            else [
+                {
+                    "id": calendar_id,
+                    "summary": self._config.get("calendar_name") or calendar_id,
+                    "accessRole": "owner",
+                    "primary": calendar_id == "primary",
+                    "selected": True,
+                    "hidden": False,
+                    "timeZone": self._config.get("timezone"),
+                    "defaultReminders": [],
+                }
+            ]
+        )
         emitted = 0
         for entry in entries:
             await self._emit_calendar_source(ctx=ctx, entry=entry)
@@ -470,9 +477,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 ctx=ctx,
                 calendar_id=str(entry["id"]),
                 calendar_name=str(
-                    entry.get("summaryOverride")
-                    or entry.get("summary")
-                    or entry["id"]
+                    entry.get("summaryOverride") or entry.get("summary") or entry["id"]
                 ),
             )
         return emitted
@@ -581,10 +586,16 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 continue
             event_key = f"{calendar_id}:{event_id}"
             if event.get("status") == "cancelled":
+                deleted_key = self._provider_event_idempotency_key(
+                    event_type="calendar.event_deleted",
+                    calendar_id=calendar_id,
+                    event=event,
+                )
                 await self._append(
                     ctx=ctx,
                     event_type="calendar.event_deleted",
                     schema_version=2,
+                    idempotency_key=deleted_key,
                     payload={
                         "member_id": str(self._config["member_id"]),
                         "provider": "google_calendar",
@@ -608,8 +619,12 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     emitted += 1
                 self._known_events.pop(event_key, None)
             else:
+                created = str(event.get("created") or "")
+                updated = str(event.get("updated") or "")
                 kind = (
-                    "calendar.event_updated" if incremental else "calendar.event_added"
+                    "calendar.event_updated"
+                    if incremental or (created and updated and created != updated)
+                    else "calendar.event_added"
                 )
                 await self._emit_calendar_snapshot(
                     ctx=ctx,
@@ -838,10 +853,17 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             for item in event.get("attachments") or []
             if item.get("fileUrl")
         ]
+        idempotency_key = self._provider_event_idempotency_key(
+            event_type=event_type,
+            calendar_id=calendar_id,
+            calendar_name=calendar_name or self._config.get("calendar_name"),
+            event=event,
+        )
         await self._append(
             ctx=ctx,
             event_type=event_type,
             schema_version=2,
+            idempotency_key=idempotency_key,
             payload={
                 "member_id": str(self._config["member_id"]),
                 "provider": "google_calendar",
@@ -905,6 +927,37 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 ),
             },
         )
+
+    def _provider_event_idempotency_key(
+        self,
+        *,
+        event_type: str,
+        calendar_id: str,
+        calendar_name: str | None = None,
+        event: dict[str, Any],
+    ) -> str | None:
+        """Identify one immutable provider revision across process restarts."""
+        event_id = str(event.get("id") or "")
+        revision = str(event.get("etag") or event.get("updated") or "")
+        if not event_id or not revision:
+            return None
+        provider_account_id = str(
+            self._config.get("provider_account_id")
+            or self._config.get("user_email")
+            or ""
+        )
+        seed = "\x1f".join(
+            (
+                str(self._config.get("member_id") or ""),
+                provider_account_id,
+                calendar_id,
+                str(calendar_name or ""),
+                event_id,
+                revision,
+                event_type,
+            )
+        )
+        return f"google-calendar:provider-revision:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
     async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
         """[UT-27] gate already checked ``operation.kind``. Phase B routes
@@ -1096,6 +1149,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         payload: dict[str, Any],
         causation_id: str | None = None,
         schema_version: int = 1,
+        idempotency_key: str | None = None,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
         await write_adapter_event(
@@ -1107,6 +1161,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             payload=payload,
             causation_id=causation_id,
             schema_version=schema_version,
+            idempotency_key=idempotency_key,
         )
 
     @staticmethod
