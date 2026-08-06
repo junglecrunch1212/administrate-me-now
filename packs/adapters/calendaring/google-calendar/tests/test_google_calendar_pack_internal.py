@@ -120,6 +120,7 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
             "calendar.event_added",
             "calendar.event_updated",
             "calendar.event_deleted",
+            "calendar.source_observed",
         ]
     )
 

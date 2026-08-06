@@ -17,6 +17,27 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 live Calendar activation evidence
+
+The central Mac is running the reviewed Calendar reconciliation in observation
+mode. Live Google discovery resolved seven included calendars and four
+explicitly quarantined calendars; the reviewed per-member rules and household
+schedule policy are event-sourced, Calendar onboarding reports complete, and
+Today, Find time, Rules, and Triage were browser-simulated against the running
+release. Doctor reports all fourteen projections healthy, exact OpenClaw
+plugin discovery, five-of-five managed schedules, and both loopback services
+healthy. External provider writes remain suppressed during observation.
+
+The production run also exposed two restart-only defects that static fixtures
+did not: Google's legacy `primary` alias could survive beside its canonical
+calendar id, and a fresh adapter process re-appended unchanged provider
+snapshots. Both are **HARDENED** without weakening append-only authority. The
+Calendars projection retires only the derived alias directory/rule state after
+the canonical primary is observed, while provider event snapshots now use a
+stable member/account/calendar/event/revision idempotency identity. Event facts
+are never deleted, real provider revisions still append, and restart regression
+coverage pins the behavior through the shipped adapter loader.
+
 ## 2026-08-06 deterministic household Calendar reconciliation
 
 The Calendar product now **MODERNIZES** the earlier single-primary-calendar
@@ -36,10 +57,11 @@ effective events, while Triage offers only reviewed writable destinations and
 retains the one-confirmation plus independent-governance write contract.
 
 Code/process evidence is `tests/unit/test_calendar_reasoning.py`, the Calendars
-v3 projection tests, Google multi-calendar discovery tests, and the Gate 7
-onboarding/Calendar/Today/Triage process slice. Live account discovery, policy
-seeding, and provider propagation remain AC-27 production evidence until the
-reviewed commit is deployed and browser-simulated on the Mac.
+v3 projection tests, Google multi-calendar discovery/restart tests, and the
+Gate 7 onboarding/Calendar/Today/Triage process slice. Live account discovery,
+policy seeding, and browser simulation are complete. Provider-write
+propagation remains AC-27 production evidence after observation is explicitly
+approved.
 
 ## 2026-08-06 live native-message reconciliation repair
 
