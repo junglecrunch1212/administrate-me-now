@@ -367,6 +367,7 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert member_page.headers["cache-control"] == "no-store"
         assert css_asset.headers["cache-control"] == "no-store"
         assert js_asset.headers["cache-control"] == "no-store"
+        assert "Time guardrails" in js_asset.text
         assets = (
             js_asset.text
             + css_asset.text
