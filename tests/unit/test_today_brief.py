@@ -47,6 +47,21 @@ def _compose() -> dict:
                     "actions": ["complete", "evidence"],
                     "last_event_id": "event-routine",
                 },
+                {
+                    "id": "routine-ordered-1",
+                    "kind": "routine",
+                    "title": "Leave the house",
+                    "status": "in_progress",
+                    "due": "2034-03-02T15:00:00Z",
+                    "time_label": "10:00 AM–11:00 AM",
+                    "current_step": {
+                        "step_id": "shoes",
+                        "position": 0,
+                        "title": "Put on shoes",
+                    },
+                    "actions": ["complete_step", "skip_step", "evidence"],
+                    "last_event_id": "event-routine-ordered",
+                },
             ],
         },
         calendar_events=[
@@ -118,7 +133,7 @@ def test_daily_brief_is_repeatable_local_and_semantically_distinct() -> None:
     assert first["as_of"] == "2034-03-02T15:30:00+00:00"
     assert first["stats"] == {
         "events": 1,
-        "moves": 3,
+        "moves": 4,
         "messages": 1,
         "questions": 1,
         "overdue": 1,
@@ -128,11 +143,13 @@ def test_daily_brief_is_repeatable_local_and_semantically_distinct() -> None:
         "task",
         "list_item",
         "recurrence",
+        "routine",
     ]
     by_kind = {item["kind"]: item for item in first["carousel"]["items"]}
     assert by_kind["task"]["actions"][0] == "complete"
     assert by_kind["list_item"]["actions"][0] == "complete_external"
     assert by_kind["recurrence"]["actions"][0] == "complete"
+    assert by_kind["routine"]["actions"][:2] == ["complete_step", "skip_step"]
     assert by_kind["calendar_event"]["actions"] == ["evidence"]
     assert by_kind["clarifying_question"]["actions"][0] == "open_triage"
     assert by_kind["message"]["actions"][0] == "open_chat"

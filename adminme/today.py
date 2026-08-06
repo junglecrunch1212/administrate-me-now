@@ -90,8 +90,7 @@ def _calendar_item(
         ),
         "actions": actions,
         "last_event_id": row.get("last_event_id"),
-        "evidence_event_id": row.get("outcome_event_id")
-        or row.get("last_event_id"),
+        "evidence_event_id": row.get("outcome_event_id") or row.get("last_event_id"),
         "provider": row.get("calendar_source"),
         "external_event_id": row.get("external_uid"),
         "linked_item_kind": row.get("linked_item_kind"),
@@ -122,7 +121,8 @@ def _message_item(row: dict[str, Any]) -> dict[str, Any]:
         "title": row.get("subject") or row.get("summary") or "Message to review",
         "status": row.get("response_urgency") or "needs_review",
         "context": row.get("channel_specific") or row.get("channel_family"),
-        "micro_step": row.get("suggested_action") or "Open it and decide whether to reply.",
+        "micro_step": row.get("suggested_action")
+        or "Open it and decide whether to reply.",
         "actions": ["open_chat", "evidence"],
         "last_event_id": row.get("last_event_id"),
         "evidence_event_id": row.get("last_event_id"),
@@ -171,9 +171,7 @@ def compose_daily_brief(
     local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_utc = (local_start + timedelta(days=1)).astimezone(timezone.utc)
 
-    schedule = [
-        _calendar_item(row, as_of=as_of, zone=zone) for row in calendar_events
-    ]
+    schedule = [_calendar_item(row, as_of=as_of, zone=zone) for row in calendar_events]
     schedule.sort(key=lambda item: (item["_sort"], item["id"]))
 
     ranked = [dict(item) for item in what_now.get("ranked") or []]
@@ -191,17 +189,15 @@ def compose_daily_brief(
     questions = [_question_item(row) for row in triage_items]
 
     next_event = next(
-        (
-            item
-            for item in schedule
-            if item["status"] in {"upcoming", "in_progress"}
-        ),
+        (item for item in schedule if item["status"] in {"upcoming", "in_progress"}),
         None,
     )
     overdue = sum(
         1
         for item in day_work
-        if (due := _parse_time(item.get("due"))) is not None and due < as_of
+        if (due := _parse_time(item.get("due"))) is not None
+        and due < as_of
+        and not (item.get("kind") == "routine" and item.get("status") == "in_progress")
     )
     stats = {
         "events": len(schedule),
@@ -212,13 +208,21 @@ def compose_daily_brief(
     }
     clauses = []
     if stats["events"]:
-        clauses.append(f"{stats['events']} timed event{'s' if stats['events'] != 1 else ''}")
+        clauses.append(
+            f"{stats['events']} timed event{'s' if stats['events'] != 1 else ''}"
+        )
     if stats["moves"]:
-        clauses.append(f"{stats['moves']} planned move{'s' if stats['moves'] != 1 else ''}")
+        clauses.append(
+            f"{stats['moves']} planned move{'s' if stats['moves'] != 1 else ''}"
+        )
     if stats["questions"]:
-        clauses.append(f"{stats['questions']} decision{'s' if stats['questions'] != 1 else ''}")
+        clauses.append(
+            f"{stats['questions']} decision{'s' if stats['questions'] != 1 else ''}"
+        )
     if stats["messages"]:
-        clauses.append(f"{stats['messages']} message{'s' if stats['messages'] != 1 else ''} to notice")
+        clauses.append(
+            f"{stats['messages']} message{'s' if stats['messages'] != 1 else ''} to notice"
+        )
     summary = (
         ", ".join(clauses) + "."
         if clauses
@@ -250,9 +254,7 @@ def compose_daily_brief(
     ]
     add(urgent_schedule)
     add(day_work[:1])
-    add(
-        [item for item in schedule if item["status"] in {"in_progress", "upcoming"}]
-    )
+    add([item for item in schedule if item["status"] in {"in_progress", "upcoming"}])
     add(day_work[1:])
     add(questions)
     add(messages)

@@ -130,6 +130,38 @@ async def _seed_today_truth(runtime: Any) -> dict[str, str]:
         )
     )
     await runtime.wait_for_projection("recurrences", recurrence_event_id)
+    routine_event_id = await runtime.events.write(
+        EventEnvelope(
+            **common,
+            type="routine.defined",
+            schema_version=1,
+            idempotency_key="gate7:today:routine",
+            payload={
+                "routine_id": "gate7-evening-landing",
+                "member_id": PRINCIPAL,
+                "title": "Evening landing",
+                "timezone": "Etc/UTC",
+                "starts_on": day_start.date().isoformat(),
+                "rrule": "FREQ=DAILY",
+                "window_start_local": "00:00",
+                "window_end_local": "23:59",
+                "steps": [
+                    {
+                        "step_id": "put-away",
+                        "title": "Put one thing away",
+                        "position": 0,
+                        "micro_step": "Pick up the nearest loose item.",
+                    },
+                    {
+                        "step_id": "water",
+                        "title": "Set out water",
+                        "position": 1,
+                    },
+                ],
+            },
+        )
+    )
+    await runtime.wait_for_projection("recurrences", routine_event_id)
     calendar_event_id = await runtime.events.write(
         EventEnvelope(
             **common,
@@ -153,7 +185,11 @@ async def _seed_today_truth(runtime: Any) -> dict[str, str]:
         )
     )
     await runtime.wait_for_projection("calendars", calendar_event_id)
-    return {"recurrence": recurrence_event_id, "calendar": calendar_event_id}
+    return {
+        "recurrence": recurrence_event_id,
+        "routine": routine_event_id,
+        "calendar": calendar_event_id,
+    }
 
 
 def _portal_provenance(
@@ -501,6 +537,31 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
             and item["actions"] == ["complete", "evidence"]
             for item in brief["plan"]
         )
+        routine_item = next(
+            item for item in brief["plan"] if item["id"] == "gate7-evening-landing"
+        )
+        assert routine_item["kind"] == "routine"
+        assert routine_item["current_step"]["step_id"] == "put-away"
+        assert routine_item["actions"] == [
+            "complete_step",
+            "skip_step",
+            "evidence",
+        ]
+        view_as_headers = {
+            **HEADERS[PRINCIPAL],
+            "X-AdminMe-View-Member": ADULT,
+        }
+        denied_routine_progress = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=view_as_headers,
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-view-as-denied",
+            },
+        )
+        assert denied_routine_progress.status_code == 403
         calendar_item = next(
             item
             for item in brief["schedule"]
@@ -535,6 +596,62 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         )
         assert retry.status_code == 200, retry.text
         assert retry.json()["duplicate"] is True
+
+        first_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-step-one",
+            },
+        )
+        assert first_routine_step.status_code == 200, first_routine_step.text
+        progressed_routine = first_routine_step.json()["routine"]
+        assert progressed_routine["current_step"]["step_id"] == "water"
+        assert progressed_routine["completed_steps"] == 1
+        routine_retry = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/put-away/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-step-one",
+            },
+        )
+        assert routine_retry.status_code == 200, routine_retry.text
+        assert routine_retry.json()["duplicate"] is True
+        stale_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/water/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "completed",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-stale-step",
+            },
+        )
+        assert stale_routine_step.status_code == 409
+        final_routine_step = client.post(
+            "/api/member/v1/routines/gate7-evening-landing/occurrences/"
+            f"{routine_item['occurrence_date']}/steps/water/outcome",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "outcome": "skipped",
+                "expected_last_event_id": progressed_routine["last_event_id"],
+                "request_id": "gate7-today-routine-step-two",
+            },
+        )
+        assert final_routine_step.status_code == 200, final_routine_step.text
+        assert final_routine_step.json()["routine"]["status"] == (
+            "completed_with_skips"
+        )
+        assert all(
+            item["id"] != "gate7-evening-landing"
+            for item in final_routine_step.json()["brief"]["plan"]
+        )
 
         outcome = client.post(
             f"/api/member/v1/calendar/{calendar_item['id']}/outcome",
@@ -583,9 +700,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         )
         assert dashboard.status_code == 200, dashboard.text
         assert dashboard.json()["brief"]["contract"] == brief["contract"]
-        assert dashboard.json()["today"]["generated_by"] == (
-            "deterministic-ranker-v2"
-        )
+        assert dashboard.json()["today"]["generated_by"] == ("deterministic-ranker-v2")
 
 
 def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> None:

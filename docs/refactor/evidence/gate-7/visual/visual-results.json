@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-06T13:53:18.849Z",
+  "generated_at": "2026-08-06T14:28:58.414Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -352,12 +352,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_f1312242a20547e4 HTTP",
+      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_f1312242a20547e4 title",
+      "name": "/member/quests/view_3a9b4c64d4314556 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -372,12 +372,12 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_f1312242a20547e4 HTTP",
+      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_f1312242a20547e4 title",
+      "name": "/member/quests/view_3a9b4c64d4314556 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -582,8 +582,8 @@
       "sha256": "3ac87eacb6237f22dc11f482ef81888ed0a2d114726b0b8bf684d4a13dced526"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 115653,
-      "sha256": "0e7d4f2f89d7ca8911d1fdcb567a77350f7dd46ecae2613005a77994d5a9ad32"
+      "bytes": 115655,
+      "sha256": "619dbd52ab234813b60f15a18e362203081f3e57edc8a64e9fd56aee8ebca496"
     },
     "adult-chat-streamed-tablet.png": {
       "bytes": 99441,
@@ -598,12 +598,12 @@
       "sha256": "5de7630310903b728da63f9d62fe4abb2d7e551e20c6959a5b77f0b7b0b6ec3d"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 103259,
-      "sha256": "c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f"
-    },
-    "quest-expired-bookmark.png": {
       "bytes": 103261,
       "sha256": "ff3babfb94783c14812e987d094d0e77b2b592d0f76cb83363f498dd4b70a66c"
+    },
+    "quest-expired-bookmark.png": {
+      "bytes": 103259,
+      "sha256": "c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f"
     },
     "mode-child-today-narrow.png": {
       "bytes": 109524,
@@ -615,7 +615,7 @@
     },
     "shared-screen-scoreboard.png": {
       "bytes": 82792,
-      "sha256": "4c4138c5d5c63e44655a8f8d2e86be7096f987966cef672c6b1eb4d8cb4e30ad"
+      "sha256": "b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa"
     },
     "adult-chat-degraded-domain-healthy.png": {
       "bytes": 126320,

@@ -314,9 +314,7 @@ async def test_today_uses_the_members_iana_timezone_boundary(
         today_iso="2026-04-25",
         tz_name="Etc/UTC",
     )
-    assert [row["external_uid"] for row in new_york_day] == [
-        "ev-local-evening"
-    ]
+    assert [row["external_uid"] for row in new_york_day] == ["ev-local-evening"]
     assert utc_day == []
 
 

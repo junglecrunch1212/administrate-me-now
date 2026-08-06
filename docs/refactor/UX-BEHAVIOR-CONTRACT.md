@@ -14,15 +14,17 @@ unavailable, and not-built states with reasons.
 
 Today amendment (2026-08-06): Today is now a deterministic Daily Brief, not a
 raw list dump or a profile/debug label. The default Day Brief synthesizes the
-member's local date, timed calendar events, executable work, trackable
-recurrences, actionable messages, and clarifying decisions from authorized
+member's local date, timed calendar events, executable work, individual
+recurrences, ordered Routine occurrences, actionable messages, and clarifying decisions from authorized
 projections. An explicit Day Brief/Carousel switch keeps the same typed queue;
 What Now opens Carousel on the deterministic current card: a timed event in
 progress or starting within 30 minutes, otherwise the highest-ranked work card. Carousel actions
 are derived by item kind, and `Later` moves only the viewport—it never mutates
 due dates, status, or household truth. The portal and pinned OpenClaw dashboard
 consume the same read-time brief contract. No model chooses, orders, completes,
-or infers attendance for these items.
+or infers attendance for these items. Routine `Step done` and `Skip step`
+advance only the current step of the dated occurrence; they never complete a
+linked Task implicitly.
 
 Gate 3 backend behavior evidence (2026-07-30): pending commitment review supports explicit edit, approve, and dismiss commands; active commitments support complete, defer, snooze, block, and unblock; every write is authorized under `authMember` rather than `viewMember`; observation mode returns and audits a suppressed delivery intent; what-now returns six stable horizons with structured explanations. This gate makes no new production visual-fidelity claim, so the immutable Gate 1 console evidence below remains the visual reference.
 
@@ -40,7 +42,7 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 
 | Surface | Required behavior | Superseded behavior |
 |---|---|---|
-| Today | A local-time Daily Brief synthesizing calendar, executable tasks/commitments/list items, trackable recurrences, actionable messages, and clarifying decisions; explicit Day Brief/Carousel switching; contextual what-now for now/hour/daypart/day/week; energy/capacity, blockers, evidence, and profile-aware micro-steps. | A static hardcoded task carousel, a raw “Open lists” card, or a profile/member identifier presented as the current view. |
+| Today | A local-time Daily Brief synthesizing calendar, executable tasks/commitments/list items, individual recurrences, ordered Routine occurrences, actionable messages, and clarifying decisions; explicit Day Brief/Carousel switching; contextual what-now for now/hour/daypart/day/week; energy/capacity, blockers, evidence, and profile-aware micro-steps. | A static hardcoded task carousel, a raw “Open lists” card, a recurrence presented as an ordered Routine, or a profile/member identifier presented as the current view. |
 | Triage | Member-owned queue containing only extracted/derived candidates; confirm, enrich/reroute, or dismiss with source evidence and terminal outcome. Raw provider observations remain facts; already-official tasks never appear here. | The former Inbox mixture of proposals plus open work; client-only “Approve & Send”; generic transcript storage. |
 | CRM | Party/relationship/interaction/commitment/artifact views, provenance, overdue relationship cues, birthday/hosting balance where authorized. | Exemplar household data and mock counts. |
 | Capture/Knowledge | Member-owned knowledge, authorized household knowledge, lists, recipes, provenance, structured/semantic search. Keep the navigation concept, label it “Knowledge” where clarity helps. | Quick-capture prefix routing, direct voice ingest, and triage queue are retired by D17. |
@@ -73,7 +75,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 |---|---|
 | UX-01 | All eight required destinations are addressable by stable routes, responsive at phone/tablet/desktop widths, and keyboard navigable. |
 | UX-02 | Navigation and API route availability derive from server-authorized role/capability data; direct child requests to hidden routes are denied without leaking counts or labels. |
-| UX-03 | Today defaults to a local-time Day Brief and can switch to one-item Carousel without changing truth. It exposes calendar, executable work, trackable recurrence, actionable-message, and clarifying-decision sections plus now, next-hour, daypart, day, and week recommendations with explanation payloads. What Now deterministically prioritizes an in-progress or next-30-minute timed event before ranked work; changed context changes ranking. |
+| UX-03 | Today defaults to a local-time Day Brief and can switch to one-item Carousel without changing truth. It exposes calendar, executable work, individual recurrence, ordered Routine occurrence, actionable-message, and clarifying-decision sections plus now, next-hour, daypart, day, and week recommendations with explanation payloads. What Now deterministically prioritizes an in-progress or next-30-minute timed event before ranked work; changed context changes ranking. Routine actions handle only the current step and preserve linked Tasks. |
 | UX-04 | A Triage candidate shows source evidence, confidence, affected object, intended target member/provider/container, external action, sender identity, approval requirements, and expiry before authorization. |
 | UX-05 | Approval, rejection, completion, defer, snooze, block, correction, suppression, delivery, and failure render distinct states and link to immutable evidence. |
 | UX-06 | Calendar returns a busy block—not title, attendee, location, notes, or link—for an unauthorized private event; filtering happens server-side. |
@@ -120,8 +122,9 @@ to reintroduce the deleted Node application.
 The 2026-08-06 Today amendment is process-proven by
 `tests/acceptance/test_gate7_household_experience.py`: the production
 composition returns one deterministic brief to the portal and OpenClaw,
-preserves tasks/list items/recurrences/calendar events as distinct kinds, and
-executes idempotent recurrence and member-confirmed calendar-outcome events.
+preserves tasks/list items/recurrences/routines/calendar events as distinct
+kinds, and executes idempotent recurrence, ordered Routine-step, and
+member-confirmed calendar-outcome events.
 `tests/unit/test_today_brief.py` pins the pure composition clock/timezone and
 item-action contract. The Gate 7 visual harness renders the Day Brief and the
 interactive Carousel at desktop, tablet, narrow, and reduced-motion states.

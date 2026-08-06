@@ -136,11 +136,40 @@ def test_ranker_preserves_list_and_recurrence_semantics() -> None:
                 "last_event_id": "event-hidden",
             },
         ],
+        routines=[
+            {
+                "routine_id": "routine-leaving",
+                "title": "Leave the house",
+                "occurrence_date": "2034-03-02",
+                "window_start_at": "2034-03-02T11:45:00Z",
+                "window_end_at": "2034-03-02T12:30:00Z",
+                "time_label": "11:45 AM–12:30 PM",
+                "status": "in_progress",
+                "current_step": {
+                    "step_id": "keys",
+                    "position": 0,
+                    "title": "Pick up keys",
+                    "micro_step": "Touch the keys.",
+                },
+                "steps": [],
+                "completed_steps": 0,
+                "skipped_steps": 0,
+                "total_steps": 2,
+                "last_event_id": "event-routine",
+            }
+        ],
     )
 
     by_kind = {item["kind"]: item for item in ranked["ranked"]}
-    assert set(by_kind) == {"list_item", "recurrence"}
+    assert set(by_kind) == {"list_item", "recurrence", "routine"}
     assert by_kind["list_item"]["actions"] == ["complete_external", "evidence"]
     assert by_kind["recurrence"]["actions"] == ["complete", "evidence"]
     assert by_kind["recurrence"]["id"] == "rec-medicine"
     assert by_kind["list_item"]["id"] == "groceries:milk"
+    assert by_kind["routine"]["id"] == "routine-leaving"
+    assert by_kind["routine"]["actions"] == [
+        "complete_step",
+        "skip_step",
+        "evidence",
+    ]
+    assert by_kind["routine"]["current_step"]["step_id"] == "keys"

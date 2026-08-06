@@ -76,7 +76,10 @@ def _default_service_factory(
         creds = Credentials(
             token=None,
             refresh_token=str(credentials_json["refresh_token"]),
-            token_uri=str(credentials_json.get("token_uri") or "https://oauth2.googleapis.com/token"),
+            token_uri=str(
+                credentials_json.get("token_uri")
+                or "https://oauth2.googleapis.com/token"
+            ),
             client_id=str(credentials_json["client_id"]),
             client_secret=str(credentials_json["client_secret"]),
             scopes=scopes,
@@ -180,11 +183,15 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
     async def start(self, *, ctx: AdapterContext) -> None:
         """Authenticate, emit ``adapter.authenticated``, run poll loop."""
-        op_ref = self._config.get("oauth_credentials_ref") or self._config.get("service_account_key_ref")
+        op_ref = self._config.get("oauth_credentials_ref") or self._config.get(
+            "service_account_key_ref"
+        )
         tasklist_id = self._config.get("tasklist_id")
         user_email = self._config.get("user_email")
         member_id = self._config.get("member_id")
-        if not isinstance(op_ref, str) or not op_ref.startswith(("op://", "keychain://")):
+        if not isinstance(op_ref, str) or not op_ref.startswith(
+            ("op://", "keychain://")
+        ):
             raise ValueError(
                 "credential must be a 1Password reference or macOS Keychain reference"
             )

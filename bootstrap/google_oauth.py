@@ -27,6 +27,9 @@ def enroll(client_file: Path, *, secret_name: str) -> str:
     flow = InstalledAppFlow.from_client_secrets_file(
         str(client_file), scopes=list(GOOGLE_ADAPTER_SCOPES)
     )
+    token_uri = flow.client_config.get("token_uri")
+    if not isinstance(token_uri, str) or not token_uri:
+        raise RuntimeError("Google OAuth client configuration has no token URI")
     original_authorization_url = flow.authorization_url
 
     def authorization_url(**kwargs: object) -> tuple[str, str]:
@@ -40,7 +43,7 @@ def enroll(client_file: Path, *, secret_name: str) -> str:
         credentials = flow.run_local_server(
             host="127.0.0.1",
             port=0,
-            authorization_prompt_message=None,
+            authorization_prompt_message="",
             success_message=(
                 "AdministrateMe authorization complete. You may close this tab."
             ),
@@ -56,7 +59,7 @@ def enroll(client_file: Path, *, secret_name: str) -> str:
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
         "refresh_token": credentials.refresh_token,
-        "token_uri": credentials.token_uri,
+        "token_uri": token_uri,
         "scopes": sorted(credentials.scopes or GOOGLE_ADAPTER_SCOPES),
     }
     return secret_store(paths).put(

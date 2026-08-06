@@ -24,6 +24,7 @@ from adminme.projections.recurrences.queries import (
     due_within,
     for_member,
     get_recurrence,
+    routine_occurrences_at,
 )
 from adminme.projections.runner import ProjectionRunner
 
@@ -463,3 +464,125 @@ async def test_scope_canary_privileged_drops_for_non_owner(
         ("tenant-a", "rec-priv"),
     ).fetchone()
     assert raw[0] == 1
+
+
+async def test_ordered_routine_occurrence_progress_and_rebuild(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    owner = "private:test_actor"
+    definition = await log.append(
+        _envelope(
+            "routine.defined",
+            {
+                "routine_id": "routine-evening",
+                "member_id": "test_actor",
+                "title": "Evening landing",
+                "timezone": "Etc/UTC",
+                "starts_on": "2034-03-01",
+                "rrule": "FREQ=DAILY",
+                "window_start_local": "19:00",
+                "window_end_local": "20:00",
+                "steps": [
+                    {
+                        "step_id": "bag",
+                        "title": "Put the bag by the door",
+                        "position": 0,
+                    },
+                    {
+                        "step_id": "water",
+                        "title": "Fill a water bottle",
+                        "position": 1,
+                    },
+                ],
+            },
+            owner_scope=owner,
+        )
+    )
+    await bus.notify(definition)
+    await _wait_for_checkpoint(bus, "projection:recurrences", definition)
+
+    conn = runner.connection("recurrences")
+    items = routine_occurrences_at(
+        conn,
+        _S(),
+        member_party_id="test_actor",
+        as_of_iso="2034-03-02T19:15:00Z",
+    )
+    assert len(items) == 1
+    assert items[0]["status"] == "in_progress"
+    assert items[0]["current_step"]["step_id"] == "bag"
+    assert items[0]["last_event_id"] == definition
+
+    first = await log.append(
+        _envelope(
+            "routine.step_outcome_recorded",
+            {
+                "routine_id": "routine-evening",
+                "occurrence_date": "2034-03-02",
+                "step_id": "bag",
+                "outcome": "completed",
+                "recorded_at": "2034-03-02T19:16:00Z",
+                "recorded_by_member_id": "test_actor",
+            },
+            owner_scope=owner,
+        )
+    )
+    await bus.notify(first)
+    await _wait_for_checkpoint(bus, "projection:recurrences", first)
+    progressed = routine_occurrences_at(
+        conn,
+        _S(),
+        member_party_id="test_actor",
+        as_of_iso="2034-03-02T19:16:00Z",
+    )[0]
+    assert progressed["current_step"]["step_id"] == "water"
+    assert progressed["completed_steps"] == 1
+    assert progressed["last_event_id"] == first
+
+    last = await log.append(
+        _envelope(
+            "routine.step_outcome_recorded",
+            {
+                "routine_id": "routine-evening",
+                "occurrence_date": "2034-03-02",
+                "step_id": "water",
+                "outcome": "skipped",
+                "recorded_at": "2034-03-02T19:17:00Z",
+                "recorded_by_member_id": "test_actor",
+            },
+            owner_scope=owner,
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:recurrences", last)
+    assert (
+        routine_occurrences_at(
+            conn,
+            _S(),
+            member_party_id="test_actor",
+            as_of_iso="2034-03-02T19:17:00Z",
+        )
+        == []
+    )
+    closed = routine_occurrences_at(
+        conn,
+        _S(),
+        member_party_id="test_actor",
+        as_of_iso="2034-03-02T19:17:00Z",
+        include_closed=True,
+    )[0]
+    assert closed["status"] == "completed_with_skips"
+    assert closed["skipped_steps"] == 1
+
+    await runner.rebuild("recurrences")
+    rebuilt = routine_occurrences_at(
+        runner.connection("recurrences"),
+        _S(),
+        member_party_id="test_actor",
+        as_of_iso="2034-03-02T19:17:00Z",
+        include_closed=True,
+    )[0]
+    assert rebuilt == closed

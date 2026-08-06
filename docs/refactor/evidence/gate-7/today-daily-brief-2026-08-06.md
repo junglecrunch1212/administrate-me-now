@@ -14,9 +14,9 @@ scope/privacy, governance, and pinned OpenClaw ownership.
   in-progress or next-30-minute timed event first, then the deterministic
   ranker's first work item. Carousel `Later` mutates only browser
   position.
-- Tasks, commitments, provider list items, trackable recurrences, calendar
-  events, messages, and clarifying questions retain distinct item kinds and
-  action contracts.
+- Tasks, commitments, provider list items, individual recurrences, ordered
+  Routine occurrences, calendar events, messages, and clarifying questions
+  retain distinct item kinds and action contracts.
 - Trackable recurrence completion writes `recurrence.completed` and advances
   the recurrence projection. Calendar attended/missed writes
   `calendar.event_outcome_recorded` only after the event starts and records
@@ -24,10 +24,12 @@ scope/privacy, governance, and pinned OpenClaw ownership.
 - The pinned OpenClaw dashboard consumes the same Daily Brief contract. The
   brief and What Now ranking remain deterministic when model/chat is absent.
 
-Not claimed: an ordered, multi-step routine occurrence. The released domain
-currently supports trackable recurrence occurrences only. Today keeps that
-type distinct and does not invent ordered steps or time windows from task
-proximity.
+D27 adds the formerly missing ordered Routine contract. A Routine definition
+contains an RFC 5545 rule, IANA timezone, local time window, and contiguous
+steps. The production member route records only the current step's explicit
+completed/skipped outcome for one dated occurrence, rejects stale or
+out-of-order writes, and leaves any linked Task unchanged. Rebuilding the
+recurrences projection reproduces the same occurrence state.
 
 ## Executable evidence
 
@@ -36,6 +38,7 @@ PYTHONPATH=bridge poetry run pytest -q \
   tests/unit/test_today_brief.py \
   tests/unit/test_what_now_gate6.py \
   tests/unit/test_projection_calendars.py \
+  tests/unit/test_projection_recurrences.py \
   tests/acceptance/test_gate7_household_experience.py
 ```
 
@@ -54,10 +57,10 @@ degraded-chat, reduced-motion, and other Gate 7 captures plus
 
 ## Final result
 
-- Complete Python/bridge suite: **1,330 passed** (one upstream Starlette/httpx
+- Complete Python/bridge suite: **1,335 passed** (one upstream Starlette/httpx
   deprecation warning).
 - Strict acceptance with `--runxfail`: **23 passed**.
-- Ruff: passed. Mypy: passed across 187 source files. Invariant script and
+- Ruff: passed. Mypy: passed across 188 source files. Invariant script and
   `git diff --check`: passed.
 - Pinned OpenClaw TypeScript/contract check: passed. Plugin tests: **14
   passed**.

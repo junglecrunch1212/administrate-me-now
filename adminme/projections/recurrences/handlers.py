@@ -8,6 +8,8 @@ Subscribed event types:
 - ``recurrence.completed``  → advance next_occurrence via RRULE
 - ``recurrence.updated``    → apply field_updates; if rrule changed,
   recompute next_occurrence from now
+- ``routine.defined``       → upsert one ordered, time-windowed routine
+- ``routine.step_outcome_recorded`` → record one explicit occurrence step
 
 Per [§4.5]: firing a recurrence does NOT auto-materialize a task. The
 handler advances ``next_occurrence`` only; task creation is a prompt-10c
@@ -47,6 +49,10 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         apply_recurrence_completed(envelope, conn)
     elif event_type == "recurrence.updated":
         apply_recurrence_updated(envelope, conn)
+    elif event_type == "routine.defined":
+        apply_routine_defined(envelope, conn)
+    elif event_type == "routine.step_outcome_recorded":
+        apply_routine_step_outcome(envelope, conn)
 
 
 def apply_recurrence_added(
@@ -168,6 +174,180 @@ def apply_recurrence_updated(
         f"UPDATE recurrences SET {assignments} "
         "WHERE tenant_id = ? AND recurrence_id = ?",
         params,
+    )
+
+
+def apply_routine_defined(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    tenant_id = envelope["tenant_id"]
+    routine_id = p["routine_id"]
+    conn.execute(
+        """
+        INSERT INTO routines (
+            routine_id, tenant_id, member_id, title, timezone, starts_on,
+            rrule, window_start_local, window_end_local, owner_scope,
+            visibility_scope, sensitivity, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, routine_id) DO UPDATE SET
+            member_id          = excluded.member_id,
+            title              = excluded.title,
+            timezone           = excluded.timezone,
+            starts_on          = excluded.starts_on,
+            rrule              = excluded.rrule,
+            window_start_local = excluded.window_start_local,
+            window_end_local   = excluded.window_end_local,
+            owner_scope        = excluded.owner_scope,
+            visibility_scope   = excluded.visibility_scope,
+            sensitivity        = excluded.sensitivity,
+            last_event_id      = excluded.last_event_id
+        """,
+        (
+            routine_id,
+            tenant_id,
+            p["member_id"],
+            p["title"],
+            p["timezone"],
+            p["starts_on"],
+            p["rrule"],
+            p["window_start_local"],
+            p["window_end_local"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    step_ids: list[str] = []
+    conn.execute(
+        "UPDATE routine_steps SET position = position + 1000 "
+        "WHERE tenant_id = ? AND routine_id = ?",
+        (tenant_id, routine_id),
+    )
+    for step in p["steps"]:
+        step_ids.append(step["step_id"])
+        conn.execute(
+            """
+            INSERT INTO routine_steps (
+                tenant_id, routine_id, step_id, position, title, micro_step,
+                linked_task_id, last_event_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, routine_id, step_id) DO UPDATE SET
+                position       = excluded.position,
+                title          = excluded.title,
+                micro_step     = excluded.micro_step,
+                linked_task_id = excluded.linked_task_id,
+                last_event_id  = excluded.last_event_id
+            """,
+            (
+                tenant_id,
+                routine_id,
+                step["step_id"],
+                step["position"],
+                step["title"],
+                step.get("micro_step"),
+                step.get("linked_task_id"),
+                envelope["event_id"],
+            ),
+        )
+    placeholders = ",".join("?" for _ in step_ids)
+    conn.execute(
+        f"DELETE FROM routine_steps WHERE tenant_id = ? AND routine_id = ? "
+        f"AND step_id NOT IN ({placeholders})",
+        [tenant_id, routine_id, *step_ids],
+    )
+
+
+def apply_routine_step_outcome(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    tenant_id = envelope["tenant_id"]
+    routine = conn.execute(
+        "SELECT 1 FROM routines WHERE tenant_id = ? AND routine_id = ?",
+        (tenant_id, p["routine_id"]),
+    ).fetchone()
+    step = conn.execute(
+        "SELECT 1 FROM routine_steps "
+        "WHERE tenant_id = ? AND routine_id = ? AND step_id = ?",
+        (tenant_id, p["routine_id"], p["step_id"]),
+    ).fetchone()
+    if routine is None or step is None:
+        _log.info(
+            "routine step outcome for unknown definition routine_id=%s step_id=%s",
+            p["routine_id"],
+            p["step_id"],
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO routine_step_outcomes (
+            tenant_id, routine_id, occurrence_date, step_id, outcome,
+            recorded_at, recorded_by_member_id, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, routine_id, occurrence_date, step_id) DO UPDATE SET
+            outcome               = excluded.outcome,
+            recorded_at           = excluded.recorded_at,
+            recorded_by_member_id = excluded.recorded_by_member_id,
+            last_event_id         = excluded.last_event_id
+        """,
+        (
+            tenant_id,
+            p["routine_id"],
+            p["occurrence_date"],
+            p["step_id"],
+            p["outcome"],
+            p["recorded_at"],
+            p["recorded_by_member_id"],
+            envelope["event_id"],
+        ),
+    )
+    counts = conn.execute(
+        """
+        SELECT
+          (SELECT count(*) FROM routine_steps
+            WHERE tenant_id = ? AND routine_id = ?) AS total,
+          sum(CASE WHEN outcome = 'completed' THEN 1 ELSE 0 END) AS completed,
+          sum(CASE WHEN outcome = 'skipped' THEN 1 ELSE 0 END) AS skipped
+        FROM routine_step_outcomes
+        WHERE tenant_id = ? AND routine_id = ? AND occurrence_date = ?
+        """,
+        (
+            tenant_id,
+            p["routine_id"],
+            tenant_id,
+            p["routine_id"],
+            p["occurrence_date"],
+        ),
+    ).fetchone()
+    total = int(counts["total"] or 0)
+    completed = int(counts["completed"] or 0)
+    skipped = int(counts["skipped"] or 0)
+    status = "in_progress"
+    if total and completed + skipped >= total:
+        status = "completed_with_skips" if skipped else "completed"
+    conn.execute(
+        """
+        INSERT INTO routine_occurrences (
+            tenant_id, routine_id, occurrence_date, status,
+            completed_steps, skipped_steps, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, routine_id, occurrence_date) DO UPDATE SET
+            status          = excluded.status,
+            completed_steps = excluded.completed_steps,
+            skipped_steps   = excluded.skipped_steps,
+            last_event_id   = excluded.last_event_id
+        """,
+        (
+            tenant_id,
+            p["routine_id"],
+            p["occurrence_date"],
+            status,
+            completed,
+            skipped,
+            envelope["event_id"],
+        ),
     )
 
 

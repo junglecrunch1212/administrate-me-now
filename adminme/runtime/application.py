@@ -404,6 +404,7 @@ class AdministrateMeRuntime:
                                 "triage.*",
                                 "calendar.event_outcome_recorded",
                                 "recurrence.completed",
+                                "routine.*",
                                 "identifier.added",
                                 "household.action.*",
                                 "external_sync.*",

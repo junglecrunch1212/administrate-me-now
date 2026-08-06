@@ -169,9 +169,9 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             runtime.projections.connection("calendars"),
             session,
             member_party_id=member,
-            today_iso=now.astimezone(
-                ZoneInfo(runtime.settings.instance.timezone)
-            ).date().isoformat(),
+            today_iso=now.astimezone(ZoneInfo(runtime.settings.instance.timezone))
+            .date()
+            .isoformat(),
             tz_name=runtime.settings.instance.timezone,
         )
         interactions = (

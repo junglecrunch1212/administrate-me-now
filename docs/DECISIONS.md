@@ -338,6 +338,46 @@ but they do not appear in navigation or new documentation. This rename does
 not alter external-provider Inbox folders, email inbox terminology, or the
 legacy internal task workflow status named `inbox`.
 
+### D27 — Today is a deterministic Daily Brief; routines are ordered occurrences
+
+**Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** the flat
+`{stream, summary, activeIdx, energy, streak, whatNow}` Today-stream contract
+in BUILD, the task-only profile examples, and prompt 14b's former Node-console
+rendering instructions. It does not supersede any event-authority, scope,
+privacy, governance, observation, or OpenClaw boundary.
+
+Today is a read-time composition over authorized projections. Its default Day
+Brief groups the member's local-day calendar, executable Tasks and
+Commitments, provider List Items, ordered Routine occurrences, actionable
+Interactions, and pending Triage questions without copying them into a new
+store. The one-item Carousel is a presentation of that same typed composition.
+`What Now?` deterministically selects an event in progress or beginning within
+30 minutes before falling back to the explained work ranking. No model chooses
+the order or implies an outcome.
+
+Carousel `Later` changes browser position only. Task/Commitment completion,
+provider List Item completion, calendar attendance/missed outcomes, and
+Routine step outcomes use separate typed, idempotent commands. Elapsed
+calendar time is not attendance evidence. A linked routine step is not a Task
+completion and never completes its linked Task implicitly.
+
+A Routine is a distinct ordered execution aggregate housed in the existing
+`recurrences` projection because it shares recurrence scheduling, not because
+it is interchangeable with a Recurrence template. `routine.defined@v1`
+records an owner-scoped member, IANA timezone, RFC 5545 rule, local time
+window, and contiguous ordered steps. `routine.step_outcome_recorded@v1`
+records an explicit `completed` or `skipped` outcome for one step of one dated
+occurrence. The projection derives the current step and closed status; it does
+not emit events. Steps must be handled in order. This adds no fifteenth
+projection and does not collapse Tasks, Recurrences, calendar events, or
+scheduler jobs.
+
+The member portal and pinned OpenClaw dashboard consume the same
+`deterministic-daily-brief-v1` contract. Process acceptance must prove local
+time, scope filtering, typed action routing, optimistic concurrency,
+idempotent retries, ordered Routine progression, replay, and a model-free
+path before Today behavior is considered complete.
+
 ---
 
 ## How to use this file

@@ -56,6 +56,7 @@ def rank_what_now(
     as_of: datetime,
     list_items: list[dict[str, Any]] | None = None,
     recurrences: list[dict[str, Any]] | None = None,
+    routines: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Rank authorized executable work identically for the same instant.
 
@@ -277,6 +278,67 @@ def rank_what_now(
                     "nudge_state": "profile_penalty" if nudge_penalty else "clear",
                     "recent_outcomes": outcome_bias,
                     "obligation": "trackable recurrence, not a task or commitment",
+                },
+            }
+        )
+
+    for row in routines or []:
+        current_step = row.get("current_step")
+        if not isinstance(current_step, dict):
+            continue
+        start = _parse_time(row.get("window_start_at"))
+        end = _parse_time(row.get("window_end_at"))
+        status = str(row.get("status") or "upcoming")
+        if status == "in_progress":
+            window_score = 900
+        elif status == "overdue":
+            window_score = 750
+        elif start is not None and start <= as_of + timedelta(minutes=30):
+            window_score = 650
+        else:
+            window_score = 200
+        candidates.append(
+            {
+                "id": row["routine_id"],
+                "kind": "routine",
+                "title": row["title"],
+                "last_event_id": row.get("last_event_id"),
+                "evidence_event_id": row.get("evidence_event_id")
+                or row.get("last_event_id"),
+                "due": row.get("window_start_at"),
+                "window_start_at": row.get("window_start_at"),
+                "window_end_at": row.get("window_end_at"),
+                "time_label": row.get("time_label"),
+                "status": status,
+                "micro_step": current_step.get("micro_step")
+                or current_step.get("title")
+                or "Start only this step.",
+                "energy": "routine",
+                "effort": f"step {int(current_step.get('position', 0)) + 1} of {row.get('total_steps', 1)}",
+                "context": "ordered routine",
+                "actions": ["complete_step", "skip_step", "evidence"],
+                "occurrence_date": row["occurrence_date"],
+                "current_step": current_step,
+                "steps": row.get("steps") or [],
+                "completed_steps": row.get("completed_steps", 0),
+                "skipped_steps": row.get("skipped_steps", 0),
+                "total_steps": row.get("total_steps", 0),
+                "_score": 575 + window_score + outcome_bias,
+                "_due": start or end,
+                "explanation": {
+                    "available_time": available,
+                    "temporal_horizon": f"routine_window_{status}",
+                    "priority_urgency": window_score,
+                    "energy": "routine",
+                    "effort_minutes": None,
+                    "context_location": "ordered routine",
+                    "dependencies_waiting": [],
+                    "relationship_consequence": None,
+                    "profile_behavior": profile.get("id") if profile else None,
+                    "quiet_hours": in_quiet_hours,
+                    "nudge_state": "profile_penalty" if nudge_penalty else "clear",
+                    "recent_outcomes": outcome_bias,
+                    "obligation": "routine occurrence, not a task or recurrence completion",
                 },
             }
         )

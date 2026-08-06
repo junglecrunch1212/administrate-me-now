@@ -323,6 +323,19 @@ async function executeTodayAction(item, action, container) {
         }),
       });
       setBanner(action === "attended" ? "Attendance recorded." : "Missed event recorded. Nothing else was inferred.");
+    } else if (item.kind === "routine" && ["complete_step", "skip_step"].includes(action)) {
+      const step = item.current_step;
+      setBanner(action === "complete_step" ? "Recording this routine step…" : "Skipping only this step and keeping the routine moving…");
+      await api(`/api/member/v1/routines/${encodeURIComponent(item.id)}/occurrences/${encodeURIComponent(item.occurrence_date)}/steps/${encodeURIComponent(step.step_id)}/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          request_id: crypto.randomUUID(),
+          expected_last_event_id: item.last_event_id,
+          outcome: action === "complete_step" ? "completed" : "skipped",
+        }),
+      });
+      setBanner(action === "complete_step" ? "Step recorded. Here is the next one." : "Step skipped without changing any linked task.");
     } else if (item.kind === "list_item" && action === "complete_external") {
       setBanner("Requesting completion through the reminder provider…");
       await api("/api/member/v1/external-sync/commands", {
@@ -355,13 +368,15 @@ function actionButton(item, action, container) {
   const labels = {
     complete: "Done",
     complete_external: "Done",
+    complete_step: "Step done",
+    skip_step: "Skip step",
     attended: "Attended",
     missed: "Missed",
     open_triage: "Review",
     open_chat: "Talk it through",
     evidence: "Why this is here",
   };
-  const primary = ["complete", "complete_external", "attended", "open_triage"].includes(action);
+  const primary = ["complete", "complete_external", "complete_step", "attended", "open_triage"].includes(action);
   const button = text("button", labels[action] || titleCase(action), action === "evidence" ? "link-button" : `button ${primary ? "button-primary" : "button-quiet"}`);
   button.type = "button";
   button.addEventListener("click", () => executeTodayAction(item, action, container));
@@ -381,7 +396,7 @@ function todayItem(item, { interactive = true } = {}) {
   if (interactive) {
     const row = document.createElement("div");
     row.className = "day-item-actions";
-    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
     for (const action of actions) row.append(actionButton(item, action, li));
     if (actions.length) li.append(row);
   }
@@ -515,7 +530,7 @@ function renderCarousel(brief) {
   section.append(progress);
   const row = document.createElement("div");
   row.className = "button-row carousel-actions";
-  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
+  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
     row.append(actionButton(item, action, section));
   }
   if (items.length > 1) {

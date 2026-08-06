@@ -6,10 +6,17 @@ Brief shared by the member portal and pinned OpenClaw dashboard. It composes
 authorized projections at read time, in the configured household timezone,
 and adds explicit Day Brief/Carousel/What Now controls. What Now uses a fixed
 in-progress/next-30-minute calendar guard before the existing work ranker. Typed interaction
-contracts preserve task, commitment, list-item, recurrence, calendar,
+contracts preserve task, commitment, list-item, recurrence, ordered Routine,
+calendar,
 message, and clarifying-question boundaries. `Later` is view-only; actual
 completion/outcome operations remain idempotent event commands. This adds no
 second summary store and no model decision path.
+
+D27 closes the ordered-Routine gap inside the existing `recurrences`
+projection. Routine definitions carry their own schedule/time window and
+ordered steps; dated step complete/skip outcomes advance only the current
+Routine occurrence and never imply a linked-Task completion. Projection count
+remains fourteen.
 
 Personal Google OAuth update (2026-08-06): the Gmail, Google Calendar, and
 Google Tasks activation rows are **KEEP/HARDEN COMPLETE IN CODE** for personal

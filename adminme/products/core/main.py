@@ -22,6 +22,7 @@ from adminme.products.commitment_service import (
 from adminme.projections.commitments.queries import active_for_member
 from adminme.projections.lists.queries import open_items_for_member
 from adminme.projections.recurrences.queries import for_member as recurrences_for_member
+from adminme.projections.recurrences.queries import routine_occurrences_at
 from adminme.projections.tasks.queries import open_for_member as open_tasks
 from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.what_now import rank_what_now
@@ -67,15 +68,23 @@ def _what_now(runtime: Any, session: Session) -> dict[str, Any]:
         session,
         member_party_id=session.view_member_id,
     )
+    as_of = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    routines = routine_occurrences_at(
+        runtime.projections.connection("recurrences"),
+        session,
+        member_party_id=session.view_member_id,
+        as_of_iso=as_of.isoformat(),
+    )
     profile = runtime.extensions.profile_for(session.view_member_id)
     return rank_what_now(
         tasks,
         commitments,
         member_id=session.view_member_id,
         profile=profile,
-        as_of=datetime.now(timezone.utc).replace(second=0, microsecond=0),
+        as_of=as_of,
         list_items=list_items,
         recurrences=recurrences,
+        routines=routines,
     )
 
 
@@ -105,7 +114,11 @@ async def triage(request: Request, session: SessionDep) -> dict[str, Any]:
 async def inbox(request: Request, session: SessionDep) -> dict[str, Any]:
     """Deprecated compatibility alias for pre-D26 clients."""
     result = await triage(request, session)
-    return {**result, "deprecated_alias": "inbox", "canonical_path": "/api/core/v1/triage"}
+    return {
+        **result,
+        "deprecated_alias": "inbox",
+        "canonical_path": "/api/core/v1/triage",
+    }
 
 
 @router.get("/v1/activity")

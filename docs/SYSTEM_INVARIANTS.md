@@ -67,6 +67,7 @@ Commitments, tasks, and recurrences are three distinct projections with three di
 5. A **Recurrence** is a template (RFC 5545 RRULE string) with `next_occurrence`, `lead_time_days`, and a `trackable` flag; recurrences generate scheduled occurrences but **are not tasks themselves** — a recurrence firing does not automatically produce a task row unless a pipeline explicitly materializes it. [arch §4 table row 3.6]
 6. Commitments are never completed by a recurrence firing; they complete only on explicit `commitment.confirmed` / `commitment.completed` or on task completion whose downstream fulfillment logic decides so. [BUILD.md §3.4, BUILD.md §3.6]
 7. Every LLM-produced proposal (commitment, recurrence, thank-you, artifact-classification) carries `source_skill@version` provenance; direct LLM writes to live state are prohibited — the LLM proposes, the human confirms. [arch §5, BUILD.md §CRITICAL OPERATING RULES rule 6]
+8. A **Routine** is an ordered, time-windowed recurring execution aggregate, not a Task or a Recurrence completion alias. Its definition and per-occurrence step outcomes are typed events projected inside `recurrences`; only the current pending step may be completed or skipped, and a linked Task is never completed implicitly. Routine support does not add a projection or permit a model to order steps. [D27, AC-05, AC-06, AC-18]
 
 ## Section 5: Calendar and its relationship to tasks/recurrences
 
