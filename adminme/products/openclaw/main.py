@@ -1117,6 +1117,7 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
 async def dashboard_surface(
     surface: Literal[
         "comms",
+        "reminders",
         "people",
         "knowledge",
         "finance",

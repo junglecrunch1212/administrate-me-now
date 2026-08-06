@@ -390,7 +390,7 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "OPENAI_API_KEY" not in assets and "ANTHROPIC_API_KEY" not in assets
 
 
-def test_nine_surfaces_three_modes_and_independent_route_denial(
+def test_ten_surfaces_three_modes_and_independent_route_denial(
     tmp_path: Path,
 ) -> None:
     instance = tmp_path / "instance"
@@ -403,6 +403,7 @@ def test_nine_surfaces_three_modes_and_independent_route_denial(
             "today",
             "triage",
             "comms",
+            "reminders",
             "people",
             "knowledge",
             "finance",
@@ -436,6 +437,7 @@ def test_nine_surfaces_three_modes_and_independent_route_denial(
         for forbidden in (
             "triage",
             "comms",
+            "reminders",
             "people",
             "knowledge",
             "finance",
@@ -461,6 +463,172 @@ def test_nine_surfaces_three_modes_and_independent_route_denial(
                 "/api/member/v1/surfaces/today", headers=HEADERS[DEVICE]
             ).status_code
             == 404
+        )
+
+
+def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-reminders-fixture",
+            "source_account_id": "google-a",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        list_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="list.created",
+                schema_version=1,
+                idempotency_key="gate7:reminders:list",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "provider": "google_tasks",
+                    "provider_account_id": "google-a",
+                    "list_external_id": "list-a",
+                    "list_name": "Personal",
+                    "is_default": True,
+                    "changed_at": now.isoformat(),
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "lists", list_event)
+        item_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="list_item.added",
+                schema_version=3,
+                idempotency_key="gate7:reminders:item",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "provider": "google_tasks",
+                    "provider_account_id": "google-a",
+                    "list_external_id": "list-a",
+                    "item_external_id": "take-bins",
+                    "list_name": "Personal",
+                    "title": "Take bins out",
+                    "priority": 0,
+                    "completed": False,
+                    "alarms": [],
+                    "recurrence_rules": [],
+                    "completion_policy": "manual",
+                    "last_modified_at": now.isoformat(),
+                    "sync_cycle_id": "gate7-reminders",
+                    "provider_position": "0001",
+                    "source_links": [],
+                    "provider_data": {},
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "lists", item_event)
+        signal_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="context.signal.observed",
+                schema_version=1,
+                idempotency_key="gate7:reminders:signal",
+                payload={
+                    "signal_id": "signal-garage",
+                    "signal_key": "presence:garage",
+                    "member_id": PRINCIPAL,
+                    "source": "home_assistant",
+                    "kind": "presence",
+                    "state": "present",
+                    "observed_at": now.isoformat(),
+                    "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                    "attributes": {},
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "lists", signal_event)
+        cue_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="reminder.cue.configured",
+                schema_version=1,
+                idempotency_key="gate7:reminders:cue",
+                payload={
+                    "cue_id": "cue-garage",
+                    "member_id": PRINCIPAL,
+                    "provider": "google_tasks",
+                    "provider_account_id": "google-a",
+                    "list_external_id": "list-a",
+                    "item_external_id": "take-bins",
+                    "signal_key": "presence:garage",
+                    "source": "home_assistant",
+                    "kind": "presence",
+                    "operator": "equals",
+                    "expected_state": "present",
+                    "enabled": True,
+                    "configured_at": now.isoformat(),
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "lists", cue_event)
+
+        surface = client.get(
+            "/api/member/v1/surfaces/reminders", headers=HEADERS[PRINCIPAL]
+        )
+        assert surface.status_code == 200, surface.text
+        item = surface.json()["cockpit"]["items"][0]
+        assert item["bucket"] == "now"
+        assert item["why"] == ["Presence cue matched"]
+        assert surface.json()["cockpit"]["accounts"][0]["state"] == "read_only"
+
+        no_independent_approval = client.post(
+            "/api/member/v1/reminders/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "provider": "google_tasks",
+                "provider_account_id": "google-a",
+                "operation": "complete_task",
+                "list_external_id": "list-a",
+                "item_external_id": "take-bins",
+                "expected_last_event_id": item_event,
+                "payload": {},
+                "request_id": "gate7-reminders-command",
+                "openclaw_approved": False,
+            },
+        )
+        assert no_independent_approval.status_code == 403
+
+        provenance = {
+            "actor_id": "actor-principal",
+            "agent_id": "main",
+            "session_key": None,
+            "session_id": None,
+            "channel_id": "openclaw-dashboard",
+            "account_id": "dashboard-principal",
+            "message_id": None,
+            "thread_id": None,
+            "correlation_id": "gate7:dashboard:reminders",
+            "call_kind": "dashboard",
+            "openclaw_version": OPENCLAW_VERSION,
+            "openclaw_commit": OPENCLAW_COMMIT,
+        }
+        dashboard = client.post(
+            "/api/openclaw/v1/dashboard/reminders",
+            headers=OPENCLAW_HEADERS,
+            json={"provenance": provenance},
+        )
+        assert dashboard.status_code == 200, dashboard.text
+        assert dashboard.json()["cockpit"]["version"] == (
+            "deterministic-reminders-cockpit-v1"
         )
         assert client.get("/api/member/v1/bootstrap").status_code == 401
 

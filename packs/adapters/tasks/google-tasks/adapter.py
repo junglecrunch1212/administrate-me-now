@@ -1,19 +1,10 @@
-"""Google Tasks adapter pack — fresh Cohort D Cat-B adapter (prompt 11b-iv).
+"""Google Tasks v1 bidirectional state-mirror adapter.
 
-Inherits :class:`adminme.lib.adapters.ExternalStateMirrorAdapter` per memo
-05 §1.2 / §2.3 / §2.5 / §3.2 / §5.3 / [D18] / [D19] / [PM-34] / [UT-27].
-First Cat-B adapter to declare ``family="tasks"`` (authorized by PR #170
-sidecar that extended the Cat-B family Literal). Inbound poll of Google
-Tasks v1 ``tasks.list`` maps onto the EXISTING ``list_item.added@v1`` at
-``adminme/events/schemas/lists.py`` (no new schema per [D7]); outbound
-``create_task`` calls ``tasks.insert`` wrapped through
-:func:`adminme.lib.observation.outbound` per [§6.20]. Asymmetric
-``write_capabilities=["create_task"]`` per [UT-27]; update/delete/complete
-are out of scope per parent draft.
-
-F-7: Google Tasks has no priority field; every emission maps to
-``priority=5`` (medium) so the ``ListItemAddedV1`` ``Literal[0, 1, 5, 9]``
-gate accepts it.
+The adapter mirrors task lists and tasks into the canonical ``list.*`` and
+``list_item.*`` families.  It preserves Google's opaque position, etag,
+links, completion and assignment provenance without pretending Google has
+native priority, alarm, recurrence, or geofence fields.  Every outbound
+operation is separately declared and passes through observation mode.
 """
 
 # [§8.2, D6] no LLM SDK imports under packs/adapters/.
@@ -21,12 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import AdapterContext, AdapterStatus, SensitivityFloor
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import resolve_json_credentials
-from adminme.events.schemas.lists import ListItemAddedV1  # noqa: F401 — type-reference for pack-internal test guards
 from adminme.lib.adapters import (
     ChangeEnvelope,
     ExternalStateMirrorAdapter,
@@ -46,8 +37,21 @@ _FLOOR_RANK: dict[str, int] = {"normal": 0, "privileged": 1}
 _DEFAULT_POLL_INTERVAL_S: int = 60
 _DEFAULT_PAGE_SIZE: int = 100
 
-# [F-7] No native priority on Google Tasks; map to 5 (medium).
-_GOOGLE_TASKS_DEFAULT_PRIORITY: Literal[0, 1, 5, 9] = 5
+# Google has no priority.  ``0`` means genuinely unspecified.
+_GOOGLE_TASKS_DEFAULT_PRIORITY: Literal[0, 1, 5, 9] = 0
+
+GOOGLE_TASKS_WRITE_CAPABILITIES = [
+    "create_list",
+    "update_list",
+    "delete_list",
+    "create_task",
+    "update_task",
+    "delete_task",
+    "complete_task",
+    "uncomplete_task",
+    "move_task",
+    "clear_completed_tasks",
+]
 
 CredentialsResolver = Callable[[str], dict[str, Any]]
 """``op://`` ref → service-account JSON. Tests inject a stub; production
@@ -106,18 +110,31 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
 
     name: ClassVar[str] = "tasks-google-tasks"
     family: ClassVar[Literal["reminders", "calendaring", "contacts", "tasks"]] = "tasks"
-    version: ClassVar[str] = "1.0.0"
+    version: ClassVar[str] = "2.0.0"
     sensitivity_floor: ClassVar[SensitivityFloor] = "normal"
 
     # [memo 05 §3.2, PM-35] class-level mirror of the manifest's
     # capabilities. One Cat-B entry declaring the EXISTING on-main
     # ``list_item.added`` family — NO new schema per [D7].
     capabilities: ClassVar[list[Any]] = [
-        {"kind": "Cat-B", "runtime": "central", "event_families": ["list_item.added"]},
+        {
+            "kind": "Cat-B",
+            "runtime": "central",
+            "event_families": [
+                "list.created",
+                "list.updated",
+                "list.deleted",
+                "list_item.added",
+                "list_item.updated",
+                "list_item.completed",
+                "list_item.uncompleted",
+                "list_item.deleted",
+            ],
+        },
     ]
 
     # [UT-27] asymmetric — declare ONLY what is implemented.
-    write_capabilities: ClassVar[list[str]] = ["create_task"]
+    write_capabilities: ClassVar[list[str]] = list(GOOGLE_TASKS_WRITE_CAPABILITIES)
 
     # [memo 05 §2.5, PM-35] projection-row column for per-member vs
     # shared rows on the future tasks projection.
@@ -157,10 +174,8 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         self._ctx: AdapterContext | None = None
         self._stop_requested: bool = False
         self._max_poll_cycles: int | None = max_poll_cycles
-        # Dedupe by stable task id; tracks ``updated`` so a future
-        # list_item.updated emission (out of scope) can diff without
-        # a re-fetch.
-        self._seen_inbound: dict[str, str] = {}
+        self._seen_inbound: dict[tuple[str, str], dict[str, Any]] = {}
+        self._seen_lists: dict[str, dict[str, Any]] = {}
         # [§6.20, PM-27] observation seam slots; Phase A leaves unset.
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
@@ -248,44 +263,119 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 return
 
     async def _poll_once(self, *, ctx: AdapterContext) -> int:
-        """Fetch + dedupe + emit. ``_seen_inbound`` is the dedupe gate
-        per F-3 — re-poll on the same task id is a no-op."""
+        """Mirror provider lists and emit deterministic task transitions."""
         if self._service is None:
             raise RuntimeError(
                 "Google Tasks service not initialized; call start() first"
             )
-        tasklist_id = str(self._config["tasklist_id"])
-        tasks = self._fetch_tasks(tasklist_id=tasklist_id)
         emitted = 0
-        for task in tasks:
-            task_id = task.get("id")
-            if not isinstance(task_id, str) or not task_id:
+        tasklists = self._fetch_tasklists()
+        observed_list_ids = {
+            str(tasklist.get("id")) for tasklist in tasklists if tasklist.get("id")
+        }
+        if bool(self._config.get("include_all_tasklists", True)):
+            for missing_id in sorted(set(self._seen_lists) - observed_list_ids):
+                await self._emit_list_deleted(ctx=ctx, tasklist_id=missing_id)
+                self._seen_lists.pop(missing_id, None)
+                for key in [key for key in self._seen_inbound if key[0] == missing_id]:
+                    self._seen_inbound.pop(key, None)
+                emitted += 1
+        for tasklist in tasklists:
+            tasklist_id = str(tasklist.get("id") or "")
+            if not tasklist_id:
                 continue
-            if task_id in self._seen_inbound:
-                continue
-            title = task.get("title")
-            if not isinstance(title, str) or not title.strip():
-                _log.warning("skipping titleless Google task %s", task_id)
-                self._seen_inbound[task_id] = str(task.get("updated") or "")
-                continue
-            await self._emit_list_item_added(
-                ctx=ctx, tasklist_id=tasklist_id, task=task
-            )
-            self._seen_inbound[task_id] = str(task.get("updated") or "")
-            emitted += 1
+            previous_list = self._seen_lists.get(tasklist_id)
+            if previous_list is None or previous_list.get("etag") != tasklist.get(
+                "etag"
+            ):
+                await self._emit_list_change(
+                    ctx=ctx,
+                    event_type="list.created"
+                    if previous_list is None
+                    else "list.updated",
+                    tasklist=tasklist,
+                )
+                self._seen_lists[tasklist_id] = dict(tasklist)
+                emitted += 1
+            for task in self._fetch_tasks(tasklist_id=tasklist_id):
+                task_id = task.get("id")
+                if not isinstance(task_id, str) or not task_id:
+                    continue
+                key = (tasklist_id, task_id)
+                previous = self._seen_inbound.get(key)
+                if task.get("deleted"):
+                    if previous is not None:
+                        await self._emit_deleted(
+                            ctx=ctx, tasklist_id=tasklist_id, task=task
+                        )
+                        self._seen_inbound.pop(key, None)
+                        emitted += 1
+                    continue
+                title = task.get("title")
+                if not isinstance(title, str) or not title.strip():
+                    _log.warning("skipping titleless Google task %s", task_id)
+                    continue
+                if previous is None:
+                    event_type = "list_item.added"
+                elif previous.get("etag") == task.get("etag") and previous.get(
+                    "updated"
+                ) == task.get("updated"):
+                    continue
+                elif previous.get("status") != task.get("status"):
+                    event_type = (
+                        "list_item.completed"
+                        if task.get("status") == "completed"
+                        else "list_item.uncompleted"
+                    )
+                else:
+                    event_type = "list_item.updated"
+                await self._emit_item(
+                    ctx=ctx,
+                    event_type=event_type,
+                    tasklist=tasklist,
+                    task=task,
+                )
+                self._seen_inbound[key] = dict(task)
+                emitted += 1
         return emitted
 
+    def _fetch_tasklists(self) -> list[dict[str, Any]]:
+        """Return every task list when enabled, otherwise the configured list."""
+        if not bool(self._config.get("include_all_tasklists", True)) or not hasattr(
+            self._service, "tasklists"
+        ):
+            tasklist_id = str(self._config["tasklist_id"])
+            return [
+                {
+                    "id": tasklist_id,
+                    "title": self._config.get("list_name") or tasklist_id,
+                    "etag": None,
+                }
+            ]
+        records: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            params: dict[str, Any] = {"maxResults": self.PAGE_SIZE}
+            if page_token:
+                params["pageToken"] = page_token
+            response = self._service.tasklists().list(**params).execute()
+            records.extend(response.get("items") or [])
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                return records
+
     def _fetch_tasks(self, *, tasklist_id: str) -> list[dict[str, Any]]:
-        """Page ``tasks.list(tasklist=..., showCompleted=False,
-        showDeleted=False)`` until ``nextPageToken`` is absent."""
+        """Page the complete task state, including terminal tombstones."""
         records: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:
             params: dict[str, Any] = {
                 "tasklist": tasklist_id,
                 "maxResults": self.PAGE_SIZE,
-                "showCompleted": False,
-                "showDeleted": False,
+                "showCompleted": True,
+                "showDeleted": True,
+                "showHidden": True,
+                "showAssigned": bool(self._config.get("show_assigned", True)),
             }
             if page_token:
                 params["pageToken"] = page_token
@@ -303,37 +393,186 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         tasklist_id: str,
         task: dict[str, Any],
     ) -> None:
-        """Map a Google task onto ``ListItemAddedV1`` per [D7] + canonical
-        11a's "MAP DON'T REGISTER". Priority defaults to 5 (medium) per
-        F-7 since Google Tasks has no native priority field."""
-        list_name = self._config.get("list_name") or tasklist_id
-        completed = task.get("status") == "completed"
-        await self._append(
+        """Backward-compatible helper retained for pack consumers."""
+        await self._emit_item(
             ctx=ctx,
             event_type="list_item.added",
+            tasklist={
+                "id": tasklist_id,
+                "title": self._config.get("list_name") or tasklist_id,
+            },
+            task=task,
+        )
+
+    @staticmethod
+    def _date_components(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return {
+            "year": parsed.year,
+            "month": parsed.month,
+            "day": parsed.day,
+            "all_day": True,
+            "floating": True,
+        }
+
+    def _item_payload(
+        self,
+        *,
+        ctx: AdapterContext,
+        tasklist: dict[str, Any],
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
+        assigned = bool(task.get("assignmentInfo"))
+        links = []
+        for link in task.get("links") or []:
+            if link.get("link"):
+                links.append(
+                    {
+                        "kind": str(link.get("type") or "provider"),
+                        "url": str(link["link"]),
+                        "description": link.get("description"),
+                    }
+                )
+        updated = task.get("updated") or ctx.now_factory().isoformat()
+        return {
+            "member_id": str(self._config["member_id"]),
+            "provider": "google_tasks",
+            "provider_account_id": str(
+                self._config.get("provider_account_id")
+                or self._config.get("user_email")
+            ),
+            "list_external_id": str(tasklist.get("id") or ""),
+            "item_external_id": str(task.get("id") or ""),
+            "list_name": str(tasklist.get("title") or tasklist.get("id") or "Tasks"),
+            "list_color": None,
+            "title": str(task.get("title") or ""),
+            "notes": task.get("notes"),
+            "url": task.get("webViewLink"),
+            "priority": _GOOGLE_TASKS_DEFAULT_PRIORITY,
+            "completed": task.get("status") == "completed",
+            "completion_at": task.get("completed"),
+            "start": None,
+            "due": self._date_components(task.get("due")),
+            "alarms": [],
+            "recurrence_rules": [],
+            "flagged": None,
+            "tags": None,
+            "parent_external_id": task.get("parent"),
+            "sort_order": None,
+            "linked_item_kind": None,
+            "linked_item_id": None,
+            "completion_policy": "manual",
+            "provider_revision": task.get("etag"),
+            "last_modified_at": updated,
+            "sync_cycle_id": ctx.correlation_id_factory(),
+            "provider_position": task.get("position"),
+            "source_links": links,
+            "provider_data": {
+                "self_link": task.get("selfLink"),
+                "hidden": bool(task.get("hidden")),
+                "assignment_info": task.get("assignmentInfo"),
+            },
+            "read_only_reason": (
+                "Assigned Google Tasks have provider-enforced write restrictions."
+                if assigned and self._config.get("assigned_tasks_read_only", True)
+                else None
+            ),
+        }
+
+    async def _emit_item(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        tasklist: dict[str, Any],
+        task: dict[str, Any],
+    ) -> None:
+        await self._append(
+            ctx=ctx,
+            event_type=event_type,
+            payload=self._item_payload(ctx=ctx, tasklist=tasklist, task=task),
+            schema_version=3,
+        )
+
+    async def _emit_list_change(
+        self,
+        *,
+        ctx: AdapterContext,
+        event_type: str,
+        tasklist: dict[str, Any],
+    ) -> None:
+        await self._append(
+            ctx=ctx,
+            event_type=event_type,
             payload={
                 "member_id": str(self._config["member_id"]),
+                "provider": "google_tasks",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id")
+                    or self._config.get("user_email")
+                ),
+                "list_external_id": str(tasklist.get("id") or ""),
+                "list_name": str(tasklist.get("title") or "Tasks"),
+                "color": None,
+                "is_default": tasklist.get("id") == "@default",
+                "provider_revision": tasklist.get("etag"),
+                "changed_at": tasklist.get("updated") or ctx.now_factory().isoformat(),
+            },
+        )
+
+    async def _emit_deleted(
+        self,
+        *,
+        ctx: AdapterContext,
+        tasklist_id: str,
+        task: dict[str, Any],
+    ) -> None:
+        await self._append(
+            ctx=ctx,
+            event_type="list_item.deleted",
+            schema_version=2,
+            payload={
+                "member_id": str(self._config["member_id"]),
+                "provider": "google_tasks",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id")
+                    or self._config.get("user_email")
+                ),
                 "list_external_id": tasklist_id,
                 "item_external_id": str(task.get("id") or ""),
-                "list_name": str(list_name),
-                "title": str(task.get("title") or ""),
-                "notes": task.get("notes"),
-                "due_at": task.get("due"),
-                "priority": _GOOGLE_TASKS_DEFAULT_PRIORITY,
-                "completed": completed,
-                "last_modified_at": task.get("updated"),
+                "deleted_at": task.get("updated") or ctx.now_factory().isoformat(),
                 "sync_cycle_id": ctx.correlation_id_factory(),
             },
         )
 
+    async def _emit_list_deleted(
+        self, *, ctx: AdapterContext, tasklist_id: str
+    ) -> None:
+        await self._append(
+            ctx=ctx,
+            event_type="list.deleted",
+            payload={
+                "member_id": str(self._config["member_id"]),
+                "provider": "google_tasks",
+                "provider_account_id": str(
+                    self._config.get("provider_account_id")
+                    or self._config.get("user_email")
+                ),
+                "list_external_id": tasklist_id,
+                "deleted_at": ctx.now_factory().isoformat(),
+            },
+        )
+
     async def _apply_write_impl(self, operation: WriteOperation) -> WriteResult:
-        """[UT-27] gate already checked ``operation.kind``. Phase B routes
-        ``tasks.insert`` through :func:`observation_outbound` per
-        [§6.20]; Phase A direct-calls when seams are unset."""
-        if operation.kind != "create_task":  # defense-in-depth
+        """Dispatch one explicitly declared Google Tasks operation."""
+        if operation.kind not in self.write_capabilities:
             raise WriteCapabilityError(
-                f"GoogleTasksAdapter._apply_write_impl received "
-                f"undeclared kind={operation.kind!r}"
+                f"GoogleTasksAdapter received undeclared kind={operation.kind!r}"
             )
         service = self._service
         if service is None:
@@ -343,18 +582,71 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         tasklist_id = str(
             payload.get("tasklist_id") or self._config.get("tasklist_id") or ""
         )
-        task_body: dict[str, Any] = {
-            "title": str(payload.get("title") or ""),
+        target_id = str(operation.target_external_id or payload.get("task_id") or "")
+        task_body = {
+            key: payload[key]
+            for key in ("title", "notes", "due", "status", "completed")
+            if key in payload and payload[key] is not None
         }
-        if (notes := payload.get("notes")) is not None:
-            task_body["notes"] = notes
-        if (due := payload.get("due")) is not None:
-            task_body["due"] = due
+        list_body = {"title": str(payload.get("title") or "")}
 
-        async def _do_insert() -> dict[str, Any]:
-            return (
-                service.tasks().insert(tasklist=tasklist_id, body=task_body).execute()
-            )
+        def _request() -> Any:
+            tasks = service.tasks()
+            tasklists = service.tasklists() if hasattr(service, "tasklists") else None
+            if operation.kind == "create_task":
+                kwargs: dict[str, Any] = {"tasklist": tasklist_id, "body": task_body}
+                for key in ("parent", "previous"):
+                    if payload.get(key):
+                        kwargs[key] = payload[key]
+                return tasks.insert(**kwargs)
+            if operation.kind == "update_task":
+                return tasks.patch(tasklist=tasklist_id, task=target_id, body=task_body)
+            if operation.kind in {"complete_task", "uncomplete_task"}:
+                body: dict[str, Any] = {
+                    "status": (
+                        "completed"
+                        if operation.kind == "complete_task"
+                        else "needsAction"
+                    )
+                }
+                if operation.kind == "complete_task":
+                    body["completed"] = (
+                        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
+                return tasks.patch(tasklist=tasklist_id, task=target_id, body=body)
+            if operation.kind == "delete_task":
+                return tasks.delete(tasklist=tasklist_id, task=target_id)
+            if operation.kind == "move_task":
+                kwargs = {"tasklist": tasklist_id, "task": target_id}
+                for key in ("parent", "previous"):
+                    if payload.get(key):
+                        kwargs[key] = payload[key]
+                destination = payload.get("destinationTasklist") or payload.get(
+                    "destination_list_external_id"
+                )
+                if destination:
+                    kwargs["destinationTasklist"] = destination
+                return tasks.move(**kwargs)
+            if operation.kind == "clear_completed_tasks":
+                return tasks.clear(tasklist=tasklist_id)
+            if tasklists is None:
+                raise RuntimeError("Google Tasks service does not expose tasklists")
+            if operation.kind == "create_list":
+                return tasklists.insert(body=list_body)
+            if operation.kind == "update_list":
+                return tasklists.patch(
+                    tasklist=target_id or tasklist_id, body=list_body
+                )
+            if operation.kind == "delete_list":
+                return tasklists.delete(tasklist=target_id or tasklist_id)
+            raise WriteCapabilityError(f"unsupported operation {operation.kind!r}")
+
+        async def _do_write() -> dict[str, Any]:
+            request = _request()
+            expected_revision = payload.get("expected_provider_revision")
+            if expected_revision and hasattr(request, "headers"):
+                request.headers["If-Match"] = expected_revision
+            return request.execute() or {}
 
         session = self._observation_session
         manager = self._observation_manager
@@ -363,17 +655,15 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         response: dict[str, Any] = {}
         try:
             if session is not None and manager is not None and event_log is not None:
-                # [§6.20] Phase B: observation seam wraps tasks.insert.
                 outbound_result = await observation_outbound(
                     session,
-                    "tasks.create_task",
+                    f"tasks.{operation.kind}",
                     {
                         "tasklist_id": tasklist_id,
-                        "title": task_body.get("title", ""),
-                        "notes": task_body.get("notes"),
-                        "due": task_body.get("due"),
+                        "target_external_id": target_id or None,
+                        "fields": sorted(task_body or list_body),
                     },
-                    _do_insert,
+                    _do_write,
                     manager=manager,
                     event_sink=event_log,
                     target_channel="tasks-google-tasks",
@@ -385,7 +675,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     return WriteResult(applied=False, external_id=None, suppressed=True)
                 response = outbound_result.result or {}
             else:
-                response = await _do_insert()
+                response = await _do_write()
         except BaseException as exc:  # noqa: BLE001 — classify & emit
             ctx = self._ctx
             severity, error_kind, retry_after_s = self._classify_tasks_error(exc)
@@ -399,7 +689,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 )
             raise
 
-        external_id = response.get("id")
+        external_id = response.get("id") or target_id or tasklist_id
         return WriteResult(
             applied=True,
             external_id=str(external_id) if external_id else None,
@@ -455,6 +745,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         event_type: str,
         payload: dict[str, Any],
         causation_id: str | None = None,
+        schema_version: int = 1,
     ) -> None:
         """[§7.3, D17] append to the event log; never write projections."""
         try:
@@ -466,6 +757,7 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 event_type=event_type,
                 payload=payload,
                 causation_id=causation_id,
+                schema_version=schema_version,
             )
         except Exception:  # noqa: BLE001 — best-effort emission
             _log.exception("google-tasks adapter failed to emit %s event", event_type)

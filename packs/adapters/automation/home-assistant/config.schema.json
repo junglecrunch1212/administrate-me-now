@@ -21,6 +21,24 @@
       "default": 60,
       "description": "In-process Cat-C inbound state-poll cadence in seconds. Defaults to 60s; pack.yaml's cron is a heartbeat the supervisor uses to detect a wedged adapter."
     },
+    "reminder_context_signals": {
+      "type": "array",
+      "default": [],
+      "description": "Explicit allowlist of Home Assistant entities that may become expiring, private reminder-context facts for one member.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id", "member_id", "kind"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 },
+          "member_id": { "type": "string", "minLength": 1 },
+          "signal_key": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["location", "presence", "weather", "device_state", "network_presence", "calendar_transition", "energy", "capacity"] },
+          "ttl_seconds": { "type": "integer", "minimum": 10, "maximum": 86400, "default": 300 },
+          "attribute_allowlist": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "default": [] }
+        }
+      }
+    },
     "sensitivity_floor": {
       "type": "string",
       "enum": ["normal", "privileged"],

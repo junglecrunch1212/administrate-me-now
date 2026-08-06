@@ -123,7 +123,14 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     cls_c = cls_by_kind["Cat-C"]
     manifest_c = manifest_by_kind["Cat-C"]
     assert cls_c["runtime"] == manifest_c.runtime == "central"
-    assert cls_c["event_families"] == manifest_c.event_families == ["ha.state_changed"]
+    assert (
+        cls_c["event_families"]
+        == manifest_c.event_families
+        == [
+            "ha.state_changed",
+            "context.signal.observed",
+        ]
+    )
     assert cls_c["observation_mode_required"] is False
     assert manifest_c.observation_mode_required is False
 

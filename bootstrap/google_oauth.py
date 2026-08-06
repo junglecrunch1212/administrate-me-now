@@ -30,7 +30,7 @@ def enroll(
     paths = DeploymentPaths.default()
     paths.run_dir.mkdir(parents=True, exist_ok=True)
     authorization_url_file = paths.run_dir / "google-oauth-authorization-url"
-    scopes = list(GOOGLE_ADAPTER_SCOPES)
+    scopes: list[str] = list(GOOGLE_ADAPTER_SCOPES)
     if enable_gmail_writes:
         scopes.extend(GMAIL_WRITE_SCOPES)
     flow = InstalledAppFlow.from_client_secrets_file(str(client_file), scopes=scopes)

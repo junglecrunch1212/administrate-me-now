@@ -72,7 +72,7 @@ from typing import Any
 
 import yaml
 
-from adminme.events.schemas.lists import ListItemAddedV1
+from adminme.events.schemas.lists import ListItemV3
 from adminme.lib.pack_registry.parser import parse_adapter_manifest
 from adminme.lib.pack_registry.validator import validate_adapter_pack
 from adminme.adapters.base import AdapterContext
@@ -116,11 +116,17 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     manifest_entry = manifest.capabilities[0]
     assert cls_entry["kind"] == manifest_entry.kind == "Cat-B"
     assert cls_entry["runtime"] == manifest_entry.runtime == "central"
-    assert (
-        cls_entry["event_families"]
-        == manifest_entry.event_families
-        == ["list_item.added"]
-    )
+    assert cls_entry["event_families"] == manifest_entry.event_families
+    assert set(cls_entry["event_families"]) == {
+        "list.created",
+        "list.updated",
+        "list.deleted",
+        "list_item.added",
+        "list_item.updated",
+        "list_item.completed",
+        "list_item.uncompleted",
+        "list_item.deleted",
+    }
 
 
 def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
@@ -144,7 +150,7 @@ def test_pack_yaml_round_trips_through_parse_adapter_manifest() -> None:
     assert raw_manifest["pack"]["family"] == "tasks"
     assert manifest.capabilities[0].kind == "Cat-B"
     assert manifest.capabilities[0].runtime == "central"
-    assert manifest.write_capabilities == ["create_task"]
+    assert manifest.write_capabilities == GoogleTasksAdapter.write_capabilities
     assert manifest.sharing_model_discriminator == "owner_member_id"
     assert manifest.dedup_strategy == {"kind": "external_id"}
     assert manifest.sensitivity_default == "normal"
@@ -190,7 +196,7 @@ def _make_ctx(event_log: _FakeEventLog) -> AdapterContext:
     )
 
 
-def test_inbound_emit_payload_validates_against_list_item_added_v1_schema() -> None:
+def test_inbound_emit_payload_validates_against_list_item_v3_schema() -> None:
     """The pack's :meth:`_emit_list_item_added` helper produces a payload
     that validates byte-for-byte against the on-main
     :class:`ListItemAddedV1` schema. The schema's
@@ -229,7 +235,7 @@ def test_inbound_emit_payload_validates_against_list_item_added_v1_schema() -> N
     assert len(added_calls) == 1
     payload = added_calls[0]["payload"]
     # extra="forbid" — extras would raise here.
-    instance = ListItemAddedV1.model_validate(payload)
+    instance = ListItemV3.model_validate(payload)
     assert instance.member_id == "member-pack-internal-001"
     assert instance.list_external_id == "tasklist-primary"
     assert instance.item_external_id == "gtask-pack-001"
@@ -237,7 +243,8 @@ def test_inbound_emit_payload_validates_against_list_item_added_v1_schema() -> N
     assert instance.title == "Pack-internal emit"
     assert instance.notes == "Pack-internal round-trip"
     # F-7: no native priority on Google Tasks → medium default.
-    assert instance.priority == 5
+    assert instance.priority == 0
+    assert instance.provider == "google_tasks"
     assert instance.completed is False
     assert instance.sync_cycle_id == "corr-pack-internal-1"
 

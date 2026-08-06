@@ -112,10 +112,46 @@ def lists_for_member(
     return filter_rows(session, [dict(row) for row in rows])
 
 
+def reminder_cues_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM reminder_cues
+         WHERE tenant_id=? AND member_id=? AND enabled=1
+         ORDER BY configured_at, cue_id
+        """,
+        (session.tenant_id, member_id),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
+
+
+def context_signals_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT * FROM context_signals
+         WHERE tenant_id=? AND member_id=?
+         ORDER BY kind, signal_key
+        """,
+        (session.tenant_id, member_id),
+    ).fetchall()
+    return filter_rows(session, [dict(row) for row in rows])
+
+
 __all__ = [
     "get_item",
     "items_for_list",
     "items_for_member",
     "open_items_for_member",
     "lists_for_member",
+    "reminder_cues_for_member",
+    "context_signals_for_member",
 ]

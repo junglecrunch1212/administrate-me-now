@@ -37,7 +37,7 @@ assert(pkg.openclaw.extensions[0] === "./src/index.ts", "source entrypoint");
 assert(pkg.openclaw.runtimeExtensions[0] === "./dist/index.js", "runtime entrypoint");
 assert(JSON.stringify(manifest.contracts.tools) === JSON.stringify(expectedTools), "typed tool declarations");
 assert(expectedTools.every((name) => name.startsWith("administrateme_")), "tool namespace");
-assert(manifest.dashboard.dataBindings.length === 10, "nine domain views plus health binding");
+assert(manifest.dashboard.dataBindings.length === 11, "ten domain views plus health binding");
 assert(manifest.dashboard.actionVerbs.length === 2, "dashboard write bindings");
 assert(manifest.commandAliases.every((entry) => entry.kind === "runtime-slash"), "slash alias kind");
 assert(

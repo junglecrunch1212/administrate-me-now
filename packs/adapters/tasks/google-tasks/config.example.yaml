@@ -8,6 +8,11 @@ service_account_key_ref: op://AdministrateMe/google-tasks-sandbox/service-accoun
 tasklist_id: "@default"
 user_email: sandbox@example.test
 member_id: member-sandbox
-list_name: Inbox
+provider_account_id: google-member-sandbox
+account_label: Personal Google Tasks
+list_name: Tasks
+include_all_tasklists: true
+show_assigned: true
+assigned_tasks_read_only: true
 poll_interval_s: 60
 sensitivity_floor: normal

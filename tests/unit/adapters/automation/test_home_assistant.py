@@ -190,6 +190,7 @@ def _make_adapter(
     observation_manager: Any = None,
     observation_event_log: Any = None,
     base_url: str = "http://homeassistant.local:8123",
+    config_overrides: dict[str, Any] | None = None,
 ) -> Any:
     """Construct a HomeAssistantAdapter with optional pre-installed client
     and observation seam slots. Mirrors the Google Calendar test's
@@ -198,6 +199,7 @@ def _make_adapter(
         config={
             "access_token_ref": "op://test/v/ha/token",
             "base_url": base_url,
+            **(config_overrides or {}),
         },
         observation_session=observation_session,
         observation_manager=observation_manager,
@@ -349,6 +351,44 @@ async def test_poll_states_once_skips_seen_entity_with_unchanged_last_changed() 
     assert second == 0
     state_changes = [c for c in event_log.calls if c["type"] == "ha.state_changed"]
     assert len(state_changes) == 1
+
+
+async def test_allowlisted_entity_emits_private_expiring_reminder_context() -> None:
+    state = _state(
+        entity_id="person.member_a",
+        state="home",
+        attributes={"latitude": 40.0, "longitude": -73.0, "secret": "drop"},
+        last_changed="2026-05-18T10:00:00+00:00",
+    )
+    client = _FakeAsyncClient(
+        get_response=_FakeResponse(status_code=200, json_data=[state])
+    )
+    adapter = _make_adapter(
+        client=client,
+        config_overrides={
+            "reminder_context_signals": [
+                {
+                    "entity_id": "person.member_a",
+                    "member_id": "member-a",
+                    "signal_key": "presence:home",
+                    "kind": "presence",
+                    "ttl_seconds": 120,
+                    "attribute_allowlist": [],
+                }
+            ]
+        },
+    )
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+
+    assert await adapter._poll_states_once(ctx=ctx) == 1
+    signal = next(
+        call for call in event_log.calls if call["type"] == "context.signal.observed"
+    )
+    assert signal["owner_scope"] == "private:member-a"
+    assert signal["payload"]["signal_key"] == "presence:home"
+    assert signal["payload"]["expires_at"] == "2026-05-18T10:02:00+00:00"
+    assert signal["payload"]["attributes"] == {}
 
 
 async def test_poll_states_emit_payload_validates_against_ha_state_changed_v1() -> None:

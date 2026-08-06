@@ -1,7 +1,7 @@
 pack:
   id: adapter:tasks-google-tasks
   name: Google Tasks central adapter
-  version: 1.0.0
+  version: 2.0.0
   kind: adapter
   family: tasks
   author: built-in
@@ -33,30 +33,50 @@ depends_on:
     - adapter.authenticated
     - adapter.cursor_advanced
     - list_item.added
+    - list_item.updated
+    - list_item.completed
+    - list_item.uncompleted
+    - list_item.deleted
+    - list.created
+    - list.updated
+    - list.deleted
 
 events_emitted:
   - adapter.error
   - adapter.authenticated
   - adapter.cursor_advanced
   - list_item.added
+  - list_item.updated
+  - list_item.completed
+  - list_item.uncompleted
+  - list_item.deleted
+  - list.created
+  - list.updated
+  - list.deleted
 
 config:
   schema: config.schema.json
   example: config.example.yaml
 
 # Framework extension fields per memo 05 §3.1 / [PM-33] / [PM-35] / [UT-27].
-# Cat-B central — Google Tasks v1 API; inbound poll emits the on-main
-# `list_item.added@v1` schema (no new schema registered per [D7]);
-# outbound `create_task` calls `tasks.insert` wrapped through
-# `adminme.lib.observation.outbound` per [§6.20]. write_capabilities is
-# asymmetric per [UT-27] (only `create_task` is implemented; update_task
-# / delete_task / complete_task are out of scope per parent draft).
+# Cat-B central — Google Tasks v1 API. Inbound polling mirrors lists and
+# task transitions into canonical typed events. Each supported provider
+# mutation is separately declared and observation-wrapped.
 capabilities:
   - kind: Cat-B
     runtime: central
-    event_families: [list_item.added]
+    event_families: [list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
 write_capabilities:
+  - create_list
+  - update_list
+  - delete_list
   - create_task
+  - update_task
+  - delete_task
+  - complete_task
+  - uncomplete_task
+  - move_task
+  - clear_completed_tasks
 sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 observation_mode_required: true

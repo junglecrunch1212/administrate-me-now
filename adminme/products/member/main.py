@@ -24,6 +24,11 @@ from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
+from adminme.events.schemas.reminder_context import (
+    ContextKind,
+    ContextSource,
+    CueOperator,
+)
 from adminme.lib.scope import allowed_read
 from adminme.lib.session import Session
 from adminme.member_chat import MemberChatError
@@ -38,6 +43,7 @@ from adminme.products.member.surfaces import (
     evaluate_query,
     experience_mode,
     navigation,
+    reminder_accounts,
 )
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.products.openclaw.main import (
@@ -56,6 +62,11 @@ from adminme.projections.recurrences.queries import (
     get_routine_occurrence,
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.projections.lists.queries import (
+    get_item as get_list_item,
+    items_for_member as list_items_for_member,
+    lists_for_member,
+)
 from adminme.temporary_surfaces import (
     CHILD_ACTIONS,
     CHILD_QUERIES,
@@ -173,6 +184,56 @@ class CommsCommandRequest(BaseModel):
     openclaw_approved: bool = False
 
 
+class ReminderCommandRequest(BaseModel):
+    """One explicit member mutation of a provider-owned reminder/list."""
+
+    model_config = {"extra": "forbid"}
+    provider: Literal["apple_reminders", "google_tasks"]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    operation: Literal[
+        "create_reminder",
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "create_task",
+        "update_task",
+        "delete_task",
+        "complete_task",
+        "uncomplete_task",
+        "move_task",
+        "clear_completed_tasks",
+        "create_list",
+        "update_list",
+        "delete_list",
+    ]
+    list_external_id: str | None = Field(default=None, max_length=1000)
+    item_external_id: str | None = Field(default=None, max_length=1000)
+    expected_last_event_id: str | None = Field(default=None, max_length=240)
+    expected_provider_revision: str | None = Field(default=None, max_length=1000)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    request_id: str = Field(min_length=8, max_length=120)
+    openclaw_approved: bool = False
+
+
+class ReminderCueRequest(BaseModel):
+    """A typed comparison against one scoped context signal."""
+
+    model_config = {"extra": "forbid"}
+    cue_id: str = Field(min_length=8, max_length=240)
+    list_external_id: str = Field(min_length=1, max_length=1000)
+    item_external_id: str = Field(min_length=1, max_length=1000)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    signal_key: str = Field(min_length=1, max_length=500)
+    source: ContextSource
+    kind: ContextKind
+    operator: CueOperator
+    expected_state: str | None = Field(default=None, max_length=500)
+    expected_number: float | None = None
+    enabled: bool = True
+
+
 class TriageEnrichmentRequest(BaseModel):
     """Member corrections applied before a candidate can be confirmed."""
 
@@ -204,7 +265,18 @@ _EXTERNAL_OPERATIONS = {
         "move_event",
         "respond_event",
     },
-    "google_tasks": {"create_task"},
+    "google_tasks": {
+        "create_task",
+        "update_task",
+        "delete_task",
+        "complete_task",
+        "uncomplete_task",
+        "move_task",
+        "clear_completed_tasks",
+        "create_list",
+        "update_list",
+        "delete_list",
+    },
     "apple_calendar": {"create_event", "update_event", "delete_event", "move_event"},
     "apple_reminders": {
         "create_reminder",
@@ -235,6 +307,47 @@ _COMMS_EXTERNAL_OPERATIONS = {
     "twilio_sms": {"reply"},
     "twilio_whatsapp": {"reply"},
     "fixture": {"reply"},
+}
+
+_REMINDER_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
+    "create_reminder": frozenset(
+        {
+            "title",
+            "notes",
+            "url",
+            "priority",
+            "start",
+            "due",
+            "alarms",
+            "recurrence_rules",
+        }
+    ),
+    "update_reminder": frozenset(
+        {
+            "title",
+            "notes",
+            "url",
+            "priority",
+            "start",
+            "due",
+            "alarms",
+            "recurrence_rules",
+        }
+    ),
+    "delete_reminder": frozenset(),
+    "complete_reminder": frozenset(),
+    "uncomplete_reminder": frozenset(),
+    "move_reminder": frozenset({"destination_list_external_id"}),
+    "create_task": frozenset({"title", "notes", "due", "parent", "previous"}),
+    "update_task": frozenset({"title", "notes", "due"}),
+    "delete_task": frozenset(),
+    "complete_task": frozenset(),
+    "uncomplete_task": frozenset(),
+    "move_task": frozenset({"destination_list_external_id", "parent", "previous"}),
+    "clear_completed_tasks": frozenset(),
+    "create_list": frozenset({"title", "name", "color"}),
+    "update_list": frozenset({"title", "name", "color"}),
+    "delete_list": frozenset(),
 }
 
 
@@ -721,6 +834,382 @@ async def request_external_write(
     )
     event_id = await runtime.events.write(envelope)
     return {"accepted": True, "command_id": body.request_id, "event_id": event_id}
+
+
+def _reminder_account_for_command(
+    runtime: Any, session: Session, body: ReminderCommandRequest
+) -> dict[str, Any]:
+    conn = runtime.projections.connection("lists")
+    items = list_items_for_member(conn, session, member_id=session.auth_member_id)
+    lists = lists_for_member(conn, session, member_id=session.auth_member_id)
+    account = next(
+        (
+            account
+            for account in reminder_accounts(
+                runtime,
+                session.auth_member_id,
+                projected_items=items,
+                projected_lists=lists,
+            )
+            if account["provider"] == body.provider
+            and account["provider_account_id"] == body.provider_account_id
+        ),
+        None,
+    )
+    if account is None:
+        raise HTTPException(404, "reminder account not found")
+    if body.operation not in account["operations"]:
+        raise HTTPException(
+            409,
+            account.get("remedy")
+            or "this provider account does not support that reminder action",
+        )
+    return account
+
+
+def _validate_reminder_command_target(
+    runtime: Any,
+    session: Session,
+    body: ReminderCommandRequest,
+    provider_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    conn = runtime.projections.connection("lists")
+    owned_lists = lists_for_member(conn, session, member_id=session.auth_member_id)
+
+    def owned_list(list_external_id: str | None) -> dict[str, Any] | None:
+        if not list_external_id:
+            return None
+        return next(
+            (
+                row
+                for row in owned_lists
+                if row["provider"] == body.provider
+                and row["provider_account_id"] == body.provider_account_id
+                and row["list_external_id"] == list_external_id
+            ),
+            None,
+        )
+
+    item_operations = {
+        "update_reminder",
+        "delete_reminder",
+        "complete_reminder",
+        "uncomplete_reminder",
+        "move_reminder",
+        "update_task",
+        "delete_task",
+        "complete_task",
+        "uncomplete_task",
+        "move_task",
+    }
+    if body.operation in item_operations:
+        if not body.list_external_id or not body.item_external_id:
+            raise HTTPException(422, "this action requires a source list and item")
+        item = get_list_item(
+            conn,
+            session,
+            list_external_id=body.list_external_id,
+            item_external_id=body.item_external_id,
+        )
+        if (
+            item is None
+            or item.get("member_id") != session.auth_member_id
+            or item.get("provider") != body.provider
+            or item.get("provider_account_id") != body.provider_account_id
+        ):
+            raise HTTPException(404, "reminder not found")
+        if item.get("read_only_reason"):
+            raise HTTPException(409, str(item["read_only_reason"]))
+        if not body.expected_last_event_id:
+            raise HTTPException(422, "an item action requires expected_last_event_id")
+        if item["last_event_id"] != body.expected_last_event_id:
+            raise HTTPException(409, "reminder changed; refresh before acting")
+        if body.operation in {"move_reminder", "move_task"}:
+            destination = provider_payload.get("destination_list_external_id")
+            if not isinstance(destination, str) or not destination:
+                raise HTTPException(422, "a move requires a destination list")
+            if owned_list(destination) is None:
+                raise HTTPException(404, "destination reminder list not found")
+        return item
+
+    if body.operation in {"create_reminder", "create_task", "clear_completed_tasks"}:
+        if not body.list_external_id:
+            raise HTTPException(422, "this action requires a destination list")
+        row = owned_list(body.list_external_id)
+        if row is None:
+            raise HTTPException(404, "destination reminder list not found")
+        if body.operation == "clear_completed_tasks":
+            if not body.expected_last_event_id:
+                raise HTTPException(
+                    422, "clearing completed tasks requires expected_last_event_id"
+                )
+            if row["last_event_id"] != body.expected_last_event_id:
+                raise HTTPException(409, "reminder list changed; refresh before acting")
+        return row
+    if body.operation in {"update_list", "delete_list"}:
+        if not body.list_external_id:
+            raise HTTPException(422, "this action requires a list")
+        row = owned_list(body.list_external_id)
+        if row is None:
+            raise HTTPException(404, "reminder list not found")
+        if not body.expected_last_event_id:
+            raise HTTPException(422, "a list action requires expected_last_event_id")
+        if row["last_event_id"] != body.expected_last_event_id:
+            raise HTTPException(409, "reminder list changed; refresh before acting")
+        return row
+    return None
+
+
+def _provider_reminder_payload(
+    body: ReminderCommandRequest,
+) -> tuple[dict[str, Any], frozenset[str]]:
+    """Return the exact, provider-native payload or fail before governance."""
+
+    allowed_fields = _REMINDER_PAYLOAD_FIELDS[body.operation]
+    unexpected = set(body.payload) - allowed_fields
+    if unexpected:
+        raise HTTPException(
+            422, f"unsupported provider fields: {', '.join(sorted(unexpected))}"
+        )
+    provider_payload = {
+        key: body.payload[key] for key in body.payload if key in allowed_fields
+    }
+    if (
+        body.operation in {"create_reminder", "create_task"}
+        and not str(provider_payload.get("title") or "").strip()
+    ):
+        raise HTTPException(422, "a new reminder requires a title")
+
+    if body.provider == "google_tasks":
+        if body.operation in {"create_list", "update_list"}:
+            unexpected_list_fields = set(provider_payload) - {"title"}
+            if unexpected_list_fields:
+                raise HTTPException(
+                    422,
+                    "Google Tasks lists only expose a title through this adapter",
+                )
+            if not str(provider_payload.get("title") or "").strip():
+                raise HTTPException(422, "a Google Tasks list requires a title")
+        due = provider_payload.get("due")
+        if isinstance(due, str) and "T" not in due:
+            # Google accepts RFC 3339 but stores only the date component.
+            try:
+                parsed_due = datetime.strptime(due, "%Y-%m-%d")
+            except ValueError as exc:
+                raise HTTPException(422, "due must be YYYY-MM-DD") from exc
+            provider_payload["due"] = parsed_due.strftime("%Y-%m-%dT00:00:00.000Z")
+    else:
+        if body.operation in {"create_list", "update_list"}:
+            unexpected_list_fields = set(provider_payload) - {"name", "color"}
+            if unexpected_list_fields:
+                raise HTTPException(
+                    422,
+                    "Apple Reminders lists expose name and color through this adapter",
+                )
+            if (
+                body.operation == "create_list"
+                and not str(provider_payload.get("name") or "").strip()
+            ):
+                raise HTTPException(422, "an Apple Reminders list requires a name")
+            if "name" in provider_payload:
+                provider_payload["list_name"] = provider_payload.pop("name")
+        for field in ("start", "due"):
+            value = provider_payload.get(field)
+            if isinstance(value, str):
+                try:
+                    parsed = datetime.strptime(value, "%Y-%m-%d")
+                except ValueError as exc:
+                    raise HTTPException(
+                        422,
+                        f"Apple Reminders {field} must be YYYY-MM-DD or date components",
+                    ) from exc
+                provider_payload[field] = {
+                    "year": parsed.year,
+                    "month": parsed.month,
+                    "day": parsed.day,
+                    "all_day": True,
+                    "floating": True,
+                }
+    return provider_payload, allowed_fields
+
+
+@router.post("/api/member/v1/reminders/commands", status_code=202)
+async def reminder_command(
+    body: ReminderCommandRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """Validate, authorize, and enqueue one provider-shaped reminder mutation."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "reminder actions are unavailable while viewing another member"
+        )
+    if not body.openclaw_approved:
+        raise HTTPException(403, "independent OpenClaw action approval is required")
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "reminder state is unavailable")
+    _reminder_account_for_command(runtime, session, body)
+    provider_payload, allowed_fields = _provider_reminder_payload(body)
+    target = _validate_reminder_command_target(runtime, session, body, provider_payload)
+    if body.provider == "apple_reminders" and body.operation == "move_reminder":
+        provider_payload["destination_list_id"] = provider_payload.pop(
+            "destination_list_external_id"
+        )
+
+    expected_provider_revision = body.expected_provider_revision or (
+        (target or {}).get("provider_revision")
+    )
+
+    provider_payload.update(
+        {
+            "member_id": session.auth_member_id,
+            "list_external_id": body.list_external_id,
+            "tasklist_id": body.list_external_id,
+            "item_external_id": body.item_external_id,
+            "expected_provider_revision": expected_provider_revision,
+            "content_privacy_guard": {
+                "member_bound": True,
+                "provider_fields_allowlisted": sorted(allowed_fields),
+                "source_scope": f"private:{session.auth_member_id}",
+            },
+            "openclaw_approved": True,
+        }
+    )
+    target_external_id = body.item_external_id or body.list_external_id
+    now = EventEnvelope.now_utc_iso()
+    command_payload = {
+        "command_id": body.request_id,
+        "member_id": session.auth_member_id,
+        "provider": body.provider,
+        "provider_account_id": body.provider_account_id,
+        "operation": body.operation,
+        "target_external_id": target_external_id,
+        "expected_provider_revision": expected_provider_revision,
+        "payload": provider_payload,
+        "requested_at": now,
+    }
+    decision = await runtime.guarded_write.check(
+        session, "external_sync.write_requested", command_payload
+    )
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {"reason": decision.reason, "correlation_id": decision.correlation_id},
+        )
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    key = f"reminder-command:{session.auth_member_id}:{body.request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is not None:
+        if prior.get("raw_ref") != f"request-sha256:{fingerprint}":
+            raise HTTPException(
+                409, "idempotency key conflicts with prior reminder action"
+            )
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "command_id": body.request_id,
+            "event_id": prior["event_id"],
+        }
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="external_sync.write_requested",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-reminders",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=cast(
+                Sensitivity, (target or {}).get("sensitivity") or "normal"
+            ),
+            correlation_id=decision.correlation_id,
+            causation_id=(target or {}).get("last_event_id"),
+            actor_identity=session.auth_member_id,
+            idempotency_key=key,
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=command_payload,
+        )
+    )
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "command_id": body.request_id,
+        "event_id": event_id,
+        "observation_mode": runtime._observation_active,
+    }
+
+
+@router.post("/api/member/v1/reminders/cues", status_code=202)
+async def configure_reminder_cue(
+    body: ReminderCueRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Attach one deterministic cue rule to an owned reminder item."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "reminder cues are unavailable in view-as mode")
+    runtime = _runtime(request)
+    item = get_list_item(
+        runtime.projections.connection("lists"),
+        session,
+        list_external_id=body.list_external_id,
+        item_external_id=body.item_external_id,
+    )
+    if item is None or item.get("member_id") != session.auth_member_id:
+        raise HTTPException(404, "reminder not found")
+    if item["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "reminder changed; refresh before adding the cue")
+    if body.operator in {"equals", "not_equals"} and body.expected_state is None:
+        raise HTTPException(422, f"{body.operator} requires expected_state")
+    if body.operator in {"above", "below"} and body.expected_number is None:
+        raise HTTPException(422, f"{body.operator} requires expected_number")
+    payload = {
+        "cue_id": body.cue_id,
+        "member_id": session.auth_member_id,
+        "provider": item["provider"],
+        "provider_account_id": item["provider_account_id"],
+        "list_external_id": body.list_external_id,
+        "item_external_id": body.item_external_id,
+        "signal_key": body.signal_key,
+        "source": body.source,
+        "kind": body.kind,
+        "operator": body.operator,
+        "expected_state": body.expected_state,
+        "expected_number": body.expected_number,
+        "enabled": body.enabled,
+        "configured_at": EventEnvelope.now_utc_iso(),
+    }
+    await _guard_member_write(runtime, session, "reminder.cue.configured", payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="reminder.cue.configured",
+            schema_version=1,
+            occurred_at=payload["configured_at"],
+            source_adapter="member-reminders",
+            source_account_id=session.auth_member_id,
+            owner_scope=item["owner_scope"],
+            visibility_scope=item["visibility_scope"],
+            sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+            correlation_id=session.correlation_id,
+            causation_id=item["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"reminder-cue:{session.auth_member_id}:{body.cue_id}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("lists", event_id)
+    return {"accepted": True, "event_id": event_id, "cue_id": body.cue_id}
 
 
 @router.post("/api/member/v1/triage/{proposal_id}/enrich")

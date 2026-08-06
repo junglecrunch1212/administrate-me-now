@@ -263,7 +263,7 @@ async function run() {
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
-      today: "Today", triage: "Triage", comms: "Comms", people: "People", knowledge: "Knowledge",
+      today: "Today", triage: "Triage", comms: "Comms", reminders: "Reminders", people: "People", knowledge: "Knowledge",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     for (const [surface, label] of Object.entries(surfaceLabels)) {
@@ -286,12 +286,17 @@ async function run() {
         await principal.page.getByRole("button", { name: /^Quieted/ }).click();
         record("Comms quiet lens is interactive", (await principal.page.locator(".comms-list").textContent()).includes("Nothing in this lens"), await principal.page.locator(".comms-list").textContent());
         await principal.page.getByRole("button", { name: /^Focus/ }).click();
+      } else if (surface === "reminders") {
+        record("Reminders identifies deterministic provider truth", await principal.page.locator("#mode-label").textContent() === "Private · provider-backed · deterministic", await principal.page.locator("#mode-label").textContent());
+        record("Reminders exposes stable activation lenses", await principal.page.getByRole("button", { name: /^Now/ }).count() === 1 && await principal.page.getByRole("button", { name: /^Places/ }).count() === 1, await principal.page.locator("#surface").textContent());
+        record("Reminders does not invent a writable provider", (await principal.page.locator(".reminder-quick-add").textContent()).includes("Connect a writable"), await principal.page.locator(".reminder-quick-add").textContent());
+        await screenshot(principal.page, "surface-reminders-desktop.png");
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);
       }
     }
-    record("nine principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 9, await principal.page.locator("#primary-nav .nav-link").count());
+    record("ten principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 10, await principal.page.locator("#primary-nav .nav-link").count());
     await auditAccessibility(principal.page, "desktop");
     await principal.context.close();
 

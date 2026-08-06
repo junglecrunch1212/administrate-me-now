@@ -10,6 +10,12 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from adminme.comms import compose_comms_cockpit
+from adminme.reminders import (
+    APPLE_OPERATIONS,
+    GOOGLE_OPERATIONS,
+    PROVIDER_CONTRACTS,
+    compose_reminders_cockpit,
+)
 from adminme.lib.session import Session
 from adminme.products.core import main as core
 from adminme.today import compose_daily_brief
@@ -24,7 +30,13 @@ from adminme.projections.interactions.queries import (
     recent_for_member,
     recent_with,
 )
-from adminme.projections.lists.queries import open_items_for_member
+from adminme.projections.lists.queries import (
+    context_signals_for_member,
+    items_for_member,
+    lists_for_member,
+    open_items_for_member,
+    reminder_cues_for_member,
+)
 from adminme.projections.member_knowledge.queries import list_visible
 from adminme.projections.money.queries import flows_in_range
 from adminme.projections.parties.queries import (
@@ -44,6 +56,7 @@ ADULT_SURFACES = (
     "today",
     "triage",
     "comms",
+    "reminders",
     "people",
     "knowledge",
     "finance",
@@ -58,6 +71,7 @@ SURFACE_LABELS = {
     "today": "Today",
     "triage": "Triage",
     "comms": "Comms",
+    "reminders": "Reminders",
     "people": "People",
     "knowledge": "Knowledge",
     "finance": "Finance",
@@ -81,6 +95,83 @@ _PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
     "twilio_sms": frozenset({"reply", "send"}),
     "twilio_whatsapp": frozenset({"reply", "send"}),
 }
+
+
+def reminder_accounts(
+    runtime: Any,
+    member_id: str,
+    *,
+    projected_items: list[dict[str, Any]],
+    projected_lists: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Negotiate exact provider capabilities without leaking credentials."""
+
+    accounts: dict[tuple[str, str], dict[str, Any]] = {}
+    for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        adapter_id = str(
+            entry.get("id") or entry.get("kind") or entry.get("pack_id") or ""
+        ).removeprefix("adapter:")
+        config = entry.get("config") or {}
+        if not isinstance(config, dict) or config.get("member_id") != member_id:
+            continue
+        if "google-tasks" in adapter_id:
+            provider = "google_tasks"
+            operations = GOOGLE_OPERATIONS
+            account_id = str(
+                config.get("provider_account_id")
+                or config.get("user_email")
+                or f"google-tasks-{index}"
+            )
+            label = str(config.get("account_label") or "Google Tasks")
+            runtime_shape = "central_oauth"
+        elif "apple-eventkit" in adapter_id:
+            provider = "apple_reminders"
+            operations = APPLE_OPERATIONS
+            account_id = str(config.get("provider_account_id") or member_id)
+            label = str(config.get("account_label") or "Apple Reminders")
+            runtime_shape = str(config.get("deployment_target") or "central")
+        else:
+            continue
+        contract = PROVIDER_CONTRACTS[provider]
+        accounts[(provider, account_id)] = {
+            "id": str(entry.get("id") or f"{provider}-{index}"),
+            "provider": provider,
+            "provider_account_id": account_id,
+            "label": label,
+            "runtime": runtime_shape,
+            "state": "observation_only" if runtime._observation_active else "writable",
+            "operations": sorted(operations),
+            "native": contract["native"],
+            "limitations": contract["limitations"],
+        }
+
+    for row in [*projected_lists, *projected_items]:
+        provider = str(row.get("provider") or "")
+        account_id = str(row.get("provider_account_id") or "")
+        if provider not in PROVIDER_CONTRACTS or not account_id:
+            continue
+        key = (provider, account_id)
+        if key in accounts:
+            continue
+        contract = PROVIDER_CONTRACTS[provider]
+        accounts[key] = {
+            "id": f"projected:{provider}:{account_id}",
+            "provider": provider,
+            "provider_account_id": account_id,
+            "label": contract["label"],
+            "runtime": "projected_only",
+            "state": "read_only",
+            "operations": [],
+            "native": contract["native"],
+            "limitations": contract["limitations"],
+            "remedy": "Reconnect this member's provider adapter to enable writes.",
+        }
+    return sorted(
+        accounts.values(),
+        key=lambda account: (account["provider"], account["label"].casefold()),
+    )
 
 
 def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
@@ -419,6 +510,26 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             now=now,
         )
         base["connector_catalog"] = _connector_catalog()
+    elif surface == "reminders":
+        lists_conn = runtime.projections.connection("lists")
+        reminder_items = items_for_member(lists_conn, session, member_id=member)
+        reminder_lists = lists_for_member(lists_conn, session, member_id=member)
+        accounts = reminder_accounts(
+            runtime,
+            member,
+            projected_items=reminder_items,
+            projected_lists=reminder_lists,
+        )
+        base["cockpit"] = compose_reminders_cockpit(
+            member_id=member,
+            timezone_name=runtime.settings.instance.timezone,
+            items=reminder_items,
+            lists=reminder_lists,
+            accounts=accounts,
+            cues=reminder_cues_for_member(lists_conn, session, member_id=member),
+            signals=context_signals_for_member(lists_conn, session, member_id=member),
+            now=now,
+        )
     elif surface == "people":
         base["people"] = all_parties(runtime.projections.connection("parties"), session)
         base["recent_interactions"] = recent(

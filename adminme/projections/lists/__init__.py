@@ -1,16 +1,4 @@
-"""
-Lists projection — 13th projection per [D18].
-
-Per ADMINISTRATEME_BUILD.md §L3 and SYSTEM_INVARIANTS.md §2 (invariants
-1-4) + §6 (scope discipline on reads).
-
-Subscribes ONLY to ``list_item.added@v1``. The other three list_item
-event types (updated/completed/deleted) have no first-party producer on
-main yet — declaring subscriptions without producers + handlers would
-fail rebuild correctness per UT-27-style asymmetric-subscription
-discipline. Follow-up sub-prompts (11b-i-β / 11b-iv-β) ship the producers
-and a paired 11f-β extends subscriptions.
-"""
+"""Lists projection — provider list/item mirrors plus reminder cue facts."""
 
 from __future__ import annotations
 
@@ -23,8 +11,7 @@ from adminme.projections.lists import handlers
 
 class ListsProjection(Projection):
     name = "lists"
-    version = 2
-    # Asymmetric on purpose — other list_item.* types ship in 11f-β [D18, UT-27].
+    version = 3
     subscribes_to = [
         "list.created",
         "list.updated",
@@ -34,6 +21,9 @@ class ListsProjection(Projection):
         "list_item.completed",
         "list_item.uncompleted",
         "list_item.deleted",
+        "context.signal.observed",
+        "reminder.cue.configured",
+        "reminder.cue.cleared",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -56,6 +46,10 @@ class ListsProjection(Projection):
             "tags_json": "TEXT",
             "parent_external_id": "TEXT",
             "sort_order": "INTEGER",
+            "provider_position": "TEXT",
+            "source_links_json": "TEXT NOT NULL DEFAULT '[]'",
+            "provider_data_json": "TEXT NOT NULL DEFAULT '{}'",
+            "read_only_reason": "TEXT",
             "linked_item_kind": "TEXT",
             "linked_item_id": "TEXT",
             "completion_policy": "TEXT NOT NULL DEFAULT 'manual'",

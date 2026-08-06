@@ -248,6 +248,31 @@ class ListItemDeletedV2(BaseModel):
     sync_cycle_id: str = Field(min_length=1)
 
 
+class ReminderSourceLinkV3(BaseModel):
+    """Provider-owned provenance link attached to a reminder/list item."""
+
+    model_config = {"extra": "forbid"}
+    kind: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=4000)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class ListItemV3(ListItemV2):
+    """Rich snapshot with lossless Google Tasks ordering and provenance.
+
+    ``sort_order`` remains available for providers with integer positions.
+    Google Tasks positions are opaque lexicographic strings, so coercing them
+    to integers would lose ordering evidence. Provider-specific read-only
+    assignment metadata stays in ``provider_data`` and never expands the
+    provider write allowlist.
+    """
+
+    provider_position: str | None = Field(default=None, max_length=1000)
+    source_links: list[ReminderSourceLinkV3] = Field(default_factory=list)
+    provider_data: dict[str, Any] = Field(default_factory=dict)
+    read_only_reason: str | None = Field(default=None, max_length=500)
+
+
 registry.register("list_item.added", 1, ListItemAddedV1)
 registry.register("list_item.updated", 1, ListItemUpdatedV1)
 registry.register("list_item.completed", 1, ListItemCompletedV1)
@@ -260,3 +285,7 @@ registry.register("list_item.updated", 2, ListItemV2)
 registry.register("list_item.completed", 2, ListItemV2)
 registry.register("list_item.uncompleted", 1, ListItemV2)
 registry.register("list_item.deleted", 2, ListItemDeletedV2)
+registry.register("list_item.added", 3, ListItemV3)
+registry.register("list_item.updated", 3, ListItemV3)
+registry.register("list_item.completed", 3, ListItemV3)
+registry.register("list_item.uncompleted", 3, ListItemV3)

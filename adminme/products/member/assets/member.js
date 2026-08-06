@@ -11,6 +11,10 @@ const state = {
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
+  remindersView: "now",
+  remindersAccount: "all",
+  remindersList: "all",
+  reminderItem: null,
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -341,21 +345,20 @@ async function executeTodayAction(item, action, container) {
       setBanner(action === "complete_step" ? "Step recorded. Here is the next one." : "Step skipped without changing any linked task.");
     } else if (item.kind === "list_item" && action === "complete_external") {
       setBanner("Requesting completion through the reminder provider…");
-      await api("/api/member/v1/external-sync/commands", {
+      await api("/api/member/v1/reminders/commands", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
         body: JSON.stringify({
           provider: item.provider,
           provider_account_id: item.provider_account_id,
-          operation: "complete_reminder",
-          target_external_id: item.item_external_id,
+          operation: item.provider === "google_tasks" ? "complete_task" : "complete_reminder",
+          list_external_id: item.list_external_id,
+          item_external_id: item.item_external_id,
+          expected_last_event_id: item.last_event_id,
           expected_provider_revision: item.provider_revision,
-          payload: {
-            member_id: state.bootstrap.member.id,
-            item_external_id: item.item_external_id,
-            list_external_id: item.list_external_id,
-          },
+          payload: {},
           request_id: crypto.randomUUID(),
+          openclaw_approved: true,
         }),
       });
       setBanner("Completion requested. It will leave Today after the provider confirms it.");
@@ -770,6 +773,188 @@ function renderComms(data) {
   }
 }
 
+function reminderOperation(item, stem) {
+  const suffix = item.provider === "google_tasks" ? "task" : "reminder";
+  return `${stem}_${suffix}`;
+}
+
+async function runReminderCommand(item, operation, payload = {}) {
+  setBanner("Sending one explicit change through both approval gates…");
+  try {
+    const result = await api("/api/member/v1/reminders/commands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        provider: item.provider,
+        provider_account_id: item.provider_account_id,
+        operation,
+        list_external_id: item.list_external_id || null,
+        item_external_id: item.item_external_id || null,
+        expected_last_event_id: item.last_event_id || null,
+        expected_provider_revision: item.provider_revision || null,
+        payload,
+        request_id: crypto.randomUUID(),
+        openclaw_approved: true,
+      }),
+    });
+    setBanner(result.observation_mode ? "Approved and audited. Observation mode suppressed the provider change." : "Approved. The provider result will update this view when observed.");
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} Nothing was changed or implied.`);
+  }
+}
+
+async function configureReminderCue(item) {
+  const signalKey = window.prompt("Typed signal key (for example presence:home or weather:rain)", "");
+  if (!signalKey?.trim()) return;
+  const source = window.prompt("Signal source (home_assistant, member_bridge, weather, device, network, calendar, member_profile, or manual)", "home_assistant");
+  if (!source) return;
+  const kind = window.prompt("Signal kind (location, presence, weather, device_state, network_presence, calendar_transition, energy, or capacity)", "presence");
+  if (!kind) return;
+  const operator = window.prompt("Match rule (equals, not_equals, above, below, entered, left, or present)", "equals");
+  if (!operator) return;
+  const expected = ["equals", "not_equals"].includes(operator) ? window.prompt("Expected state", "present") : ["above", "below"].includes(operator) ? window.prompt("Threshold number", "0") : null;
+  if (["equals", "not_equals", "above", "below"].includes(operator) && expected == null) return;
+  setBanner("Saving a deterministic cue. This will not change the source reminder…");
+  try {
+    await api("/api/member/v1/reminders/cues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        cue_id: crypto.randomUUID(), list_external_id: item.list_external_id,
+        item_external_id: item.item_external_id, expected_last_event_id: item.last_event_id,
+        signal_key: signalKey.trim(), source, kind, operator,
+        expected_state: ["equals", "not_equals"].includes(operator) ? expected : null,
+        expected_number: ["above", "below"].includes(operator) ? Number(expected) : null,
+        enabled: true,
+      }),
+    });
+    setBanner("Cue saved. It activates only when a fresh authorized signal matches.");
+    await reloadActiveSurface();
+  } catch (error) { setBanner(`${error.message} No cue was created.`); }
+}
+
+function reminderMatches(item) {
+  return item.bucket === state.remindersView
+    && (state.remindersAccount === "all" || item.provider_account_id === state.remindersAccount)
+    && (state.remindersList === "all" || item.list_external_id === state.remindersList);
+}
+
+function remindersHero(cockpit) {
+  const hero = document.createElement("section"); hero.className = "hero-card reminders-hero";
+  const nowCount = cockpit.counts.now || 0;
+  hero.append(
+    text("p", "REMINDERS COCKPIT", "eyebrow"),
+    text("h2", nowCount ? `${nowCount} reminder${nowCount === 1 ? " is" : "s are"} active now.` : "Nothing is asking to be remembered right now.", "action-title"),
+    text("p", "Time, place, and context cues are deterministic lenses over provider-owned reminders. A reminder never silently becomes a task, promise, or calendar event.", "brief-summary"),
+  );
+  const stats = document.createElement("dl"); stats.className = "brief-stats reminder-stats";
+  for (const [label, value] of [["Now", cockpit.counts.now], ["Scheduled", cockpit.counts.scheduled], ["Places", cockpit.counts.places], ["Anytime", cockpit.counts.anytime]]) {
+    const stat = text("div", "", "stat"); stat.append(text("dt", label), text("dd", value || 0)); stats.append(stat);
+  }
+  hero.append(stats); return hero;
+}
+
+function remindersControls(cockpit, data) {
+  const controls = document.createElement("section"); controls.className = "card reminder-controls";
+  const views = document.createElement("div"); views.className = "comms-filter-row"; views.setAttribute("role", "group"); views.setAttribute("aria-label", "Reminder activation lens");
+  for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["completed", "Completed"]]) {
+    const button = text("button", `${label} ${cockpit.counts[value] || 0}`, "comms-filter"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.remindersView === value));
+    button.addEventListener("click", () => { state.remindersView = value; renderReminders(data); }); views.append(button);
+  }
+  const accounts = document.createElement("div"); accounts.className = "comms-filter-row account-filters";
+  for (const account of [{ provider_account_id: "all", label: "All accounts" }, ...(cockpit.accounts || [])]) {
+    const button = text("button", account.label, "account-filter"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.remindersAccount === account.provider_account_id));
+    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; renderReminders(data); }); accounts.append(button);
+  }
+  const lists = document.createElement("div"); lists.className = "comms-filter-row account-filters";
+  for (const list of [{ list_external_id: "all", list_name: "All lists" }, ...(cockpit.lists || []).filter((row) => state.remindersAccount === "all" || row.provider_account_id === state.remindersAccount)]) {
+    const button = text("button", list.list_name, "account-filter"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.remindersList === list.list_external_id));
+    button.addEventListener("click", () => { state.remindersList = list.list_external_id; renderReminders(data); }); lists.append(button);
+  }
+  controls.append(views, accounts, lists); return controls;
+}
+
+function reminderItemButton(item) {
+  const button = document.createElement("button"); button.type = "button"; button.className = "reminder-item";
+  if (state.reminderItem === item.id) button.setAttribute("aria-current", "true");
+  const heading = document.createElement("span"); heading.className = "reminder-item-heading";
+  heading.append(text("strong", item.title), text("span", `${item.account_label} · ${item.list_name}`, "meta"));
+  button.append(heading, text("span", item.why?.[0] || "Available", "focus-explanation"));
+  if (item.due_at) button.append(text("span", new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(item.due_at)), "meta"));
+  button.addEventListener("click", () => { state.reminderItem = item.id; renderReminders(state.surface); });
+  return button;
+}
+
+function reminderDetail(item, cockpit) {
+  const pane = document.createElement("section"); pane.className = "card reminder-detail";
+  if (!item) { pane.append(text("h2", "Choose one reminder"), text("p", "The cockpit carries the remembering. You only need to decide about one item at a time.", "empty")); return pane; }
+  pane.append(text("p", `${item.account_label} · ${item.list_name}`, "eyebrow"), text("h2", item.title));
+  if (item.notes) pane.append(text("p", item.notes));
+  const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode((item.why || []).join(" · "))); pane.append(why);
+  const facts = document.createElement("dl"); facts.className = "reminder-facts";
+  const fields = [["Provider", item.account_label], ["Scheduled", item.due_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(new Date(item.due_at)) : "No date"], ["Priority", item.priority === 1 ? "High" : item.priority === 5 ? "Medium" : item.priority === 9 ? "Low" : "None"], ["Repeats", item.recurrence_rules?.length ? item.recurrence_rules.join(", ") : "No"], ["Context cues", item.cues?.length || 0]];
+  for (const [label, value] of fields) facts.append(text("dt", label), text("dd", value)); pane.append(facts);
+  if (item.read_only_reason) pane.append(text("p", item.read_only_reason, "state-note"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  if (item.can_complete || item.completed) {
+    const stem = item.completed ? "uncomplete" : "complete"; const button = text("button", item.completed ? "Restore" : "Done", "button button-primary"); button.type = "button";
+    button.addEventListener("click", () => runReminderCommand(item, reminderOperation(item, stem))); actions.append(button);
+  }
+  if (item.can_edit) {
+    const edit = text("button", "Edit title", "button button-quiet"); edit.type = "button";
+    edit.addEventListener("click", () => { const title = window.prompt("Reminder title", item.title); if (title?.trim()) runReminderCommand(item, reminderOperation(item, "update"), { title: title.trim() }); }); actions.append(edit);
+    const move = text("button", "Move", "button button-quiet"); move.type = "button";
+    move.addEventListener("click", () => { const candidates = (cockpit.lists || []).filter((list) => list.provider === item.provider && list.provider_account_id === item.provider_account_id && list.list_external_id !== item.list_external_id); const destination = window.prompt(`Destination list ID\n${candidates.map((list) => `${list.list_name}: ${list.list_external_id}`).join("\n")}`, candidates[0]?.list_external_id || ""); if (destination) runReminderCommand(item, reminderOperation(item, "move"), { destination_list_external_id: destination }); }); actions.append(move);
+    const remove = text("button", "Delete", "button button-quiet"); remove.type = "button";
+    remove.addEventListener("click", () => { if (window.confirm("Delete this reminder from its source provider?")) runReminderCommand(item, reminderOperation(item, "delete")); }); actions.append(remove);
+  }
+  const cue = text("button", "Add context cue", "button button-quiet"); cue.type = "button";
+  cue.addEventListener("click", () => configureReminderCue(item)); actions.append(cue);
+  pane.append(actions);
+  if (item.source_links?.length) { const links = document.createElement("div"); links.className = "source-links"; for (const link of item.source_links) { const anchor = text("a", link.description || "Open source", "link-button"); anchor.href = link.url; anchor.target = "_blank"; anchor.rel = "noreferrer"; links.append(anchor); } pane.append(links); }
+  return pane;
+}
+
+function reminderQuickAdd(cockpit) {
+  const cardNode = document.createElement("section"); cardNode.className = "card reminder-quick-add"; cardNode.append(text("h2", "Quick add"), text("p", "Capture it now; enrich it only if useful.", "state-note"));
+  const writable = (cockpit.accounts || []).filter((account) => account.state !== "read_only" && account.operations?.some((operation) => ["create_task", "create_reminder"].includes(operation)));
+  if (!writable.length) { cardNode.append(text("p", "Connect a writable Apple Reminders or Google Tasks account in Settings.", "empty")); return cardNode; }
+  const form = document.createElement("form"); form.className = "reminder-add-form";
+  const title = document.createElement("input"); title.required = true; title.maxLength = 1000; title.placeholder = "What should not be forgotten?"; title.setAttribute("aria-label", "Reminder title");
+  const accountSelect = document.createElement("select"); accountSelect.setAttribute("aria-label", "Reminder account");
+  for (const account of writable) { const option = document.createElement("option"); option.value = `${account.provider}|${account.provider_account_id}`; option.textContent = account.label; accountSelect.append(option); }
+  const listSelect = document.createElement("select"); listSelect.setAttribute("aria-label", "Reminder list");
+  const refreshLists = () => { listSelect.replaceChildren(); const [provider, accountId] = accountSelect.value.split("|"); for (const list of (cockpit.lists || []).filter((row) => row.provider === provider && row.provider_account_id === accountId)) { const option = document.createElement("option"); option.value = list.list_external_id; option.textContent = list.list_name; listSelect.append(option); } };
+  accountSelect.addEventListener("change", refreshLists); refreshLists();
+  const due = document.createElement("input"); due.type = "date"; due.setAttribute("aria-label", "Scheduled date (optional)");
+  const submit = text("button", "Add reminder", "button button-primary"); submit.type = "submit"; form.append(title, accountSelect, listSelect, due, submit);
+  form.addEventListener("submit", (event) => { event.preventDefault(); const [provider, providerAccountId] = accountSelect.value.split("|"); runReminderCommand({ provider, provider_account_id: providerAccountId, list_external_id: listSelect.value }, provider === "google_tasks" ? "create_task" : "create_reminder", { title: title.value.trim(), ...(due.value ? { due: due.value } : {}) }); });
+  cardNode.append(form); return cardNode;
+}
+
+function reminderProviderTruth(cockpit) {
+  const section = document.createElement("section"); section.className = "card provider-truth"; section.append(text("h2", "What each provider can really do"));
+  for (const account of cockpit.accounts || []) { const details = document.createElement("details"); const summary = text("summary", `${account.label} · ${titleCase(account.state)}`); details.append(summary, text("p", `Native: ${(account.native || []).map(titleCase).join(", ")}.`)); for (const limit of account.limitations || []) details.append(text("p", limit, "state-note")); section.append(details); }
+  if (!(cockpit.accounts || []).length) section.append(text("p", "No reminder account is connected yet.", "empty")); return section;
+}
+
+function renderReminders(data) {
+  const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
+  $("#mode-label").textContent = "Private · provider-backed · deterministic";
+  root.append(remindersHero(cockpit), remindersControls(cockpit, data));
+  const visible = cockpit.items.filter(reminderMatches);
+  if (!state.reminderItem || !visible.some((item) => item.id === state.reminderItem)) state.reminderItem = visible[0]?.id || null;
+  const selected = visible.find((item) => item.id === state.reminderItem);
+  const workspace = document.createElement("div"); workspace.className = "reminder-workspace";
+  const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} reminders`));
+  if (!visible.length) list.append(text("p", "Nothing in this lens. Your provider truth is unchanged.", "empty")); else { const items = document.createElement("ol"); items.className = "reminder-items"; for (const item of visible) { const li = document.createElement("li"); li.append(reminderItemButton(item)); items.append(li); } list.append(items); }
+  workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
+}
+
 function renderSurface(data) {
   state.surface = data;
   const root = $("#surface");
@@ -785,6 +970,8 @@ function renderSurface(data) {
     root.append(triageSurface(data.items));
   } else if (data.surface === "comms") {
     renderComms(data);
+  } else if (data.surface === "reminders") {
+    renderReminders(data);
   } else if (data.surface === "people") {
     root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
   } else if (data.surface === "knowledge") {

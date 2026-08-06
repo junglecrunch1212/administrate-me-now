@@ -483,6 +483,62 @@ round trip, stale-write refusal, provider capability denial, observation-mode
 suppression, replay, pinned OpenClaw binding, responsive keyboard behavior, and
 zero browser/runtime errors.
 
+### D29 — Reminders is a deterministic provider mirror and contextual remembering cockpit
+
+**Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** the nine-surface
+count introduced by D28. **Preserves:** D6, D17, D18, D26, and every external
+write/privacy/observation invariant.
+
+Reminders is the tenth stable adult member surface, immediately after Comms.
+It is a working-memory prosthetic over member-bound Apple Reminders and Google
+Tasks—not a second Task model, a calendar, an LLM-ranked queue, or an
+AdministrateMe-owned source of provider truth. The combined view is an
+authorized query-time union; every list and item retains provider, member,
+account, list, native identifier, revision, scope, sensitivity, and immutable
+event provenance.
+
+`deterministic-reminders-cockpit-v1` derives Now, Scheduled, Places, Anytime,
+and Completed with fixed code from completion, explicit provider priority,
+dates, alarms, recurrence, and member-authored cue matches. Sort order and
+plain-language reasons are stable and inspectable. An LLM may extract a typed
+proposal through the pinned OpenClaw `llm-task` seam; it cannot decide that a
+cue matched, infer a member's location/presence/energy, rank or hide an item,
+write a provider, or materialize a Task, Commitment, calendar event,
+recurrence, list, or scheduler job. Extracted provider-bound work still passes
+through D26 Triage.
+
+Context awareness uses typed `context.signal.observed` facts carrying member
+scope, source, observation time, expiry, state/value/unit, accuracy where
+applicable, and provenance. A `reminder.cue.configured` rule compares one fact
+with one fixed operator. Location, Home Assistant presence/device/network,
+calendar transitions, weather thresholds, and explicit member capacity may
+activate a lens or notification eligibility only while fresh; they do not
+change provider truth. Provider-native EventKit geofences remain provider
+alarms rather than duplicated AdministrateMe location rules.
+
+Capability parity may never be invented. Public Apple EventKit supports
+calendar/list identity, title, notes, URL, priority, completion, date
+components, alarms including structured-location enter/leave proximity, and
+recurrence. It does not expose Reminders.app-only tags, sections, subtasks,
+templates, assignment, or smart-list semantics. Google Tasks supports task
+lists, title, notes, date-only `due`, completion, nesting, opaque ordering,
+move, links, and assignment provenance; the API discards due time and exposes
+no priority, alarm, recurrence, or geofence. Assigned/recurrent tasks may have
+provider-enforced write restrictions. Sources:
+<https://developer.apple.com/documentation/eventkit>,
+<https://developer.apple.com/documentation/eventkit/ekreminder>,
+<https://developer.apple.com/documentation/eventkit/ekstructuredlocation>,
+<https://developers.google.com/workspace/tasks/reference/rest/v1/tasks>, and
+<https://developers.google.com/workspace/tasks/reference/rest/v1/tasklists>.
+
+Every mutation exposes only an exact configured account capability and passes
+allowlist → governance → rate limit, explicit member intent, independent
+OpenClaw approval, final content/privacy guard, observation, idempotency,
+optimistic concurrency, and requested/completed/failed audit reconciliation.
+A UI acceptance is not provider success. Live EventKit/Google propagation is
+separate release evidence; absent credentials or grants render read-only or
+not configured without weakening the Reminders product contract.
+
 ---
 
 ## How to use this file

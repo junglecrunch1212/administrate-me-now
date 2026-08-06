@@ -33,6 +33,7 @@ depends_on:
     - adapter.authenticated
     - adapter.cursor_advanced
     - ha.state_changed
+    - context.signal.observed
     - action.executed
     - action.failed
 
@@ -41,6 +42,7 @@ events_emitted:
   - adapter.authenticated
   - adapter.cursor_advanced
   - ha.state_changed
+  - context.signal.observed
   - action.executed
   - action.failed
 
@@ -63,7 +65,7 @@ capabilities:
     observation_mode_required: true
   - kind: Cat-C
     runtime: central
-    event_families: [ha.state_changed]
+    event_families: [ha.state_changed, context.signal.observed]
     observation_mode_required: false
 sensitivity_default: normal
 observation_mode_required: true
