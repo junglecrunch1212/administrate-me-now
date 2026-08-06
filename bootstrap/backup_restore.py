@@ -185,6 +185,7 @@ class BackupManager:
 
     def _build_archive(self) -> tuple[bytes, dict[str, Any]]:
         files: list[dict[str, Any]] = []
+        payloads: dict[str, bytes] = {}
         for path in sorted(self.paths.instance_dir.rglob("*")):
             if path.is_symlink():
                 # OpenClaw materializes plugin skill discovery as generated
@@ -200,8 +201,7 @@ class BackupManager:
                 continue
             relative = Path("state") / path.relative_to(self.paths.instance_dir)
             try:
-                size = path.stat().st_size
-                digest = sha256_file(path)
+                payload = path.read_bytes()
             except FileNotFoundError:
                 # SQLite removes quiesced shared-memory and WAL sidecars after
                 # the directory walk can already have observed them. They are
@@ -209,7 +209,15 @@ class BackupManager:
                 if path.name.endswith(("-shm", "-wal")):
                     continue
                 raise
-            files.append({"path": relative.as_posix(), "size": size, "sha256": digest})
+            relative_name = relative.as_posix()
+            payloads[relative_name] = payload
+            files.append(
+                {
+                    "path": relative_name,
+                    "size": len(payload),
+                    "sha256": __import__("hashlib").sha256(payload).hexdigest(),
+                }
+            )
         manifest: dict[str, Any] = {
             "format": "administrateme-backup-manifest-v1",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -230,8 +238,10 @@ class BackupManager:
         buffer = io.BytesIO()
         with tarfile.open(fileobj=buffer, mode="w") as archive:
             for item in files:
-                source = self.paths.root / item["path"]
-                archive.add(source, arcname=item["path"], recursive=False)
+                info = tarfile.TarInfo(item["path"])
+                info.size = item["size"]
+                info.mode = 0o600
+                archive.addfile(info, io.BytesIO(payloads[item["path"]]))
             encoded = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
             info = tarfile.TarInfo("manifest.json")
             info.size = len(encoded)

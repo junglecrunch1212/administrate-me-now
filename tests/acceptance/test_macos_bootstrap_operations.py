@@ -71,18 +71,14 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     (plugin_skills / "generated-skill").symlink_to(REPO_ROOT / "packs" / "skills")
     transient = paths.instance_dir / "events" / "events.db-shm"
     transient.write_bytes(b"transient sqlite state")
-    original_stat = Path.stat
-    transient_stats = 0
+    original_read_bytes = Path.read_bytes
 
-    def remove_transient_on_stat(path: Path, *args, **kwargs):
-        nonlocal transient_stats
+    def remove_transient_on_read(path: Path):
         if path == transient:
-            transient_stats += 1
-        if path == transient and transient_stats == 2:
             path.unlink(missing_ok=True)
-        return original_stat(path, *args, **kwargs)
+        return original_read_bytes(path)
 
-    monkeypatch.setattr(Path, "stat", remove_transient_on_stat)
+    monkeypatch.setattr(Path, "read_bytes", remove_transient_on_read)
     manager = BackupManager(paths, root=REPO_ROOT, test_mode=True)
     backup = manager.create()
     assert backup["encrypted"] is True
