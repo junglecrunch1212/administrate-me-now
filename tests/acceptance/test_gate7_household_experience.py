@@ -374,6 +374,10 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "triage-workspace" in css_asset.text
         assert "observation-banner" in member_page.text
         assert "calendar-time-grid" in css_asset.text
+        assert ".surface > * { min-width: 0; }" in css_asset.text
+        assert ".calendar-board-layout { grid-template-columns: minmax(0, 1fr); }" in (
+            css_asset.text
+        )
         assets = (
             js_asset.text
             + css_asset.text
