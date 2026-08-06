@@ -40,7 +40,7 @@ import pytest
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.registry import registry
-from adminme.events.schemas.ingest import CalendarEventAddedV1
+from adminme.events.schemas.ingest import CalendarEventAddedV1, CalendarEventV2
 from adminme.lib.adapters import (
     ExternalStateMirrorAdapter,
     WriteCapabilityError,
@@ -789,6 +789,43 @@ async def test_discovery_syncs_each_calendar_and_observes_capabilities_once() ->
         "calendar-a",
         "calendar-b",
     }
+
+
+async def test_google_popup_reminder_maps_to_canonical_alert_alarm() -> None:
+    event = _make_event(event_id="event-with-popup", summary="Reminder shape")
+    event["reminders"] = {
+        "useDefault": False,
+        "overrides": [{"method": "popup", "minutes": 15}],
+    }
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+
+    await adapter._emit_calendar_snapshot(
+        ctx=ctx,
+        event_type="calendar.event_added",
+        calendar_id="calendar-a",
+        calendar_name="Personal",
+        event=event,
+    )
+
+    payload = event_log.calls[0]["payload"]
+    assert payload["alarms"] == [
+        {
+            "method": "alert",
+            "trigger_at": None,
+            "relative_offset_seconds": -900,
+            "provider_alarm_id": None,
+        }
+    ]
+    CalendarEventV2.model_validate(payload)
 
 
 # ===========================================================================
