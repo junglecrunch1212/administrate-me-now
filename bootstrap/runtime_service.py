@@ -85,6 +85,10 @@ def main() -> None:
         create_application(settings),
         host="127.0.0.1",
         port=3330,
+        # Tailscale Serve connects over loopback and supplies the authenticated
+        # identity header. Do not rewrite request.client from forwarded headers;
+        # the auth boundary must continue proving the immediate peer is local.
+        proxy_headers=False,
         access_log=False,
         log_level="info",
     )

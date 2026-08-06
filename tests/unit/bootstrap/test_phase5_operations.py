@@ -558,7 +558,12 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
         staticmethod(capture_settings),
     )
     monkeypatch.setattr(runtime_service, "create_application", lambda value: value)
-    monkeypatch.setattr(runtime_service.uvicorn, "run", lambda *_args, **_kwargs: None)
+    uvicorn_capture: dict[str, object] = {}
+    monkeypatch.setattr(
+        runtime_service.uvicorn,
+        "run",
+        lambda *_args, **kwargs: uvicorn_capture.update(kwargs),
+    )
     runtime_service.main()
 
     assert runtime_capture["openclaw_gateway_token"] == shared
@@ -568,6 +573,8 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
         {"member_fixture_principal_a", "member_fixture_principal_b"}
     )
     assert runtime_capture["child_chat_enabled_members"] == frozenset()
+    assert uvicorn_capture["host"] == "127.0.0.1"
+    assert uvicorn_capture["proxy_headers"] is False
     assert runtime_capture["adapter_config"] == json.loads(
         (test_paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
     )
