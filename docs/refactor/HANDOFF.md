@@ -17,6 +17,34 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 multi-calendar interaction reconciliation
+
+The Calendar frontend **MODERNIZES** its agenda-list-only presentation while
+preserving `deterministic-household-calendar-v1` as the sole reasoning
+contract. The production surface API now accepts an explicit local date and a
+bounded view enum, then composes a one-day Day, Monday-based seven-day Week,
+six-week Month, or fourteen-day Agenda/Find-time range through the same scoped
+Calendars projection and approved policy. Duplicate groups expose all source
+routes so a member can visually filter copies without losing provenance.
+The comparative product evidence and deterministic translation are recorded in
+`docs/refactor/CALENDAR-UX-RESEARCH.md`.
+
+The browser now leads with anchored date navigation and a spatial Day/Week
+grid, separate all-day lane, Month and Agenda views, source visibility controls,
+capacity-versus-calendar color lenses, household guardrail backgrounds,
+current-time position, duration-aware open-window review, and an event detail
+pane for effect, source, buffer, duplicate, and evidence facts. Calendar
+visibility and color are presentation-only and never remove facts from capacity,
+conflict, Today, or Triage computation. Recurring guardrails and buffers are
+summarized before the reviewed rule editor, which is progressively disclosed
+to reduce accidental policy changes. `tests/unit/test_calendar_reasoning.py`
+and the Gate 7 process slice pin source-route retention and exact anchored
+month/day boundaries. The credential-free rendered Gate 7 run passes 107/107
+checks with ten Calendar-specific interactions, zero console/page/request
+errors, and deterministic Week/Month captures under
+`docs/refactor/evidence/gate-7/visual/`. Live provider-data simulation follows
+reviewed deployment.
+
 ## 2026-08-06 live Calendar activation evidence
 
 The central Mac is running the reviewed Calendar reconciliation in observation

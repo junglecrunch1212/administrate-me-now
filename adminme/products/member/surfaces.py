@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -427,7 +427,14 @@ def _workbook_health(runtime: Any) -> list[dict[str, Any]]:
     return values
 
 
-def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any]:
+def build_surface(
+    runtime: Any,
+    session: Session,
+    surface: str,
+    *,
+    calendar_anchor: date | None = None,
+    calendar_view: str = "week",
+) -> dict[str, Any]:
     authorize_surface(session, surface)
     if runtime.projections is None:
         raise HTTPException(503, "domain views are unavailable")
@@ -601,10 +608,20 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
     elif surface == "calendar":
         calendar_conn = runtime.projections.connection("calendars")
         zone = ZoneInfo(runtime.settings.instance.timezone)
-        range_start = now.astimezone(zone).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        range_end = range_start + timedelta(days=7)
+        local_date = calendar_anchor or now.astimezone(zone).date()
+        if calendar_view == "week":
+            local_date -= timedelta(days=local_date.weekday())
+            range_days = 7
+        elif calendar_view == "month":
+            local_date = local_date.replace(day=1)
+            local_date -= timedelta(days=local_date.weekday())
+            range_days = 42
+        elif calendar_view in {"agenda", "find"}:
+            range_days = 14
+        else:
+            range_days = 1 if calendar_view == "day" else 7
+        range_start = datetime.combine(local_date, time.min, tzinfo=zone)
+        range_end = range_start + timedelta(days=range_days)
         rows = events_in_range(
             calendar_conn,
             session,
@@ -613,6 +630,11 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             range_end_iso=range_end.astimezone(timezone.utc).isoformat(),
         )
         base["events"] = rows
+        base["calendar_view"] = calendar_view
+        base["calendar_anchor"] = (
+            calendar_anchor or now.astimezone(zone).date()
+        ).isoformat()
+        base["calendar_today"] = now.astimezone(zone).date().isoformat()
         base["cockpit"] = compose_calendar_cockpit(
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,

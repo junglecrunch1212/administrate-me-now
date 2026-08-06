@@ -16,6 +16,12 @@ const state = {
   remindersList: "all",
   reminderItem: null,
   calendarView: "week",
+  calendarAnchor: null,
+  calendarToday: null,
+  calendarLens: "capacity",
+  calendarHiddenSources: [],
+  calendarSelectedEvent: null,
+  calendarDuration: 60,
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -99,7 +105,13 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
 async function reloadActiveSurface() {
   const active = currentSurface();
   if (active.startsWith("quest:")) return;
-  renderSurface(await api(`/api/member/v1/surfaces/${encodeURIComponent(active)}`));
+  let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
+  if (active === "calendar") {
+    const params = new URLSearchParams({ view: state.calendarView });
+    if (state.calendarAnchor) params.set("date", state.calendarAnchor);
+    path += `?${params}`;
+  }
+  renderSurface(await api(path));
 }
 
 async function decideTriage(item, action, buttons) {
@@ -978,68 +990,291 @@ function reminderProviderTruth(cockpit) {
 
 function calendarTime(value, options = {}) {
   if (!value) return "";
-  return new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit", ...options }).format(new Date(value));
+  const timeZone = options.timeZone || state.surface?.cockpit?.timezone;
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit", ...(timeZone ? { timeZone } : {}), ...options }).format(new Date(value));
+}
+
+function calendarLocalDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function calendarDate(value) {
+  if (value instanceof Date) return value;
+  const [year, month, day] = String(value).slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day, 12, 0, 0);
+}
+
+function calendarZonedParts(value, timeZone = state.surface?.cockpit?.timezone) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(value instanceof Date ? value : new Date(value));
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+}
+
+function calendarDateKey(value, timeZone = state.surface?.cockpit?.timezone) {
+  const parts = calendarZonedParts(value, timeZone);
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function calendarHour(value, timeZone = state.surface?.cockpit?.timezone) {
+  const parts = calendarZonedParts(value, timeZone);
+  return parts.hour + (parts.minute / 60);
+}
+
+function calendarSourceKey(source) {
+  return `${source.provider || ""}|${source.provider_account_id || ""}|${source.calendar_external_id || ""}`;
+}
+
+function calendarEffectLabel(effect) {
+  return ({ hard_block: "Hard block", soft_hold: "Soft load", context: "Context", ignore: "Ignored" })[effect] || titleCase(effect);
+}
+
+function calendarSources(cockpit) {
+  const rules = new Map((cockpit.rules || []).map((rule) => [calendarSourceKey(rule), rule]));
+  return (cockpit.sources || []).map((source) => ({ ...source, rule: rules.get(calendarSourceKey(source)) || {} }));
+}
+
+function calendarSourceColor(source, cockpit) {
+  const palette = ["#2d736e", "#8d5b53", "#7b659f", "#a5762e", "#4f6f8b", "#8b5e79", "#55774d", "#846a54"];
+  const keys = calendarSources(cockpit).map(calendarSourceKey).sort();
+  return palette[Math.max(0, keys.indexOf(calendarSourceKey(source))) % palette.length];
+}
+
+function calendarEventIsVisible(event) {
+  const routes = event.source_routes?.length ? event.source_routes : [event];
+  return routes.some((route) => !state.calendarHiddenSources.includes(calendarSourceKey(route)));
+}
+
+function calendarEventOccursOn(event, dateKey, timeZone = state.surface?.cockpit?.timezone) {
+  const startKey = calendarDateKey(event.start_at, timeZone);
+  const endKey = calendarDateKey(event.end_at, timeZone);
+  const endsAtMidnight = calendarHour(event.end_at, timeZone) === 0;
+  return startKey <= dateKey && (event.all_day || endsAtMidnight ? dateKey < endKey : dateKey <= endKey);
+}
+
+function calendarRangeDates(cockpit) {
+  const dates = [];
+  const cursor = calendarDate(cockpit.range?.start_at);
+  const end = calendarDate(cockpit.range?.end_at);
+  while (cursor < end) {
+    dates.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+async function setCalendarView(view, anchor = state.calendarAnchor) {
+  state.calendarView = view;
+  state.calendarAnchor = anchor || state.calendarToday || calendarLocalDate();
+  state.calendarSelectedEvent = null;
+  await reloadActiveSurface();
+}
+
+function shiftCalendar(direction) {
+  const anchor = calendarDate(state.calendarAnchor || state.calendarToday || calendarLocalDate());
+  if (state.calendarView === "month") anchor.setMonth(anchor.getMonth() + direction, 1);
+  else {
+    const amount = state.calendarView === "day" ? 1 : state.calendarView === "week" ? 7 : 14;
+    anchor.setDate(anchor.getDate() + (amount * direction));
+  }
+  setCalendarView(state.calendarView, calendarLocalDate(anchor));
+}
+
+function calendarRangeTitle(cockpit) {
+  const anchor = calendarDate(state.calendarAnchor || state.calendarToday || calendarLocalDate());
+  if (state.calendarView === "rules") return "Calendar policy";
+  if (state.calendarView === "day") return new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" }).format(anchor);
+  if (state.calendarView === "month") return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(anchor);
+  const dates = calendarRangeDates(cockpit);
+  if (!dates.length) return "Calendar";
+  const first = dates[0]; const last = dates.at(-1);
+  const firstMonth = new Intl.DateTimeFormat(undefined, { month: "short" }).format(first);
+  const lastMonth = new Intl.DateTimeFormat(undefined, { month: "short" }).format(last);
+  const year = last.getFullYear();
+  return first.getMonth() === last.getMonth()
+    ? `${firstMonth} ${first.getDate()}–${last.getDate()}, ${year}`
+    : `${firstMonth} ${first.getDate()} – ${lastMonth} ${last.getDate()}, ${year}`;
 }
 
 function calendarHero(cockpit) {
-  const section = document.createElement("section"); section.className = "hero-card calendar-hero";
-  const counts = cockpit.counts || {};
-  section.append(text("p", "CALENDAR REASONING", "eyebrow"), text("h2", "Your time, without every calendar competing for attention.", "action-title"), text("p", "Provider facts stay intact. Approved rules decide what blocks, what warns, what is context, and where one confirmed Triage item may be written."));
-  const stats = document.createElement("div"); stats.className = "calendar-stats";
-  for (const [label, value] of [["Hard blocks", counts.hard_block], ["Soft load", counts.soft_hold], ["Context", counts.context], ["Duplicates grouped", counts.duplicates_collapsed], ["Conflicts", counts.conflicts]]) { const node = document.createElement("div"); node.append(text("strong", value || 0), text("span", label)); stats.append(node); }
-  section.append(stats); return section;
+  const section = document.createElement("section"); section.className = "card calendar-hero";
+  const counts = cockpit.counts || {}; const onboarding = cockpit.onboarding || {};
+  const copy = document.createElement("div"); copy.className = "calendar-hero-copy";
+  copy.append(text("p", "CALENDAR REASONING", "eyebrow"), text("h2", "One schedule, explicit rules.", "action-title"), text("p", `${onboarding.source_count || 0} connected calendars are composed without merging provider truth. View filters never change availability or write routes.`, "state-note"));
+  const stats = document.createElement("dl"); stats.className = "calendar-stats";
+  for (const [label, value, kind] of [["Hard", counts.hard_block, "hard"], ["Soft load", counts.soft_hold, "soft"], ["Context", counts.context, "context"], ["Conflicts", counts.conflicts, "conflict"]]) { const node = document.createElement("div"); node.className = `calendar-stat calendar-stat-${kind}`; node.append(text("dt", label), text("dd", value || 0)); stats.append(node); }
+  section.append(copy, stats); return section;
 }
 
-function calendarControls() {
-  const controls = document.createElement("section"); controls.className = "calendar-controls card";
-  const switcher = document.createElement("div"); switcher.className = "view-switcher";
-  for (const [id, label] of [["day", "Day"], ["week", "Week"], ["find", "Find time"], ["rules", "Rules"]]) { const button = text("button", label, "view-button"); button.type = "button"; button.setAttribute("aria-pressed", String(state.calendarView === id)); button.addEventListener("click", () => { state.calendarView = id; renderCalendar(state.surface); }); switcher.append(button); }
-  controls.append(switcher); return controls;
+function calendarControls(cockpit) {
+  const controls = document.createElement("section"); controls.className = "card calendar-commandbar";
+  const dateControls = document.createElement("div"); dateControls.className = "calendar-date-controls";
+  const today = text("button", "Today", "button button-quiet calendar-today"); today.type = "button"; today.addEventListener("click", () => setCalendarView(state.calendarView === "rules" ? "week" : state.calendarView, state.calendarToday || calendarLocalDate()));
+  const previous = text("button", "‹", "calendar-step"); previous.type = "button"; previous.setAttribute("aria-label", "Previous date range"); previous.addEventListener("click", () => shiftCalendar(-1));
+  const next = text("button", "›", "calendar-step"); next.type = "button"; next.setAttribute("aria-label", "Next date range"); next.addEventListener("click", () => shiftCalendar(1));
+  const title = text("h2", calendarRangeTitle(cockpit), "calendar-range-title");
+  dateControls.append(today, previous, next, title);
+  const switcher = document.createElement("div"); switcher.className = "view-switcher calendar-view-switcher";
+  for (const [id, label] of [["day", "Day"], ["week", "Week"], ["month", "Month"], ["agenda", "Agenda"], ["find", "Find time"]]) { const button = text("button", label, "view-button"); button.type = "button"; button.setAttribute("aria-pressed", String(state.calendarView === id)); button.addEventListener("click", () => setCalendarView(id)); switcher.append(button); }
+  const settings = text("button", "Calendar settings", "button calendar-settings-button"); settings.type = "button"; settings.setAttribute("aria-pressed", String(state.calendarView === "rules")); settings.addEventListener("click", () => setCalendarView(state.calendarView === "rules" ? "week" : "rules"));
+  const right = document.createElement("div"); right.className = "calendar-command-actions"; right.append(switcher, settings);
+  controls.append(dateControls, right); return controls;
 }
 
-function calendarEventList(cockpit) {
-  const section = document.createElement("section"); section.className = "card calendar-agenda"; section.append(text("h2", state.calendarView === "day" ? "Today" : "The next seven days"));
-  const today = new Date().toDateString();
-  const events = (cockpit.events || []).filter((event) => state.calendarView !== "day" || new Date(event.start_at).toDateString() === today);
-  if (!events.length) { section.append(text("p", "No effective events in this lens. Context calendars and provider records remain connected.", "empty")); return section; }
-  const list = document.createElement("ol"); list.className = "calendar-events";
-  for (const event of events) { const li = document.createElement("li"); li.className = `calendar-event calendar-effect-${event.effect}`; const heading = document.createElement("div"); heading.className = "calendar-event-heading"; heading.append(text("strong", event.title), text("span", titleCase(event.effect), `pill calendar-effect-pill calendar-effect-${event.effect}`)); li.append(heading, text("span", event.all_day ? `${new Intl.DateTimeFormat(undefined, { weekday: "long", month: "short", day: "numeric" }).format(new Date(event.start_at))} · all day` : `${calendarTime(event.start_at)}–${new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(event.end_at))}`, "meta")); if (event.source_calendars?.length) li.append(text("small", event.source_calendars.join(" · "))); if (event.why?.length) li.append(text("small", event.why.join(" "), "calendar-why")); if (event.duplicate_collapsed) li.append(text("small", `${event.copy_count} provider copies grouped as one effective event.`, "calendar-duplicate")); list.append(li); }
-  section.append(list); return section;
-}
-
-function calendarFindTime(cockpit) {
-  const fragment = document.createDocumentFragment();
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Open windows"), text("p", "Hard blocks, buffers, and protected household time are already removed. Soft load is shown separately so you choose deliberately.", "state-note"));
-  const windows = cockpit.open_windows || [];
-  if (!windows.length) section.append(text("p", "No unprotected 20-minute window appears in this range.", "empty")); else { const list = document.createElement("ul"); list.className = "time-windows"; for (const window of windows.slice(0, 24)) { const li = document.createElement("li"); li.append(text("strong", calendarTime(window.start_at, { month: "short", day: "numeric", weekday: undefined })), text("span", `until ${calendarTime(window.end_at, { weekday: undefined })}`, "meta")); list.append(li); } section.append(list); }
-  const conditional = document.createElement("section"); conditional.className = "card"; conditional.append(text("h2", "Only if accepted")); for (const window of cockpit.conditional_windows || []) conditional.append(text("p", `${window.label}: ${calendarTime(window.start_at)}–${calendarTime(window.end_at, { weekday: undefined })}`, "calendar-conditional")); if (!(cockpit.conditional_windows || []).length) conditional.append(text("p", "No conditional household window in this range.", "empty"));
-  fragment.append(section, conditional); return fragment;
-}
-
-function calendarConflictPanel(cockpit) {
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Conflicts and pressure"));
-  if (!(cockpit.conflicts || []).length) section.append(text("p", "No buffered hard conflict or soft-load pressure is visible.", "empty"));
-  for (const conflict of cockpit.conflicts || []) { const row = document.createElement("div"); row.className = `calendar-conflict calendar-${conflict.kind}`; row.append(text("strong", `${titleCase(conflict.kind)} · ${conflict.minutes} minutes`), text("span", conflict.why, "state-note")); section.append(row); }
+function calendarSourcePanel(cockpit, data) {
+  const section = document.createElement("section"); section.className = "card calendar-source-panel";
+  const heading = document.createElement("div"); heading.className = "calendar-source-heading";
+  const copy = document.createElement("div"); copy.append(text("h2", "Calendars in view"), text("p", "Show only what is useful right now. This is a private display filter; household rules remain active.", "state-note"));
+  const lens = document.createElement("div"); lens.className = "calendar-lens-switcher";
+  for (const [id, label] of [["capacity", "Capacity colors"], ["source", "Calendar colors"]]) { const button = text("button", label, "account-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.calendarLens === id)); button.addEventListener("click", () => { state.calendarLens = id; renderCalendar(data); }); lens.append(button); }
+  heading.append(copy, lens); section.append(heading);
+  const filters = document.createElement("div"); filters.className = "calendar-source-filters";
+  for (const source of calendarSources(cockpit)) { const key = calendarSourceKey(source); const label = document.createElement("label"); label.className = "calendar-source-filter"; const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = !state.calendarHiddenSources.includes(key); checkbox.addEventListener("change", () => { state.calendarHiddenSources = checkbox.checked ? state.calendarHiddenSources.filter((value) => value !== key) : [...new Set([...state.calendarHiddenSources, key])]; state.calendarSelectedEvent = null; renderCalendar(data); }); const dot = document.createElement("span"); dot.className = "calendar-source-dot"; dot.style.background = calendarSourceColor(source, cockpit); const body = document.createElement("span"); body.append(text("strong", source.calendar_name || "Calendar"), text("small", `${titleCase(source.rule.purpose || "unclassified")} · ${calendarEffectLabel(source.rule.effect || "context")}`)); label.append(checkbox, dot, body); filters.append(label); }
+  section.append(filters);
+  const actions = document.createElement("div"); actions.className = "calendar-filter-actions";
+  const all = text("button", "Show all", "link-button"); all.type = "button"; all.addEventListener("click", () => { state.calendarHiddenSources = []; renderCalendar(data); });
+  const capacity = text("button", "Capacity only", "link-button"); capacity.type = "button"; capacity.addEventListener("click", () => { state.calendarHiddenSources = calendarSources(cockpit).filter((source) => !["hard_block", "soft_hold"].includes(source.rule.effect)).map(calendarSourceKey); renderCalendar(data); });
+  actions.append(all, capacity, text("span", `${calendarSources(cockpit).length - state.calendarHiddenSources.length} of ${calendarSources(cockpit).length} visible`, "meta")); section.append(actions);
   return section;
 }
 
+function calendarEventButton(event, cockpit, compact = false) {
+  const source = event.source_routes?.find((route) => !state.calendarHiddenSources.includes(calendarSourceKey(route))) || event.source_routes?.[0] || event;
+  const button = document.createElement("button"); button.type = "button";
+  button.className = `calendar-event-block calendar-effect-${event.effect} calendar-lens-${state.calendarLens}${compact ? " calendar-event-compact" : ""}`;
+  button.style.setProperty("--source-color", calendarSourceColor(source, cockpit));
+  const time = event.all_day ? "All day" : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: cockpit.timezone }).format(new Date(event.start_at));
+  button.setAttribute("aria-label", `${event.title}, ${time}, ${calendarEffectLabel(event.effect)}`);
+  if (compact) button.append(text("span", event.all_day ? "" : time, "calendar-event-time"), text("strong", event.title));
+  else button.append(text("strong", event.title), text("span", `${time} · ${calendarEffectLabel(event.effect)}`, "calendar-event-meta"));
+  button.addEventListener("click", () => { state.calendarSelectedEvent = event.cluster_id || event.id; renderCalendar(state.surface); });
+  return button;
+}
+
+function calendarEventDetail(cockpit) {
+  const pane = document.createElement("aside"); pane.className = "card calendar-event-detail"; pane.setAttribute("aria-label", "Calendar event details");
+  const events = (cockpit.events || []).filter(calendarEventIsVisible);
+  const event = events.find((item) => (item.cluster_id || item.id) === state.calendarSelectedEvent);
+  if (!event) { pane.append(text("p", "EVENT DETAIL", "eyebrow"), text("h2", "Select a calendar item"), text("p", "Open an item to see its source, effect, buffers, duplicate copies, and evidence without leaving the calendar.", "state-note")); return pane; }
+  pane.append(text("p", "EVENT DETAIL", "eyebrow"), text("h2", event.title));
+  const effect = text("span", calendarEffectLabel(event.effect), `pill calendar-effect-pill calendar-effect-${event.effect}`); pane.append(effect);
+  const facts = document.createElement("dl"); facts.className = "calendar-event-facts";
+  const rows = [
+    ["When", event.all_day ? `${new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", timeZone: cockpit.timezone }).format(new Date(event.start_at))} · all day` : `${calendarTime(event.start_at)}–${calendarTime(event.end_at, { weekday: undefined })}`],
+    ["Calendar", (event.source_calendars || [event.calendar_name]).filter(Boolean).join(" · ")],
+    ["Purpose", titleCase(event.purpose)],
+    ["Buffer", event.buffer_before_minutes || event.buffer_after_minutes ? `${event.buffer_before_minutes || 0} min before · ${event.buffer_after_minutes || 0} min after` : "None"],
+    ["Location", event.location],
+    ["Provider", titleCase(event.provider)],
+  ];
+  for (const [label, value] of rows) if (value) facts.append(text("dt", label), text("dd", value));
+  pane.append(facts);
+  if (event.why?.length) pane.append(text("h3", "Why it behaves this way"), text("p", event.why.join(" "), "state-note"));
+  if (event.duplicate_collapsed) pane.append(text("p", `${event.copy_count} provider copies are grouped here; none were deleted.`, "calendar-duplicate"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  if (event.last_event_id) { const evidence = text("button", "View evidence", "button button-quiet"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(event.last_event_id)); actions.append(evidence); }
+  if (event.html_link) { const provider = text("a", "Open in provider", "button button-quiet"); provider.href = event.html_link; provider.target = "_blank"; provider.rel = "noreferrer"; actions.append(provider); }
+  pane.append(actions); return pane;
+}
+
+function calendarEventLayout(events) {
+  const ends = []; const layouts = new Map();
+  for (const event of [...events].sort((left, right) => new Date(left.start_at) - new Date(right.start_at))) { const start = new Date(event.start_at).getTime(); let column = ends.findIndex((end) => end <= start); if (column < 0) column = ends.length; ends[column] = new Date(event.end_at).getTime(); layouts.set(event.cluster_id || event.id, column); }
+  return { columns: Math.max(1, ends.length), layouts };
+}
+
+function calendarTimeGrid(cockpit) {
+  const dates = calendarRangeDates(cockpit).slice(0, state.calendarView === "day" ? 1 : 7);
+  const visible = (cockpit.events || []).filter(calendarEventIsVisible);
+  const timed = visible.filter((event) => !event.all_day); const allDay = visible.filter((event) => event.all_day);
+  const minHour = Math.max(0, Math.min(6, ...timed.map((event) => calendarHour(event.start_at, cockpit.timezone))));
+  const maxHour = Math.min(24, Math.max(22, ...timed.map((event) => Math.ceil(calendarHour(event.end_at, cockpit.timezone)))));
+  const hourHeight = 56; const height = Math.max(8, maxHour - minHour) * hourHeight;
+  const board = document.createElement("section"); board.className = "card calendar-board";
+  const boardHeading = document.createElement("div"); boardHeading.className = "calendar-board-heading"; boardHeading.append(text("h2", state.calendarView === "day" ? "Day plan" : "Week at a glance"));
+  const legend = document.createElement("div"); legend.className = "calendar-legend"; for (const [effect, label] of [["hard_block", "Hard"], ["soft_hold", "Soft"], ["context", "Context"], ["policy", "Guardrail"], ["buffer", "Buffer"]]) { const item = document.createElement("span"); item.className = `calendar-legend-${effect}`; item.append(document.createElement("i"), document.createTextNode(label)); legend.append(item); } boardHeading.append(legend); board.append(boardHeading);
+  const scroller = document.createElement("div"); scroller.className = "calendar-grid-scroll";
+  const grid = document.createElement("div"); grid.className = "calendar-time-grid"; grid.style.setProperty("--calendar-days", dates.length);
+  grid.append(text("span", cockpit.timezone || "", "calendar-timezone"));
+  for (const date of dates) { const head = document.createElement("div"); head.className = `calendar-day-head${calendarLocalDate(date) === state.calendarToday ? " is-today" : ""}`; head.append(text("span", new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(date)), text("strong", date.getDate())); grid.append(head); }
+  grid.append(text("span", "all-day", "calendar-all-day-label"));
+  for (const date of dates) { const cell = document.createElement("div"); cell.className = "calendar-all-day-cell"; for (const event of allDay.filter((item) => calendarEventOccursOn(item, calendarLocalDate(date), cockpit.timezone)).slice(0, 4)) cell.append(calendarEventButton(event, cockpit, true)); grid.append(cell); }
+  const axis = document.createElement("div"); axis.className = "calendar-time-axis"; axis.style.height = `${height}px`; for (let hour = minHour; hour <= maxHour; hour += 1) { const label = text("span", new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(new Date(2020, 0, 1, hour)), "calendar-hour-label"); label.style.top = `${(hour - minHour) * hourHeight}px`; axis.append(label); } grid.append(axis);
+  for (const date of dates) {
+    const key = calendarLocalDate(date); const lane = document.createElement("div"); lane.className = "calendar-day-lane"; lane.style.height = `${height}px`; lane.style.setProperty("--hour-height", `${hourHeight}px`);
+    for (const window of (cockpit.schedule_windows || []).filter((item) => calendarDateKey(item.start_at, cockpit.timezone) === key)) { const startHour = calendarHour(window.start_at, cockpit.timezone); const endHour = calendarDateKey(window.end_at, cockpit.timezone) !== calendarDateKey(window.start_at, cockpit.timezone) ? 24 : calendarHour(window.end_at, cockpit.timezone); const top = Math.max(0, startHour - minHour) * hourHeight; const blockHeight = Math.max(0, Math.min(maxHour, endHour) - Math.max(minHour, startHour)) * hourHeight; if (blockHeight <= 0) continue; const policy = text("div", blockHeight >= 34 ? window.label : "", `calendar-policy-window calendar-policy-${window.effect}`); policy.style.top = `${top}px`; policy.style.height = `${blockHeight}px`; policy.title = `${window.label} · ${calendarEffectLabel(window.effect)}`; lane.append(policy); }
+    const dayEvents = timed.filter((event) => calendarEventOccursOn(event, key, cockpit.timezone)); const layout = calendarEventLayout(dayEvents);
+    for (const event of dayEvents) { const startHour = calendarDateKey(event.start_at, cockpit.timezone) === key ? calendarHour(event.start_at, cockpit.timezone) : 0; const endHour = calendarDateKey(event.end_at, cockpit.timezone) === key ? calendarHour(event.end_at, cockpit.timezone) : 24; const top = Math.max(0, startHour - minHour) * hourHeight; const eventHeight = Math.max(28, (Math.min(maxHour, endHour) - Math.max(minHour, startHour)) * hourHeight); const column = layout.layouts.get(event.cluster_id || event.id) || 0; const left = `calc(${(column / layout.columns) * 100}% + 2px)`; const width = `calc(${100 / layout.columns}% - 4px)`; if (event.buffer_before_minutes || event.buffer_after_minutes) { const bufferedStartHour = calendarDateKey(event.buffered_start_at, cockpit.timezone) === key ? calendarHour(event.buffered_start_at, cockpit.timezone) : 0; const bufferedEndHour = calendarDateKey(event.buffered_end_at, cockpit.timezone) === key ? calendarHour(event.buffered_end_at, cockpit.timezone) : 24; const halo = document.createElement("span"); halo.className = `calendar-buffer-halo calendar-buffer-${event.effect}`; halo.style.top = `${Math.max(0, bufferedStartHour - minHour) * hourHeight}px`; halo.style.height = `${Math.max(0, Math.min(maxHour, bufferedEndHour) - Math.max(minHour, bufferedStartHour)) * hourHeight}px`; halo.style.left = left; halo.style.width = width; halo.title = `${event.buffer_before_minutes || 0} minute preparation buffer and ${event.buffer_after_minutes || 0} minute recovery buffer`; lane.append(halo); } const block = calendarEventButton(event, cockpit); block.style.top = `${top}px`; block.style.height = `${eventHeight}px`; block.style.left = left; block.style.width = width; lane.append(block); }
+    if (key === state.calendarToday) { const hour = calendarHour(new Date(), cockpit.timezone); if (hour >= minHour && hour <= maxHour) { const line = document.createElement("span"); line.className = "calendar-now-line"; line.style.top = `${(hour - minHour) * hourHeight}px`; lane.append(line); } }
+    grid.append(lane);
+  }
+  scroller.append(grid); board.append(scroller); const layout = document.createElement("div"); layout.className = "calendar-board-layout"; layout.append(board, calendarEventDetail(cockpit)); return layout;
+}
+
+function calendarAgenda(cockpit) {
+  const section = document.createElement("section"); section.className = "card calendar-agenda"; section.append(text("h2", "Agenda"));
+  const events = (cockpit.events || []).filter(calendarEventIsVisible); const dates = calendarRangeDates(cockpit);
+  let found = false;
+  for (const date of dates) { const dayEvents = events.filter((event) => calendarEventOccursOn(event, calendarLocalDate(date), cockpit.timezone)); if (!dayEvents.length) continue; found = true; const group = document.createElement("section"); group.className = "calendar-agenda-day"; group.append(text("h3", new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(date))); const list = document.createElement("div"); list.className = "calendar-agenda-items"; for (const event of dayEvents) list.append(calendarEventButton(event, cockpit)); group.append(list); section.append(group); }
+  if (!found) section.append(text("p", "No visible calendar items in this range. Hidden calendars and provider records are unchanged.", "empty")); return section;
+}
+
+function calendarMonth(cockpit) {
+  const section = document.createElement("section"); section.className = "card calendar-month"; section.append(text("h2", "Month at a glance")); const grid = document.createElement("div"); grid.className = "calendar-month-grid";
+  for (const label of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) grid.append(text("span", label, "calendar-month-weekday"));
+  const anchor = calendarDate(state.calendarAnchor || state.calendarToday || calendarLocalDate()); const events = (cockpit.events || []).filter(calendarEventIsVisible);
+  for (const date of calendarRangeDates(cockpit)) { const key = calendarLocalDate(date); const cell = document.createElement("div"); cell.className = `calendar-month-day${date.getMonth() !== anchor.getMonth() ? " outside-month" : ""}${key === state.calendarToday ? " is-today" : ""}`; const head = text("button", String(date.getDate()), "calendar-month-date"); head.type = "button"; head.setAttribute("aria-label", `Open ${new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(date)} in Day view`); head.addEventListener("click", () => setCalendarView("day", key)); cell.append(head); const dayEvents = events.filter((event) => calendarEventOccursOn(event, key, cockpit.timezone)); for (const event of dayEvents.slice(0, 3)) cell.append(calendarEventButton(event, cockpit, true)); if (dayEvents.length > 3) { const more = text("button", `+${dayEvents.length - 3} more`, "calendar-month-more"); more.type = "button"; more.addEventListener("click", () => setCalendarView("day", key)); cell.append(more); } grid.append(cell); }
+  section.append(grid); return section;
+}
+
+function calendarFindTime(cockpit) {
+  const fragment = document.createDocumentFragment(); const section = document.createElement("section"); section.className = "card calendar-find";
+  const heading = document.createElement("div"); heading.className = "calendar-find-heading"; const copy = document.createElement("div"); copy.append(text("h2", "Find a workable window"), text("p", "Hard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.", "state-note"));
+  const durations = document.createElement("div"); durations.className = "calendar-duration-switcher"; for (const minutes of [30, 60, 90, 120]) { const button = text("button", `${minutes} min`, "account-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.calendarDuration === minutes)); button.addEventListener("click", () => { state.calendarDuration = minutes; renderCalendar(state.surface); }); durations.append(button); } heading.append(copy, durations); section.append(heading);
+  const now = Date.now(); const soft = (cockpit.events || []).filter((event) => event.effect === "soft_hold"); const candidates = (cockpit.open_windows || []).filter((window) => new Date(window.end_at) - new Date(window.start_at) >= state.calendarDuration * 60000 && new Date(window.start_at).getTime() >= now - 60000).map((window) => { const suggestedEnd = new Date(new Date(window.start_at).getTime() + state.calendarDuration * 60000); return { ...window, suggested_end_at: suggestedEnd.toISOString(), soft_load: soft.some((event) => new Date(event.start_at) < suggestedEnd && new Date(event.end_at) > new Date(window.start_at)) }; }).sort((left, right) => Number(left.soft_load) - Number(right.soft_load) || new Date(left.start_at) - new Date(right.start_at));
+  if (!candidates.length) section.append(text("p", `No ${state.calendarDuration}-minute unprotected window appears in this range.`, "empty")); else { const list = document.createElement("ol"); list.className = "calendar-window-list"; for (const [index, window] of candidates.slice(0, 18).entries()) { const li = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", `${index === 0 ? "Earliest fit · " : ""}${new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: cockpit.timezone }).format(new Date(window.start_at))}`), text("span", `${calendarTime(window.start_at, { weekday: undefined })}–${calendarTime(window.suggested_end_at, { weekday: undefined })}`, "meta")); li.append(body, text("span", window.soft_load ? "Soft load nearby" : "Clear", `pill ${window.soft_load ? "calendar-window-soft" : "pill-teal"}`)); list.append(li); } section.append(list); }
+  const conditional = document.createElement("section"); conditional.className = "card calendar-conditional-card"; conditional.append(text("h2", "Available only if you accept")); for (const window of cockpit.conditional_windows || []) conditional.append(text("p", `${window.label}: ${calendarTime(window.start_at)}–${calendarTime(window.end_at, { weekday: undefined })}`, "calendar-conditional")); if (!(cockpit.conditional_windows || []).length) conditional.append(text("p", "No conditional household windows in this range.", "empty")); fragment.append(section, conditional, calendarConflictPanel(cockpit)); return fragment;
+}
+
+function calendarConflictPanel(cockpit) {
+  const section = document.createElement("section"); section.className = "card calendar-conflicts"; section.append(text("h2", "Conflicts and pressure"));
+  if (!(cockpit.conflicts || []).length) section.append(text("p", "No buffered hard conflict or soft-load pressure is visible.", "empty compact-empty"));
+  for (const conflict of cockpit.conflicts || []) { const row = document.createElement("div"); row.className = `calendar-conflict calendar-${conflict.kind}`; row.append(text("strong", `${titleCase(conflict.kind)} · ${conflict.minutes} minutes`), text("span", conflict.why, "state-note")); section.append(row); } return section;
+}
+
+function calendarPolicyOverview(cockpit) {
+  const fragment = document.createDocumentFragment(); const policy = cockpit.schedule_policy || {};
+  const section = document.createElement("section"); section.className = "card calendar-policy-overview"; section.append(text("h2", "Household time guardrails"), text("p", "These recurring windows shape availability before any suggested opening is shown.", "state-note"));
+  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; const list = document.createElement("div"); list.className = "calendar-policy-list";
+  for (const window of policy.windows || []) { const row = document.createElement("div"); row.className = `calendar-policy-row calendar-effect-${window.effect}`; row.append(text("strong", window.label), text("span", `${window.days.map((day) => dayNames[day]).join(", ")} · ${window.start_local}–${window.end_local}`, "meta"), text("span", calendarEffectLabel(window.effect), "calendar-policy-effect")); list.append(row); } section.append(list);
+  const buffers = document.createElement("section"); buffers.className = "card calendar-buffer-card"; buffers.append(text("h2", "Preparation and recovery buffers")); const bufferList = document.createElement("dl"); bufferList.className = "calendar-buffer-list"; const values = policy.buffer_minutes || {}; for (const kind of ["remote", "appointment", "medical", "handoff", "deep_work"]) { const before = values[`${kind}_before`] || 0; const after = values[`${kind}_after`] || 0; const row = document.createElement("div"); row.append(text("dt", titleCase(kind)), text("dd", `${before} min before · ${after} min after`)); bufferList.append(row); } buffers.append(bufferList); fragment.append(section, buffers); return fragment;
+}
+
 function calendarRuleEditor(cockpit, data) {
-  const section = document.createElement("section"); section.className = "card calendar-rules"; section.append(text("h2", "Calendar rules"), text("p", "These are explicit household policy, not model guesses. Re-saving replaces each route deterministically.", "state-note"));
+  const fragment = document.createDocumentFragment(); fragment.append(calendarPolicyOverview(cockpit));
+  const section = document.createElement("section"); section.className = "card calendar-rules"; section.append(text("h2", "Calendar routing and capacity"), text("p", "Provider access is factual. Purpose, capacity effect, and approved write destinations are explicit household policy.", "state-note"));
+  const disclosure = document.createElement("details"); disclosure.className = "calendar-rule-disclosure"; disclosure.append(text("summary", "Review or change calendar rules"));
   const form = document.createElement("form"); form.className = "calendar-rule-form";
   const existing = new Map((cockpit.rules || []).map((rule) => [`${rule.provider}|${rule.provider_account_id}|${rule.calendar_external_id}`, rule]));
-  for (const source of cockpit.sources || []) { const key = `${source.provider}|${source.provider_account_id}|${source.calendar_external_id}`; const rule = existing.get(key) || {}; const row = document.createElement("fieldset"); row.dataset.source = JSON.stringify(source); row.append(text("legend", source.calendar_name || "Calendar"), text("small", `${titleCase(source.access_role)} · ${source.write_events ? "can write" : "read only"}`, "meta")); const purpose = document.createElement("select"); purpose.dataset.field = "purpose"; for (const value of ["personal", "work", "household", "coparenting", "property", "family_context", "holidays", "test", "other"]) { const option = new Option(titleCase(value), value); option.selected = (rule.purpose || "other") === value; purpose.append(option); } const effect = document.createElement("select"); effect.dataset.field = "effect"; for (const value of ["hard_block", "soft_hold", "context", "ignore"]) { const option = new Option(titleCase(value), value); option.selected = (rule.effect || "context") === value; effect.append(option); } const write = document.createElement("input"); write.type = "checkbox"; write.dataset.field = "write"; write.checked = Boolean(rule.write_target); write.disabled = !source.write_events; const writeLabel = document.createElement("label"); writeLabel.append(write, document.createTextNode(" approved write destination")); row.append(purpose, effect, writeLabel); form.append(row); }
+  for (const source of cockpit.sources || []) { const key = `${source.provider}|${source.provider_account_id}|${source.calendar_external_id}`; const rule = existing.get(key) || {}; const row = document.createElement("fieldset"); row.dataset.source = JSON.stringify(source); row.append(text("legend", source.calendar_name || "Calendar"), text("small", `${titleCase(source.access_role)} · ${source.write_events ? "can write" : "read only"}`, "meta")); const purposeLabel = text("label", "Purpose", "calendar-rule-label"); const purpose = document.createElement("select"); purpose.dataset.field = "purpose"; purpose.setAttribute("aria-label", `${source.calendar_name} purpose`); for (const value of ["personal", "work", "household", "coparenting", "property", "family_context", "holidays", "test", "other"]) { const option = new Option(titleCase(value), value); option.selected = (rule.purpose || "other") === value; purpose.append(option); } purposeLabel.append(purpose); const effectLabel = text("label", "Capacity effect", "calendar-rule-label"); const effect = document.createElement("select"); effect.dataset.field = "effect"; effect.setAttribute("aria-label", `${source.calendar_name} capacity effect`); for (const value of ["hard_block", "soft_hold", "context", "ignore"]) { const option = new Option(calendarEffectLabel(value), value); option.selected = (rule.effect || "context") === value; effect.append(option); } effectLabel.append(effect); const write = document.createElement("input"); write.type = "checkbox"; write.dataset.field = "write"; write.checked = Boolean(rule.write_target); write.disabled = !source.write_events; const writeLabel = document.createElement("label"); writeLabel.className = "calendar-write-label"; writeLabel.append(write, document.createTextNode(source.write_events ? " Approved Triage write destination" : " Read-only provider calendar")); row.append(purposeLabel, effectLabel, writeLabel); form.append(row); }
   const save = text("button", "Save reviewed rules", "button button-primary"); save.type = "submit"; form.append(save);
   form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; const rules = [...form.querySelectorAll("fieldset")].map((row) => { const source = JSON.parse(row.dataset.source); const old = existing.get(`${source.provider}|${source.provider_account_id}|${source.calendar_external_id}`) || {}; const writeTarget = row.querySelector('[data-field="write"]').checked; const purpose = row.querySelector('[data-field="purpose"]').value; const writableKinds = ["personal", "work", "household", "coparenting", "property"]; return { source_member_id: source.member_id, provider: source.provider, provider_account_id: source.provider_account_id, calendar_external_id: source.calendar_external_id, purpose, effect: row.querySelector('[data-field="effect"]').value, tentative_effect: old.tentative_effect || "soft_hold", caregiving_load: old.caregiving_load || "ignore", caregiving_summary_values: old.caregiving_summary_values || [], buffer_kind: old.buffer_kind || "auto", write_target: writeTarget, destination_kind: writeTarget ? (old.destination_kind || (writableKinds.includes(purpose) ? purpose : "personal")) : null, enabled: true }; }); try { await api("/api/member/v1/calendar/onboarding", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), member_id: data.member_id, timezone: cockpit.timezone, rules, windows: cockpit.schedule_policy?.windows || [], buffer_minutes: cockpit.schedule_policy?.buffer_minutes || {}, accepted_chores_required: cockpit.schedule_policy?.accepted_chores_required ?? true, one_confirm_write: cockpit.schedule_policy?.one_confirm_write ?? true }) }); setBanner("Calendar rules saved. Availability was recalculated from provider facts."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Calendar rules were not changed.`); save.disabled = false; } });
-  section.append(form); return section;
+  disclosure.append(form); section.append(disclosure); fragment.append(section); return fragment;
 }
 
 function renderCalendar(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit || {};
+  state.calendarAnchor ||= data.calendar_anchor || calendarLocalDate();
+  state.calendarToday = data.calendar_today || state.calendarToday || calendarLocalDate();
   $("#mode-label").textContent = "Private · deterministic calendar policy";
-  root.append(calendarHero(cockpit), calendarControls());
-  if (state.calendarView === "find") root.append(calendarFindTime(cockpit), calendarConflictPanel(cockpit));
+  root.append(calendarHero(cockpit), calendarControls(cockpit));
+  if (state.calendarView !== "rules") root.append(calendarSourcePanel(cockpit, data));
+  if (state.calendarView === "find") root.append(calendarFindTime(cockpit));
   else if (state.calendarView === "rules") root.append(calendarRuleEditor(cockpit, data));
-  else root.append(calendarEventList(cockpit), calendarConflictPanel(cockpit));
+  else if (state.calendarView === "month") root.append(calendarMonth(cockpit), calendarConflictPanel(cockpit));
+  else if (state.calendarView === "agenda") root.append(calendarAgenda(cockpit), calendarConflictPanel(cockpit));
+  else root.append(calendarTimeGrid(cockpit), calendarConflictPanel(cockpit));
 }
 
 function renderReminders(data) {
@@ -1057,6 +1292,7 @@ function renderReminders(data) {
 
 function renderSurface(data) {
   state.surface = data;
+  document.body.dataset.surface = data.surface;
   const root = $("#surface");
   root.setAttribute("aria-busy", "false");
   root.replaceChildren();
