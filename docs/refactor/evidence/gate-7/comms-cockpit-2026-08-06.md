@@ -12,6 +12,9 @@ not a second mailbox or generic OpenClaw transcript.
 
 ## Executable proof
 
+- The root Python/bridge suite passes 1,340 tests; the combined `tests` +
+  `packs` release slice passes 1,486 tests; and strict acceptance passes all
+  24 gates under `--runxfail`.
 - `tests/unit/test_comms.py` proves stable explained Focus/noise ordering,
   exact member binding, personal/work separation, disabled-account exclusion,
   read-only capability denial, and the deterministic final content/privacy

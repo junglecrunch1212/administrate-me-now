@@ -50,8 +50,9 @@ separate work agent is justified only by a real policy/tool/model/retention
 boundary, not by an inbox filter. The portal and pinned OpenClaw dashboard read
 the same `deterministic-comms-cockpit-v1` contract.
 
-Final local verification on 2026-08-06: the complete Python/bridge suite
-passed with 1,340 tests; strict acceptance passed with 24 tests under
+Final local verification on 2026-08-06: the root Python/bridge suite passed
+with 1,340 tests and the combined `tests` + `packs` release slice passed with
+1,486 tests; strict acceptance passed with 24 tests under
 `--runxfail`; Ruff, format, mypy across 189 source files, invariant checks,
 architecture-negative checks, JavaScript syntax, and diff hygiene passed. The
 pinned OpenClaw contract, TypeScript check, 14 tests, and build passed. The

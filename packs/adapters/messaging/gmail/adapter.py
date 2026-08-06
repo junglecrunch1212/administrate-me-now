@@ -7,11 +7,9 @@ retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
 :meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
 directly when the observation seam slots are unpopulated (Phase A),
 and routes through :func:`adminme.lib.observation.outbound` when the
-slots are populated by the supervisor (Phase B). The emitted event is
-the EXISTING ``messaging.sent@v1`` schema registered at
-``adminme/events/schemas/ingest.py`` since phase 04-3 (commit
-``2ce1cff``); NO new schema is registered by 11a per [D7] (v1 schemas
-immutable, 47 production consumers).
+slots are populated by the supervisor (Phase B). D28 emits the additive
+``messaging.sent@v2`` schema with exact member/account/workspace coordinates;
+the existing v1 registration remains immutable for historical producers.
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
@@ -217,7 +215,7 @@ class GmailAdapter(CommunicationAdapter):
         self._max_poll_cycles: int | None = max_poll_cycles
         # ctx is captured at start() so :meth:`send` (a Cat-A contract
         # method the supervisor invokes without re-passing ctx) can emit
-        # ``messaging.sent@v1`` / ``adapter.error@v1`` events through the
+        # ``messaging.sent@v2`` / ``adapter.error@v1`` events through the
         # supervisor-bound event log. Mirrors the apple-eventkit pattern.
         self._ctx: AdapterContext | None = None
         # Observation-mode wiring slots for :meth:`send`. Phase A leaves
@@ -377,18 +375,17 @@ class GmailAdapter(CommunicationAdapter):
         the Gmail service directly (Phase A — memo 08 §3.4
         Phase-A-conditional, mirroring 11r-c's
         :meth:`_apply_write_impl`). On success, emits one
-        ``messaging.sent@v1`` event with field-mapping from Gmail
-        semantics to the existing schema (registered at
-        ``adminme/events/schemas/ingest.py`` since phase 04-3); on
+        ``messaging.sent@v2`` event with field-mapping from Gmail
+        semantics plus the exact Comms account coordinates; on
         observation-suppress, the same event is emitted with
-        ``delivery_status="queued"`` and ``thread_id=None``. The
-        ``messaging.sent@v1`` registration is reused unchanged per [D7].
+        ``delivery_status="queued"`` and ``thread_id=None``. The immutable
+        ``messaging.sent@v1`` registration remains available per [D7].
 
         Errors classify per :meth:`_classify_gmail_error` into the
         ``AdapterErrorV1`` taxonomy (4xx auth → fatal ``auth_failed``,
         5xx → transient ``network``, 429 → transient ``rate_limited``),
         emit one ``adapter.error@v1`` event, and re-raise so the
-        supervisor's backoff handles retry. ``messaging.sent@v1`` is
+        supervisor's backoff handles retry. ``messaging.sent@v2`` is
         NOT emitted on the error path — the action did not, in fact,
         send.
         """
