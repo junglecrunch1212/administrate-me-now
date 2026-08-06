@@ -144,7 +144,10 @@ Python environment from that release's working directory; it cannot import a
 developer checkout merely because the operator invoked the wrapper there.
 Upgrade/start waits for the previous launchd definition to unload and verifies
 the newly loaded program, working directory, and repository-root environment
-against the candidate plist before accepting health.
+against the candidate plist before accepting health. Post-switch validation
+may retry only the bounded projection/Gateway/plugin/cron/listener startup
+checks; it then requires the complete Doctor, including the canonical
+synthetic round trip. Every other failed check causes immediate rollback.
 
 For a bug report, create a secret-redacted machine report:
 

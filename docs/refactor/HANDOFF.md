@@ -39,8 +39,8 @@ the production composition from proposal through human confirmation to one
 official task.
 
 Local release evidence on 2026-08-06: the complete root suite passed with
-1,322 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
-and mypy passed across 188 production/bootstrap source files; both invariant scripts
+1,324 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
+and mypy passed across 189 production/bootstrap source files; both invariant scripts
 passed; and the exact pinned OpenClaw contract, TypeScript check, 14 plugin
 tests, and build passed. The Triage process proof also covers idempotent
 enrichment/confirmation/dismissal, private-scope isolation, CRM visibility,
@@ -67,7 +67,10 @@ program, working directory, and repository-root environment against the new
 plist before health can pass. Stable wrappers also change into the validated
 active release before importing bootstrap code, and LaunchAgents now provide
 the exact state directory through `ADMINME_INSTANCE_DIR`, preventing live
-model-skill pipelines from degrading on an unresolved instance path. These
+model-skill pipelines from degrading on an unresolved instance path. The
+post-switch gate tolerates only bounded projection/Gateway/plugin/cron/listener
+startup transients before requiring the complete Doctor and synthetic round
+trip; structural and security failures still roll back immediately. These
 changes **MODERNIZE** service switching while **PRESERVING** rollback, release
 immutability, secret-free argument lists, and fail-closed readiness.
 

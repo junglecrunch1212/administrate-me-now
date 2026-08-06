@@ -22,7 +22,7 @@ from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.state import EncryptedStateStore
-from bootstrap.upgrade import UpgradeError, validate_candidate
+from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
 import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
@@ -801,3 +801,64 @@ def test_upgrade_incompatibility_is_detected_before_service_replacement(
     with pytest.raises(UpgradeError):
         validate_candidate(candidate)
     assert sentinel.read_text("utf-8") == "unchanged"
+
+
+def test_upgrade_waits_only_for_known_post_switch_transients(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [
+            {
+                "name": "openclaw_compatibility_and_plugin_discovery",
+                "ok": False,
+            }
+        ],
+    }
+    healthy = {"status": "healthy", "checks": []}
+    reports = [transient, transient, healthy, healthy]
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return reports.pop(0)
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
+    result = UpgradeManager(
+        test_paths, root=REPO_ROOT, test_mode=False
+    )._post_switch_doctor(REPO_ROOT)
+    assert result["status"] == "healthy"
+    assert include_synthetic == [False, False, False, True]
+
+
+def test_upgrade_does_not_retry_a_structural_doctor_failure(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "encrypted_event_log_and_migrations", "ok": False}],
+    }
+    calls = 0
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            nonlocal calls
+            calls += 1
+            return structural
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    result = UpgradeManager(
+        test_paths, root=REPO_ROOT, test_mode=False
+    )._post_switch_doctor(REPO_ROOT)
+    assert result == structural
+    assert calls == 1

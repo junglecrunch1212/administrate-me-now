@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,17 @@ from bootstrap.wizard import install_launch_agents
 
 class UpgradeError(RuntimeError):
     pass
+
+
+_TRANSIENT_POST_SWITCH_CHECKS = frozenset(
+    {
+        "fourteen_projections_and_checkpoints",
+        "openclaw_compatibility_and_plugin_discovery",
+        "openclaw_cron_reconciliation",
+        "launchd_and_process_state",
+        "ports_and_loopback_binding",
+    }
+)
 
 
 def validate_candidate(candidate: Path) -> dict[str, Any]:
@@ -80,6 +92,37 @@ class UpgradeManager:
         self.test_mode = test_mode
         self.services = ServiceManager(paths, test_mode=test_mode)
 
+    @staticmethod
+    def _failed_check_names(result: dict[str, Any]) -> set[str]:
+        return {
+            str(check.get("name"))
+            for check in result.get("checks", [])
+            if isinstance(check, dict) and not check.get("ok")
+        }
+
+    def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
+        """Wait for only known launch transients, then run the full proof once."""
+
+        doctor = Doctor(
+            self.paths,
+            root=release,
+            test_mode=self.test_mode,
+        )
+        attempts = 1 if self.test_mode else 6
+        last: dict[str, Any] = {}
+        for attempt in range(attempts):
+            last = doctor.run(include_synthetic_proof=False)
+            if last.get("status") == "healthy":
+                last = doctor.run()
+                if last.get("status") == "healthy":
+                    return last
+            failed = self._failed_check_names(last)
+            if not failed or not failed.issubset(_TRANSIENT_POST_SWITCH_CHECKS):
+                return last
+            if attempt + 1 < attempts:
+                time.sleep(2)
+        return last
+
     def activate(self, candidate: Path) -> dict[str, Any]:
         evidence = validate_candidate(candidate)
         candidate = candidate.resolve()
@@ -120,13 +163,12 @@ class UpgradeManager:
         try:
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
-            result = Doctor(
-                self.paths,
-                root=release,
-                test_mode=self.test_mode,
-            ).run()
+            result = self._post_switch_doctor(release)
             if result["status"] != "healthy":
-                raise UpgradeError("candidate failed post-switch Doctor")
+                failed = ", ".join(sorted(self._failed_check_names(result)))
+                raise UpgradeError(
+                    f"candidate failed post-switch Doctor: {failed or 'unknown check'}"
+                )
             if not was_running:
                 self.services.stop()
         except Exception:
@@ -174,13 +216,12 @@ class UpgradeManager:
         try:
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
-            result = Doctor(
-                self.paths,
-                root=release,
-                test_mode=self.test_mode,
-            ).run()
+            result = self._post_switch_doctor(release)
             if result["status"] != "healthy":
-                raise UpgradeError("rolled-back release failed Doctor")
+                failed = ", ".join(sorted(self._failed_check_names(result)))
+                raise UpgradeError(
+                    f"rolled-back release failed Doctor: {failed or 'unknown check'}"
+                )
             if stopped:
                 self.services.stop()
         except Exception:
