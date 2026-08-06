@@ -64,10 +64,16 @@ class InteractionsProjection(Projection):
             if name not in columns:
                 conn.execute(f"ALTER TABLE interactions ADD COLUMN {name} {sql_type}")
                 columns.add(name)
+        # v2 originally keyed this index only by tenant/channel. That made a
+        # repeated provider observation crash the projection before the
+        # handler could reconcile it, and it conflated distinct member/account
+        # namespaces. Serialized projection code performs the member/provider/
+        # account-scoped fold; this non-unique index accelerates that lookup.
+        conn.execute("DROP INDEX IF EXISTS idx_interactions_tenant_native_message")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS "
-            "idx_interactions_tenant_native_message "
-            "ON interactions(tenant_id, channel_specific, native_message_id) "
+            "CREATE INDEX idx_interactions_tenant_native_message "
+            "ON interactions(tenant_id, member_id, provider, "
+            "provider_account_id, native_message_id) "
             "WHERE native_message_id IS NOT NULL"
         )
         if {"tenant_id", "member_id", "occurred_at"} <= columns:

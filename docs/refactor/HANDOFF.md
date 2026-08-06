@@ -17,6 +17,23 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 live native-message reconciliation repair
+
+The Reminders activation restart exposed a pre-existing Comms poison event:
+Gmail legitimately re-observed one native message after provider state changed,
+but the interactions handler derived a new row id from the new event while a
+tenant/channel-only unique index rejected the native id. The durable bus
+correctly stopped after five attempts and the upgrade manager correctly rolled
+back rather than hiding a degraded checkpoint.
+
+The repair **HARDENS** D28 while preserving append-only event authority. Repeat
+observations now resolve to the first interaction only inside the exact tenant,
+member, provider, and provider-account namespace; every contributing event id
+is retained and the latest provider observation updates the projection. The
+former uniqueness constraint is replaced by an account-scoped lookup index so
+normal at-least-once replay can reach deterministic reconciliation code.
+Regression coverage proves both repeat folding and cross-account isolation.
+
 ## 2026-08-06 deterministic Reminders cockpit
 
 Reminders is now the tenth stable adult surface after Comms. The portal and
