@@ -810,9 +810,17 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         start = event.get("start") or {}
         end = event.get("end") or {}
         reminders = event.get("reminders") or {}
+        method_map = {
+            "popup": "alert",
+            "email": "email",
+            "sms": "sms",
+            "default": "default",
+        }
         alarms = [
             {
-                "method": str(item.get("method") or "default"),
+                "method": method_map.get(
+                    str(item.get("method") or "default"), "default"
+                ),
                 "trigger_at": None,
                 "relative_offset_seconds": -60 * int(item.get("minutes") or 0),
                 "provider_alarm_id": None,
