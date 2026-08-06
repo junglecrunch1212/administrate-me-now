@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 
 def test_parse_existing_gmail_pack_yaml_yields_cat_a_capability() -> None:
     """Gmail pack.yaml was retrofitted in prompt 11r-a: the manifest now
-    declares one Cat-A capability with ``messaging.received`` in
+    declares one Cat-A capability with account-bound receive/send families in
     event_families, ``observation_mode_required: true`` (Cat-A is
     outbound-bearing per [§6.20]), and ``sharing_model_discriminator:
     owner_member_id`` (matches Plaid + Reminders per [PM-35])."""
@@ -37,7 +37,7 @@ def test_parse_existing_gmail_pack_yaml_yields_cat_a_capability() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-A"
     assert cap.runtime == "central"
-    assert cap.event_families == ["messaging.received"]
+    assert cap.event_families == ["messaging.received", "messaging.sent"]
     assert manifest.write_capabilities == []
     assert manifest.observation_mode_required is True
     assert manifest.sharing_model_discriminator == "owner_member_id"

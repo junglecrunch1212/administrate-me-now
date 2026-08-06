@@ -11,7 +11,7 @@ AdministrateMe is a private, household-scale Chief of Staff that turns distribut
 | Household Chief of Staff | The family sees what matters, what is owed, and what happens next across time horizons. | Tasks, commitments, recurrences, calendars, lists, approvals, outcomes, contextual what-now. |
 | ADHD cognitive neuroprosthetic | Work is reduced to approachable next steps without guilt or infantilization. | Carousel, micro-script, energy/effort fit, endowed progress, variable rewards, paralysis support, concise digests, guilt filter. |
 | Household/professional CRM | Relationships have continuity across people, organizations, family roles, conversations, promises, and artifacts. | Parties, Identifiers, Memberships, Relationships, Interactions, Commitments, Artifacts. |
-| Unified communications | Relevant inbound and outbound facts form one governed operational stream without duplicating a chat platform. | Scoped channel bridge, interaction normalization, proposals, reviews, delivery/suppression/failure outcomes. |
+| Unified communications | A member-isolated, account/workspace-aware cockpit carries working memory across person-to-person channels without duplicating assistant chat or letting a model decide priority. | Loss-aware interaction normalization, deterministic Focus/Waiting/Snoozed/Quieted rules, provider capability negotiation, Triage proposals, and governed requested/completed/failed delivery outcomes. |
 | Working memory/member knowledge | Each member’s knowledge remains theirs while supporting authorized recall and household coordination. | Cat-D member bridges, `member_knowledge`, privileged exclusion, scope-filtered `vector_search`, provenance/corrections. |
 | Sensor/signal/action layer | Finance, home, calendar, lists, and other sources can be observed and acted on safely. | Cat-B/C/E adapters, typed facts, explicit verbs, observation, authorization, verification events. |
 
@@ -73,7 +73,7 @@ All products use this spine through events and scope-filtered projections. No pr
 | Capability | Purpose | Gate 1 state |
 |---|---|---|
 | `parties` | CRM identities, identifiers, memberships, relationships | Code/schema present; not in default runtime registry. |
-| `interactions` | Deduplicated communications/touchpoints | Code/schema present; not in default runtime registry. |
+| `interactions` | Deduplicated, member/account/workspace-bound communication facts and explicit local/provider state | Default-registered; D28 Comms composition, scope/replay, provider command and process acceptance implemented. |
 | `artifacts` | Documents/forms/records and links | Code/schema present; not in default runtime registry. |
 | `commitments` | Proposed, reviewed, active, completed obligations | Code/schema present; not in default runtime registry. |
 | `tasks` | Household execution work and ADHD attributes | Code/schema present; not in default runtime registry. |

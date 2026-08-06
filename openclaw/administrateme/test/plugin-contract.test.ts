@@ -122,14 +122,14 @@ describe("native OpenClaw contract fixture", () => {
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
     expect([...runtime.tools]).toHaveLength(9);
     expect([...runtime.commands]).toHaveLength(8);
-    expect([...runtime.gateways]).toHaveLength(11);
+    expect([...runtime.gateways]).toHaveLength(12);
     expect(runtime.services).toHaveLength(1);
     expect(manifest.contracts.tools).toEqual([...runtime.tools.keys()]);
   });
 
   it("registers dashboard ownership during read-only OpenClaw discovery", () => {
     const runtime = fakeApi({}, "discovery");
-    expect([...runtime.gateways]).toHaveLength(11);
+    expect([...runtime.gateways]).toHaveLength(12);
     expect(runtime.tools).toHaveLength(0);
     expect(runtime.commands).toHaveLength(0);
     expect(runtime.hooks).toHaveLength(0);
@@ -138,7 +138,7 @@ describe("native OpenClaw contract fixture", () => {
 
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
-    expect([...runtime.gateways]).toHaveLength(11);
+    expect([...runtime.gateways]).toHaveLength(12);
     expect([...runtime.tools]).toHaveLength(9);
     expect(runtime.services).toHaveLength(0);
   });

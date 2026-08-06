@@ -28,6 +28,8 @@ def load_builtin_adapters(
     for index, entry in enumerate(config.get("adapters") or []):
         if not isinstance(entry, dict):
             raise ValueError(f"adapter entry {index} must be a mapping")
+        if entry.get("enabled") is False:
+            continue
         kind = str(entry.get("kind") or "")
         resolved = catalog.get(kind)
         if resolved is None:

@@ -3,7 +3,7 @@
   "title": "Gmail adapter config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["user_email"],
+  "required": ["user_email", "member_id"],
   "oneOf": [
     { "required": ["oauth_credentials_ref"] },
     { "required": ["service_account_key_ref"] }
@@ -23,6 +23,28 @@
       "type": "string",
       "format": "email",
       "description": "The Gmail address being polled (subject of service-account domain-wide delegation)."
+    },
+    "member_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The one household member who owns this mailbox. Unbound mailboxes are not exposed in Comms."
+    },
+    "workspace": {
+      "type": "string",
+      "enum": ["personal", "work"],
+      "default": "personal",
+      "description": "Isolation coordinate retained on every message fact."
+    },
+    "account_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "description": "Optional member-visible label; never used for routing."
+    },
+    "enable_writes": {
+      "type": "boolean",
+      "default": false,
+      "description": "Request Gmail modify/send scopes and expose reply/read/archive actions. Requires fresh OAuth consent."
     },
     "sensitivity_floor": {
       "type": "string",

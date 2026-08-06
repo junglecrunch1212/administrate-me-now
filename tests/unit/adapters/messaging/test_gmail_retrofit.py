@@ -118,7 +118,7 @@ def test_pack_yaml_capabilities_block_parses() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-A"
     assert cap.runtime == "central"
-    assert cap.event_families == ["messaging.received"]
+    assert cap.event_families == ["messaging.received", "messaging.sent"]
 
 
 def test_pack_yaml_extension_fields_round_trip() -> None:

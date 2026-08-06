@@ -62,6 +62,16 @@ remain facts; extracted calendar/list/reminder candidates require explicit
 member/account/container routing and governed confirmation before a write
 request. Deprecated Inbox HTTP/OpenClaw aliases remain for pinned clients.
 
+Comms semantics update (2026-08-06): Comms is **MODERNIZED COMPLETE FOR THE
+PRODUCT CORE** as the ninth adult surface. It is a deterministic, scoped
+read-time composition over interactions rather than a copied mailbox or an
+OpenClaw transcript. Member, provider account, and personal/work workspace
+remain independently authorized. Local snooze/quiet state is event sourced;
+provider reply/read/archive is capability-negotiated and travels through the
+external-write governance and outcome path. Gmail is implemented; uninstalled
+Microsoft Graph, BlueBubbles, and Twilio edges remain visibly disabled rather
+than simulated. All extracted domain candidates still route through Triage.
+
 Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
 deleted Node scaffold stays deleted; FastAPI serves a small static member
 portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
@@ -72,8 +82,8 @@ projection, scheduler, workflow, or copied record store.
 
 | Gate 7 subsystem | Final class | Executable result |
 |---|---|---|
-| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, governed review/lifecycle bindings, and the same deterministic Daily Brief contract as the portal. |
-| Member/child experience | REWRITE COMPLETE | Python-served portal has adult eight-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence; Today supplies a Day Brief, explicit Carousel, and deterministic What Now without exposing internal mode/member labels. |
+| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, Comms, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, governed review/lifecycle bindings, and the same deterministic Daily Brief/Comms contracts as the portal. |
+| Member/child experience | REWRITE COMPLETE | Python-served portal has adult nine-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence; Today supplies a Day Brief, explicit Carousel, and deterministic What Now, while Comms supplies member-isolated deterministic message focus. |
 | Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
 | Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
 | Browser runtime | KEEP DELETED NODE / ADD STATIC PYTHON SURFACE | No Node app server, service worker, local transcript/cache, provider SDK, model picker, admin console, plugin manager, or terminal. |
@@ -116,7 +126,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Central composition root | absent | no process instantiates log+bus+all runners/APIs | REWRITE | Create one lifecycle owner with truthful readiness and ordered shutdown. |
 | Projection protocol/runner | `adminme/projections/base.py`, `runner.py` | replay/registration mechanisms; default tuple only `lists` | HARDEN | Exact fourteen registry (thirteen domain plus Triage), shared bus ownership, per-capability replay/idempotency/status. |
 | Parties projection | `adminme/projections/parties/` | schema/handlers/queries/tests | KEEP | Register and prove live/replay/privacy in composition. |
-| Interactions projection | `adminme/projections/interactions/` | schema/handlers/queries/tests | KEEP | Register; canonical communication slice/dedupe. |
+| Interactions projection | `adminme/projections/interactions/` | account/workspace/body/provider-state schema, handlers, scoped thread queries, command results, replay tests | HARDEN COMPLETE | Preserve one fact per message event, native dedupe and privacy; deterministic Comms grouping remains read-time composition. |
 | Artifacts projection | `adminme/projections/artifacts/` | schema/handlers/queries/tests | KEEP | Register; scope/provenance/correction. |
 | Commitments projection | `adminme/projections/commitments/` | schema/handlers/queries/tests | KEEP | Register; full proposal-review-completion feedback. |
 | Tasks projection | `adminme/projections/tasks/` | schema/handlers/queries/tests | KEEP | Register; keep task semantics and what-now links. |
@@ -134,7 +144,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Adapter pack registry/validator/CLI | `adminme/lib/pack_registry/`, `adminme/cli/commands/adapters*` | useful validation; Windows-invalid `<NAME>` tracked templates | HARDEN | Portable template names/placeholders, all six pack lifecycle stages, atomic rollback/install events. |
 | Central adapter supervisor | `adminme/daemons/adapter_supervisor.py` | restart/status primitive; error emit uses ambiguous call shape; not composed | HARDEN | Construct real packs/contexts, retain tasks, durable state, orderly drain, composition status. |
 | Bridge package/runtime | `bridge/adminme_bridge/`, `adminme/products/bridge/`, `bootstrap/bridge_enrollment.py` | Central ingest and owner-scoped knowledge are retained; reviewed bootstrap adds encrypted export, identity/release/expiry validation, per-member launchd, real enrollment proof, finalization/revocation, and durable idempotent commands for Apple Calendar, Reminders, and Notes | HARDEN COMPLETE FOR ENROLLMENT AND PRIMARY APP COMMANDS | Live opt-in pack configuration, Apple grants, and iCloud propagation remain separate evidence. |
-| Gmail Cat-A | `packs/adapters/messaging/gmail/` | implementation/tests present | HARDEN | Canonical communication slice; assistant identity modes and OpenClaw delivery outcome. |
+| Gmail Cat-A | `packs/adapters/messaging/gmail/` | account-bound v3 inbound, v2 outbound, history sync, provider labels, reply headers, read/archive mutations, dynamic OAuth scopes and tests | HARDEN COMPLETE IN CODE | Live account remains read-only until fresh modify/send OAuth consent; Pub/Sub watch/fallback remains operational follow-up. |
 | Cat-B calendar/reminder/task packs | `packs/adapters/{calendaring,reminders,tasks}/` | Google/Apple Calendar and Apple Reminders now cover supported native fields, calendars/lists, recurrences, alarms/geofences, completions, change feedback, durable cursors, and central/bridge command paths | HARDEN COMPLETE IN CODE | Retain external authority, observation/governance, idempotent writes, and require live OAuth/EventKit propagation evidence. |
 | Plaid Cat-C | `packs/adapters/financial/plaid/` | inbound code/tests; vendored docs lint noise | KEEP | Compose sandbox-first; redact/privileged scope; authority and workbook proof. |
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
@@ -147,7 +157,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | guardedWrite/rate limiter | `adminme/lib/governance.py` | correct three-layer local order; no full approval/outbound composition | HARDEN | Compose independent approvals, content/privacy/persona and observation gates; all terminal outcomes. |
 | Observation | `adminme/lib/observation.py` | on-by-default and suppression code/tests | HARDEN | Persist start/trust window/review prerequisites; complete payload; Cat-B explicit rule; final seam only. |
 | Product Core | `adminme/products/core/main.py` | docstring-only stub | REWRITE | Router namespace and real handlers for CoS/what-now/lifecycle. |
-| Product Comms | `adminme/products/comms/main.py` | commitment review lifecycle is implemented | REWRITE COMPLETE | Triage is the canonical proposal queue; Comms retains communication/commitment commands and no generic chat. |
+| Product Comms | `adminme/products/comms/main.py`, `adminme/comms.py`, member Comms surface | Ninth adult surface, deterministic focus/thread contract, account capability negotiation, local focus commands and governed provider command spine | REWRITE COMPLETE FOR PRODUCT CORE | Triage remains the only proposal queue; Comms is not generic chat; missing Outlook/BlueBubbles/Twilio provider packs stay disabled and explicit. |
 | Product Capture | `adminme/products/capture/main.py` | stale quick-capture docstring-only stub | REWRITE | Knowledge/CRM/Lists/read/search namespace; delete quick capture/voice/triage claims. |
 | Product Automation | `adminme/products/automation/main.py` | docstring-only stub | REWRITE | Finance/signal/action namespace with scoped reads and governed writes. |
 | Bridge product | `adminme/products/bridge/` | only implemented FastAPI app; separate `:3337` | HARDEN | Move router into central root; preserve endpoint compatibility/auth; no separate central process. |

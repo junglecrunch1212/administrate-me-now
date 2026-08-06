@@ -41,7 +41,7 @@ from adminme.lib.instance_config import (
     resolve_instance_dir,
 )
 from adminme.lib.observation import ObservationManager
-from adminme.lib.adapters import WriteOperation
+from adminme.lib.adapters import OutboundMessage, WriteOperation
 from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
@@ -320,6 +320,7 @@ class AdministrateMeRuntime:
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
         self.today_command_locks: dict[str, asyncio.Lock] = {}
+        self.communication_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -560,33 +561,103 @@ class AdministrateMeRuntime:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""
 
         payload = event["payload"]
-        if payload.get("provider") not in {"google_calendar", "google_tasks"}:
+        communication_providers = {
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "fixture",
+        }
+        provider = payload.get("provider")
+        if (
+            provider
+            not in {"google_calendar", "google_tasks"} | communication_providers
+        ):
             return
         if self.adapters is None:
             raise RuntimeError("adapter supervisor unavailable")
         now = EventEnvelope.now_utc_iso()
         result_type = "external_sync.write_completed"
         try:
-            result = await self.adapters.dispatch_write(
-                provider=str(payload["provider"]),
-                member_id=str(payload["member_id"]),
-                provider_account_id=str(payload["provider_account_id"]),
-                operation=WriteOperation(
-                    kind=str(payload["operation"]),
-                    target_external_id=payload.get("target_external_id"),
-                    payload=dict(payload.get("payload") or {}),
-                ),
-            )
+            if provider in communication_providers:
+                command_body = {
+                    **dict(payload.get("payload") or {}),
+                    "target_external_id": payload.get("target_external_id"),
+                    "native_message_id": payload.get("target_external_id"),
+                }
+                communication_result: dict[str, Any]
+                if provider == "fixture":
+                    if self.fixture_adapter is None or payload["operation"] != "reply":
+                        raise LookupError(
+                            "fixture communication adapter is unavailable"
+                        )
+                    recipient = command_body.get("recipient")
+                    body = command_body.get("body")
+                    if not isinstance(recipient, str) or not recipient:
+                        raise ValueError("reply recipient is unavailable")
+                    if not isinstance(body, str) or not body.strip():
+                        raise ValueError("reply body is empty")
+                    send_result = await self.fixture_adapter.send(
+                        OutboundMessage(
+                            channel="fixture",
+                            recipient=recipient,
+                            body=body,
+                            metadata={
+                                "thread_id": command_body.get("thread_id"),
+                                "interaction_id": command_body.get("interaction_id"),
+                            },
+                        )
+                    )
+                    communication_result = {
+                        "applied": send_result.delivered,
+                        "suppressed": send_result.suppressed,
+                        "external_id": send_result.external_id,
+                        "state": {},
+                    }
+                else:
+                    communication_result = (
+                        await self.adapters.dispatch_communication_write(
+                            provider=str(provider),
+                            member_id=str(payload["member_id"]),
+                            provider_account_id=str(payload["provider_account_id"]),
+                            operation=str(payload["operation"]),
+                            payload=command_body,
+                        )
+                    )
+                applied = bool(communication_result.get("applied"))
+                suppressed = bool(communication_result.get("suppressed"))
+                external_id = communication_result.get("external_id")
+                result_body = {
+                    "applied": applied,
+                    "interaction_id": command_body.get("interaction_id"),
+                    "state": communication_result.get("state") or {},
+                }
+            else:
+                result = await self.adapters.dispatch_write(
+                    provider=str(payload["provider"]),
+                    member_id=str(payload["member_id"]),
+                    provider_account_id=str(payload["provider_account_id"]),
+                    operation=WriteOperation(
+                        kind=str(payload["operation"]),
+                        target_external_id=payload.get("target_external_id"),
+                        payload=dict(payload.get("payload") or {}),
+                    ),
+                )
+                applied = result.applied
+                suppressed = result.suppressed
+                external_id = result.external_id
+                result_body = {"applied": applied}
             result_payload: dict[str, Any] = {
                 "command_id": payload["command_id"],
                 "member_id": payload["member_id"],
                 "provider": payload["provider"],
                 "operation": payload["operation"],
-                "external_id": result.external_id,
+                "external_id": external_id,
                 "provider_revision": None,
-                "result": {"applied": result.applied},
+                "result": result_body,
                 "completed_at": now,
-                "suppressed": result.suppressed,
+                "suppressed": suppressed,
             }
         except Exception as exc:  # provider failures are terminal, typed evidence
             result_type = "external_sync.write_failed"
@@ -784,7 +855,7 @@ class AdministrateMeRuntime:
         configured = {
             str(item.get("kind"))
             for item in self.settings.adapter_config.get("adapters", [])
-            if isinstance(item, dict)
+            if isinstance(item, dict) and item.get("enabled") is not False
         }
         for manifest_path in sorted(root.rglob("pack.yaml")):
             manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}

@@ -22,11 +22,13 @@ depends_on:
     - adapter.authenticated
     - adapter.cursor_advanced
     - messaging.received
+    - messaging.sent
 events_emitted:
   - adapter.error
   - adapter.authenticated
   - adapter.cursor_advanced
   - messaging.received
+  - messaging.sent
 config:
   schema: config.schema.json
   example: config.example.yaml
@@ -39,7 +41,7 @@ config:
 capabilities:
   - kind: Cat-A
     runtime: central
-    event_families: [messaging.received]
+    event_families: [messaging.received, messaging.sent]
 observation_mode_required: true
 sharing_model_discriminator: owner_member_id
 dedup_strategy:

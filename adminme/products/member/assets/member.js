@@ -8,6 +8,9 @@ const state = {
   todayView: "brief",
   carouselIndex: 0,
   carouselItems: [],
+  commsView: "focus",
+  commsAccount: "all",
+  commsThread: null,
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -569,6 +572,204 @@ function renderToday(data) {
   root.append(state.todayView === "carousel" ? renderCarousel(brief) : renderDayBrief(brief));
 }
 
+function commsMatches(thread) {
+  const view = state.commsView;
+  const viewMatch = view === "all"
+    || (view === "focus" && ["focus", "needs_reply"].includes(thread.bucket))
+    || (view === "needs_reply" && ["focus", "needs_reply"].includes(thread.bucket))
+    || thread.bucket === view;
+  const accountMatch = state.commsAccount === "all" || thread.provider_account_id === state.commsAccount;
+  return viewMatch && accountMatch;
+}
+
+function commsControls(cockpit, data) {
+  const controls = document.createElement("section");
+  controls.className = "comms-controls card";
+  const views = document.createElement("div");
+  views.className = "comms-filter-row";
+  views.setAttribute("role", "group");
+  views.setAttribute("aria-label", "Communication focus view");
+  const choices = [
+    ["focus", "Focus", cockpit.counts.needs_reply],
+    ["waiting", "Waiting", cockpit.counts.waiting],
+    ["snoozed", "Snoozed", cockpit.counts.snoozed],
+    ["quieted", "Quieted", cockpit.counts.quieted],
+    ["all", "All", cockpit.counts.all],
+  ];
+  for (const [value, label, count] of choices) {
+    const button = text("button", `${label} ${count}`, "comms-filter");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(state.commsView === value));
+    button.addEventListener("click", () => { state.commsView = value; renderComms(data); });
+    views.append(button);
+  }
+  const accounts = document.createElement("div");
+  accounts.className = "comms-filter-row account-filters";
+  accounts.setAttribute("role", "group");
+  accounts.setAttribute("aria-label", "Communication account");
+  for (const account of [{ provider_account_id: "all", label: "All accounts", workspace: "" }, ...(cockpit.accounts || [])]) {
+    const button = text("button", `${account.label}${account.workspace ? ` · ${titleCase(account.workspace)}` : ""}`, "account-filter");
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(state.commsAccount === account.provider_account_id));
+    button.addEventListener("click", () => { state.commsAccount = account.provider_account_id; renderComms(data); });
+    accounts.append(button);
+  }
+  controls.append(views, accounts);
+  return controls;
+}
+
+function commsHero(cockpit) {
+  const hero = document.createElement("section");
+  hero.className = "hero-card comms-hero";
+  hero.append(
+    text("p", "COMMUNICATION COCKPIT", "eyebrow"),
+    text("h2", cockpit.counts.needs_reply === 1 ? "1 conversation deserves a look." : cockpit.counts.needs_reply ? `${cockpit.counts.needs_reply} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
+    text("p", "Focus is a deterministic lens over your connected accounts. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
+  );
+  const stats = document.createElement("dl");
+  stats.className = "brief-stats comms-stats";
+  for (const [label, value] of [["Needs reply", cockpit.counts.needs_reply], ["Waiting", cockpit.counts.waiting], ["To Triage", cockpit.counts.triage], ["Quieted", cockpit.counts.quieted]]) {
+    const stat = text("div", "", "stat"); stat.append(text("dt", label), text("dd", value)); stats.append(stat);
+  }
+  hero.append(stats);
+  return hero;
+}
+
+async function runCommsCommand(thread, operation, extras = {}) {
+  setBanner(operation === "reply" ? "Sending through the governed provider gate…" : "Updating this conversation…");
+  try {
+    const result = await api(`/api/member/v1/comms/${encodeURIComponent(thread.last_interaction_id)}/commands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        operation,
+        expected_last_event_id: thread.last_event_id,
+        request_id: crypto.randomUUID(),
+        openclaw_approved: false,
+        ...extras,
+      }),
+    });
+    setBanner(result.local ? "Updated. The focus view has been recalculated." : result.observation_mode ? "Approved and audited. Observation mode suppressed the external change." : "Approved. Waiting for the provider result.");
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} Nothing was changed.`);
+  }
+}
+
+function messageBubble(message) {
+  const item = document.createElement("li");
+  item.className = `comms-message ${message.direction === "outbound" ? "outbound" : "inbound"}`;
+  const people = message.direction === "outbound" ? `To ${message.to.join(", ") || "recipient"}` : `From ${message.from.join(", ") || "sender"}`;
+  const timestamp = message.occurred_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(message.occurred_at)) : "";
+  item.append(text("span", `${people}${timestamp ? ` · ${timestamp}` : ""}`, "meta"));
+  if (message.subject) item.append(text("strong", message.subject));
+  item.append(text("p", message.body || message.preview));
+  if (message.attachments?.length) {
+    const attachments = document.createElement("ul"); attachments.className = "attachment-list";
+    for (const attachment of message.attachments) {
+      const size = attachment.size ? ` · ${Math.max(1, Math.round(attachment.size / 1024))} KB` : "";
+      attachments.append(text("li", `${attachment.filename || "Attachment"}${size}`));
+    }
+    item.append(attachments);
+  }
+  if (message.evidence_event_ids?.[0]) {
+    const evidence = text("button", "Why this is here", "link-button"); evidence.type = "button";
+    evidence.addEventListener("click", () => showEvidence(message.evidence_event_ids[0])); item.append(evidence);
+  }
+  return item;
+}
+
+function commsReadingPane(thread) {
+  const pane = document.createElement("section");
+  pane.className = "card comms-reading";
+  if (!thread) {
+    pane.append(text("h2", "Choose one conversation"), text("p", "The combined view carries the remembering. You only need to look at one thread at a time.", "empty"));
+    return pane;
+  }
+  const heading = document.createElement("div"); heading.className = "comms-reading-heading";
+  const title = document.createElement("div");
+  title.append(text("p", `${thread.account_label} · ${titleCase(thread.channel)}`, "eyebrow"), text("h2", thread.title));
+  const badge = text("span", titleCase(thread.bucket), `pill ${thread.bucket === "focus" ? "pill-blush" : "pill-lavender"}`);
+  heading.append(title, badge); pane.append(heading);
+  const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode(thread.why.join(" · "))); pane.append(why);
+  if (thread.triage_count) {
+    const triage = text("a", `${thread.triage_count} extracted candidate${thread.triage_count === 1 ? "" : "s"} awaiting Triage`, "triage-link"); triage.href = "/member/triage"; pane.append(triage);
+  }
+  const messages = document.createElement("ol"); messages.className = "comms-transcript";
+  for (const message of thread.messages) messages.append(messageBubble(message)); pane.append(messages);
+  const actions = document.createElement("div"); actions.className = "button-row comms-actions";
+  const latest = thread.messages[thread.messages.length - 1];
+  if (thread.capabilities.mark_read) {
+    const operation = latest.unread ? "mark_read" : "mark_unread";
+    const button = text("button", latest.unread ? "Mark read" : "Mark unread", "button button-quiet"); button.type = "button";
+    button.addEventListener("click", () => runCommsCommand(thread, operation, { openclaw_approved: true })); actions.append(button);
+  }
+  if (thread.capabilities.archive) {
+    const operation = thread.archived ? "restore" : "archive";
+    const button = text("button", thread.archived ? "Restore" : "Archive", "button button-quiet"); button.type = "button";
+    button.addEventListener("click", () => runCommsCommand(thread, operation, { openclaw_approved: true })); actions.append(button);
+  }
+  const snooze = text("button", thread.bucket === "snoozed" ? "Unsnooze" : "Snooze 2h", "button button-quiet"); snooze.type = "button";
+  snooze.addEventListener("click", () => runCommsCommand(thread, thread.bucket === "snoozed" ? "unsnooze" : "snooze", thread.bucket === "snoozed" ? {} : { snoozed_until: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() })); actions.append(snooze);
+  const quiet = text("button", thread.quieted ? "Restore to focus" : "Quiet this", "button button-quiet"); quiet.type = "button";
+  quiet.addEventListener("click", () => runCommsCommand(thread, thread.quieted ? "unquiet" : "quiet")); actions.append(quiet);
+  pane.append(actions);
+  const compose = document.createElement("form"); compose.className = "comms-compose";
+  compose.append(text("label", "Reply in this thread"));
+  const input = document.createElement("textarea"); input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(input);
+  if (thread.capabilities.reply) {
+    const approvalLabel = document.createElement("label"); approvalLabel.className = "approval-check";
+    const approval = document.createElement("input"); approval.type = "checkbox";
+    approvalLabel.append(approval, document.createTextNode(" Approve the independent OpenClaw delivery gate for this exact reply"));
+    const send = text("button", "Send reply", "button button-primary"); send.type = "submit";
+    compose.append(approvalLabel, send);
+    compose.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!approval.checked) { setBanner("Check the OpenClaw delivery approval before sending. Nothing was sent."); return; }
+      runCommsCommand(thread, "reply", { body: input.value.trim(), openclaw_approved: true });
+    });
+  } else {
+    input.disabled = true;
+    compose.append(text("p", "This account is connected read-only. Reconnect it with provider write access to reply or manage messages here.", "state-note"));
+  }
+  pane.append(compose);
+  return pane;
+}
+
+function commsThreadList(threads) {
+  const list = document.createElement("section"); list.className = "card comms-list";
+  const heading = document.createElement("div"); heading.className = "section-heading"; heading.append(text("h2", "Conversations"), text("span", threads.length, "count-badge")); list.append(heading);
+  if (!threads.length) { list.append(text("p", "Nothing in this lens. Try All, another account, or enjoy the quiet.", "empty")); return list; }
+  const items = document.createElement("ol"); items.className = "comms-thread-items";
+  for (const thread of threads) {
+    const li = document.createElement("li");
+    const button = document.createElement("button"); button.type = "button"; button.className = "comms-thread";
+    if (thread.thread_key === state.commsThread) button.setAttribute("aria-current", "true");
+    const first = document.createElement("span"); first.className = "comms-thread-title"; first.append(text("strong", thread.title), text("span", thread.account_label, "meta"));
+    const count = thread.unread_count ? text("span", thread.unread_count, "unread-badge") : text("span", titleCase(thread.bucket), "meta");
+    button.append(first, count, text("span", thread.preview, "thread-preview"), text("span", thread.why[0], "focus-explanation"));
+    button.addEventListener("click", () => { state.commsThread = thread.thread_key; renderComms(state.surface); });
+    li.append(button); items.append(li);
+  }
+  list.append(items); return list;
+}
+
+function renderComms(data) {
+  const root = $("#surface"); root.replaceChildren();
+  const cockpit = data.cockpit;
+  $("#mode-label").textContent = "Private · deterministic focus";
+  root.append(commsHero(cockpit), commsControls(cockpit, data));
+  const visible = cockpit.threads.filter(commsMatches);
+  if (!state.commsThread || !visible.some((thread) => thread.thread_key === state.commsThread)) state.commsThread = visible[0]?.thread_key || null;
+  const selected = visible.find((thread) => thread.thread_key === state.commsThread);
+  const workspace = document.createElement("div"); workspace.className = "comms-workspace";
+  workspace.append(commsThreadList(visible), commsReadingPane(selected)); root.append(workspace);
+  if (!(cockpit.accounts || []).length) {
+    const setup = document.createElement("section"); setup.className = "state-card";
+    setup.append(text("strong", "No member-bound communication account is connected."), text("p", "Connect Gmail, Outlook, a trusted Messages bridge, Twilio SMS, or WhatsApp in Settings. Unbound accounts are deliberately excluded to prevent cross-member leakage.")); root.append(setup);
+  }
+}
+
 function renderSurface(data) {
   state.surface = data;
   const root = $("#surface");
@@ -582,6 +783,8 @@ function renderSurface(data) {
     renderToday(data);
   } else if (data.surface === "triage") {
     root.append(triageSurface(data.items));
+  } else if (data.surface === "comms") {
+    renderComms(data);
   } else if (data.surface === "people") {
     root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
   } else if (data.surface === "knowledge") {

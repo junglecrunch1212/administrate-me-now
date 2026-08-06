@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-06T14:28:58.414Z",
+  "generated_at": "2026-08-06T15:53:38.208Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -73,6 +73,41 @@
       "name": "triage member context",
       "status": "PASS",
       "detail": "Private member view"
+    },
+    {
+      "name": "/member/comms HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/comms title",
+      "status": "PASS",
+      "detail": "Comms"
+    },
+    {
+      "name": "Comms identifies deterministic private focus",
+      "status": "PASS",
+      "detail": "Private · deterministic focus"
+    },
+    {
+      "name": "Comms renders one member-bound account and thread",
+      "status": "PASS",
+      "detail": "COMMUNICATION COCKPIT1 conversation deserves a look.Focus is a deterministic lens over your connected accounts. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply1Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?Unread inbound messageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: Unread inbound message · Classified personal1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSnooze 2hQuiet thisReply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
+    },
+    {
+      "name": "Comms explains focus without a model",
+      "status": "PASS",
+      "detail": "Why it is here: Unread inbound message · Classified personal"
+    },
+    {
+      "name": "Comms reply requires independent approval",
+      "status": "PASS",
+      "detail": "Reply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
+    },
+    {
+      "name": "Comms quiet lens is interactive",
+      "status": "PASS",
+      "detail": "Conversations0Nothing in this lens. Try All, another account, or enjoy the quiet."
     },
     {
       "name": "/member/people HTTP",
@@ -165,9 +200,9 @@
       "detail": "Private member view"
     },
     {
-      "name": "eight principal navigation items",
+      "name": "nine principal navigation items",
       "status": "PASS",
-      "detail": 8
+      "detail": 9
     },
     {
       "name": "desktop named controls",
@@ -230,6 +265,26 @@
         "visible": true,
         "outline": 3
       }
+    },
+    {
+      "name": "/member/comms HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/comms title",
+      "status": "PASS",
+      "detail": "Comms"
+    },
+    {
+      "name": "Comms reflows without phone overflow",
+      "status": "PASS",
+      "detail": false
+    },
+    {
+      "name": "Comms phone retains focus explanation and reply approval",
+      "status": "PASS",
+      "detail": "COMMUNICATION COCKPIT1 conversation deserves a look.Focus is a deterministic lens over your connected accounts. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply1Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?Unread inbound messageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: Unread inbound message · Classified personal1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSnooze 2hQuiet thisReply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
     },
     {
       "name": "/member/today HTTP",
@@ -352,12 +407,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
+      "name": "/member/quests/view_5f5e1cd3ecbe4602 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_3a9b4c64d4314556 title",
+      "name": "/member/quests/view_5f5e1cd3ecbe4602 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -372,19 +427,19 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_3a9b4c64d4314556 HTTP",
+      "name": "/member/quests/view_5f5e1cd3ecbe4602 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_3a9b4c64d4314556 title",
+      "name": "/member/quests/view_5f5e1cd3ecbe4602 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
     {
       "name": "archived quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriagePeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsPeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "expiring quest created",
@@ -394,7 +449,7 @@
     {
       "name": "expired quest has no navigation entry",
       "status": "PASS",
-      "detail": "TodayTriagePeopleKnowledgeFinanceCalendarScoreboardSettings"
+      "detail": "TodayTriageCommsPeopleKnowledgeFinanceCalendarScoreboardSettings"
     },
     {
       "name": "/member/today HTTP",
@@ -546,80 +601,88 @@
   ],
   "screenshots": {
     "surface-today-day-brief-desktop.png": {
-      "bytes": 163679,
-      "sha256": "e468c616c6eab83e6414eebaa17b3560c9b7378701157552e1b49717cd19b849"
+      "bytes": 164421,
+      "sha256": "62419a2558793761066e358978a49d5a12e8e7664b7be94c26e3a77a6fd0cd78"
     },
     "surface-today-carousel-desktop.png": {
-      "bytes": 125055,
-      "sha256": "30e5ab7a5874420c736c4582761ea2881cb3e9845e84881af591b466137fd799"
+      "bytes": 125972,
+      "sha256": "e546995e3552dafb4c747e5665ac990e47fdb8b15dd0ea3b8ce8eaeeb6130c3e"
     },
     "surface-triage-desktop.png": {
-      "bytes": 137903,
-      "sha256": "a1eb109129f7a04e2a4e846c124b6d08c2a0814a56a2bc3fac19a755c4e8f368"
+      "bytes": 138977,
+      "sha256": "97bedc57e00040d53926b1cfb4af6101bf449ed1dcd9f425988e45e6550d7208"
+    },
+    "surface-comms-focus-desktop.png": {
+      "bytes": 235145,
+      "sha256": "f412add64ba5ab7a3a2bfd7f2b83f13b0ec113fd7eb197f21cdb629d8dd2b2e4"
     },
     "surface-people-desktop.png": {
-      "bytes": 109581,
-      "sha256": "8d019b7331e3368370fc2825fc505576a3377162df5dae43be7e70f2b6890a69"
+      "bytes": 110636,
+      "sha256": "1ca981d7d27bcf343f5faa8d8bc03f0d2ac1c3281abb57d238dc36baecd2f0db"
     },
     "surface-knowledge-desktop.png": {
-      "bytes": 111566,
-      "sha256": "25249686af26b68448cdbe77a2bd0c20c5ac472a96362ed8e0eeb54137fa3a7e"
+      "bytes": 112453,
+      "sha256": "df50d710bd1ca07be633330340ca6e311196fee515d831b4bc3271d4528a46d6"
     },
     "surface-finance-desktop.png": {
-      "bytes": 94364,
-      "sha256": "d3c6cd59745eb034866c006e06e03c249be2b0b3014dd8b2fa1b4e5e68a6bb00"
+      "bytes": 95320,
+      "sha256": "335a2594ef5fde91ec26c40548121a4c881f1192e9738518e56ef11e4880ed3e"
     },
     "surface-calendar-desktop.png": {
-      "bytes": 92848,
-      "sha256": "0c38013d9c9ba9d57c69bfa832d9babee8b3aa28fcffbe7a2f7ffe1fa464fe87"
+      "bytes": 93865,
+      "sha256": "a9dc79e7d344067435e946e7ef601311630f04db0c7000eae3f208328c56e34c"
     },
     "surface-scoreboard-desktop.png": {
-      "bytes": 107701,
-      "sha256": "e6d394bf1eae4d19e4ebfbe2337c81aadfd29028d57f6254d60ef49fab245045"
+      "bytes": 108708,
+      "sha256": "98829d3cf75d4b163c57907b3a76ea96b4a0b4d1deeaaf0479240e553b1d6563"
     },
     "surface-settings-desktop.png": {
-      "bytes": 231060,
-      "sha256": "3ac87eacb6237f22dc11f482ef81888ed0a2d114726b0b8bf684d4a13dced526"
+      "bytes": 232172,
+      "sha256": "ae98df7467bc2bb0168e809e25f04bc64337759fc241887eadc1dbf7a2217ffe"
+    },
+    "surface-comms-focus-narrow.png": {
+      "bytes": 149307,
+      "sha256": "71fc76fc58f4d1c9bb33a6adb4992a7757855f53250d0114041c213608ec87f3"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 115655,
-      "sha256": "619dbd52ab234813b60f15a18e362203081f3e57edc8a64e9fd56aee8ebca496"
+      "bytes": 116484,
+      "sha256": "46995722fe8132110893dee4738fd3997c6fd9c9758888cc71183c7400e67d01"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 99441,
-      "sha256": "26c00e36846dd1f5264054ad3fa43c7d4c485adac5da3e44e86f0099ccb785c0"
+      "bytes": 100561,
+      "sha256": "22a7ffc1a37bf71f4367d7e6bafa4a1ddfd4fc3d1262bd978e5fd2dae3db221d"
     },
     "quest-private-compressed.png": {
-      "bytes": 183619,
-      "sha256": "045370e6422acceedde0120e8e1d2725f4102eb18e2cf8e30ffd2eaecef61a7a"
+      "bytes": 184671,
+      "sha256": "e08427e9a2569c396823b3c9c66a4cf44c1470362194f5737dea2c105cfac467"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 220605,
-      "sha256": "5de7630310903b728da63f9d62fe4abb2d7e551e20c6959a5b77f0b7b0b6ec3d"
+      "bytes": 221581,
+      "sha256": "0a9c8b6025c094a1906d448a270597cc3537e6d294f07b3218a93d7fa9da2dca"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 103261,
-      "sha256": "ff3babfb94783c14812e987d094d0e77b2b592d0f76cb83363f498dd4b70a66c"
+      "bytes": 104301,
+      "sha256": "15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 103259,
-      "sha256": "c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f"
+      "bytes": 104301,
+      "sha256": "15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 109524,
-      "sha256": "64fbdebc9cb10059567085eebe5ac52b6ea2cb333f77485b1566a42f955429c2"
+      "bytes": 84695,
+      "sha256": "709986338162d729ffb07b13ef12ccd0a6cfdfb2c942612e54defbab31a4dc03"
     },
     "mode-child-scoreboard-narrow.png": {
-      "bytes": 50258,
-      "sha256": "ab79a691ed199334963158713f607680ec7a4d7787449bad783cb0da3b6b3746"
+      "bytes": 49989,
+      "sha256": "c6c297a4ce74f87aa31a01a8321242b14db7bef29375e5df9b936062b9ca47d1"
     },
     "shared-screen-scoreboard.png": {
       "bytes": 82792,
-      "sha256": "b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa"
+      "sha256": "4c4138c5d5c63e44655a8f8d2e86be7096f987966cef672c6b1eb4d8cb4e30ad"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 126320,
-      "sha256": "1330770b89c26dcc3c9dec9c38f641e9df248a6f46657567c6b2d70cf1e403de"
+      "bytes": 127341,
+      "sha256": "f6639c2dff848d0811db6af15523f45028f8de61b90c3053841afcf6ffea3cd7"
     }
   },
   "console_errors": [],

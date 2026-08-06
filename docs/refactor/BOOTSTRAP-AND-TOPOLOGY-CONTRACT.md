@@ -20,6 +20,23 @@ Node must satisfy the selected source engine (`>=22.22.3 <23 || >=24.15.0 <25 ||
 
 Each Apple-using member may have a separate least-privilege bridge daemon on a Mac signed into that member’s account. It holds only its enrollment identity and source-specific permissions; it never holds the central event-log key or another member’s credentials. The central ingest route derives owner scope from enrolled Tailscale identity and rejects a payload that claims another scope. Kid restrictions are enforced in the enrollment manifest and central policy.
 
+### Communication and OpenClaw isolation
+
+Every central communication account is bound explicitly to one member, one
+provider account, and a `personal|work` workspace before it can ingest into
+Comms. An unbound account is disabled; account discovery or an email address
+match is never authority. Read and write capabilities are recorded per exact
+account, and provider consent is least-privilege and observation-first.
+
+Human-to-human provider traffic is normalized by Cat-A adapters and does not
+enter an OpenClaw model session. For member-to-CoS DMs, bootstrap binds one
+isolated OpenClaw agent per human member and configures account-aware DM scope
+(`per-account-channel-peer`) so two people or two provider accounts cannot
+share session memory. A second work agent for the same member is created only
+when its tools, model, retention, or organization policy must differ—not just
+to render a work filter. Provider account credentials and OpenClaw agent
+credentials remain separately revocable.
+
 ## Composition lifecycle
 
 Startup order is transactional and health-visible:
@@ -51,7 +68,7 @@ Each section has `not_started|in_progress|complete|failed|rolled_back`, versione
 2. **Assistant persona:** select/fork the instance-level persona, run `npm --prefix openclaw/administrateme run workspace:compile`, install the generated `SOUL.md`, `IDENTITY.md`, `USER.md`, and `AGENTS.md` at the pinned workspace location, reload and verify. Member profiles remain per-member overlays. No authority or model policy comes from persona.
 3. **Household composition:** create tenant/household Parties, principals/children/helpers/ambient members, Memberships/Relationships, time zone and address through typed events; verify projection and two-member isolation.
 4. **Profiles:** assign one of five built-ins or validated custom profiles; disclose behavior diff; emit assignment; verify route/engine policy for adult/child/ambient roles.
-5. **Credential references:** generate a random 24+ character `ADMINME_OPENCLAW_SHARED_SECRET` for both local processes, store only its secret reference, and configure exact `ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON` (`channel|account|actor -> member`) plus `ADMINME_OPENCLAW_MEMBER_ROLES_JSON` separately. Every mapped member requires an explicit interactive role. Collect other values through local secure UI/CLI, validate, write values to 1Password/OpenClaw secret storage, persist references only, and redact logs/reports. The transport secret is not member authorization; provider LLM keys go to OpenClaw only.
+5. **Credential references:** generate a random 24+ character `ADMINME_OPENCLAW_SHARED_SECRET` for both local processes, store only its secret reference, and configure exact `ADMINME_OPENCLAW_ACTOR_IDENTITIES_JSON` (`channel|account|actor -> member`) plus `ADMINME_OPENCLAW_MEMBER_ROLES_JSON` separately. Every mapped member requires an explicit interactive role and, for enabled external DMs, a distinct member agent/account binding under account-aware DM scope. Every Comms adapter requires explicit `member_id`, provider account, workspace, and capability consent. Collect other values through local secure UI/CLI, validate, write values to 1Password/OpenClaw secret storage, persist references only, and redact logs/reports. The transport secret is not member authorization; provider LLM keys go to OpenClaw only.
 6. **Plaid:** sandbox first, consent/link, read-only minimum scopes, initial sync/reconciliation, no production flip during bootstrap/observation.
 7. **Seed data:** tenant-supplied household/CRM/place/asset/account/recurrence/project data becomes typed events; skipped optional data creates an explicit follow-up, never exemplar defaults.
 8. **Central integrations:** pair selected OpenClaw channels and central Cat-A/B/C/E adapters; set `ADMINME_LIVE_GATE=1` and `OPENCLAW_SOURCE_DIR` only in the disposable lab; run the live plugin link/inspect/restart/deep-RPC gate; reconcile the compiled skill, commands, dashboard, and `automations.json`; seed selected shared lists; test enabled adapters with observation-safe actions. Do not proceed on a version/commit mismatch.

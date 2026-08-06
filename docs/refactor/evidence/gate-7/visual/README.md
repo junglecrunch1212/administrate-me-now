@@ -22,6 +22,13 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: /member/triage HTTP
 - PASS: /member/triage title
 - PASS: triage member context
+- PASS: /member/comms HTTP
+- PASS: /member/comms title
+- PASS: Comms identifies deterministic private focus
+- PASS: Comms renders one member-bound account and thread
+- PASS: Comms explains focus without a model
+- PASS: Comms reply requires independent approval
+- PASS: Comms quiet lens is interactive
 - PASS: /member/people HTTP
 - PASS: /member/people title
 - PASS: people member context
@@ -40,13 +47,17 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: /member/settings HTTP
 - PASS: /member/settings title
 - PASS: settings member context
-- PASS: eight principal navigation items
+- PASS: nine principal navigation items
 - PASS: desktop named controls
 - PASS: desktop no horizontal overflow
 - PASS: desktop single page heading
 - PASS: desktop screen-reader landmarks
 - PASS: desktop contrast tokens
 - PASS: desktop keyboard focus indicator
+- PASS: /member/comms HTTP
+- PASS: /member/comms title
+- PASS: Comms reflows without phone overflow
+- PASS: Comms phone retains focus explanation and reply approval
 - PASS: /member/today HTTP
 - PASS: /member/today title
 - PASS: tablet Day Brief default
@@ -61,12 +72,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: tablet reduced-motion keyboard focus indicator
 - PASS: reduced motion honored
 - PASS: private quest created
-- PASS: /member/quests/view_3a9b4c64d4314556 HTTP
-- PASS: /member/quests/view_3a9b4c64d4314556 title
+- PASS: /member/quests/view_5f5e1cd3ecbe4602 HTTP
+- PASS: /member/quests/view_5f5e1cd3ecbe4602 title
 - PASS: private quest undiscoverable
 - PASS: quest promoted by explicit review
-- PASS: /member/quests/view_3a9b4c64d4314556 HTTP
-- PASS: /member/quests/view_3a9b4c64d4314556 title
+- PASS: /member/quests/view_5f5e1cd3ecbe4602 HTTP
+- PASS: /member/quests/view_5f5e1cd3ecbe4602 title
 - PASS: archived quest has no navigation entry
 - PASS: expiring quest created
 - PASS: expired quest has no navigation entry
@@ -96,22 +107,24 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 
 ## Screenshots
 
-- `surface-today-day-brief-desktop.png` — 163679 bytes, SHA-256 `e468c616c6eab83e6414eebaa17b3560c9b7378701157552e1b49717cd19b849`
-- `surface-today-carousel-desktop.png` — 125055 bytes, SHA-256 `30e5ab7a5874420c736c4582761ea2881cb3e9845e84881af591b466137fd799`
-- `surface-triage-desktop.png` — 137903 bytes, SHA-256 `a1eb109129f7a04e2a4e846c124b6d08c2a0814a56a2bc3fac19a755c4e8f368`
-- `surface-people-desktop.png` — 109581 bytes, SHA-256 `8d019b7331e3368370fc2825fc505576a3377162df5dae43be7e70f2b6890a69`
-- `surface-knowledge-desktop.png` — 111566 bytes, SHA-256 `25249686af26b68448cdbe77a2bd0c20c5ac472a96362ed8e0eeb54137fa3a7e`
-- `surface-finance-desktop.png` — 94364 bytes, SHA-256 `d3c6cd59745eb034866c006e06e03c249be2b0b3014dd8b2fa1b4e5e68a6bb00`
-- `surface-calendar-desktop.png` — 92848 bytes, SHA-256 `0c38013d9c9ba9d57c69bfa832d9babee8b3aa28fcffbe7a2f7ffe1fa464fe87`
-- `surface-scoreboard-desktop.png` — 107701 bytes, SHA-256 `e6d394bf1eae4d19e4ebfbe2337c81aadfd29028d57f6254d60ef49fab245045`
-- `surface-settings-desktop.png` — 231060 bytes, SHA-256 `3ac87eacb6237f22dc11f482ef81888ed0a2d114726b0b8bf684d4a13dced526`
-- `mode-compressed-observation-tablet.png` — 115655 bytes, SHA-256 `619dbd52ab234813b60f15a18e362203081f3e57edc8a64e9fd56aee8ebca496`
-- `adult-chat-streamed-tablet.png` — 99441 bytes, SHA-256 `26c00e36846dd1f5264054ad3fa43c7d4c485adac5da3e44e86f0099ccb785c0`
-- `quest-private-compressed.png` — 183619 bytes, SHA-256 `045370e6422acceedde0120e8e1d2725f4102eb18e2cf8e30ffd2eaecef61a7a`
-- `quest-promoted-carousel.png` — 220605 bytes, SHA-256 `5de7630310903b728da63f9d62fe4abb2d7e551e20c6959a5b77f0b7b0b6ec3d`
-- `quest-archived-bookmark.png` — 103261 bytes, SHA-256 `ff3babfb94783c14812e987d094d0e77b2b592d0f76cb83363f498dd4b70a66c`
-- `quest-expired-bookmark.png` — 103259 bytes, SHA-256 `c7cf5a0ce83cf2183e43193cdc49bfc3c34c632de7d739539923fc6a0a0bd57f`
-- `mode-child-today-narrow.png` — 109524 bytes, SHA-256 `64fbdebc9cb10059567085eebe5ac52b6ea2cb333f77485b1566a42f955429c2`
-- `mode-child-scoreboard-narrow.png` — 50258 bytes, SHA-256 `ab79a691ed199334963158713f607680ec7a4d7787449bad783cb0da3b6b3746`
-- `shared-screen-scoreboard.png` — 82792 bytes, SHA-256 `b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa`
-- `adult-chat-degraded-domain-healthy.png` — 126320 bytes, SHA-256 `1330770b89c26dcc3c9dec9c38f641e9df248a6f46657567c6b2d70cf1e403de`
+- `surface-today-day-brief-desktop.png` — 164421 bytes, SHA-256 `62419a2558793761066e358978a49d5a12e8e7664b7be94c26e3a77a6fd0cd78`
+- `surface-today-carousel-desktop.png` — 125972 bytes, SHA-256 `e546995e3552dafb4c747e5665ac990e47fdb8b15dd0ea3b8ce8eaeeb6130c3e`
+- `surface-triage-desktop.png` — 138977 bytes, SHA-256 `97bedc57e00040d53926b1cfb4af6101bf449ed1dcd9f425988e45e6550d7208`
+- `surface-comms-focus-desktop.png` — 235145 bytes, SHA-256 `f412add64ba5ab7a3a2bfd7f2b83f13b0ec113fd7eb197f21cdb629d8dd2b2e4`
+- `surface-people-desktop.png` — 110636 bytes, SHA-256 `1ca981d7d27bcf343f5faa8d8bc03f0d2ac1c3281abb57d238dc36baecd2f0db`
+- `surface-knowledge-desktop.png` — 112453 bytes, SHA-256 `df50d710bd1ca07be633330340ca6e311196fee515d831b4bc3271d4528a46d6`
+- `surface-finance-desktop.png` — 95320 bytes, SHA-256 `335a2594ef5fde91ec26c40548121a4c881f1192e9738518e56ef11e4880ed3e`
+- `surface-calendar-desktop.png` — 93865 bytes, SHA-256 `a9dc79e7d344067435e946e7ef601311630f04db0c7000eae3f208328c56e34c`
+- `surface-scoreboard-desktop.png` — 108708 bytes, SHA-256 `98829d3cf75d4b163c57907b3a76ea96b4a0b4d1deeaaf0479240e553b1d6563`
+- `surface-settings-desktop.png` — 232172 bytes, SHA-256 `ae98df7467bc2bb0168e809e25f04bc64337759fc241887eadc1dbf7a2217ffe`
+- `surface-comms-focus-narrow.png` — 149307 bytes, SHA-256 `71fc76fc58f4d1c9bb33a6adb4992a7757855f53250d0114041c213608ec87f3`
+- `mode-compressed-observation-tablet.png` — 116484 bytes, SHA-256 `46995722fe8132110893dee4738fd3997c6fd9c9758888cc71183c7400e67d01`
+- `adult-chat-streamed-tablet.png` — 100561 bytes, SHA-256 `22a7ffc1a37bf71f4367d7e6bafa4a1ddfd4fc3d1262bd978e5fd2dae3db221d`
+- `quest-private-compressed.png` — 184671 bytes, SHA-256 `e08427e9a2569c396823b3c9c66a4cf44c1470362194f5737dea2c105cfac467`
+- `quest-promoted-carousel.png` — 221581 bytes, SHA-256 `0a9c8b6025c094a1906d448a270597cc3537e6d294f07b3218a93d7fa9da2dca`
+- `quest-archived-bookmark.png` — 104301 bytes, SHA-256 `15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77`
+- `quest-expired-bookmark.png` — 104301 bytes, SHA-256 `15f786c7e286ebb21b0bd3d19b67e2f1dc9aa3672752fc15ac6519635193dd77`
+- `mode-child-today-narrow.png` — 84695 bytes, SHA-256 `709986338162d729ffb07b13ef12ccd0a6cfdfb2c942612e54defbab31a4dc03`
+- `mode-child-scoreboard-narrow.png` — 49989 bytes, SHA-256 `c6c297a4ce74f87aa31a01a8321242b14db7bef29375e5df9b936062b9ca47d1`
+- `shared-screen-scoreboard.png` — 82792 bytes, SHA-256 `4c4138c5d5c63e44655a8f8d2e86be7096f987966cef672c6b1eb4d8cb4e30ad`
+- `adult-chat-degraded-domain-healthy.png` — 127341 bytes, SHA-256 `f6639c2dff848d0811db6af15523f45028f8de61b90c3053841afcf6ffea3cd7`

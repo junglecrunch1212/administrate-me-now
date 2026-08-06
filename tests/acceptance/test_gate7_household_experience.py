@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -95,6 +96,17 @@ async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
     async for event in runtime.event_log.read_since(types=list(types) or None):
         rows.append(event)
     return rows
+
+
+async def _wait_for_command_result(runtime: Any, command_id: str) -> dict[str, Any]:
+    for _ in range(200):
+        async for event in runtime.event_log.read_since(
+            types=["external_sync.write_completed", "external_sync.write_failed"]
+        ):
+            if event["payload"].get("command_id") == command_id:
+                return event
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"no terminal result for {command_id}")
 
 
 async def _seed_today_truth(runtime: Any) -> dict[str, str]:
@@ -378,7 +390,7 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "OPENAI_API_KEY" not in assets and "ANTHROPIC_API_KEY" not in assets
 
 
-def test_eight_surfaces_three_modes_and_independent_route_denial(
+def test_nine_surfaces_three_modes_and_independent_route_denial(
     tmp_path: Path,
 ) -> None:
     instance = tmp_path / "instance"
@@ -390,6 +402,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert [item["id"] for item in adult_bootstrap.json()["navigation"]] == [
             "today",
             "triage",
+            "comms",
             "people",
             "knowledge",
             "finance",
@@ -422,6 +435,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert child_bootstrap["mode"] == "child"
         for forbidden in (
             "triage",
+            "comms",
             "people",
             "knowledge",
             "finance",
@@ -508,6 +522,115 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert completed.status_code == 200, completed.text
         assert completed.json()["commitment"]["status"] == "done"
         assert completed.json()["next_action"] != before
+
+
+def test_comms_is_member_isolated_deterministic_and_locally_controllable(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        seeded = client.post(
+            "/api/comms/v1/demo/canonical-message",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-comms-cockpit",
+                "native_message_id": "gate7-comms-native",
+                "body": "Please reply today and add the appointment candidate to Triage.",
+                "received_at": "2026-08-04T12:05:00Z",
+            },
+        )
+        assert seeded.status_code == 200, seeded.text
+
+        response = client.get(
+            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
+        )
+        assert response.status_code == 200, response.text
+        cockpit = response.json()["cockpit"]
+        assert cockpit["contract"] == "deterministic-comms-cockpit-v1"
+        assert cockpit["decision_maker"] == "rules_not_model"
+        assert cockpit["combined_view_is_union_not_copy"] is True
+        assert cockpit["official_items_require_triage"] is True
+        assert cockpit["accounts"][0]["provider_account_id"] == "fixture-account"
+        [thread] = cockpit["threads"]
+        assert thread["provider"] == "fixture"
+        assert thread["workspace"] == "personal"
+        assert thread["messages"][0]["body"].startswith("Please reply today")
+        assert thread["why"]
+        assert thread["last_event_id"]
+
+        wake = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        snoozed = client.post(
+            f"/api/member/v1/comms/{thread['last_interaction_id']}/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "operation": "snooze",
+                "expected_last_event_id": thread["last_event_id"],
+                "request_id": "gate7-comms-snooze",
+                "snoozed_until": wake,
+            },
+        )
+        assert snoozed.status_code == 200, snoozed.text
+        updated = client.get(
+            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert updated["threads"][0]["bucket"] == "snoozed"
+        assert updated["counts"]["snoozed"] == 1
+        current = updated["threads"][0]
+        unapproved = client.post(
+            f"/api/member/v1/comms/{current['last_interaction_id']}/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "operation": "reply",
+                "expected_last_event_id": current["last_event_id"],
+                "request_id": "gate7-comms-reply-unapproved",
+                "body": "A calm fixture reply.",
+                "openclaw_approved": False,
+            },
+        )
+        assert unapproved.status_code == 403
+        approved = client.post(
+            f"/api/member/v1/comms/{current['last_interaction_id']}/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "operation": "reply",
+                "expected_last_event_id": current["last_event_id"],
+                "request_id": "gate7-comms-reply-approved",
+                "body": "A calm fixture reply.",
+                "openclaw_approved": True,
+            },
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["observation_mode"] is True
+        terminal = client.portal.call(
+            _wait_for_command_result,
+            app.state.runtime,
+            "gate7-comms-reply-approved",
+        )
+        assert terminal["type"] == "external_sync.write_completed"
+        assert terminal["payload"]["suppressed"] is True
+        assert app.state.runtime.fixture_adapter.delivered == []
+        command_state = client.get(
+            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]["threads"][0]["command_state"]
+        assert command_state == "suppressed"
+        stale = client.post(
+            f"/api/member/v1/comms/{thread['last_interaction_id']}/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "operation": "quiet",
+                "expected_last_event_id": thread["last_event_id"],
+                "request_id": "gate7-comms-stale",
+            },
+        )
+        assert stale.status_code == 409
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/comms", headers=HEADERS[CHILD]
+            ).status_code
+            == 404
+        )
 
 
 def test_today_is_one_deterministic_brief_with_typed_member_actions(

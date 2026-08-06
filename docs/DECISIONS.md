@@ -230,6 +230,9 @@ Twilio is Cat-E (Outbound-Action). Inbound SMS is **deferred to v2** — the v1 
 
 If a future v2 build adds inbound SMS handling (alphanumeric short codes, two-way SMS chat with non-iMessage parties), it lands as a separate Cat-A capability on the same Twilio pack manifest, declared as a second capability per [D19].
 
+**Partially superseded by D28:** two-way Twilio SMS/MMS and WhatsApp are now
+admitted Cat-A capabilities; proactive SMS/voice remains Cat-E.
+
 ### D22 — Apple Calendar is dual-deployment Cat-B; v1 scope expands
 
 **Decided:** 2026-04-29-B. **Status:** CONFIRMED. **Resolves:** v1 calendar gap for Apple-using households — the pre-Amendment-2 plan had Google Calendar (central) and CalDAV (deferred to v2), leaving an Apple-using household without an Apple-side calendar adapter in v1.
@@ -377,6 +380,108 @@ The member portal and pinned OpenClaw dashboard consume the same
 time, scope filtering, typed action routing, optimistic concurrency,
 idempotent retries, ordered Routine progression, replay, and a model-free
 path before Today behavior is considered complete.
+
+### D28 — Comms is a deterministic, member-isolated communications cockpit
+
+**Decided:** 2026-08-06. **Status:** CONFIRMED. **Supersedes:** the eight-surface
+count in D26/Gate 7 and D21 only where it deferred all inbound Twilio messaging.
+It preserves D21's Cat-E classification for proactive SMS/voice actions.
+
+Comms is the ninth stable adult member surface, immediately after Triage. It is
+the working-memory layer over person-to-person email and messaging—not a
+second assistant chat, a generic OpenClaw transcript viewer, or a source of
+household truth. The default Focus view, account/workspace/channel filters,
+Waiting, Snoozed, Quieted, All, thread reader, inline reply, provider-state
+actions, capability status, and links to extracted Triage candidates operate on
+the existing `interactions` projection.
+
+The combined inbox is an authorized union at query time. Every fact retains
+`member_id`, provider, provider account, `personal|work` workspace, native
+thread/message identifiers, participants, scope, sensitivity, provider labels,
+and raw-event provenance. It is never copied into a cross-account mailbox.
+Principals cannot act while viewing as another member; privileged content
+remains owner-only; children and ambient/device roles have no Comms route.
+Personal and work accounts may be combined visually only after each account
+passes the same member authorization independently.
+
+Focus is `deterministic-comms-cockpit-v1`. Fixed rules derive Focus, Needs
+Reply, Waiting, Snoozed, Quieted, Archive, scores, and plain-language reasons
+from direction, unread/important state, explicit member controls, typed
+classification, response urgency, and recency. An LLM cannot choose ordering,
+archive, send, or create an official item. NLP through the pinned OpenClaw
+`llm-task` seam may emit typed classifications or extraction proposals; those
+are auditable inputs to the fixed rules. Calendar events, Tasks, Commitments,
+reminders, lists/list items, and CRM links extracted from communications still
+become official only through D26 Triage.
+
+Snooze and quiet are AdministrateMe-owned, event-sourced focus state and do not
+pretend to change a provider mailbox. Reply/read/archive operations are typed
+`external_sync.write_requested` commands. The UI exposes an operation only
+when that exact configured account advertises it. Every external mutation
+retains allowlist → domain governance → rate limit ordering, explicit member
+approval, independent OpenClaw approval, final content/privacy guard,
+observation handling, optimistic concurrency, and requested/completed/failed
+audit evidence. A provider response or later provider observation—not a UI
+click—is the terminal delivery/state fact.
+
+OpenClaw owns member-to-CoS channel conversations and model sessions;
+AdministrateMe owns the normalized communication facts and domain policy. A
+human-to-human provider message does not enter an OpenClaw model session merely
+because OpenClaw can transport that channel. When member DMs do reach OpenClaw,
+true person isolation uses one OpenClaw agent per member, with a private
+workspace/state/auth/session store and deterministic account/peer binding.
+Within one member, `per-account-channel-peer` sessions separate channel
+accounts. A second personal/work agent is justified only when model, tool,
+workspace, or professional-policy boundaries differ; an extra agent is not a
+substitute for AdministrateMe member/account/workspace authorization. Official
+OpenClaw routing references reviewed for this decision:
+<https://docs.openclaw.ai/concepts/multi-agent>,
+<https://docs.openclaw.ai/channels/channel-routing>, and
+<https://docs.openclaw.ai/gateway/config-channels>.
+
+Provider capability ceilings are evidence-backed and never universalized:
+
+- Gmail/Google Workspace uses Gmail messages, threads, history, labels,
+  `messages.modify`, and `messages.send`. Push uses Pub/Sub `watch`, must be
+  renewed, and still needs periodic history fallback because notifications can
+  be delayed or dropped. Read-only OAuth is the default; reply/read/archive
+  require fresh modify/send consent. Sources:
+  <https://developers.google.com/workspace/gmail/api/reference/rest>,
+  <https://developers.google.com/workspace/gmail/api/guides/push>, and
+  <https://developers.google.com/workspace/gmail/api/guides/sync>.
+- Outlook/Microsoft 365 uses Microsoft Graph message/folder APIs, per-folder
+  delta, change/lifecycle notifications, reply/forward/draft/send, read state,
+  flags, and importance. Shared/delegated mailbox subscriptions require the
+  provider's application-permission path rather than pretending delegated
+  `Mail.Read.Shared` is sufficient. Sources:
+  <https://learn.microsoft.com/en-us/graph/outlook-mail-concept-overview>,
+  <https://learn.microsoft.com/en-us/graph/api/message-delta>, and
+  <https://learn.microsoft.com/en-us/graph/outlook-change-notifications-overview>.
+- Apple EventKit is not a Messages-history API. Apple's public Messages and
+  MessageUI frameworks support extensions/compose UI, not arbitrary personal
+  history ingestion. iMessage/SMS therefore requires a reviewed, explicitly
+  trusted per-member local bridge such as BlueBubbles, with Full Disk Access
+  and automation implications disclosed. It is never installed or labeled as
+  EventKit. Sources: <https://developer.apple.com/documentation/messages>,
+  <https://developer.apple.com/documentation/messageui>, and
+  <https://github.com/BlueBubblesApp/bluebubbles-server>.
+- A Twilio number used for two-way SMS/MMS or WhatsApp declares a Cat-A
+  inbound/reply capability; proactive SMS and voice remain a separate Cat-E
+  capability on the same pack. Delivery/read status is provider evidence.
+  WhatsApp free-form replies are constrained to the provider's 24-hour
+  customer-service window; approved templates apply outside it. Sources:
+  <https://www.twilio.com/docs/messaging/api/message-resource>,
+  <https://www.twilio.com/docs/usage/webhooks/messaging-webhooks>, and
+  <https://www.twilio.com/docs/whatsapp/api>.
+
+Missing Outlook, BlueBubbles, Twilio SMS, and Twilio WhatsApp packs remain
+truthfully unconfigured/disabled provider edges; their absence cannot remove
+the required Comms product function or invite fabricated live-provider claims.
+Release acceptance proves navigation/server authorization, account isolation,
+body/provenance projection, deterministic grouping/ranking, local focus-state
+round trip, stale-write refusal, provider capability denial, observation-mode
+suppression, replay, pinned OpenClaw binding, responsive keyboard behavior, and
+zero browser/runtime errors.
 
 ---
 

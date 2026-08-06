@@ -1,13 +1,13 @@
 # UX behavior contract
 
-Gate 7 production status (2026-08-04): the real member portal now implements
-the eight stable surfaces, role-derived navigation/routes, carousel,
+Gate 7 production status (amended 2026-08-06): the real member portal now implements
+the nine stable adult surfaces, role-derived navigation/routes, carousel,
 compressed, and child modes, evidence dialog, lifecycle-to-next-action
 feedback, workbook/capability states, the narrow OpenClaw chat relay, and
 private disposable quest navigation. `tools/console-reference-harness/
-run-gate7.mjs` rendered and inspected 17 deterministic captures across
+run-gate7.mjs` now renders and inspects 21 deterministic captures across
 1440×1000, 1280×900, 1024×768, 820×1180, and 390×844. Its accessibility and
-browser checks pass with no unexpected console/page/request failures. The
+all 92 browser checks pass with no unexpected console/page/request failures. The
 pixel review caught and corrected a disabled-provider/Ready labeling defect;
 Settings now shows distinct disabled, healthy, degraded, blocked,
 unavailable, and not-built states with reasons.
@@ -44,6 +44,7 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 |---|---|---|
 | Today | A local-time Daily Brief synthesizing calendar, executable tasks/commitments/list items, individual recurrences, ordered Routine occurrences, actionable messages, and clarifying decisions; explicit Day Brief/Carousel switching; contextual what-now for now/hour/daypart/day/week; energy/capacity, blockers, evidence, and profile-aware micro-steps. | A static hardcoded task carousel, a raw “Open lists” card, a recurrence presented as an ordered Routine, or a profile/member identifier presented as the current view. |
 | Triage | Member-owned queue containing only extracted/derived candidates; confirm, enrich/reroute, or dismiss with source evidence and terminal outcome. Raw provider observations remain facts; already-official tasks never appear here. | The former Inbox mixture of proposals plus open work; client-only “Approve & Send”; generic transcript storage. |
+| Comms | Member-isolated unified communications cockpit with combined and per-account/workspace views, deterministic Focus/Waiting/Snoozed/Quieted/All lenses, thread reader, explicit provider capabilities, inline governed actions, local focus controls, and linked Triage extraction status. | A copied global mailbox, model-ranked inbox, second assistant transcript, implicit provider capability, cross-member/workspace union, or direct extraction-to-calendar/task/list write. |
 | CRM | Party/relationship/interaction/commitment/artifact views, provenance, overdue relationship cues, birthday/hosting balance where authorized. | Exemplar household data and mock counts. |
 | Capture/Knowledge | Member-owned knowledge, authorized household knowledge, lists, recipes, provenance, structured/semantic search. Keep the navigation concept, label it “Knowledge” where clarity helps. | Quick-capture prefix routing, direct voice ingest, and triage queue are retired by D17. |
 | Finance | Scope-filtered accounts/transactions/budgets/subscriptions and workbook state; privileged owner-only details and audit. | Any client-only masking or demo values. |
@@ -73,7 +74,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 
 | ID | Requirement |
 |---|---|
-| UX-01 | All eight required destinations are addressable by stable routes, responsive at phone/tablet/desktop widths, and keyboard navigable. |
+| UX-01 | All nine required adult destinations are addressable by stable routes, responsive at phone/tablet/desktop widths, and keyboard navigable. |
 | UX-02 | Navigation and API route availability derive from server-authorized role/capability data; direct child requests to hidden routes are denied without leaking counts or labels. |
 | UX-03 | Today defaults to a local-time Day Brief and can switch to one-item Carousel without changing truth. It exposes calendar, executable work, individual recurrence, ordered Routine occurrence, actionable-message, and clarifying-decision sections plus now, next-hour, daypart, day, and week recommendations with explanation payloads. What Now deterministically prioritizes an in-progress or next-30-minute timed event before ranked work; changed context changes ranking. Routine actions handle only the current step and preserve linked Tasks. |
 | UX-04 | A Triage candidate shows source evidence, confidence, affected object, intended target member/provider/container, external action, sender identity, approval requirements, and expiry before authorization. |
@@ -85,10 +86,12 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-10 | Evidence/provenance views show source adapter/account, timestamps, correlation/causation, schema/version, transformation/skill provenance, correction history, and current projection freshness without exposing secrets. |
 | UX-11 | Capture/Knowledge contains no quick-prefix mutation, direct voice upload, or triage affordance unless a future ADR reintroduces it with member-bridge semantics. |
 | UX-12 | Approval UI cannot auto-send as a principal. Assistant-identity send is labeled; draft-for-principal is review-only; send-as-principal is unavailable/hard-refused. |
-| UX-13 | Chat handoff uses per-channel-peer OpenClaw sessions and explicitly selected domain events; generic history is not copied into AdministrateMe. |
+| UX-13 | Chat handoff uses one isolated OpenClaw agent per member plus account-aware peer sessions for external DMs and explicitly selected domain events; generic history is not copied into AdministrateMe. |
 | UX-14 | All state-changing controls are idempotent under double click, reconnect, and retry and surface pending/confirmed/failed reconciliation. |
 | UX-15 | Inputs and evidence are safely escaped; no untrusted value reaches `innerHTML` or equivalent unsanitized rendering. |
 | UX-16 | WCAG 2.2 AA checks cover landmarks, names/roles/values, focus order/visibility, contrast, target size, error association, live regions, reduced motion, and 200% zoom/reflow. |
+| UX-17 | Comms authorizes every account independently before query-time union; retains member/provider/account/workspace/thread/message provenance; exposes only exact-account capabilities; and denies children, devices, cross-member reads, and all view-as mutations. |
+| UX-18 | Comms Focus and noise suppression are fixed, explained rules over typed state. Snooze/quiet are local event-sourced state; reply/read/archive are governed provider commands with pending/completed/failed reconciliation; extracted work can become canonical only through Triage. |
 
 ## State model
 
@@ -128,3 +131,14 @@ member-confirmed calendar-outcome events.
 `tests/unit/test_today_brief.py` pins the pure composition clock/timezone and
 item-action contract. The Gate 7 visual harness renders the Day Brief and the
 interactive Carousel at desktop, tablet, narrow, and reduced-motion states.
+
+Comms amendment (2026-08-06): Comms is the ninth adult destination, directly
+after Triage. It composes an authorized member/account/workspace union over
+the interactions projection at read time. Focus, Waiting, Snoozed, Quieted,
+and All are deterministic views; personal and work accounts remain separately
+filterable even in the combined view. The transcript reader, inline reply,
+read/archive controls, local snooze/quiet controls, capability remedies, and
+Triage links expose only actions the exact account can support. Provider
+writes require self context, optimistic concurrency, independent approval,
+the full external-write guard, and terminal reconciliation. No model owns the
+sort order, sends a reply, or materializes extracted household truth.

@@ -38,6 +38,40 @@ class MessagingReceivedV2(MessagingReceivedV1):
     native_message_id: str = Field(min_length=1, max_length=240)
 
 
+class MessagingReceivedV3(MessagingReceivedV2):
+    """Account-bound, loss-aware communication fact for the Comms cockpit.
+
+    The envelope still carries the authoritative owner/sensitivity scope.  These
+    fields preserve the provider/account/workspace coordinates required to form
+    a combined inbox without erasing the isolation boundary that each message
+    crossed.  Provider labels are observations, never AdministrateMe truth.
+    """
+
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: Literal[
+        "gmail",
+        "microsoft_graph",
+        "bluebubbles",
+        "twilio_sms",
+        "twilio_whatsapp",
+        "openclaw_channel",
+        "fixture",
+    ]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    workspace: Literal["personal", "work"]
+    to_identifiers: list[str] = Field(default_factory=list, max_length=100)
+    cc_identifiers: list[str] = Field(default_factory=list, max_length=100)
+    bcc_identifiers: list[str] = Field(default_factory=list, max_length=100)
+    reply_to_identifier: str | None = Field(default=None, max_length=1000)
+    rfc_message_id: str | None = Field(default=None, max_length=1000)
+    references: list[str] = Field(default_factory=list, max_length=100)
+    provider_labels: list[str] = Field(default_factory=list, max_length=200)
+    unread: bool = True
+    archived: bool = False
+    starred: bool = False
+    important: bool = False
+
+
 class InteractionParticipantResolvedV1(BaseModel):
     """Identity pipeline result linking an interaction role to a Party."""
 
@@ -59,6 +93,37 @@ class MessagingSentV1(BaseModel):
     body_text: str | None = None
     sent_at: str = Field(min_length=1)
     delivery_status: Literal["queued", "sent", "failed"]
+
+
+class MessagingSentV2(MessagingSentV1):
+    """Account-bound outbound observation emitted after the provider seam."""
+
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: Literal[
+        "gmail",
+        "microsoft_graph",
+        "bluebubbles",
+        "twilio_sms",
+        "twilio_whatsapp",
+        "openclaw_channel",
+        "fixture",
+    ]
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    workspace: Literal["personal", "work"]
+    native_message_id: str | None = Field(default=None, max_length=240)
+    in_reply_to_interaction_id: str | None = Field(default=None, max_length=240)
+
+
+class CommunicationStateChangedV1(BaseModel):
+    """Deterministic member-owned focus state, independent of provider state."""
+
+    interaction_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    operation: Literal["snooze", "unsnooze", "quiet", "unquiet"]
+    snoozed_until: str | None = None
+    quieted: bool | None = None
+    changed_at: str = Field(min_length=1)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
 
 
 class TelephonySmsReceivedV1(BaseModel):
@@ -261,10 +326,13 @@ class MessagingClassifiedV1(BaseModel):
 
 registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.received", 2, MessagingReceivedV2)
+registry.register("messaging.received", 3, MessagingReceivedV3)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )
 registry.register("messaging.sent", 1, MessagingSentV1)
+registry.register("messaging.sent", 2, MessagingSentV2)
+registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)
 registry.register("calendar.event_updated", 1, CalendarEventUpdatedV1)

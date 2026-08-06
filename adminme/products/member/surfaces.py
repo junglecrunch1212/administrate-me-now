@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
+from adminme.comms import compose_comms_cockpit
 from adminme.lib.session import Session
 from adminme.products.core import main as core
 from adminme.today import compose_daily_brief
@@ -18,6 +19,7 @@ from adminme.projections.calendars.queries import week
 from adminme.projections.commitments.queries import by_party
 from adminme.projections.interactions.queries import (
     closeness_signals,
+    participants_for,
     recent,
     recent_for_member,
     recent_with,
@@ -41,6 +43,7 @@ from adminme.projections.triage.queries import pending_for_member as pending_tri
 ADULT_SURFACES = (
     "today",
     "triage",
+    "comms",
     "people",
     "knowledge",
     "finance",
@@ -54,6 +57,7 @@ DEVICE_SURFACES = ("scoreboard",)
 SURFACE_LABELS = {
     "today": "Today",
     "triage": "Triage",
+    "comms": "Comms",
     "people": "People",
     "knowledge": "Knowledge",
     "finance": "Finance",
@@ -61,6 +65,182 @@ SURFACE_LABELS = {
     "scoreboard": "Scoreboard",
     "settings": "Settings",
 }
+
+
+_COMMUNICATION_PROVIDERS: dict[str, tuple[str, str]] = {
+    "messaging-gmail-api": ("gmail", "Email"),
+    "messaging-microsoft-graph": ("microsoft_graph", "Email"),
+    "messaging-bluebubbles": ("bluebubbles", "Messages"),
+    "messaging-twilio-sms": ("twilio_sms", "SMS"),
+    "messaging-twilio-whatsapp": ("twilio_whatsapp", "WhatsApp"),
+}
+_PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
+    "gmail": frozenset({"reply", "send", "mark_read", "archive"}),
+    "microsoft_graph": frozenset({"reply", "send", "mark_read", "archive"}),
+    "bluebubbles": frozenset({"reply", "send"}),
+    "twilio_sms": frozenset({"reply", "send"}),
+    "twilio_whatsapp": frozenset({"reply", "send"}),
+}
+
+
+def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
+    """Expose secret-free, member-bound capability negotiation to the UI."""
+
+    accounts: list[dict[str, Any]] = []
+    for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("enabled") is False:
+            continue
+        kind = str(entry.get("kind") or "").removeprefix("adapter:")
+        provider_info = _COMMUNICATION_PROVIDERS.get(kind)
+        if provider_info is None:
+            continue
+        config = entry.get("config") or {}
+        if not isinstance(config, dict) or config.get("member_id") != member_id:
+            continue
+        provider, channel = provider_info
+        account_id = str(
+            config.get("provider_account_id")
+            or config.get("user_email")
+            or entry.get("id")
+            or f"{provider}-{index}"
+        )
+        workspace = str(config.get("workspace") or "personal")
+        writes = bool(config.get("enable_writes"))
+        write_capabilities = _PROVIDER_WRITE_CAPABILITIES[provider]
+        accounts.append(
+            {
+                "id": str(entry.get("id") or f"{kind}-{index}"),
+                "provider": provider,
+                "provider_account_id": account_id,
+                "label": str(config.get("account_label") or account_id),
+                "channel": channel,
+                "workspace": workspace,
+                "state": "observation_only"
+                if runtime._observation_active
+                else "connected",
+                "capabilities": {
+                    "read": True,
+                    "threads": True,
+                    "reply": writes and "reply" in write_capabilities,
+                    "send": writes and "send" in write_capabilities,
+                    "mark_read": writes and "mark_read" in write_capabilities,
+                    "archive": writes and "archive" in write_capabilities,
+                    "attachments": "metadata_only",
+                    "snooze_local": True,
+                    "quiet_local": True,
+                },
+                "write_access_remedy": None
+                if writes
+                else "Reconnect this account with provider write access.",
+            }
+        )
+    if (
+        runtime.fixture_adapter is not None
+        and runtime.settings.fixture_member_id == member_id
+    ):
+        accounts.append(
+            {
+                "id": "fixture-messaging",
+                "provider": "fixture",
+                "provider_account_id": "fixture-account",
+                "label": "Deterministic fixture",
+                "channel": "Test messages",
+                "workspace": "personal",
+                "state": "observation_only"
+                if runtime._observation_active
+                else "connected",
+                "capabilities": {
+                    "read": True,
+                    "threads": True,
+                    "reply": True,
+                    "send": True,
+                    "mark_read": False,
+                    "archive": False,
+                    "attachments": "metadata_only",
+                    "snooze_local": True,
+                    "quiet_local": True,
+                },
+                "write_access_remedy": None,
+            }
+        )
+    return accounts
+
+
+def _connector_catalog() -> list[dict[str, Any]]:
+    """Reviewed capability ceiling; configured accounts may expose less."""
+
+    return [
+        {
+            "provider": "gmail",
+            "label": "Gmail / Google Workspace",
+            "runtime": "central",
+            "supported": [
+                "sync",
+                "threads",
+                "reply",
+                "send",
+                "read_state",
+                "archive",
+                "labels",
+                "attachment_metadata",
+            ],
+            "limitations": [
+                "push requires Pub/Sub watch renewal and history fallback",
+                "attachment content/download is not yet installed",
+            ],
+        },
+        {
+            "provider": "microsoft_graph",
+            "label": "Outlook / Microsoft 365",
+            "runtime": "central",
+            "supported": [
+                "sync",
+                "threads",
+                "reply",
+                "send",
+                "read_state",
+                "folders",
+                "flags",
+            ],
+            "limitations": [
+                "shared-mailbox subscriptions require application permissions"
+            ],
+        },
+        {
+            "provider": "bluebubbles",
+            "label": "iMessage / Apple Messages",
+            "runtime": "member_bridge",
+            "supported": [
+                "sync",
+                "threads",
+                "reply",
+                "send",
+                "attachments",
+                "delivery_state",
+            ],
+            "limitations": [
+                "no supported Apple history API; requires an explicitly trusted local bridge"
+            ],
+        },
+        {
+            "provider": "twilio_sms",
+            "label": "Twilio SMS / MMS",
+            "runtime": "central_webhook",
+            "supported": ["inbound", "reply", "send", "media", "delivery_state"],
+            "limitations": ["provider number is the sender identity"],
+        },
+        {
+            "provider": "twilio_whatsapp",
+            "label": "WhatsApp via Twilio",
+            "runtime": "central_webhook",
+            "supported": ["inbound", "reply", "send", "media", "delivery_state"],
+            "limitations": [
+                "free-form replies are limited to the 24-hour service window; templates apply outside it"
+            ],
+        },
+    ]
 
 
 def navigation(session: Session) -> list[dict[str, str]]:
@@ -210,6 +390,35 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
             "human_gate_required": True,
             "states": ["pending_review", "confirmed", "dismissed"],
         }
+    elif surface == "comms":
+        interactions_conn = runtime.projections.connection("interactions")
+        rows = recent_for_member(
+            interactions_conn,
+            session,
+            member_id=member,
+            limit=500,
+        )
+        triage_items = pending_triage(
+            runtime.projections.connection("triage"), session, member_id=member
+        )
+        party_labels = {
+            str(party["party_id"]): str(party.get("display_name") or "Contact")
+            for party in all_parties(runtime.projections.connection("parties"), session)
+        }
+        base["cockpit"] = compose_comms_cockpit(
+            member_id=member,
+            rows=rows,
+            participants=participants_for(
+                interactions_conn,
+                session,
+                interaction_ids=[str(row["interaction_id"]) for row in rows],
+            ),
+            party_labels=party_labels,
+            accounts=communication_accounts(runtime, member),
+            triage_items=triage_items,
+            now=now,
+        )
+        base["connector_catalog"] = _connector_catalog()
     elif surface == "people":
         base["people"] = all_parties(runtime.projections.connection("parties"), session)
         base["recent_interactions"] = recent(

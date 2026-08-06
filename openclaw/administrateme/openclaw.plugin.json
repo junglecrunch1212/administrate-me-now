@@ -61,6 +61,11 @@
         "description": "Scope-filtered human gate for extracted household candidates."
       },
       {
+        "id": "comms.cockpit",
+        "method": "administrateme.dashboard.comms",
+        "description": "Member-isolated deterministic communications cockpit and provider capability state."
+      },
+      {
         "id": "crm.people",
         "method": "administrateme.dashboard.people",
         "description": "Scope-filtered CRM people and interaction context."

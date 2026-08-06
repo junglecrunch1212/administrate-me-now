@@ -263,7 +263,7 @@ async function run() {
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
-      today: "Today", triage: "Triage", people: "People", knowledge: "Knowledge",
+      today: "Today", triage: "Triage", comms: "Comms", people: "People", knowledge: "Knowledge",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     for (const [surface, label] of Object.entries(surfaceLabels)) {
@@ -277,14 +277,31 @@ async function run() {
         await principal.page.locator(".carousel-card").waitFor();
         record("Today Carousel is interactive", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "false", await principal.page.locator("#surface").textContent());
         await screenshot(principal.page, "surface-today-carousel-desktop.png");
+      } else if (surface === "comms") {
+        record("Comms identifies deterministic private focus", await principal.page.locator("#mode-label").textContent() === "Private · deterministic focus", await principal.page.locator("#mode-label").textContent());
+        record("Comms renders one member-bound account and thread", await principal.page.locator(".account-filters .account-filter").count() === 2 && await principal.page.locator(".comms-thread").count() === 1, await principal.page.locator("#surface").textContent());
+        record("Comms explains focus without a model", (await principal.page.locator(".focus-reason").textContent()).includes("Why it is here"), await principal.page.locator(".focus-reason").textContent());
+        record("Comms reply requires independent approval", await principal.page.getByLabel(/Approve the independent OpenClaw delivery gate/).count() === 1 && await principal.page.getByRole("button", { name: "Send reply" }).count() === 1, await principal.page.locator(".comms-compose").textContent());
+        await screenshot(principal.page, "surface-comms-focus-desktop.png");
+        await principal.page.getByRole("button", { name: /^Quieted/ }).click();
+        record("Comms quiet lens is interactive", (await principal.page.locator(".comms-list").textContent()).includes("Nothing in this lens"), await principal.page.locator(".comms-list").textContent());
+        await principal.page.getByRole("button", { name: /^Focus/ }).click();
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);
       }
     }
-    record("eight principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 8, await principal.page.locator("#primary-nav .nav-link").count());
+    record("nine principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 9, await principal.page.locator("#primary-nav .nav-link").count());
     await auditAccessibility(principal.page, "desktop");
     await principal.context.close();
+
+    const commsPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
+    await visit(commsPhone.page, server.baseUrl, "/member/comms", "Comms");
+    const commsPhoneOverflow = await commsPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    record("Comms reflows without phone overflow", commsPhoneOverflow === false, commsPhoneOverflow);
+    record("Comms phone retains focus explanation and reply approval", await commsPhone.page.locator(".focus-reason").count() === 1 && await commsPhone.page.getByLabel(/Approve the independent OpenClaw delivery gate/).count() === 1, await commsPhone.page.locator("#surface").textContent());
+    await screenshot(commsPhone.page, "surface-comms-focus-narrow.png");
+    await commsPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");
