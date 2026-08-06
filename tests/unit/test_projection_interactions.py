@@ -62,12 +62,13 @@ def _envelope(
     tenant_id: str = "tenant-a",
     owner_scope: str = "shared:household",
     sensitivity: str = "normal",
+    schema_version: int = 1,
 ) -> EventEnvelope:
     return EventEnvelope(
         event_at_ms=int(time.time() * 1000),
         tenant_id=tenant_id,
         type=event_type,
-        schema_version=1,
+        schema_version=schema_version,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="test",
         source_account_id="test-acct",
@@ -156,6 +157,86 @@ async def test_messaging_sent_is_outbound(rig: dict[str, Any]) -> None:
         (f"ix_{eid}",),
     ).fetchone()
     assert row["direction"] == "outbound"
+
+
+async def test_repeated_native_message_reconciles_without_crossing_accounts(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    base = {
+        "source_channel": "gmail",
+        "provider": "gmail",
+        "provider_account_id": "account-a",
+        "member_id": "member-a",
+        "native_message_id": "native-repeat-1",
+        "workspace": "personal",
+        "from_identifier": "sender@example.com",
+        "to_identifier": "member@example.com",
+        "thread_id": "thread-repeat-1",
+        "received_at": "2026-04-10T10:00:00Z",
+    }
+    first = await log.append(
+        _envelope(
+            "messaging.received",
+            {**base, "subject": "Original", "body_text": "first observation"},
+            owner_scope="private:member-a",
+            schema_version=3,
+        )
+    )
+    await bus.notify(first)
+    await _wait_idle(bus, "projection:interactions")
+
+    second = await log.append(
+        _envelope(
+            "messaging.received",
+            {
+                **base,
+                "subject": "Updated",
+                "body_text": "provider labels changed",
+                "provider_labels": ["IMPORTANT"],
+            },
+            owner_scope="private:member-a",
+            schema_version=3,
+        )
+    )
+    await bus.notify(second)
+    await _wait_idle(bus, "projection:interactions")
+
+    other_account = await log.append(
+        _envelope(
+            "messaging.received",
+            {
+                **base,
+                "provider_account_id": "account-b",
+                "subject": "Separate account",
+            },
+            owner_scope="private:member-a",
+            schema_version=3,
+        )
+    )
+    await bus.notify(other_account)
+    await _wait_idle(bus, "projection:interactions")
+
+    rows = (
+        runner.connection("interactions")
+        .execute(
+            "SELECT interaction_id, provider_account_id, subject, important, "
+            "raw_event_ids, last_event_id FROM interactions "
+            "WHERE tenant_id='tenant-a' AND native_message_id='native-repeat-1' "
+            "ORDER BY provider_account_id"
+        )
+        .fetchall()
+    )
+    assert len(rows) == 2
+    assert rows[0]["interaction_id"] == f"ix_{first}"
+    assert rows[0]["provider_account_id"] == "account-a"
+    assert rows[0]["subject"] == "Updated"
+    assert rows[0]["important"] == 1
+    assert rows[0]["raw_event_ids"] == f'["{first}","{second}"]'
+    assert rows[0]["last_event_id"] == second
+    assert rows[1]["provider_account_id"] == "account-b"
 
 
 async def test_telephony_sms_received(rig: dict[str, Any]) -> None:

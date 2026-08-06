@@ -51,6 +51,57 @@ def _interaction_id_for(envelope: dict[str, Any]) -> str:
     return f"ix_{envelope['event_id']}"
 
 
+def _native_interaction_identity(
+    conn: sqlcipher3.Connection,
+    envelope: dict[str, Any],
+    *,
+    native_message_id: Any,
+    member_id: str | None,
+    provider: str,
+    provider_account_id: str,
+) -> tuple[str, str]:
+    """Resolve repeated provider observations to one durable interaction row.
+
+    Adapters may legitimately observe the same native message again after a
+    restart or provider-label change. The event log keeps every observation;
+    the projection folds them into one member/account-scoped interaction while
+    retaining all source event ids. The first event-derived id is preserved so
+    existing links never need to be rewritten.
+    """
+
+    event_id = str(envelope["event_id"])
+    if isinstance(native_message_id, str) and native_message_id:
+        existing = conn.execute(
+            """
+            SELECT interaction_id, raw_event_ids
+              FROM interactions
+             WHERE tenant_id=?
+               AND member_id IS ?
+               AND provider=?
+               AND provider_account_id=?
+               AND native_message_id=?
+             ORDER BY occurred_at, interaction_id
+             LIMIT 1
+            """,
+            (
+                envelope["tenant_id"],
+                member_id,
+                provider,
+                provider_account_id,
+                native_message_id,
+            ),
+        ).fetchone()
+        if existing is not None:
+            try:
+                raw_ids = [str(value) for value in json.loads(existing[1] or "[]")]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_ids = []
+            if event_id not in raw_ids:
+                raw_ids.append(event_id)
+            return str(existing[0]), json.dumps(raw_ids, separators=(",", ":"))
+    return _interaction_id_for(envelope), json.dumps([event_id], separators=(",", ":"))
+
+
 def _member_id(envelope: dict[str, Any], payload: dict[str, Any]) -> str | None:
     explicit = payload.get("member_id")
     if isinstance(explicit, str) and explicit:
@@ -102,7 +153,6 @@ def _handle_messaging(
     family: str,
 ) -> None:
     p = envelope["payload"]
-    interaction_id = _interaction_id_for(envelope)
     channel_specific = p["source_channel"]
     occurred_at = p.get("received_at") or p.get("sent_at") or envelope["occurred_at"]
     subject = p.get("subject")
@@ -117,6 +167,14 @@ def _handle_messaging(
         p.get("provider_account_id")
         or envelope.get("source_account_id")
         or channel_specific
+    )
+    interaction_id, raw_event_ids = _native_interaction_identity(
+        conn,
+        envelope,
+        native_message_id=p.get("native_message_id"),
+        member_id=member_id,
+        provider=provider,
+        provider_account_id=provider_account_id,
     )
 
     conn.execute(
@@ -191,7 +249,7 @@ def _handle_messaging(
             json.dumps(labels, separators=(",", ":")),
             json.dumps(p.get("attachments") or [], separators=(",", ":")),
             p.get("delivery_status"),
-            json.dumps([envelope["event_id"]], separators=(",", ":")),
+            raw_event_ids,
             envelope["owner_scope"],
             envelope["visibility_scope"],
             envelope["sensitivity"],
@@ -225,7 +283,18 @@ def _handle_messaging(
 
 def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     p = envelope["payload"]
-    interaction_id = _interaction_id_for(envelope)
+    member_id = _member_id(envelope, p)
+    provider_account_id = str(
+        envelope.get("source_account_id") or p.get("to_number") or "sms"
+    )
+    interaction_id, raw_event_ids = _native_interaction_identity(
+        conn,
+        envelope,
+        native_message_id=p.get("carrier_message_id"),
+        member_id=member_id,
+        provider="twilio_sms",
+        provider_account_id=provider_account_id,
+    )
     conn.execute(
         """
         INSERT INTO interactions (
@@ -269,16 +338,16 @@ def _handle_sms(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             _preview(p.get("body")),
             None,
             p.get("carrier_message_id"),
-            _member_id(envelope, p),
+            member_id,
             "twilio_sms",
-            str(envelope.get("source_account_id") or p.get("to_number") or "sms"),
+            provider_account_id,
             "personal",
             1,
             0,
             0,
             0,
             "[]",
-            json.dumps([envelope["event_id"]], separators=(",", ":")),
+            raw_event_ids,
             envelope["owner_scope"],
             envelope["visibility_scope"],
             envelope["sensitivity"],

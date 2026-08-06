@@ -23,13 +23,22 @@ def test_existing_interactions_schema_adds_columns_before_additive_indexes() -> 
         conn.executescript(schema)
         projection.migrate_schema(conn)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(interactions)")}
-        indexes = {row[1] for row in conn.execute("PRAGMA index_list(interactions)")}
+        index_rows = list(conn.execute("PRAGMA index_list(interactions)"))
+        indexes = {row[1] for row in index_rows}
         assert {
             "native_message_id",
             "classification",
             "classification_confidence",
         } <= columns
         assert "idx_interactions_tenant_native_message" in indexes
+        assert (
+            next(
+                row[2]
+                for row in index_rows
+                if row[1] == "idx_interactions_tenant_native_message"
+            )
+            == 0
+        )
         assert "idx_interactions_member_occurred" in indexes
         assert "idx_interactions_account_thread" in indexes
     finally:
