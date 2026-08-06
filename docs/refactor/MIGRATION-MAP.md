@@ -72,6 +72,13 @@ external-write governance and outcome path. Gmail is implemented; uninstalled
 Microsoft Graph, BlueBubbles, and Twilio edges remain visibly disabled rather
 than simulated. All extracted domain candidates still route through Triage.
 
+Comms live-migration correction (2026-08-06): the interactions projection is
+**HARDEN COMPLETE** for an existing pre-Comms database. Indexes that depend on
+the additive member/account columns are created by the projection migration
+hook after those columns exist, never by the pre-migration bootstrap script.
+The retained regression executes both phases against a legacy table and proves
+all native-message, member/occurred, and account/thread indexes are present.
+
 Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
 deleted Node scaffold stays deleted; FastAPI serves a small static member
 portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
