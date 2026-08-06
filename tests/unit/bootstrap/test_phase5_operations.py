@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
 from bootstrap.cli import _bootstrap_diagnostic_status
+from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import secret_store
@@ -182,6 +183,44 @@ def test_macos_installer_dispatches_without_optional_passthrough_args(
         str(instance_root),
         "bootstrap",
     ]
+
+
+def test_interactive_answers_allow_deferred_child_tailscale_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = iter(
+        [
+            "Esther",
+            "y",
+            "America/New_York",
+            "2",
+            "Principal",
+            "principal",
+            "principal@example.invalid",
+            "Child",
+            "child",
+            "",
+            "n",  # principal OpenClaw actor
+            "n",  # child OpenClaw actor
+            "y",  # principal portal chat; child is deferred automatically
+            "n",  # Plaid sandbox
+            *(["n"] * 9),  # seed follow-ups
+            *(["n"] * 4),  # integration follow-ups
+            "n",  # principal bridge; child is deferred automatically
+            "y",  # observation mode
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    result = _interactive_answers()
+
+    principal, child = result["household"]["members"]
+    assert principal["tailscale_identity"] == "principal@example.invalid"
+    assert "tailscale_identity" not in child
+    assert result["integrations"]["member_chat_enabled_members"] == [
+        principal["member_id"]
+    ]
+    assert result["bridges"]["enabled_members"] == []
 
 
 def test_bootstrap_reports_expected_pending_bridge_work_without_masking_failures() -> (

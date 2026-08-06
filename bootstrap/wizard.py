@@ -824,6 +824,14 @@ class BootstrapWizard:
             raise WizardFailure("member chat allowlist contains an ineligible member")
         if len(chat_members) != len(set(chat_members)):
             raise WizardFailure("member chat allowlist contains duplicates")
+        identities = {
+            member["member_id"]: member.get("tailscale_identity")
+            for member in self.answers["household"]["members"]
+        }
+        if any(not identities.get(member_id) for member_id in chat_members):
+            raise WizardFailure(
+                "member portal chat requires a verified Tailscale identity"
+            )
         if not isinstance(child_chat_members, list) or not all(
             isinstance(member_id, str)
             and members.get(member_id) == "child"
