@@ -103,17 +103,12 @@ class UpgradeManager:
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
-        doctor = Doctor(
-            self.paths,
-            root=release,
-            test_mode=self.test_mode,
-        )
         attempts = 1 if self.test_mode else 6
         last: dict[str, Any] = {}
         for attempt in range(attempts):
-            last = doctor.run(include_synthetic_proof=False)
+            last = self._run_release_doctor(release, include_synthetic_proof=False)
             if last.get("status") == "healthy":
-                last = doctor.run()
+                last = self._run_release_doctor(release, include_synthetic_proof=True)
                 if last.get("status") == "healthy":
                     return last
             failed = self._failed_check_names(last)
@@ -122,6 +117,50 @@ class UpgradeManager:
             if attempt + 1 < attempts:
                 time.sleep(2)
         return last
+
+    def _run_release_doctor(
+        self, release: Path, *, include_synthetic_proof: bool
+    ) -> dict[str, Any]:
+        """Run Doctor with one coherent release registry, packs, and projections."""
+
+        release_python = release / ".venv" / "bin" / "python"
+        if self.test_mode or not release_python.is_file():
+            return Doctor(
+                self.paths,
+                root=release,
+                test_mode=self.test_mode,
+            ).run(include_synthetic_proof=include_synthetic_proof)
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("VIRTUAL_ENV", None)
+        environment["ADMINME_REPOSITORY_ROOT"] = str(release)
+        command = [
+            str(release_python),
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(self.paths.root),
+            "doctor",
+        ]
+        if not include_synthetic_proof:
+            command.append("--no-synthetic-proof")
+        completed = subprocess.run(
+            command,
+            cwd=release,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise UpgradeError(
+                "candidate Doctor did not return a valid diagnostic report"
+            ) from exc
+        if not isinstance(result, dict):
+            raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
+        return result
 
     def activate(self, candidate: Path) -> dict[str, Any]:
         evidence = validate_candidate(candidate)

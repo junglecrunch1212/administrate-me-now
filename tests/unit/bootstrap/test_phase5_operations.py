@@ -862,3 +862,44 @@ def test_upgrade_does_not_retry_a_structural_doctor_failure(
     )._post_switch_doctor(REPO_ROOT)
     assert result == structural
     assert calls == 1
+
+
+def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
+    test_paths: DeploymentPaths,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = tmp_path / "release"
+    candidate_python = release / ".venv" / "bin" / "python"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.write_text("fixture", encoding="utf-8")
+    monkeypatch.delenv("ADMINME_TEST_MODE", raising=False)
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "healthy", "checks": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr("bootstrap.upgrade.subprocess.run", fake_run)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    result = manager._run_release_doctor(release, include_synthetic_proof=False)
+
+    assert result["status"] == "healthy"
+    assert calls[0]["command"] == [
+        str(candidate_python),
+        "-m",
+        "bootstrap.cli",
+        "--instance-root",
+        str(test_paths.root),
+        "doctor",
+        "--no-synthetic-proof",
+    ]
+    assert calls[0]["cwd"] == release
+    environment = calls[0]["env"]
+    assert isinstance(environment, dict)
+    assert environment["ADMINME_REPOSITORY_ROOT"] == str(release)
+    assert "PYTHONPATH" not in environment

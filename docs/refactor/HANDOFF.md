@@ -56,7 +56,7 @@ recorded below after the release gates complete.
 
 Release-candidate evidence on the supported Mac is
 `bash scripts/acceptance/release-candidate.sh`: **PASS**. Its retained phases
-reported 27/27 acceptance tests with `--runxfail`, 1,536/1,536 Python
+reported 27/27 acceptance tests with `--runxfail`, 1,537/1,537 Python
 code-and-pack tests, 60/60 standalone bridge tests, and 14/14 pinned OpenClaw
 plugin tests. Ruff lint/format, mypy (213 files), pyright, architecture
 negatives, invariant/identity/path scans, dependency audits, Python and bridge
