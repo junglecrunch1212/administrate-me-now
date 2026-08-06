@@ -333,7 +333,8 @@ installing only the CoS Mac Mini today, use this first-install pattern:
 - enter the detected `America/New_York` timezone if it is correct;
 - enroll each real household person once; choose `principal` for both adults
   if you both administer household truth;
-- enter each person's exact Tailscale login email;
+- enter each person's exact Tailscale login email when known; leave it blank
+  only to defer both portal chat and member-bridge enrollment for that person;
 - enable private member-portal chat for both principals;
 - answer **No** to OpenClaw actor pairing unless you can see the exact tuple;
 - answer **Yes** to the calendar/shared-list follow-ups you intend to complete;
@@ -353,7 +354,7 @@ Use this parallel prompt guide:
 | How many household members? | The real count, 1–20 | Requires at least one principal |
 | Member label | A recognizable display label | Stored in encrypted bootstrap state and runtime mapping |
 | Role | One of the four exact role words above | Sets server-side authorization |
-| Verified Tailscale login | Exact user login/email | Maps Serve’s identity header to this member |
+| Verified Tailscale login | Exact user login/email, or blank to defer access | Maps Serve’s identity header to this member; a blank identity keeps portal chat and bridge enrollment disabled until it is added later |
 | Record principals as coparents? | Yes only when true | Creates explicit relationship records |
 | Pair an OpenClaw actor? | No unless the exact tuple is already known | Unmapped channel senders receive no household authority |
 | Enable member-portal chat? | Yes for each intended adult | Uses an isolated signed session; does not enable child chat automatically |

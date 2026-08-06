@@ -442,13 +442,15 @@ def _interactive_answers() -> dict[str, Any]:
                 "Use the exact Tailscale user login (normally an email address), not a device name or .ts.net server address."
             )
             identity = input(
-                "Verified Tailscale login for this member (for example member@domain): "
+                "Verified Tailscale login for this member (leave blank to defer): "
             ).strip()
-            if not identity:
-                raise RuntimeError(
-                    "Apple bridge enrollment requires a Tailscale identity"
+            if identity:
+                member["tailscale_identity"] = identity
+            else:
+                print(
+                    "  Tailscale identity deferred; portal chat and bridge enrollment "
+                    "stay disabled for this member."
                 )
-            member["tailscale_identity"] = identity
         members.append(member)
         profiles[member_id] = (
             "kid_scoreboard"
@@ -521,6 +523,12 @@ def _interactive_answers() -> dict[str, Any]:
     for member in members:
         if member["role"] not in {"principal", "child"}:
             continue
+        if not member.get("tailscale_identity"):
+            print(
+                f"Portal chat for {member['label']} is deferred until a verified "
+                "Tailscale login is added."
+            )
+            continue
         enabled = _yes_no(
             f"Enable isolated member-portal chat for {member['label']}?",
             default=member["role"] == "principal",
@@ -562,6 +570,12 @@ def _interactive_answers() -> dict[str, Any]:
         )
         for member in members:
             if member["role"] not in {"principal", "child", "helper"}:
+                continue
+            if not member.get("tailscale_identity"):
+                print(
+                    f"Member bridge setup for {member['label']} is deferred until "
+                    "a verified Tailscale login is added."
+                )
                 continue
             if _yes_no(
                 f"Prepare a separate member-bridge package for {member['label']}?"
