@@ -1,6 +1,6 @@
 # Change Order 001: Five-surface executive loop
 
-Status: **APPROVED 2026-08-06 — IMPLEMENTED AND RELEASE-CANDIDATE VALIDATED; LIVE DEPLOYMENT PENDING**
+Status: **APPROVED 2026-08-06 — IMPLEMENTED, VALIDATED, AND DEPLOYED IN OBSERVATION; MAIN MERGE PENDING**
 
 Date: 2026-08-06
 
@@ -527,3 +527,31 @@ pure, projection, pipeline, migration, security, and browser suites named in
 `ACCEPTANCE-CONTRACT.md`. Final release counts, live Doctor state, immutable
 deployment identity, and observation-mode browser simulation are recorded in
 `HANDOFF.md`; a real provider mutation remains explicitly out of scope.
+
+## 14. Live observation activation record
+
+The family Mac activated immutable revision
+`eeec1a4bd8ef6955636871ff7cc75a41a571fc73` from the reviewed v2 branch on
+2026-08-06. The final authenticated pre-switch backup is
+`administrateme-20260806T224346Z.ambackup`; the release pointer retains the
+prior immutable revision for rollback. Observation remains active and no live
+provider mutation was authorized or performed.
+
+The activation rehearsal exposed one release-coherence defect in the upgrader:
+its post-switch Doctor could retain the retiring interpreter's schema registry
+while inspecting a new release. The upgrader now launches Doctor with the
+candidate release interpreter and an explicit instance/OpenClaw/PATH
+environment. A deliberately failed intermediate activation proved automatic
+rollback before the repaired candidate and final surface revisions passed the
+same fail-closed switch.
+
+Independent operator status and full Doctor after activation reported healthy
+loopback services, the exact reviewed OpenClaw `2026.7.2` commit, 14/14 healthy
+projection checkpoints, 5/5 reconciled managed jobs, a successful canonical
+synthetic round trip, zero external side effects, and observation-only runtime
+state. Live browser simulation then exercised Today, Triage, Comms, Reminders,
+and Calendar at 911 px and 390 px. Every route retained exact active
+navigation, observation and freshness state, a collapsed CoS drawer, no
+degraded banner, no document-level horizontal overflow, and zero browser
+warnings/errors. The simulation performed view/filter/selection navigation
+only; it did not confirm, send, complete, or write.

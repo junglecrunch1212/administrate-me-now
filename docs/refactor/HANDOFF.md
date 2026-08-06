@@ -3,16 +3,16 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CODE_REVIEWED_MERGED_MAIN_AWAITING_LIVE_MAC_ACTIVATION
-verified_local_date: 2026-08-05
-verified_github_date: 2026-08-05
-branch: main
-candidate_commit_resolution: git rev-parse HEAD
+gate_result: CO001_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
+verified_local_date: 2026-08-06
+verified_github_date: 2026-08-06
+branch: codex/administrateme-v2-runtime
+candidate_commit_resolution: eeec1a4bd8ef6955636871ff7cc75a41a571fc73
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: central_observation_then_live_provider_activation
+next_phase: co001_main_review_then_remaining_member_surfaces
 ---
 
 # Release handoff
@@ -74,6 +74,36 @@ perform a real provider mutation, or change People, Knowledge, Finance,
 Scoreboard, or Settings. Rollback is the existing authenticated immutable
 release-pointer rollback after service quiescence; the event migration is
 additive, so prior events are not rewritten or deleted.
+
+Live observation activation completed on immutable revision
+`eeec1a4bd8ef6955636871ff7cc75a41a571fc73`. The final authenticated switch
+backup is `administrateme-20260806T224346Z.ambackup`; the prior immutable
+revision remains pointer-addressable for rollback. Independent stable-wrapper
+status and full Doctor reported healthy loopback services, the exact reviewed
+OpenClaw `2026.7.2` source/commit, 14/14 projection checkpoints, 5/5 managed
+jobs, and a passing canonical synthetic round trip with zero external side
+effects. Runtime state remains `observation_only`.
+
+The live switch also strengthened deployment correctness. The first CO-001
+activation showed that post-switch Doctor could inspect new packs through the
+retiring release interpreter. `UpgradeManager` now invokes Doctor through the
+candidate release's `.venv` and supplies the exact instance, OpenClaw, and
+operator PATH environment. An intermediate candidate with incomplete runtime
+environment failed closed and rolled back automatically; the corrected
+candidate and both responsive follow-up revisions passed full post-switch
+Doctor before adoption.
+
+The in-app browser then exercised all five routes without provider writes.
+At both the previously failing 911 px width and a 390 px phone width, Today,
+Triage, Comms, Reminders, and Calendar showed exact active navigation,
+persistent observation/freshness state, a collapsed CoS drawer, no degraded
+banner, no document-level overflow, and zero browser warnings/errors. The live
+audit caught and repaired Calendar's intermediate-width board/header overflow
+and Reminders' five-control Quick Add overflow; process acceptance was rerun
+after each repair. Comms also demonstrated that unread is presentation-only:
+the live Focus lens was empty while the All lens retained the scoped source
+threads, and selecting one thread produced an exact URL-backed reader without
+sending or confirming anything.
 
 ## 2026-08-06 multi-calendar interaction reconciliation
 
