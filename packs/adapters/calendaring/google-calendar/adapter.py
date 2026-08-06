@@ -367,11 +367,12 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         )
         calendar_id = self._config.get("calendar_id")
         user_email = self._config.get("user_email")
-        if not isinstance(op_ref, str) or not op_ref.startswith("op://"):
+        if not isinstance(op_ref, str) or not op_ref.startswith(
+            ("op://", "keychain://")
+        ):
             raise ValueError(
                 "oauth_credentials_ref or service_account_key_ref must be a "
-                "1Password reference "
-                "(op://<vault>/<item>/<field>)"
+                "1Password or macOS Keychain reference"
             )
         if not isinstance(calendar_id, str) or not calendar_id:
             raise ValueError("calendar_id must be a non-empty string")
