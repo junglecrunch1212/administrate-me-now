@@ -121,7 +121,7 @@ OAuth opens the provider's own page. Confirm the expected provider and least
 privilege before granting access. OpenClaw owns assistant-provider credentials.
 Plaid is sandbox-only during bootstrap. Home Assistant and optional providers
 remain disabled until explicitly selected. A skipped noncritical subsection
-becomes an Inbox follow-up; it never becomes false completion.
+becomes a Triage follow-up; it never becomes false completion.
 
 ## Daily operations
 
@@ -172,10 +172,11 @@ Restore only a file inside the configured backup directory:
 ```
 
 Restore decrypts and authenticates into a staging directory, rejects links and
-path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 13
-projections/workbooks from the event log, then and only then replaces active
-state. The previous state moves to the `rollback` directory. If post-restore
-Doctor fails, the previous state is automatically put back.
+path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 14
+registered projections (13 domain projections plus Triage) and workbooks from
+the event log, then and only then replaces active state. The previous state
+moves to the `rollback` directory. If post-restore Doctor fails, the previous
+state is automatically put back.
 
 ## Upgrade and rollback
 

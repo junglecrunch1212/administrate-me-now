@@ -23,6 +23,7 @@ from adminme.daemons.adapter_supervisor import (
     UPTIME_RESET_S,
     AdapterSupervisor,
 )
+from adminme.lib.adapters import WriteOperation, WriteResult
 
 
 class _FakeEventLog:
@@ -85,6 +86,23 @@ class _CrashThenStableAdapter:
 
     def status(self) -> AdapterStatus:
         return self._status
+
+
+class _WritableGoogleTasksAdapter(_RecordingAdapter):
+    name = "tasks-google-tasks"
+    family = "tasks"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._config = {
+            "member_id": "member-a",
+            "user_email": "member-a@example.invalid",
+        }
+        self.operations: list[WriteOperation] = []
+
+    async def apply_write(self, operation: WriteOperation) -> WriteResult:
+        self.operations.append(operation)
+        return WriteResult(applied=True, external_id="google-task-1", suppressed=False)
 
 
 def _make_ctx_factory(event_log: _FakeEventLog) -> Any:
@@ -163,6 +181,41 @@ async def test_supervisor_spawns_and_stops_adapter_cleanly(tmp_path: Path) -> No
     assert adapter.stopped.is_set()
     snapshot_after = sup.snapshot()
     assert snapshot_after["adapters"]["stub-adapter"]["state"] == "stopped"
+
+
+async def test_supervisor_routes_google_tasks_by_member_and_user_email(
+    tmp_path: Path,
+) -> None:
+    channels = tmp_path / "channels.yaml"
+    channels.write_text("adapter_supervisor_port: 0\nadapters: []\n", encoding="utf-8")
+    adapter = _WritableGoogleTasksAdapter()
+    sup = AdapterSupervisor(
+        config_path=channels,
+        ctx_factory=_make_ctx_factory(_FakeEventLog()),
+        adapter_loader=lambda _cfg: [adapter],  # type: ignore[list-item]
+    )
+    sup.prepare()
+    operation = WriteOperation(
+        kind="create_task",
+        target_external_id=None,
+        payload={"tasklist_id": "@default", "title": "Fixture task"},
+    )
+    result = await sup.dispatch_write(
+        provider="google_tasks",
+        member_id="member-a",
+        provider_account_id="member-a@example.invalid",
+        operation=operation,
+    )
+    assert result.external_id == "google-task-1"
+    assert adapter.operations == [operation]
+
+    with pytest.raises(LookupError):
+        await sup.dispatch_write(
+            provider="google_tasks",
+            member_id="member-a",
+            provider_account_id="other@example.invalid",
+            operation=operation,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -247,7 +247,7 @@ async function run() {
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
-      today: "Today", inbox: "Inbox", people: "People", knowledge: "Knowledge",
+      today: "Today", triage: "Triage", people: "People", knowledge: "Knowledge",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     for (const [surface, label] of Object.entries(surfaceLabels)) {

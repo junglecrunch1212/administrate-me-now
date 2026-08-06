@@ -16,7 +16,7 @@ Gate 3 backend behavior evidence (2026-07-30): pending commitment review support
 
 ## Evidence status
 
-`ADMINISTRATEME_CONSOLE_REFERENCE.html` was read completely and its inline DOM/state handlers were audited at SHA-256 `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`. It demonstrates eight destinations (Today, Inbox, CRM, Capture, Finance, Calendar, Scoreboard, Settings), carousel/compressed/child modes, view-as, approval interaction, reward toasts, calendar redaction, observation/degraded banners, settings panes, and chat.
+`ADMINISTRATEME_CONSOLE_REFERENCE.html` was read completely and its inline DOM/state handlers were audited at SHA-256 `98ac268f39c0d367f5c904ab2af5e0e35389eae8ff6bffd4cede7ef8bfdd0a3b`. It demonstrates eight historical destinations (Today, the former Inbox now called Triage, CRM, Capture, Finance, Calendar, Scoreboard, Settings), carousel/compressed/child modes, view-as, approval interaction, reward toasts, calendar redaction, observation/degraded banners, settings panes, and chat.
 
 Gate 1 rendered the exact file through the dev/test-only harness in `tools/console-reference-harness/`. The harness served the repository root at `http://127.0.0.1:4173`, launched installed Microsoft Edge `150.0.4078.99` headlessly through pinned `playwright-core@1.62.0`, and exercised all twelve behaviors declared in the HTML. Result: **12/12 interactions passed, 68/68 DOM assertions passed, 0 JavaScript console errors, 0 uncaught page errors, and 0 failed requests**. Page tabs were activated through keyboard focus/Enter; state-changing controls were exercised through their rendered controls.
 
@@ -29,7 +29,7 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 | Surface | Required behavior | Superseded behavior |
 |---|---|---|
 | Today | Contextual what-now for now/hour/daypart/day/week; carousel, compressed, and child presentations; energy/capacity, calendar, blockers, evidence, and profile-aware micro-steps. | A static hardcoded task carousel is demonstration data only. |
-| Inbox | Unified operational items, proposal/review queue, approve/reject with evidence, state and delivery outcome; no generic transcript store. | Client-only “Approve & Send” state changes. |
+| Triage | Member-owned queue containing only extracted/derived candidates; confirm, enrich/reroute, or dismiss with source evidence and terminal outcome. Raw provider observations remain facts; already-official tasks never appear here. | The former Inbox mixture of proposals plus open work; client-only “Approve & Send”; generic transcript storage. |
 | CRM | Party/relationship/interaction/commitment/artifact views, provenance, overdue relationship cues, birthday/hosting balance where authorized. | Exemplar household data and mock counts. |
 | Capture/Knowledge | Member-owned knowledge, authorized household knowledge, lists, recipes, provenance, structured/semantic search. Keep the navigation concept, label it “Knowledge” where clarity helps. | Quick-capture prefix routing, direct voice ingest, and triage queue are retired by D17. |
 | Finance | Scope-filtered accounts/transactions/budgets/subscriptions and workbook state; privileged owner-only details and audit. | Any client-only masking or demo values. |
@@ -62,7 +62,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-01 | All eight required destinations are addressable by stable routes, responsive at phone/tablet/desktop widths, and keyboard navigable. |
 | UX-02 | Navigation and API route availability derive from server-authorized role/capability data; direct child requests to hidden routes are denied without leaking counts or labels. |
 | UX-03 | Today exposes now, next-hour, daypart, day, and week recommendations with an explanation payload; changed context deterministically changes ranking. |
-| UX-04 | A proposal shows source evidence, confidence, affected object, intended external action, sender identity, approval requirements, and expiry before authorization. |
+| UX-04 | A Triage candidate shows source evidence, confidence, affected object, intended target member/provider/container, external action, sender identity, approval requirements, and expiry before authorization. |
 | UX-05 | Approval, rejection, completion, defer, snooze, block, correction, suppression, delivery, and failure render distinct states and link to immutable evidence. |
 | UX-06 | Calendar returns a busy block—not title, attendee, location, notes, or link—for an unauthorized private event; filtering happens server-side. |
 | UX-07 | Observation banner is persistent on every action-capable surface, explains the 5–7 day trust period, and links to complete would-have-happened records. |
@@ -84,7 +84,7 @@ Activity feed entries are evidence-rich summaries of typed events. Notifications
 
 ## Visual acceptance
 
-Gate 1 reference evidence is complete at `docs/refactor/evidence/console-reference/run-manifest.json`: the exact baseline HTML was rendered at fixed desktop and narrow viewports, all twelve declared behaviors were exercised, and the transcript/DOM/console results were retained. This proves the reference vocabulary only. Quick-prefix capture, direct voice ingest, triage, client-only authorization, and other items named in the superseded column remain superseded and are not restored by this evidence. Later implementation acceptance uses these captures as vocabulary evidence while the superseded-flow table controls semantics. Pixel equality is not required; behavior, hierarchy, privacy, responsiveness, and accessibility are.
+Gate 1 reference evidence is complete at `docs/refactor/evidence/console-reference/run-manifest.json`: the exact baseline HTML was rendered at fixed desktop and narrow viewports, all twelve declared behaviors were exercised, and the transcript/DOM/console results were retained. This proves the reference vocabulary only. Quick-prefix Capture, direct voice ingest, Capture-owned triage, client-only authorization, and other items named in the superseded column remain superseded and are not restored by this evidence. D26's separate Triage adjudication surface does not restore Capture as an ingest product. Later implementation acceptance uses these captures as vocabulary evidence while the superseded-flow table controls semantics. Pixel equality is not required; behavior, hierarchy, privacy, responsiveness, and accessibility are.
 
 ## Gate 2 implementation status
 

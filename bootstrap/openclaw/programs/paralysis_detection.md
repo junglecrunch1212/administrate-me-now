@@ -12,7 +12,7 @@ member's fog window. **Deterministic — never invokes LLM** per
 [BUILD.md §1297-1302] and operating rule 20 ([BUILD.md §124]). Picks a
 template from persona's `paralysis_templates.yaml`. Emits
 `paralysis.triggered` with template id + single-action framing. The event is an
-inbox/activity surface; it is not an external delivery request.
+Today/activity surface; it is not an external delivery request.
 
 ## Triggers
 
@@ -21,7 +21,7 @@ installation fallback; profile fog-window overrides win when configured.
 
 ## Approval gate
 
-None. This program has no outbound side effect; output is a scoped inbox and
+None. This program has no outbound side effect; output is a scoped Today/activity
 activity event surfaced on demand.
 
 ## Escalation
@@ -51,14 +51,14 @@ per [BUILD.md §1297-1302]:
    template for the same member but different members get different
    templates.
 4. Emit `paralysis.triggered` v1 with `member_id`, `template_id`,
-   `template_text`, `triggered_at`. Surface is the scoped inbox and activity
+   `template_text`, `triggered_at`. Surface is the scoped Today and activity
    feed.
 
 ## What NOT to do
 
 - **Do NOT invoke an LLM.** Template selection is a deterministic
   YAML lookup per [BUILD.md §1297-1302] + operating rule 20. Binding.
-- **Do NOT convert the scoped inbox event into an implicit message.**
+- **Do NOT convert the scoped activity event into an implicit message.**
 - **Do NOT emit when pre-conditions fail.** All defensive-skip cases
   (recent completion, energy not low, outside fog window, missing
   profile, empty persona templates) silently advance the bus.

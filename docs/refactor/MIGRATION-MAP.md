@@ -35,6 +35,15 @@ propagation remain live activation gates rather than simulated readiness.
 Central and bridge emits now require durable acknowledgement before cursor
 advancement; transport failure is retried instead of treated as success.
 
+Triage semantics update (2026-08-06): the former Inbox is **MODERNIZED
+COMPLETE** into a proposal-only human gate. A fourteenth, derived `triage`
+projection aggregates current commitment/OpenClaw proposals and the generic
+typed candidate lifecycle without changing the original thirteen domain-truth
+capabilities. Open tasks remain on Today/Scoreboard. Provider observations
+remain facts; extracted calendar/list/reminder candidates require explicit
+member/account/container routing and governed confirmation before a write
+request. Deprecated Inbox HTTP/OpenClaw aliases remain for pinned clients.
+
 Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
 deleted Node scaffold stays deleted; FastAPI serves a small static member
 portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
@@ -45,7 +54,7 @@ projection, scheduler, workflow, or copied record store.
 
 | Gate 7 subsystem | Final class | Executable result |
 |---|---|---|
-| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Inbox, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, and governed review/lifecycle bindings. |
+| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, People, Knowledge, Finance, Calendar, Scoreboard, Settings, health, and governed review/lifecycle bindings. |
 | Member/child experience | REWRITE COMPLETE | Python-served portal has adult eight-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence. |
 | Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
 | Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
@@ -53,7 +62,8 @@ projection, scheduler, workflow, or copied record store.
 | Live deployment | DEFER TRUTHFULLY | Supported-Mac real Gateway/providers/Tailscale/Apple grants remain Phase 8 evidence. |
 
 Gate 6 update (2026-08-03): the remaining retained domain code is converged on
-the Gate 2–5 runtime. All six products and thirteen projections are composed;
+the Gate 2–5 runtime. All six products, thirteen domain projections, and the
+derived Triage projection are composed;
 member knowledge and scoped vector search are distinct; workbooks, profiles,
 personas, packs, bridge sources, durable cursors, notification policy,
 capability registry, contextual what-now, and activity feed have executable
@@ -61,7 +71,7 @@ paths. Rows below retain baseline history; this Gate 6 delta is current truth.
 
 | Gate 6 subsystem | Final class | Executable result |
 |---|---|---|
-| Event runtime and projections | KEEP/HARDEN COMPLETE | One EventSink/log/bus root; exactly 13 registered projection capabilities; replay, migration, scope, checkpoint, and encrypted reopen tests pass. |
+| Event runtime and projections | KEEP/HARDEN COMPLETE | One EventSink/log/bus root; exactly fourteen registered projections (thirteen domain truth plus Triage); replay, migration, scope, checkpoint, and encrypted reopen tests pass. |
 | Domain APIs | KEEP/REWRITE COMPLETE | Core, Comms, Capture, Automation, Bridge, and System are real namespaces; activity/capability status derives from runtime wiring and authorization. |
 | Knowledge/search | KEEP/HARDEN COMPLETE | Private explicit-source `member_knowledge`; scope-filtered domain `vector_search`; privileged embedding forbidden. |
 | Workbooks | KEEP/HARDEN COMPLETE | `adminme-ops.xlsx` and `adminme-finance.xlsx` retain forward/reverse/sidecar/lock/conflict/Plaid/rebuild behavior. |
@@ -86,7 +96,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Event schema registry/upcasters | `adminme/events/registry.py`, `schemas/` | Broad typed schema suite and upcaster tests | KEEP | Inventory versions, prohibit destructive shape changes, add migration fixtures and lifecycle outcomes. |
 | Durable in-process bus | `adminme/events/bus.py` | durable offsets/retry/degrade exist; checkpoint test fails in baseline | HARDEN | Fix ordering/race in Phase 2; poison isolation, restart, drain; event-log append must notify only after commit. |
 | Central composition root | absent | no process instantiates log+bus+all runners/APIs | REWRITE | Create one lifecycle owner with truthful readiness and ordered shutdown. |
-| Projection protocol/runner | `adminme/projections/base.py`, `runner.py` | replay/registration mechanisms; default tuple only `lists` | HARDEN | Exact 13 registry, shared bus ownership, per-capability replay/idempotency/status. |
+| Projection protocol/runner | `adminme/projections/base.py`, `runner.py` | replay/registration mechanisms; default tuple only `lists` | HARDEN | Exact fourteen registry (thirteen domain plus Triage), shared bus ownership, per-capability replay/idempotency/status. |
 | Parties projection | `adminme/projections/parties/` | schema/handlers/queries/tests | KEEP | Register and prove live/replay/privacy in composition. |
 | Interactions projection | `adminme/projections/interactions/` | schema/handlers/queries/tests | KEEP | Register; canonical communication slice/dedupe. |
 | Artifacts projection | `adminme/projections/artifacts/` | schema/handlers/queries/tests | KEEP | Register; scope/provenance/correction. |
@@ -100,6 +110,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | XLSX projection/reverse daemon | `adminme/projections/xlsx_workbooks/`, `adminme/daemons/xlsx_sync/`, `xlsx_forward.py`, `xlsx_reverse.py` | substantial logic; direct POSIX `fcntl`; Windows collection/runtime failures | HARDEN | Keep macOS lock semantics; compose lifecycle; complete both workbooks, conflict and replay gates. |
 | Member knowledge projection | absent; bridge schemas refer to future 11d | required capability missing | REWRITE | Implement owner-scoped schema/handlers/queries and vector handoff from typed Cat-D events. |
 | Lists projection | `adminme/projections/lists/` | implemented and default-registered | KEEP | Compose with other 12; external-authority reconciliation and task promotion links. |
+| Triage projection | `adminme/projections/triage/` | new D26 deterministic proposal read model | MODERNIZE COMPLETE | Aggregate proposal families, enforce scope, rebuild from the log, never become domain source-of-truth. |
 | Adapter protocol/legacy base | `adminme/adapters/base.py` | protocol and supervisor tests | HARDEN | One async emission port; durable status/watermarks/circuit; remove sync/async ambiguity. |
 | Five adapter ABCs | `adminme/lib/adapters/` | Cat-A–E contracts and validation tests | KEEP | Preserve categories/verbs/floors/deployment; unify final outbound guard. |
 | Adapter pack registry/validator/CLI | `adminme/lib/pack_registry/`, `adminme/cli/commands/adapters*` | useful validation; Windows-invalid `<NAME>` tracked templates | HARDEN | Portable template names/placeholders, all six pack lifecycle stages, atomic rollback/install events. |
@@ -118,7 +129,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | guardedWrite/rate limiter | `adminme/lib/governance.py` | correct three-layer local order; no full approval/outbound composition | HARDEN | Compose independent approvals, content/privacy/persona and observation gates; all terminal outcomes. |
 | Observation | `adminme/lib/observation.py` | on-by-default and suppression code/tests | HARDEN | Persist start/trust window/review prerequisites; complete payload; Cat-B explicit rule; final seam only. |
 | Product Core | `adminme/products/core/main.py` | docstring-only stub | REWRITE | Router namespace and real handlers for CoS/what-now/lifecycle. |
-| Product Comms | `adminme/products/comms/main.py` | docstring-only stub | REWRITE | Router namespace for operational inbox/proposals/reviews/delivery; no generic chat. |
+| Product Comms | `adminme/products/comms/main.py` | commitment review lifecycle is implemented | REWRITE COMPLETE | Triage is the canonical proposal queue; Comms retains communication/commitment commands and no generic chat. |
 | Product Capture | `adminme/products/capture/main.py` | stale quick-capture docstring-only stub | REWRITE | Knowledge/CRM/Lists/read/search namespace; delete quick capture/voice/triage claims. |
 | Product Automation | `adminme/products/automation/main.py` | docstring-only stub | REWRITE | Finance/signal/action namespace with scoped reads and governed writes. |
 | Bridge product | `adminme/products/bridge/` | only implemented FastAPI app; separate `:3337` | HARDEN | Move router into central root; preserve endpoint compatibility/auth; no separate central process. |

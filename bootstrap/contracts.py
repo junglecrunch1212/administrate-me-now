@@ -24,6 +24,7 @@ PROJECTION_NAMES = (
     "xlsx_workbooks",
     "member_knowledge",
     "lists",
+    "triage",
 )
 
 ADAPTER_CATEGORIES = (

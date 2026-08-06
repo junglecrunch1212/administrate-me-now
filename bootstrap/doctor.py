@@ -145,7 +145,7 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             proposal = next(
                 row for row in pending if row["commitment_id"] == commitment_id
             )
-            dashboard = client.get("/api/core/v1/inbox", headers=headers).json()
+            dashboard = client.get("/api/core/v1/triage", headers=headers).json()
             dashboard_visible = any(
                 item.get("id") == commitment_id for item in dashboard["items"]
             )
@@ -386,12 +386,12 @@ class Doctor:
                 connection.close()
         checks.append(
             DoctorCheck(
-                "thirteen_projections_and_checkpoints",
-                len(projection_files) == 13
+                "fourteen_projections_and_checkpoints",
+                len(projection_files) == 14
                 and all(projection_files.values())
-                and checkpoint_count == 13
+                and checkpoint_count == 14
                 and degraded_count == 0,
-                f"{sum(projection_files.values())}/13 stores; {checkpoint_count}/13 healthy checkpoints",
+                f"{sum(projection_files.values())}/14 stores; {checkpoint_count}/14 healthy checkpoints",
                 "Run Doctor rebuild from a stopped instance before enabling writes.",
                 {
                     "projections": projection_files,
@@ -545,7 +545,7 @@ class Doctor:
                 "Reinstall the exact AdministrateMe package; configure chat only for opted-in members.",
                 {
                     "portal_health": "installed" if portal_ok else "degraded",
-                    "deterministic_domain_views": "covered_by_thirteen_projection_check",
+                    "deterministic_domain_views": "covered_by_fourteen_projection_check",
                     "openclaw_chat_transport": "configured"
                     if chat_transport_configured
                     else "optional_unconfigured",

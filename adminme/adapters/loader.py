@@ -64,8 +64,10 @@ def load_builtin_adapters(
             spec.loader.exec_module(module)
         adapter_class = getattr(module, class_name)
         adapter = adapter_class(config=adapter_config)
-        account = adapter_config.get("provider_account_id") or adapter_config.get(
-            "subject_email"
+        account = (
+            adapter_config.get("provider_account_id")
+            or adapter_config.get("subject_email")
+            or adapter_config.get("user_email")
         )
         member = adapter_config.get("member_id")
         configured_id = entry.get("id") or ":".join(

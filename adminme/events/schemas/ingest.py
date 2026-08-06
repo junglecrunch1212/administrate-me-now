@@ -246,7 +246,7 @@ class MessagingClassifiedV1(BaseModel):
     an inbound messaging event with a classification + skill provenance.
 
     Per [BUILD.md §1136-1138], the ``interactions`` projection uses this
-    to decide whether to surface the message in the inbox or suppress to
+    to decide whether to surface the message in authorized interactions or suppress to
     the noise bucket. The pipeline NEVER deletes the source event."""
 
     model_config = {"extra": "forbid"}

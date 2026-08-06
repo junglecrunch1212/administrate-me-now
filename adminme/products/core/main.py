@@ -19,8 +19,9 @@ from adminme.products.commitment_service import (
     owned_commitment,
     prior_command,
 )
-from adminme.projections.commitments.queries import active_for_member, pending_approval
+from adminme.projections.commitments.queries import active_for_member
 from adminme.projections.tasks.queries import open_for_member as open_tasks
+from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.what_now import rank_what_now
 
 router = APIRouter(prefix="/api/core", tags=["core"])
@@ -69,47 +70,28 @@ async def what_now(request: Request, session: SessionDep) -> dict[str, Any]:
     return _what_now(request.app.state.runtime, session)
 
 
-@router.get("/v1/inbox")
-async def inbox(request: Request, session: SessionDep) -> dict[str, Any]:
-    """Merge proposal review and household work at the authorized read seam."""
+@router.get("/v1/triage")
+async def triage(request: Request, session: SessionDep) -> dict[str, Any]:
+    """Return only derived candidates awaiting this member's adjudication."""
     runtime = request.app.state.runtime
     if runtime.projections is None:
-        raise HTTPException(503, "inbox projections unavailable")
-    proposals = [
-        {
-            "id": row["commitment_id"],
-            "kind": "commitment_proposal",
-            "state": "pending_review",
-            "title": row["description"],
-            "source_interaction_id": row["source_interaction_id"],
-            "last_event_id": row["last_event_id"],
-            "actions": ["edit", "approve", "dismiss"],
-        }
-        for row in pending_approval(
-            runtime.projections.connection("commitments"), session
-        )
-        if row["owed_by_party"] == session.view_member_id
-    ]
-    tasks = [
-        {
-            "id": row["task_id"],
-            "kind": "task",
-            "state": row["status"],
-            "title": row["title"],
-            "source_interaction_id": None,
-            "last_event_id": row["last_event_id"],
-            "actions": [],
-        }
-        for row in open_tasks(
-            runtime.projections.connection("tasks"),
-            session,
-            member_party_id=session.view_member_id,
-        )
-    ]
+        raise HTTPException(503, "triage projection unavailable")
     return {
         "member_id": session.view_member_id,
-        "items": sorted(proposals + tasks, key=lambda item: (item["kind"], item["id"])),
+        "surface": "triage",
+        "items": pending_triage(
+            runtime.projections.connection("triage"),
+            session,
+            member_id=session.view_member_id,
+        ),
     }
+
+
+@router.get("/v1/inbox", deprecated=True)
+async def inbox(request: Request, session: SessionDep) -> dict[str, Any]:
+    """Deprecated compatibility alias for pre-D26 clients."""
+    result = await triage(request, session)
+    return {**result, "deprecated_alias": "inbox", "canonical_path": "/api/core/v1/triage"}
 
 
 @router.get("/v1/activity")

@@ -55,9 +55,16 @@ export function registerCommands(api: OpenClawPluginApi, runtime: PluginRuntime)
   );
   api.registerCommand(
     command({
+      name: "adminme-triage",
+      description: "Show my authorized Triage queue.",
+      handler: (context) => invoke(runtime, context, "/api/openclaw/v1/dashboard/triage"),
+    }),
+  );
+  api.registerCommand(
+    command({
       name: "adminme-inbox",
-      description: "Show my authorized inbox.",
-      handler: (context) => invoke(runtime, context, "/api/openclaw/v1/dashboard/inbox"),
+      description: "Deprecated alias for /adminme-triage.",
+      handler: (context) => invoke(runtime, context, "/api/openclaw/v1/dashboard/triage"),
     }),
   );
 

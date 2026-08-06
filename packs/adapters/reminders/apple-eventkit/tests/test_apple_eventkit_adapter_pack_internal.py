@@ -328,7 +328,6 @@ def test_pack_manifest_loads_cleanly() -> None:
         "reminder.list_item.synced",
         "reminder.dispatched",
         "task.created",
-        "commitment.proposed",
     ):
         assert required in declared, f"manifest missing {required!r}"
 

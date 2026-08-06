@@ -281,7 +281,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         assert adult_bootstrap.status_code == 200
         assert [item["id"] for item in adult_bootstrap.json()["navigation"]] == [
             "today",
-            "inbox",
+            "triage",
             "people",
             "knowledge",
             "finance",
@@ -313,7 +313,7 @@ def test_eight_surfaces_three_modes_and_independent_route_denial(
         ]
         assert child_bootstrap["mode"] == "child"
         for forbidden in (
-            "inbox",
+            "triage",
             "people",
             "knowledge",
             "finance",
@@ -409,7 +409,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
     with TestClient(app) as client:
         runtime = app.state.runtime
         projection_names = runtime.projections.projection_names()
-        assert len(projection_names) == 13
+        assert len(projection_names) == 14
         before_counts = _domain_counts(runtime)
         create = client.post(
             "/api/member/v1/temporary-surfaces",
@@ -518,7 +518,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
             == 404
         )
         assert _domain_counts(runtime) == before_counts
-        assert len(runtime.projections.projection_names()) == 13
+        assert len(runtime.projections.projection_names()) == 14
         assert not any(
             "project" in name for name in runtime.projections.projection_names()
         )

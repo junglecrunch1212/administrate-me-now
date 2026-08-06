@@ -8,7 +8,7 @@ Bootstrap §8 (prompt 16) concatenates this file into `~/Chief/AGENTS.md`.
 Per-member morning digest delivered around the member's wake time
 (default 06:30 local in member's timezone per [BUILD.md §1202]). Gathers
 today's calendar events (respecting privacy filtering), due commitments
-+ tasks, due recurrences, overnight inbox count, streak status, reward
++ tasks, due recurrences, overnight Triage count, streak status, reward
 stats. Validation-guarded: every claimed calendar event / commitment /
 task id is verified against projections post-composition; any
 fabrication zeroes the message with sentinel "No morning brief
@@ -44,7 +44,7 @@ Proactive pack at `packs/pipelines/morning_digest/` with
 
 1. Gather projection state: today's calendar events
    (privacy-filtered), due commitments, today's tasks, due
-   recurrences, inbox count, streak status, reward stats.
+   recurrences, Triage count, streak status, reward stats.
 2. Resolve member's `profile_format` from the profile loader.
 3. Call `compose_morning_digest@v3` with the gathered payload.
 4. Validation guard: every id in the skill's `claimed_event_ids`

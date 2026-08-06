@@ -9,7 +9,7 @@
 # `min_confidence` emit `commitment.suppressed`; messages at/above
 # `review_threshold` emit `commitment.proposed` with strength=confident;
 # messages between emit `commitment.proposed` with strength=weak so the
-# inbox can surface them with a visible confidence score.
+# Triage can surface them with a visible confidence score.
 
 min_confidence: 0.55          # below this → commitment.suppressed
 review_threshold: 0.75        # at/above this → strength=confident

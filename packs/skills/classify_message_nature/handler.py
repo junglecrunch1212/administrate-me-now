@@ -7,7 +7,7 @@ the wrapper validates against output.schema.json.
 Defensive default: if the model omits or returns an unknown classification
 (out of the closed enum), coerce to ``personal`` with confidence 0.0
 rather than letting output_invalid fire downstream — mis-classifying a
-real message as noise (and dropping it from the inbox) is a worse failure
+real message as noise (and dropping it from interaction history) is a worse failure
 than mis-classifying noise as personal.
 """
 

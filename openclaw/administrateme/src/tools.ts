@@ -60,7 +60,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
   const definitions = [
     {
       name: "administrateme_state",
-      description: "Read the authorized member's AdministrateMe state, inbox, and commitments.",
+      description: "Read the authorized member's AdministrateMe state, Triage queue, and commitments.",
       parameters: Type.Object({}, { additionalProperties: false }),
       path: "/api/openclaw/v1/tools/state",
     },

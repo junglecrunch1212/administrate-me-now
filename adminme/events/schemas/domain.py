@@ -263,7 +263,7 @@ class ParalysisTriggeredV1(BaseModel):
 
     Per [BUILD.md §1297-1302]: NEVER invokes an LLM; template comes
     from persona's ``paralysis_templates.yaml``; surface is
-    inbox + optional outbound (the optional-outbound branch is
+    Today/activity + optional outbound (the optional-outbound branch is
     deferred to a future per-profile-config-aware prompt — v1 emits
     the event only). Registered at v1 per [D7]."""
 

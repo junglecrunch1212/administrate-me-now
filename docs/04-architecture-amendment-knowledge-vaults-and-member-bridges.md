@@ -108,8 +108,8 @@ The Capture product (`:3335`) is **demoted from input pipeline to read surface**
 
 - Quick-capture prefix routing (`grocery:`, `call:`, `idea:`, `recipe:`). Captures happen in Apple Notes / Voice Notes / Obsidian on the member's own device.
 - Voice-note ingest endpoint. Ingested via L1 bridge adapter.
-- Triage queue. Knowledge does not need triaging — it gets indexed and made searchable; tasks/commitments/etc. emerge from the same reactive pipelines that already process messages.
-- The slash commands `/capture` and `/triage`. Possibly retained as no-op aliases for one release cycle to avoid breaking docs, then retired.
+- Capture-owned triage queue. Knowledge itself does not need triaging — it gets indexed and made searchable. D26 later adds a separate member-owned Triage surface for action candidates extracted from knowledge or other event streams.
+- The historical Capture slash commands `/capture` and `/triage`. D26 later introduces the distinct canonical `/adminme-triage` runtime command; it does not restore Capture ingestion.
 
 The router list at `/api/capture/{capture,voice,triage,recipes,parties,parties/:id,places,assets,accounts,search}` becomes `/api/capture/{recipes,parties,parties/:id,places,assets,accounts,search,knowledge,household-knowledge}`.
 
@@ -198,7 +198,7 @@ James writes a note in Apple Notes on his iPhone.
                                            │                          │
                                            ▼                          ▼
                                     Capture / Today /         Today / Calendar /
-                                    Inbox surfaces            Scoreboard surfaces
+                                    Triage surfaces           Scoreboard surfaces
                                     show the proposed         show the proposed
                                     commitment for human      recurrence for human
                                     confirmation              confirmation

@@ -25,7 +25,7 @@
 
     "nav_surface_coverage": {
       "type": "object",
-      "description": "Status of each of the 8 nav surfaces (today / inbox / crm / capture / finance / calendar / scoreboard / settings)",
+      "description": "Status of each of the 8 nav surfaces (today / triage / crm / capture / finance / calendar / scoreboard / settings)",
       "additionalProperties": {
         "type": "object",
         "required": ["primary_implemented", "tests_present"],

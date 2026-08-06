@@ -17,6 +17,36 @@ next_phase: central_observation_then_live_provider_activation
 
 # Release handoff
 
+## 2026-08-06 Triage surface and adjudication correction
+
+This amendment **MODERNIZES** the former Inbox into the canonical Triage
+surface under D26. Triage is a private, deterministic projection containing
+only unresolved extracted/derived candidates; already-official tasks stay on
+Today and Scoreboard. Existing commitment proposals and OpenClaw household
+action proposals are aggregated during migration, while new generic
+`triage.item.*` events cover task, commitment, calendar-event, reminder, list,
+list-item, and CRM identifier-link targets.
+
+Member confirmation passes through a closed typed materializer. Local targets
+emit canonical events only after confirmation. External targets require an
+explicit household member, provider account, and destination container before
+a governed `external_sync.write_requested` event can be emitted; the provider
+observation remains the fact that updates calendar/list projections. The Apple
+Reminders adapter no longer consumes unconfirmed `commitment.proposed` events.
+Legacy Inbox HTTP/OpenClaw bindings remain deprecated aliases but are absent
+from new navigation. `tests/acceptance/test_triage_vertical_slice.py` proves
+the production composition from proposal through human confirmation to one
+official task.
+
+Local release evidence on 2026-08-06: the complete root suite passed with
+1,321 tests; strict acceptance passed with 22 tests under `--runxfail`; Ruff
+and mypy passed across 186 production source files; both invariant scripts
+passed; and the exact pinned OpenClaw contract, TypeScript check, 14 plugin
+tests, and build passed. The Triage process proof also covers idempotent
+enrichment/confirmation/dismissal, private-scope isolation, CRM visibility,
+Apple Calendar routing, Google Tasks routing, replay, and the rule that an
+external write command cannot fabricate a provider observation.
+
 ## 2026-08-06 personal Google OAuth activation repair
 
 The live Mac activation proved that the Google packs' service-account-only

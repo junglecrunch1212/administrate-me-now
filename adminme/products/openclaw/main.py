@@ -418,7 +418,7 @@ async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any
     runtime = _runtime(request)
     result = {
         "what_now": core._what_now(runtime, session),
-        "inbox": await core.inbox(request, session),
+        "triage": await core.triage(request, session),
         "commitments": await core.active_commitments(request, session),
     }
     await _record_tool_call(request, session, body.provenance, operation="tools.state")
@@ -1068,15 +1068,26 @@ async def dashboard_today(body: ContextRequest, request: Request) -> dict[str, A
     return result
 
 
-@router.post("/dashboard/inbox")
-async def dashboard_inbox(body: ContextRequest, request: Request) -> dict[str, Any]:
+@router.post("/dashboard/triage")
+async def dashboard_triage(body: ContextRequest, request: Request) -> dict[str, Any]:
     session = _session(request, body.provenance)
     _require_adult(session)
-    result = await core.inbox(request, session)
+    result = await core.triage(request, session)
     await _record_tool_call(
-        request, session, body.provenance, operation="dashboard.inbox"
+        request, session, body.provenance, operation="dashboard.triage"
     )
     return result
+
+
+@router.post("/dashboard/inbox", deprecated=True)
+async def dashboard_inbox(body: ContextRequest, request: Request) -> dict[str, Any]:
+    """Deprecated compatibility alias for the pinned pre-D26 plugin."""
+    result = await dashboard_triage(body, request)
+    return {
+        **result,
+        "deprecated_alias": "inbox",
+        "canonical_path": "/api/openclaw/v1/dashboard/triage",
+    }
 
 
 @router.post("/dashboard/health")

@@ -25,10 +25,10 @@ on_failure:
 
 Tags an inbound message — email, SMS, iMessage — with one of five
 categories so the `noise_filtering` pipeline can decide whether to
-surface it in the inbox or suppress to the noise bucket. The
+surface it in the authorized interactions view or suppress to the noise bucket. The
 `on_failure` defaults to `personal` rather than `noise` because
 mis-classifying real messages as noise (and dropping them from the
-inbox) is worse than mis-classifying noise as personal.
+interactions view) is worse than mis-classifying noise as personal.
 
 ## What classifies as each
 
@@ -61,6 +61,6 @@ work. **promotional** — solicited marketing the principal opted into
 (brand newsletters, store loyalty offers) that aren't pure noise but
 also aren't transactional. Low-confidence outputs (anywhere the
 classifier is genuinely uncertain) default to `personal` so the
-message lands in the inbox; the safer failure mode is "human sees
+message remains in the interactions view; the safer failure mode is "human sees
 something they could have ignored" rather than "human misses
 something they needed to see."

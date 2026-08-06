@@ -4,7 +4,7 @@ The recipient is the household member whose state is below.
 Member: {{ member_id }}
 Date: {{ today_iso }}
 Profile format: {{ profile_format }}
-Inbox count: {{ inbox_count }}
+Triage count: {{ inbox_count }}
 
 Today's calendar events:
 {% for ev in calendars %}- id={{ ev.id }} | {{ ev.title }}{% if ev.start_at %} @ {{ ev.start_at }}{% endif %}

@@ -209,7 +209,7 @@ No Phase A blocker was identified. One D8 constitutional violation (medium sever
 
 **Shipped state:** `paralysis_detection` v1 emits `paralysis.triggered` into the event log only. It does NOT call `outbound()`. The pipeline.yaml lists no `observation.suppressed` or `external.sent` in `events_emitted`. The pipeline.yaml comments explicitly say "outbound deferred to a future per-profile-config-aware prompt."
 
-**Gap:** The landing-page promise is "sends a gentle nudge." The shipped v1 detects the paralysis state and records it, but the nudge is never delivered to the member — not via iMessage, not via inbox, not via any surface. The `paralysis.triggered` event sits in the log unread unless some downstream subscriber (not yet built) acts on it.
+**Gap:** The landing-page promise is "sends a gentle nudge." The shipped v1 detects the paralysis state and records it, but the nudge is never delivered to the member — not via iMessage, not via Today/activity, not via any surface. The `paralysis.triggered` event sits in the log unread unless some downstream subscriber (not yet built) acts on it.
 
 **Severity (informational / elevated):** This is the most significant vision gap in the current cohort. The ADHD section's most behavior-specific promise (the 3pm/5pm nudge with a tiny next step) is not delivered end-to-end. The "event-only emit" design choice is acknowledged in BUILD.md §1297-1302 and pipeline.yaml comments, so it's intentional. But it should be on the operator's radar as a Phase A gap that needs a specific prompt to close before Phase B is live.
 
@@ -235,7 +235,7 @@ No Phase A blocker was identified. One D8 constitutional violation (medium sever
 
 - **"Working-memory and capture system" §5** — not in scope for 10d pipelines; capture layer is a future prompt.
 - **"Sensor and signal layer" §6** — not in scope; Plaid and HA adapters are prompt 11+ territory.
-- **"Unified communications §4"** — not in scope for 10d pipelines; inbox aggregation is Comms product (separate prompt).
+- **"Unified communications §4"** — not in scope for 10d pipelines; provider-message aggregation is a Comms product (separate prompt), while extracted candidates now enter Triage per D26.
 - **"The Excel workbook is alive"** — xlsx projection is orthogonal to 10d pipeline cohort.
 
 ---

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -10,14 +11,21 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel, Field
 
-from adminme.events.envelope import EventEnvelope
+from adminme.events.envelope import EventEnvelope, Sensitivity
+from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
 from adminme.lib.scope import allowed_read
 from adminme.lib.session import Session
 from adminme.member_chat import MemberChatError
-from adminme.products.auth import session_from_request
+from adminme.products.auth import require_principal, session_from_request
+from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
     authorize_surface,
@@ -33,6 +41,8 @@ from adminme.products.openclaw.main import (
     Provenance,
     _task_lifecycle,
 )
+from adminme.projections.parties.queries import get_party
+from adminme.projections.triage.queries import get_item as get_triage_item
 from adminme.temporary_surfaces import (
     CHILD_ACTIONS,
     CHILD_QUERIES,
@@ -88,7 +98,11 @@ class ExternalWriteRequest(BaseModel):
 
     model_config = {"extra": "forbid"}
     provider: Literal[
-        "google_calendar", "apple_calendar", "apple_reminders", "apple_notes"
+        "google_calendar",
+        "google_tasks",
+        "apple_calendar",
+        "apple_reminders",
+        "apple_notes",
     ]
     provider_account_id: str = Field(min_length=1, max_length=500)
     operation: str = Field(min_length=1, max_length=120)
@@ -96,6 +110,25 @@ class ExternalWriteRequest(BaseModel):
     expected_provider_revision: str | None = Field(default=None, max_length=1000)
     payload: dict[str, Any] = Field(default_factory=dict)
     request_id: str = Field(min_length=8, max_length=120)
+
+
+class TriageEnrichmentRequest(BaseModel):
+    """Member corrections applied before a candidate can be confirmed."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1)
+    title: str | None = Field(default=None, min_length=1, max_length=1000)
+    target_kind: TriageTargetKind | None = None
+    candidate_updates: dict[str, Any] = Field(default_factory=dict)
+    route: TriageRouteV1 | None = None
+
+
+class TriageDecisionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 def _runtime(request: Request) -> Any:
@@ -110,6 +143,7 @@ _EXTERNAL_OPERATIONS = {
         "move_event",
         "respond_event",
     },
+    "google_tasks": {"create_task"},
     "apple_calendar": {"create_event", "update_event", "delete_event", "move_event"},
     "apple_reminders": {
         "create_reminder",
@@ -133,6 +167,433 @@ _EXTERNAL_OPERATIONS = {
         "delete_folder",
     },
 }
+
+
+def _owned_triage_item(
+    runtime: Any, session: Session, proposal_id: str
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "Triage decisions are unavailable while viewing another member"
+        )
+    if runtime.projections is None:
+        raise HTTPException(503, "triage projection unavailable")
+    item = get_triage_item(
+        runtime.projections.connection("triage"), session, proposal_id=proposal_id
+    )
+    if item is None or item["owner_member_id"] != session.auth_member_id:
+        raise HTTPException(404, "triage item not found")
+    return item
+
+
+def _require_current_triage(item: dict[str, Any], expected_last_event_id: str) -> None:
+    if item["state"] != "pending_review":
+        raise HTTPException(409, "triage item is no longer awaiting review")
+    if item["last_event_id"] != expected_last_event_id:
+        raise HTTPException(409, "triage item changed; refresh before deciding")
+
+
+def _triage_event(
+    session: Session,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    request_id: str,
+    request_fingerprint: str,
+    causation_id: str,
+    sensitivity: Sensitivity = "normal",
+) -> EventEnvelope:
+    now = EventEnvelope.now_utc_iso()
+    return EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type=event_type,
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity=sensitivity,
+        correlation_id=session.correlation_id,
+        causation_id=causation_id,
+        actor_identity=session.auth_member_id,
+        idempotency_key=f"triage:{event_type}:{session.auth_member_id}:{request_id}",
+        raw_ref=f"request-sha256:{request_fingerprint}",
+        payload=payload,
+    )
+
+
+def _triage_request_fingerprint(proposal_id: str, body: BaseModel) -> str:
+    canonical = json.dumps(
+        {"proposal_id": proposal_id, "body": body.model_dump(mode="json")},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _triage_state_fingerprint(item: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {
+            "proposal_id": item["proposal_id"],
+            "target_kind": item["target_kind"],
+            "owner_member_id": item["owner_member_id"],
+            "title": item["title"],
+            "candidate": item.get("candidate") or {},
+            "route": item.get("route"),
+            "sensitivity": item.get("sensitivity") or "normal",
+            "last_event_id": item["last_event_id"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _prior_triage_command(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    request_id: str,
+    request_fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "event log unavailable")
+    key = f"triage:{event_type}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior["raw_ref"] != f"request-sha256:{request_fingerprint}":
+        raise HTTPException(409, "idempotency key conflicts with prior decision body")
+    return prior
+
+
+async def _guard_triage_write(
+    runtime: Any, session: Session, action: str, payload: dict[str, Any]
+) -> None:
+    if runtime.guarded_write is None:
+        raise HTTPException(503, "write authorization unavailable")
+    decision = await runtime.guarded_write.check(session, action, payload)
+    if not decision.pass_:
+        raise HTTPException(
+            409 if decision.layer_failed == "governance" else 403,
+            {"reason": decision.reason, "correlation_id": decision.correlation_id},
+        )
+
+
+def _target_member(runtime: Any, item: dict[str, Any]) -> str:
+    route = item.get("route") or {}
+    member_id = str(route.get("member_id") or item["owner_member_id"])
+    if member_id not in runtime.settings.member_roles:
+        raise HTTPException(422, "route must name a configured household member")
+    if runtime.settings.member_roles.get(member_id) == "device":
+        raise HTTPException(422, "a device cannot own household truth")
+    if member_id != item["owner_member_id"] and item.get("sensitivity") != "normal":
+        raise HTTPException(
+            403, "sensitive candidates cannot be rerouted to another member"
+        )
+    if (
+        runtime.settings.member_roles.get(member_id) == "child"
+        and member_id != item["owner_member_id"]
+        and not (item.get("candidate") or {}).get("child_safe")
+    ):
+        raise HTTPException(
+            403, "child routing requires an explicit child-safe classification"
+        )
+    return member_id
+
+
+def _require_configured_external_route(
+    runtime: Any,
+    *,
+    provider: str,
+    target_member: str,
+    provider_account_id: str,
+    container_external_id: str | None,
+) -> None:
+    if provider in {"google_calendar", "google_tasks"}:
+        expected_fragment = (
+            "google-calendar" if provider == "google_calendar" else "google-tasks"
+        )
+        container_key = (
+            "calendar_id" if provider == "google_calendar" else "tasklist_id"
+        )
+        for record in runtime.settings.adapter_config.get("adapters", []):
+            if not isinstance(record, dict):
+                continue
+            adapter_id = str(
+                record.get("id")
+                or record.get("kind")
+                or record.get("name")
+                or record.get("pack_id")
+                or ""
+            )
+            raw_config = record.get("config")
+            config: dict[str, Any] = raw_config if isinstance(raw_config, dict) else {}
+            if (
+                expected_fragment in adapter_id
+                and config.get("member_id") == target_member
+                and (config.get("provider_account_id") or config.get("user_email"))
+                == provider_account_id
+                and config.get(container_key) == container_external_id
+            ):
+                return
+        raise HTTPException(
+            422, "the Google provider route is not configured for this member"
+        )
+    if provider in {"apple_calendar", "apple_reminders"}:
+        expected_fragment = (
+            "apple-calendar" if provider == "apple_calendar" else "apple-eventkit"
+        )
+        container_key = (
+            "calendar_identifier"
+            if provider == "apple_calendar"
+            else "target_list_identifier"
+        )
+        for record in runtime.settings.adapter_config.get("adapters", []):
+            if not isinstance(record, dict):
+                continue
+            adapter_id = str(record.get("id") or record.get("kind") or "")
+            raw_config = record.get("config")
+            config = raw_config if isinstance(raw_config, dict) else {}
+            configured_account = config.get("provider_account_id") or config.get(
+                "member_id"
+            )
+            if (
+                expected_fragment in adapter_id
+                and config.get("member_id") == target_member
+                and configured_account == provider_account_id
+                and config.get(container_key) == container_external_id
+            ):
+                return
+        active_members = {
+            str(record.get("member_id"))
+            for record in runtime.settings.bridge_enrollments.values()
+            if isinstance(record, dict) and record.get("status") == "active"
+        }
+        if target_member not in active_members or provider_account_id != target_member:
+            raise HTTPException(
+                422, "the member's Apple bridge is not active for this route"
+            )
+        return
+    raise HTTPException(422, "the external route is not a configured writable adapter")
+
+
+def _materialization_envelopes(
+    runtime: Any,
+    session: Session,
+    item: dict[str, Any],
+    *,
+    request_id: str,
+) -> list[EventEnvelope]:
+    """Translate a reviewed candidate through a closed, typed allowlist."""
+
+    now = EventEnvelope.now_utc_iso()
+    candidate = dict(item.get("candidate") or {})
+    title = str(item.get("title") or candidate.get("title") or "").strip()
+    if not title:
+        raise HTTPException(422, "a confirmed candidate requires a title")
+    target_kind = item["target_kind"]
+    target_member = _target_member(runtime, item)
+    common = {
+        "event_at_ms": int(time.time() * 1000),
+        "tenant_id": session.tenant_id,
+        "occurred_at": now,
+        "source_adapter": "member-portal",
+        "source_account_id": session.auth_member_id,
+        "owner_scope": f"private:{target_member}",
+        "visibility_scope": f"private:{target_member}",
+        "sensitivity": item.get("sensitivity") or "normal",
+        "correlation_id": session.correlation_id,
+        "causation_id": item["last_event_id"],
+        "actor_identity": session.auth_member_id,
+        "raw_ref": f"triage-state-sha256:{_triage_state_fingerprint(item)}",
+    }
+    if target_kind == "task":
+        return [
+            EventEnvelope(
+                **common,
+                type="task.created",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:task",
+                payload={
+                    "task_id": f"triage_task_{item['proposal_id']}",
+                    "title": title,
+                    "description": candidate.get("description"),
+                    "owner_member_id": target_member,
+                    "due": candidate.get("due"),
+                    "energy": candidate.get("energy"),
+                    "effort_min": candidate.get("effort_min"),
+                    "source_commitment_id": candidate.get("source_commitment_id"),
+                },
+            )
+        ]
+    if target_kind == "commitment":
+        owed_to = candidate.get("owed_to_party_id")
+        if not owed_to:
+            raise HTTPException(422, "a commitment requires an owed-to party")
+        commitment_id = f"triage_commitment_{item['proposal_id']}"
+        proposed = EventEnvelope(
+            **common,
+            type="commitment.proposed",
+            schema_version=1,
+            idempotency_key=f"triage:materialize:{item['proposal_id']}:commitment",
+            payload={
+                "commitment_id": commitment_id,
+                "kind": candidate.get("kind", "other"),
+                "owed_by_member_id": target_member,
+                "owed_to_party_id": str(owed_to),
+                "text_summary": title,
+                "suggested_due": candidate.get("due"),
+                "urgency": candidate.get("urgency", "this_week"),
+                "confidence": float(item.get("confidence") or 1.0),
+                "strength": "confident",
+                "source_interaction_id": candidate.get("source_interaction_id"),
+                "source_message_preview": candidate.get("source_message_preview"),
+                "classify_reasons": list(
+                    item.get("reasons") or ["member-confirmed triage"]
+                ),
+            },
+        )
+        confirmed = EventEnvelope(
+            **common,
+            type="commitment.confirmed",
+            schema_version=1,
+            idempotency_key=f"triage:materialize:{item['proposal_id']}:commitment-confirmed",
+            payload={
+                "commitment_id": commitment_id,
+                "confirmed_by_member_id": session.auth_member_id,
+                "confirmed_at": now,
+                "note": "Confirmed through Triage",
+            },
+        )
+        return [proposed, confirmed]
+    if target_kind == "party_identifier":
+        required = {
+            "surviving_party_id",
+            "candidate_kind",
+            "candidate_value",
+            "candidate_value_normalized",
+        }
+        if not required.issubset(candidate):
+            raise HTTPException(422, "an identity candidate is missing required fields")
+        identifier_kind = str(candidate["candidate_kind"])
+        if identifier_kind not in {"email", "phone", "imessage_handle"}:
+            raise HTTPException(422, "unsupported identity candidate kind")
+        if runtime.projections is None:
+            raise HTTPException(503, "parties projection unavailable")
+        parties = runtime.projections.connection("parties")
+        party_id = str(candidate["surviving_party_id"])
+        if get_party(parties, session, party_id=party_id) is None:
+            raise HTTPException(422, "identity candidate party is unavailable")
+        existing = parties.execute(
+            """
+            SELECT party_id
+              FROM identifiers
+             WHERE tenant_id = ? AND kind = ? AND value_normalized = ?
+             LIMIT 1
+            """,
+            (
+                session.tenant_id,
+                identifier_kind,
+                str(candidate["candidate_value_normalized"]),
+            ),
+        ).fetchone()
+        if existing is not None:
+            raise HTTPException(409, "identity candidate is already assigned")
+        return [
+            EventEnvelope(
+                **common,
+                type="identifier.added",
+                schema_version=1,
+                idempotency_key=(
+                    f"triage:materialize:{item['proposal_id']}:party-identifier"
+                ),
+                payload={
+                    "identifier_id": f"triage_identifier_{item['proposal_id']}",
+                    "party_id": party_id,
+                    "kind": identifier_kind,
+                    "value": str(candidate["candidate_value"]),
+                    "value_normalized": str(candidate["candidate_value_normalized"]),
+                    "verified": False,
+                    "primary_for_kind": False,
+                },
+            )
+        ]
+
+    route = item.get("route") or {}
+    provider = route.get("provider")
+    provider_account_id = route.get("provider_account_id")
+    container = route.get("container_external_id")
+    if not provider or not provider_account_id:
+        raise HTTPException(
+            422, "external candidates require a provider and account route"
+        )
+    _require_configured_external_route(
+        runtime,
+        provider=str(provider),
+        target_member=target_member,
+        provider_account_id=str(provider_account_id),
+        container_external_id=str(container) if container is not None else None,
+    )
+    if target_kind == "calendar_event":
+        if provider not in {"google_calendar", "apple_calendar"} or not container:
+            raise HTTPException(
+                422, "calendar candidates require a writable calendar route"
+            )
+        if not candidate.get("start") or not candidate.get("end"):
+            raise HTTPException(422, "calendar candidates require start and end")
+        operation = "create_event"
+        candidate.setdefault("calendar_id", container)
+        candidate.setdefault("calendar_external_id", container)
+        candidate.setdefault("summary", title)
+    elif target_kind in {"reminder", "list_item"}:
+        if provider not in {"apple_reminders", "google_tasks"} or not container:
+            raise HTTPException(
+                422, "reminder candidates require a writable task-list route"
+            )
+        operation = (
+            "create_reminder" if provider == "apple_reminders" else "create_task"
+        )
+        candidate.setdefault(
+            "target_list_id" if provider == "apple_reminders" else "tasklist_id",
+            container,
+        )
+        candidate.setdefault("title", title)
+        candidate.setdefault("member_id", target_member)
+    elif target_kind == "list":
+        if provider != "apple_reminders":
+            raise HTTPException(422, "list creation currently requires Apple Reminders")
+        operation = "create_list"
+        candidate.setdefault("list_name", title)
+        candidate.setdefault("member_id", target_member)
+    else:
+        raise HTTPException(422, "unsupported triage target")
+    if operation not in _EXTERNAL_OPERATIONS.get(str(provider), set()):
+        raise HTTPException(422, "the routed provider does not support this write")
+    payload = {
+        "command_id": f"triage:{item['proposal_id']}:{request_id}",
+        "member_id": target_member,
+        "provider": provider,
+        "provider_account_id": provider_account_id,
+        "operation": operation,
+        "target_external_id": None,
+        "expected_provider_revision": None,
+        "payload": candidate,
+        "requested_at": now,
+    }
+    return [
+        EventEnvelope(
+            **common,
+            type="external_sync.write_requested",
+            schema_version=1,
+            idempotency_key=f"triage:materialize:{item['proposal_id']}:external",
+            payload=payload,
+        )
+    ]
 
 
 @router.post("/api/member/v1/external-sync/commands", status_code=202)
@@ -191,6 +652,291 @@ async def request_external_write(
     )
     event_id = await runtime.events.write(envelope)
     return {"accepted": True, "command_id": body.request_id, "event_id": event_id}
+
+
+@router.post("/api/member/v1/triage/{proposal_id}/enrich")
+async def enrich_triage_item(
+    proposal_id: str,
+    body: TriageEnrichmentRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    lock = runtime.triage_command_locks.setdefault(
+        f"{session.tenant_id}:{proposal_id}", asyncio.Lock()
+    )
+    async with lock:
+        return await _enrich_triage_item_locked(
+            runtime, proposal_id, body, request, session
+        )
+
+
+async def _enrich_triage_item_locked(
+    runtime: Any,
+    proposal_id: str,
+    body: TriageEnrichmentRequest,
+    request: Request,
+    session: Session,
+) -> dict[str, Any]:
+    item = _owned_triage_item(runtime, session, proposal_id)
+    if item["source_kind"] == "commitment_proposal":
+        if body.target_kind not in {None, "commitment"} or body.route is not None:
+            raise HTTPException(
+                422,
+                "existing commitment proposals may change only description or due date",
+            )
+        unexpected = set(body.candidate_updates) - {"due", "due_at"}
+        if unexpected:
+            raise HTTPException(422, "unsupported commitment enrichment fields")
+        result = await comms.edit_commitment(
+            proposal_id,
+            comms.EditRequest(
+                request_id=body.request_id,
+                expected_last_event_id=body.expected_last_event_id,
+                description=body.title,
+                due_at=body.candidate_updates.get("due_at")
+                or body.candidate_updates.get("due"),
+            ),
+            request,
+            session,
+        )
+        await runtime.wait_for_projection("triage", result["event_id"])
+        return {**result, "triage": _owned_triage_item(runtime, session, proposal_id)}
+    request_fingerprint = _triage_request_fingerprint(proposal_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.item.enriched",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("triage", prior["event_id"])
+        return {
+            "event_id": prior["event_id"],
+            "triage": _owned_triage_item(runtime, session, proposal_id),
+            "duplicate": True,
+        }
+    _require_current_triage(item, body.expected_last_event_id)
+    payload = {
+        "proposal_id": proposal_id,
+        "enriched_at": EventEnvelope.now_utc_iso(),
+        "enriched_by_member_id": session.auth_member_id,
+        "title": body.title,
+        "target_kind": body.target_kind,
+        "candidate_updates": body.candidate_updates,
+        "route": body.route.model_dump(mode="json") if body.route else None,
+    }
+    if not any(
+        (body.title, body.target_kind, body.candidate_updates, body.route is not None)
+    ):
+        raise HTTPException(422, "an enrichment must change at least one field")
+    await _guard_triage_write(runtime, session, "triage.item.enriched", payload)
+    envelope = _triage_event(
+        session,
+        event_type="triage.item.enriched",
+        payload=payload,
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+        causation_id=item["last_event_id"],
+        sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+    )
+    event_id = await runtime.events.write(envelope)
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "triage": _owned_triage_item(runtime, session, proposal_id),
+    }
+
+
+@router.post("/api/member/v1/triage/{proposal_id}/approve")
+async def approve_triage_item(
+    proposal_id: str,
+    body: TriageDecisionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    lock = runtime.triage_command_locks.setdefault(
+        f"{session.tenant_id}:{proposal_id}", asyncio.Lock()
+    )
+    async with lock:
+        return await _approve_triage_item_locked(
+            runtime, proposal_id, body, request, session
+        )
+
+
+async def _approve_triage_item_locked(
+    runtime: Any,
+    proposal_id: str,
+    body: TriageDecisionRequest,
+    request: Request,
+    session: Session,
+) -> dict[str, Any]:
+    item = _owned_triage_item(runtime, session, proposal_id)
+    if item["source_kind"] == "commitment_proposal":
+        result = await comms.approve_commitment(
+            proposal_id,
+            comms.ApproveRequest(
+                request_id=body.request_id,
+                expected_last_event_id=body.expected_last_event_id,
+                send_acknowledgement=False,
+                openclaw_approved=False,
+            ),
+            request,
+            session,
+        )
+        await runtime.wait_for_projection("triage", result["event_id"])
+        return {**result, "triage_state": "confirmed"}
+
+    request_fingerprint = _triage_request_fingerprint(proposal_id, body)
+    prior_confirmation = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.item.confirmed",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior_confirmation is not None:
+        await runtime.wait_for_projection("triage", prior_confirmation["event_id"])
+        return {
+            "event_id": prior_confirmation["event_id"],
+            "state": "confirmed",
+            "materialized_event_ids": prior_confirmation["payload"][
+                "materialized_event_ids"
+            ],
+            "duplicate": True,
+        }
+    _require_current_triage(item, body.expected_last_event_id)
+    materializations = _materialization_envelopes(
+        runtime, session, item, request_id=body.request_id
+    )
+    prior_materializations = [
+        await runtime.event_log.get_by_idempotency(
+            session.tenant_id, cast(str, envelope.idempotency_key)
+        )
+        for envelope in materializations
+    ]
+    if any(prior_materializations) and not all(prior_materializations):
+        raise HTTPException(409, "triage materialization is incomplete; run Doctor")
+    if all(prior_materializations) and any(
+        cast(dict[str, Any], prior).get("raw_ref") != envelope.raw_ref
+        for prior, envelope in zip(
+            prior_materializations, materializations, strict=True
+        )
+    ):
+        raise HTTPException(
+            409, "triage candidate changed after materialization; run Doctor"
+        )
+    confirm_payload_for_gate = {
+        "proposal_id": proposal_id,
+        "confirmed_by_member_id": session.auth_member_id,
+        "target_kind": item["target_kind"],
+    }
+    await _guard_triage_write(
+        runtime, session, "triage.item.confirmed", confirm_payload_for_gate
+    )
+    if all(prior_materializations):
+        materialized_event_ids = [
+            cast(dict[str, Any], prior)["event_id"] for prior in prior_materializations
+        ]
+    else:
+        for envelope in materializations:
+            await _guard_triage_write(runtime, session, envelope.type, envelope.payload)
+        materialized_event_ids = await runtime.events.write_batch(materializations)
+    confirmed_at = EventEnvelope.now_utc_iso()
+    confirm = _triage_event(
+        session,
+        event_type="triage.item.confirmed",
+        payload={
+            "proposal_id": proposal_id,
+            "confirmed_at": confirmed_at,
+            "confirmed_by_member_id": session.auth_member_id,
+            "materialized_event_ids": materialized_event_ids,
+        },
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+        causation_id=materialized_event_ids[-1],
+        sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+    )
+    event_id = await runtime.events.write(confirm)
+    await runtime.wait_for_projection("triage", event_id)
+    return {
+        "event_id": event_id,
+        "state": "confirmed",
+        "materialized_event_ids": materialized_event_ids,
+    }
+
+
+@router.post("/api/member/v1/triage/{proposal_id}/dismiss")
+async def dismiss_triage_item(
+    proposal_id: str,
+    body: TriageDecisionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    lock = runtime.triage_command_locks.setdefault(
+        f"{session.tenant_id}:{proposal_id}", asyncio.Lock()
+    )
+    async with lock:
+        return await _dismiss_triage_item_locked(
+            runtime, proposal_id, body, request, session
+        )
+
+
+async def _dismiss_triage_item_locked(
+    runtime: Any,
+    proposal_id: str,
+    body: TriageDecisionRequest,
+    request: Request,
+    session: Session,
+) -> dict[str, Any]:
+    item = _owned_triage_item(runtime, session, proposal_id)
+    if item["source_kind"] == "commitment_proposal":
+        result = await comms.dismiss_commitment(
+            proposal_id,
+            comms.DismissRequest(
+                request_id=body.request_id,
+                expected_last_event_id=body.expected_last_event_id,
+                reason=body.reason,
+            ),
+            request,
+            session,
+        )
+        await runtime.wait_for_projection("triage", result["event_id"])
+        return {**result, "triage_state": "dismissed"}
+    request_fingerprint = _triage_request_fingerprint(proposal_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.item.dismissed",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("triage", prior["event_id"])
+        return {"event_id": prior["event_id"], "state": "dismissed", "duplicate": True}
+    _require_current_triage(item, body.expected_last_event_id)
+    payload = {
+        "proposal_id": proposal_id,
+        "dismissed_at": EventEnvelope.now_utc_iso(),
+        "dismissed_by_member_id": session.auth_member_id,
+        "reason": body.reason,
+    }
+    await _guard_triage_write(runtime, session, "triage.item.dismissed", payload)
+    envelope = _triage_event(
+        session,
+        event_type="triage.item.dismissed",
+        payload=payload,
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+        causation_id=item["last_event_id"],
+        sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+    )
+    event_id = await runtime.events.write(envelope)
+    await runtime.wait_for_projection("triage", event_id)
+    return {"event_id": event_id, "state": "dismissed"}
 
 
 def _chat_policy(runtime: Any, session: Session) -> dict[str, Any]:
@@ -357,7 +1103,10 @@ async def member_page(
     request: Request,
     session: SessionDep,
     surface: str = "today",
-) -> FileResponse:
+) -> Response:
+    if surface == "inbox":
+        authorize_surface(session, "triage")
+        return RedirectResponse(url="/member/triage", status_code=308)
     authorize_surface(session, surface)
     return FileResponse(ASSET_ROOT / "index.html", media_type="text/html")
 
@@ -425,6 +1174,12 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
 async def surface(
     surface: str, request: Request, session: SessionDep
 ) -> dict[str, Any]:
+    if surface == "inbox":
+        return {
+            **build_surface(_runtime(request), session, "triage"),
+            "deprecated_alias": "inbox",
+            "canonical_path": "/api/member/v1/surfaces/triage",
+        }
     return build_surface(_runtime(request), session, surface)
 
 

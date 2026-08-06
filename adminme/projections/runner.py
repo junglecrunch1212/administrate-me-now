@@ -47,6 +47,7 @@ from adminme.projections.parties import PartiesProjection
 from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProjection
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.tasks import TasksProjection
+from adminme.projections.triage import TriageProjection
 from adminme.projections.vector_search import VectorSearchProjection
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 
@@ -54,8 +55,9 @@ _log = logging.getLogger(__name__)
 
 # Default projection classes the runner registers when no caller has supplied an
 # explicit set. Pack-provided projections register separately via the pack runner.
-# [D18] enumerates the 13 first-party projections; this tuple is the registration
-# anchor consumed by integration tests and bootstrap code.
+# [D18] enumerated the original 13 first-party projections. [D26] adds the
+# Triage adjudication projection; this tuple remains the registration anchor
+# consumed by integration tests and bootstrap code.
 DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
     PartiesProjection,
     InteractionsProjection,
@@ -70,6 +72,7 @@ DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
     XlsxWorkbooksProjection,
     MemberKnowledgeProjection,
     ListsProjection,
+    TriageProjection,
 )
 
 

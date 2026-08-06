@@ -28,6 +28,7 @@ EXPECTED_PROJECTIONS = {
     "xlsx_workbooks",
     "member_knowledge",
     "lists",
+    "triage",
 }
 
 

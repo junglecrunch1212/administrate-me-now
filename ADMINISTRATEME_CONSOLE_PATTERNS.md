@@ -280,7 +280,7 @@ router.get('/api/today', async (req, res, next) => {
 **Subtleties.**
 
 - **Write endpoints ignore viewMember.** A write is always "performed by authMember." There is no valid "write as another member" operation. If principal A has principal B's view open and clicks a task complete, the `task.completed` event is emitted with `actor_member_id = A`, not B. This is surprising at first — "but the task is B's!" — and correct: A did the action.
-- **Two-member commitments need both IDs.** If principal A is viewing principal B's inbox and approving a commitment that B owes to an outside party, the resulting `commitment.confirmed` event captures `approved_by = A` *and* `owner = B`. Separate fields. Do not collapse.
+- **Triage decisions are self-only.** A principal may read another member's authorized view, but Triage confirmation, enrichment, and dismissal are unavailable while view-as is active. Cross-member assignment is an explicit route chosen from the deciding principal's own Triage candidate, with actor and target kept as separate fields.
 - **`isSelf()` is the fast path.** Most views don't need the view-as logic — the user is looking at their own data. Handlers should branch `if (session.isSelf()) { ...fast path... }` to avoid loading a second profile and running cross-member ACL checks every time.
 - **Children don't have view-as.** Enforce server-side regardless of what the UI does. The console UI hides the dropdown for children, but if a child sends `?view_as=<parent>` the server rejects 403.
 - **Coparent non-user members.** A coparent like Mike appears as a Party but has no login, no profile, no agent binding. `view-as=mike` fails at the "active = 1" check (he has no member row) or at the role check (if he's a Party, not a Member). The session model only deals with Members.
@@ -548,7 +548,7 @@ router.post('/api/tasks/complete', async (req, res, next) => {
 **Subtleties.**
 
 - **Layers are ordered; denials short-circuit.** A write denied at layer 1 does not touch layers 2 or 3. This keeps rate budget clean (you don't burn a token on a request that wasn't allowed to happen) and makes audit logs readable (each denial has exactly one layer recorded).
-- **`review` is not a denial in the ethical sense.** It's "held for a principal to decide." The UI surfaces it in an approval inbox. The correlation ID returned becomes the review request ID.
+- **`review` is not a denial in the ethical sense.** It's "held for a principal to decide." Extracted household candidates surface in Triage; other governed writes use their typed approval path. The correlation ID returned becomes the review request ID.
 - **Allowlist uses glob patterns.** `message.*` matches `message.send`, `message.draft`, etc. Do not use full regex — the surface area is too wide and pack authors can accidentally over-match.
 - **Rate limits are per-action, not per-agent.** `email.send` has a limit; that limit is shared across all agents that might call it. This is deliberate: the household's budget for "emails sent today" shouldn't be gameable by spinning up a new skill.
 - **`writeFn` is only called if all three layers pass.** Inside `writeFn`, the correlation ID is available and should be stamped on every event emitted by the write. This gives you post-hoc trace: one correlation_id → one check result → one write → one set of downstream events.
@@ -993,7 +993,7 @@ router.get('/api/calendar/week', async (req, res, next) => {
 
 ## 7. HIDDEN_FOR_CHILD navigation filter
 
-**What it is.** The list of console routes and nav entries that are not just denied for child-role sessions but entirely hidden from the UI. For a child, Inbox, CRM, Capture, Finance, Calendar, and Settings don't appear in the nav at all; the Scoreboard is essentially the whole app.
+**What it is.** The list of console routes and nav entries that are not just denied for child-role sessions but entirely hidden from the UI. For a child, Triage, CRM, Capture, Finance, Calendar, and Settings don't appear in the nav at all; the Scoreboard is essentially the whole app.
 
 **Why it matters.** "Hidden" vs "denied" is a UX distinction, not a security one. The security comes from server-side role checks on every endpoint. But the UX matters a lot: a child seeing greyed-out tabs labeled "Finance" and "Settings" is an invitation to poke at them, and a confused error message when they do. Hiding them entirely means the kid interface feels like a kid app, not a crippled admin tool.
 
@@ -1007,7 +1007,7 @@ router.get('/api/calendar/week', async (req, res, next) => {
 // Canonical nav structure. Single source of truth.
 const NAV_ITEMS = [
   { id: 'today',      label: 'Today',      path: '/',                              visible_to: ['principal', 'child'] },
-  { id: 'inbox',      label: 'Inbox',      path: '/inbox',     hidden_for_child: true, visible_to: ['principal'] },
+  { id: 'triage',      label: 'Triage',      path: '/member/triage', hidden_for_child: true, visible_to: ['principal'] },
   { id: 'crm',        label: 'CRM',        path: '/crm',       hidden_for_child: true, visible_to: ['principal'] },
   { id: 'capture',    label: 'Capture',    path: '/capture',   hidden_for_child: true, visible_to: ['principal'] },
   { id: 'finance',    label: 'Finance',    path: '/finance',   hidden_for_child: true, visible_to: ['principal'] },
@@ -1018,7 +1018,7 @@ const NAV_ITEMS = [
 
 // Routes that are always blocked for children, even if reached directly by URL.
 const CHILD_BLOCKED_API_PREFIXES = [
-  '/api/inbox',
+  '/api/member/v1/surfaces/triage',
   '/api/crm',
   '/api/capture',
   '/api/finance',
@@ -1319,7 +1319,7 @@ async function fetchWithTimeout(path, opts) {
 
 function resolveUpstream(path) {
   // path: '/core/today' → 'http://127.0.0.1:3333/today'
-  // path: '/comms/inbox' → 'http://127.0.0.1:3334/inbox'
+  // canonical path: '/api/core/v1/triage' in the one Python runtime
   if (path.startsWith('/core')) return 'http://127.0.0.1:3333' + path.slice(5);
   if (path.startsWith('/comms')) return 'http://127.0.0.1:3334' + path.slice(6);
   if (path.startsWith('/capture')) return 'http://127.0.0.1:3335' + path.slice(8);
@@ -1798,7 +1798,7 @@ app.use(require('./middleware/session').attachSession);
 app.use(require('./lib/nav').blockChildOnAdminRoutes);
 
 app.use('/api/today', require('./routes/today'));
-app.use('/api/inbox', require('./routes/inbox'));
+// Superseded Node example: production serves /api/core/v1/triage from FastAPI.
 // ...other routes...
 
 app.use(require('./middleware/error').errorHandler);

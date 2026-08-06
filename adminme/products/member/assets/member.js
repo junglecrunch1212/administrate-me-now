@@ -20,7 +20,8 @@ async function api(path, options = {}) {
   const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(typeof body.detail === "string" ? body.detail : "That view is unavailable.");
+    const detail = typeof body.detail === "string" ? body.detail : body.detail?.reason;
+    const error = new Error(detail || "That view is unavailable.");
     error.status = response.status;
     error.body = body;
     throw error;
@@ -77,6 +78,110 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
   }
   section.append(list);
   return section;
+}
+
+async function reloadActiveSurface() {
+  const active = currentSurface();
+  if (active.startsWith("quest:")) return;
+  renderSurface(await api(`/api/member/v1/surfaces/${encodeURIComponent(active)}`));
+}
+
+async function decideTriage(item, action, buttons) {
+  buttons.forEach((button) => { button.disabled = true; });
+  const banner = $("#state-banner"); banner.hidden = false;
+  banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
+  try {
+    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null }),
+    });
+    banner.textContent = action === "approve" ? "Confirmed. The routed household record is now being materialized." : "Dismissed. No household record or provider write was created.";
+    await reloadActiveSurface();
+  } catch (error) {
+    banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+async function enrichTriage(item, buttons) {
+  const title = window.prompt("Confirm or correct the title", item.title || "");
+  if (title == null) return;
+  let targetKind = item.target_kind;
+  if (item.source_kind !== "commitment_proposal") {
+    targetKind = window.prompt("Target type (task, commitment, calendar_event, reminder, list, list_item, or party_identifier)", item.target_kind);
+    if (targetKind == null) return;
+  }
+  const external = ["calendar_event", "reminder", "list", "list_item"].includes(targetKind);
+  const candidateUpdates = {};
+  let route = item.route || { member_id: state.bootstrap.member.id };
+  if (item.source_kind !== "commitment_proposal") {
+    const member = window.prompt("Destination household member ID", route.member_id || state.bootstrap.member.id);
+    if (member == null) return;
+    route = { ...route, member_id: member };
+  } else {
+    route = null;
+  }
+  if (targetKind === "commitment" && item.source_kind !== "commitment_proposal") {
+    const owedTo = window.prompt("Party ID this commitment is owed to", item.candidate?.owed_to_party_id || "");
+    if (owedTo == null) return;
+    candidateUpdates.owed_to_party_id = owedTo;
+  }
+  if (targetKind === "calendar_event") {
+    const start = window.prompt("Start date/time (ISO 8601 with time zone)", item.candidate?.start || item.candidate?.due || "");
+    if (start == null) return;
+    const end = window.prompt("End date/time (ISO 8601 with time zone)", item.candidate?.end || "");
+    if (end == null) return;
+    candidateUpdates.start = start;
+    candidateUpdates.end = end;
+  }
+  if (external) {
+    const provider = window.prompt("Provider (google_calendar, google_tasks, apple_calendar, or apple_reminders)", route?.provider || "");
+    if (provider == null) return;
+    const account = window.prompt("Provider account ID", route?.provider_account_id || "");
+    if (account == null) return;
+    const container = targetKind === "list" ? route?.container_external_id || null : window.prompt("Destination calendar or list ID", route?.container_external_id || "");
+    if (container == null && targetKind !== "list") return;
+    route = { member_id: route.member_id, provider, provider_account_id: account, container_external_id: container || null };
+  }
+  buttons.forEach((button) => { button.disabled = true; });
+  const banner = $("#state-banner"); banner.hidden = false; banner.textContent = "Saving the enrichment without creating official household state…";
+  try {
+    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, title, target_kind: targetKind, candidate_updates: candidateUpdates, route }),
+    });
+    banner.textContent = "Enrichment saved. Review the candidate once more before confirming it.";
+    await reloadActiveSurface();
+  } catch (error) {
+    banner.textContent = `${error.message} The candidate was not changed.`;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function triageSurface(items) {
+  const fragment = document.createDocumentFragment();
+  const intro = document.createElement("section"); intro.className = "hero-card";
+  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "Nothing becomes household truth by inference alone.", "action-title"), text("p", "Review extracted candidates, add missing routing details, then confirm or dismiss. Provider observations remain facts and do not wait here."));
+  fragment.append(intro);
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Awaiting your decision"));
+  if (!Array.isArray(items) || items.length === 0) {
+    section.append(text("p", "Triage is clear. No extracted candidates are waiting for you.", "empty")); fragment.append(section); return fragment;
+  }
+  const list = document.createElement("ul"); list.className = "item-list";
+  for (const item of items) {
+    const li = document.createElement("li"); li.className = "item triage-item";
+    li.append(text("strong", item.title), text("span", `${String(item.target_kind).replaceAll("_", " ")} · ${item.source_kind.replaceAll("_", " ")}`, "meta"));
+    if (item.reasons?.length) li.append(text("small", item.reasons.join(" · ")));
+    const row = document.createElement("div"); row.className = "button-row";
+    const enrich = text("button", item.source_kind === "commitment_proposal" ? "Edit" : "Enrich", "button button-quiet");
+    const approve = text("button", "Confirm", "button button-primary");
+    const dismiss = text("button", "Dismiss", "button button-quiet");
+    const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id));
+    const buttons = [enrich, approve, dismiss]; buttons.forEach((button) => { button.type = "button"; });
+    enrich.addEventListener("click", () => enrichTriage(item, buttons)); approve.addEventListener("click", () => decideTriage(item, "approve", buttons)); dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
+    row.append(enrich, approve, dismiss, evidence); li.append(row); list.append(li);
+  }
+  section.append(list); fragment.append(section); return fragment;
 }
 
 function rankedItems(value) {
@@ -160,9 +265,8 @@ function renderSurface(data) {
   $("#mode-label").textContent = `${data.mode} · ${data.member_id}`;
   if (data.surface === "today") {
     root.append(whatNowCard(data.what_now, data.mode), card("Open lists", data.lists, "No open list items."));
-  } else if (data.surface === "inbox") {
-    const grid = document.createElement("div"); grid.className = "card-grid";
-    grid.append(card("Needs review", data.review), card("Open work", data.tasks)); root.append(grid);
+  } else if (data.surface === "triage") {
+    root.append(triageSurface(data.items));
   } else if (data.surface === "people") {
     root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
   } else if (data.surface === "knowledge") {

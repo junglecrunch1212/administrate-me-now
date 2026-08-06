@@ -12,7 +12,7 @@ classified event with classification=``personal`` / confidence 0.0
 rather than letting the exception propagate up to the runner — which
 would non-advance the bus checkpoint and block subsequent events on
 every classification failure. Mis-classifying a real message as noise
-(and dropping it from the inbox) is a worse failure than mis-classifying
+(and dropping it from authorized interactions) is a worse failure than mis-classifying
 noise as personal.
 
 Per [ADR-0002], skill calls go through ``ctx.run_skill_fn`` (bound to

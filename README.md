@@ -50,7 +50,7 @@ OpenClaw; AdministrateMe encryption and backup keys live in macOS Keychain.
 
 - One Python runtime and one native OpenClaw plugin; OpenClaw owns assistant
   chat, conversational memory, model routing, retries, and scheduling.
-- Six product functions, thirteen projections, six reactive pipelines, two
+- Six product functions, thirteen domain projections plus derived Triage, six reactive pipelines, two
   bidirectional workbooks, five profiles, four personas, and five adapter
   categories.
 - An adult member portal with isolated OpenClaw chat, child/shared-screen

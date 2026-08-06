@@ -149,7 +149,7 @@ def test_actor_boundary_observation_bridge_model_and_dashboard_scope(
                 )
             },
         )
-        assert child_state["inbox"]["items"] == []
+        assert child_state["triage"]["items"] == []
         assert child_state["commitments"]["items"] == []
 
         proposal = _post(

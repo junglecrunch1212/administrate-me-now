@@ -49,8 +49,8 @@ independent merge or disposable-Mac live gate.
 
 Gate 6 implementation evidence (2026-08-03): the baseline columns below are
 historical observations. Current executable evidence preserves C001–C090 while
-converging implementation ownership: six product namespaces; thirteen
-projections; Cat-A–E; two bidirectional workbooks; eleven domain pipeline packs
+converging implementation ownership: six product namespaces; thirteen domain
+projections plus the derived Triage projection; Cat-A–E; two bidirectional workbooks; eleven domain pipeline packs
 split into six reactive runtime subscriptions and five OpenClaw standing
 orders; ten skills; five profiles; four personas; scoped member knowledge and
 domain search; typed notification/result feedback; contextual what-now; and a
@@ -98,7 +98,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C021 | `xlsx_workbooks` capability | BUILD §3.11/xlsx; ARCH §4 | substantial forward/reverse code; `fcntl` blocks Windows paths | PRESERVE | AC-13 |
 | C022 | `member_knowledge` capability | BUILD D17/member bridge; ARCH §4 | missing | PRESERVE | AC-04, AC-07 |
 | C023 | `lists` capability, list item not task | BUILD LISTS/D18; ARCH §4 | code/schema present; only default projection class | PRESERVE | AC-05, AC-07 |
-| C024 | Thirteen, not twelve, projection capabilities | MENTAL says 12; BUILD/ARCH later add lists | Default tuple contains one; old test says ten | SUPERSEDE old counts; PRESERVE 13 | AC-07 |
+| C024 | Thirteen domain projection capabilities plus the derived Triage read model | MENTAL says 12; BUILD/ARCH later add lists; D26 adds non-authoritative adjudication state | Default tuple now registers all fourteen | SUPERSEDE old registered counts; PRESERVE all 13 domain capabilities and add Triage | AC-07, AC-24 |
 | C025 | Deterministic rebuild from event zero | MENTAL core rule; BUILD L2/L3; DIAGRAMS replay | projection runner supports per-projection replay; complete registry absent | PRESERVE | AC-07, AC-09 |
 | C026 | Typed lifecycle feedback: complete/defer/snooze/block/correct/approve/suppress/deliver | FIELD operation; BUILD schemas/pipelines; DIAGRAMS loops | subset of events/schemas exists | PRESERVE | AC-03, AC-05 |
 
@@ -160,18 +160,18 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 |---|---|---|---|---|---|
 | C069 | `adminme-ops.xlsx` and `adminme-finance.xlsx` are bidirectional, rebuildable projections | BUILD xlsx; DIAGRAMS; FIELD manual workflows | forward/reverse/sidecar code; platform-specific failures | PRESERVE/HARDEN | AC-13 |
 | C070 | Protected/derived cells, reverse-diff events, sidecar, locks, conflict visibility, Plaid authority, replay equivalence | BUILD xlsx contract; EXAMPLES | substantial tests, some blocked/failing on Windows | PRESERVE/HARDEN | AC-13 |
-| C071 | Today, Inbox, CRM, Capture/Knowledge, Finance, Calendar, Scoreboard, Settings | BUILD L5; HTML; ARCH §9 | HTML mock only; `console/server.js` stub | PRESERVE; rename semantics only | AC-18 |
+| C071 | Today, Triage, CRM/People, Capture/Knowledge, Finance, Calendar, Scoreboard, Settings | D26 supersedes BUILD L5 / HTML Inbox semantics; ARCH §9 | Production portal and pinned OpenClaw bindings | MODERNIZE COMPLETE: Triage contains candidates only; legacy Inbox aliases are compatibility-only | AC-18, AC-24 |
 | C072 | Carousel/compressed/child modes | BUILD profiles; HTML; ARCH §8 | HTML reference rendered and exercised by Gate 1 harness; production app absent | PRESERVE | AC-18 |
 | C073 | Calendar privacy redaction | PATTERNS §6; HTML | Python scope tests; no real route/UI | PRESERVE | AC-08, AC-18 |
 | C074 | Dual-path reward toast with dedupe | PATTERNS §8; HTML; BUILD | reward pipeline assets; no UI/SSE | PRESERVE | AC-18 |
 | C075 | Observation/degraded banners and evidence/provenance views | PATTERNS §§9/11; HTML; selected Vellum | mock only | PRESERVE/MODERNIZE | AC-14, AC-18 |
 | C076 | Responsive/accessibility behavior | BUILD L5; HTML visual contract | exact reference rendered at desktop/narrow viewports with keyboard tab activation; production app/tests absent | PRESERVE | AC-18 |
-| C077 | Quick capture/voice ingest/triage retired; Knowledge read surfaces remain | ARCH §9/D17 overrides older BUILD/HTML | product stub still claims old flow | SUPERSEDE old mutations | AC-04, AC-18 |
+| C077 | Quick Capture and central voice ingest remain retired; Knowledge stays read-only; D26 introduces a separate proposal-only Triage surface | D17 as partially superseded by D26 | Knowledge has no mutation seam; Triage is a distinct scoped projection | SUPERSEDE old Capture mutations; MODERNIZE proposal review | AC-04, AC-18, AC-24 |
 | C078 | One central Python process plus pinned OpenClaw; product ownership/routes compatible | v2 contract reconciles MENTAL/BUILD multi-service ports | only bridge API implemented; no composition root | MODERNIZE | AC-02, AC-19 |
 | C079 | Ten-section bridge-aware bootstrap | Later BUILD bootstrap §10 overrides nine-count introductions | Encrypted ten-section state machine plus selected-member package lifecycle, 30-minute transfer, member accept, event proof, finalize/revoke, and explicit non-Apple skip | SUPERSEDE nine-count; PRESERVE 10 COMPLETE | AC-01, AC-21 |
 | C080 | Bootstrap resumable, idempotent, least-privilege, secret-safe, observation-first | BUILD bootstrap; DIAGRAMS state machine; FIELD install | Version/input-digest journal, original encrypted answers on resume, Keychain references, verified GitHub source receipt, central/member user LaunchAgents, transactional cron/bridge changes, observation briefing, interruption/resume and rollback tests | PRESERVE COMPLETE FOR INSTALLER | AC-01, AC-21 |
 | C081 | Phase A disposable lab; Phase B only after reviewed merge | FIELD deployment; BUILD phases; v2 contract | process rule only | PRESERVE | AC-21 |
-| C082 | Backup/restore, migration/upcasters, degraded operation | BUILD final checks; FIELD recovery; DIAGRAMS | Gate 5 implements authenticated backup, staging validation, rollback copy, 13-projection/workbook replay; broader legacy migration/degraded matrices remain | PRESERVE/HARDEN PARTIAL | AC-14, AC-15, AC-20 |
+| C082 | Backup/restore, migration/upcasters, degraded operation | BUILD final checks; FIELD recovery; DIAGRAMS | Authenticated backup, staging validation, rollback copy, thirteen domain projections plus Triage/workbook replay | PRESERVE/HARDEN PARTIAL | AC-14, AC-15, AC-20 |
 | C083 | Static tenant-identity and instance-path scans | BUILD security/final tree; EXAMPLES tenant warning | invariant script has some checks; named identity canary absent | PRESERVE | AC-16 |
 | C084 | Two-instance isolation canary | BUILD multi-tenant rules; v2 contract | scoped unit tests, no two-live-instance process test | PRESERVE | AC-16 |
 | C085 | Optional provider deferral only | BUILD integrations/options; SEQ roadmap | several providers unbuilt | DEFER only CalDAV/Drive/optional channels/providers | AC-22 |
@@ -183,9 +183,10 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C091 | Authenticated non-admin adults can use the household CoS without operator access | Gate 7 experience contract; C048/C054 boundary | Signed per-member protocol-v4 relay, isolated OpenClaw history, no ordinary-chat domain event, exact explicit-tool audit | PRESERVE COMPLETE | AC-23 |
 | C092 | Child chat is guardian-configurable with a narrow independent tool/data allowlist | Gate 7 item 7A; C060 | Disabled unless allowlisted; state/what-now/own-task lifecycle only; adult actions/review/correction/skills/bridge/notification/model/admin denied | PRESERVE COMPLETE | AC-08, AC-23 |
 | C093 | Temporary quests are disposable data-only lenses over stable household truth | Gate 7 item 7B; anti-slop rule | Atomic schema v1 config, five named reads/actions, private owner binding, reviewed promotion, child compatibility, expiry/archive, typed audit | PRESERVE COMPLETE | AC-23 |
-| C094 | Temporary surfaces add no Project aggregate, projection, scheduler, workflow, executable code/SQL/template, copied data, transcript, or raw-log access | Gate 7 item 7B; C024/C047/C048 | Negative validation plus exact 13-projection and unchanged task/list/calendar/finance counts | PRESERVE prohibition COMPLETE | AC-22, AC-23 |
+| C094 | Temporary surfaces add no Project aggregate, projection, scheduler, workflow, executable code/SQL/template, copied data, transcript, or raw-log access | Gate 7 item 7B; C024/C047/C048 | Negative validation plus exact fourteen registered projections and unchanged task/list/calendar/finance counts | PRESERVE prohibition COMPLETE | AC-22, AC-23 |
 | C095 | Eight surfaces and three modes use server authorization and retained visual vocabulary | Gate 7 experience contract; C071/C072/C076 | OpenClaw nine read bindings; Python adult/child/device allowlists; 17 Edge captures at phone/tablet/desktop/reduced-motion states | PRESERVE COMPLETE | AC-18 |
 | C096 | Model/chat loss is explicit while deterministic domain views remain usable | Gate 7 items 6/7A; C044/C046 | Separate chat policy states, Settings pills/reasons, Doctor fields, degraded rendered process proof | MODERNIZE COMPLETE | AC-14, AC-18, AC-23 |
+| C097 | Every extracted candidate is human-gated and explicitly routed before canonical state or provider write | D26; BUILD propose-then-commit; governance ordering | `triage` projection, typed lifecycle/materializer, member APIs, provider-route validation, process acceptance | MODERNIZE COMPLETE FOR CURRENT TARGETS | AC-11, AC-18, AC-24 |
 
 ## Source coverage index
 
@@ -205,4 +206,4 @@ The runtime/delivery rows in this crosswalk are now backed by `adminme/events/wr
 | SEQ | historical dependencies/status C087 and optional-provider sequencing C085; no prompt is accepted as runtime proof |
 | MENTAL | system summary/layers/local-first/replay C024–C030; conflicts explicitly reconciled in ADR-0000 |
 | CLAW | install/discovery, plugins, skills, commands, cron, sessions C048–C055; floating details require exact host pin |
-| ARCH | later D17/D18/D22 resolutions, 13 projections, product ownership, profiles/personas, bootstrap C009–C024, C042–C055, C071–C080 |
+| ARCH | later D17/D18/D22/D26 resolutions, 13 domain projections plus Triage, product ownership, profiles/personas, bootstrap C009–C024, C042–C055, C071–C080 |

@@ -36,7 +36,7 @@ You have been given five files. They are companion artifacts, not alternatives. 
 
 ### CONSOLE_REFERENCE.html
 **Role:** the design anchor and interaction vocabulary.
-**Answers:** what the console looks like when populated; how the three view modes (carousel / compressed / child) render; how a Party detail page looks; what the reward toast UI is; how the inbox approval flow animates; what the scoreboard feels like on a wall display; what a degraded banner looks like; what settings panes contain. The file is fully interactive — open it in a browser, click through all 8 tabs, fire toasts, toggle observation mode, watch the calendar privacy filter redact Laura's work events. The PIB v5 design language (Fraunces + DM Sans + JetBrains Mono, cream + blush + lavender + teal palette, 12px/8px radii, fadeUp animations, pill badges) IS the platform's default visual vocabulary.
+**Answers:** what the console looks like when populated; how the three view modes (carousel / compressed / child) render; how a Party detail page looks; what the reward toast UI is; how the Triage approval flow animates; what the scoreboard feels like on a wall display; what a degraded banner looks like; what settings panes contain. The file is fully interactive — open it in a browser, click through all 8 tabs, fire toasts, toggle observation mode, watch the calendar privacy filter redact Laura's work events. The PIB v5 design language (Fraunces + DM Sans + JetBrains Mono, cream + blush + lavender + teal palette, 12px/8px radii, fadeUp animations, pill badges) IS the platform's default visual vocabulary.
 **Mock data disclaimer:** the file uses Stice-family data (James, Laura, Charlie, Kate, Dr. Dalton, 761 E Morningside Dr NE, etc.) as seed content to show what a populated instance looks like. **These names MUST NOT appear in `adminme/`, `bootstrap/`, `profiles/`, `personas/`, `integrations/`, or `tests/`.** The identity scan (`tests/unit/test_no_hardcoded_identity.py`) enforces this. Port the *patterns and design tokens*, not the data.
 
 ### CONSOLE_PATTERNS.md
@@ -93,7 +93,7 @@ When the files appear to disagree: **BUILD.md wins for contracts, CONSOLE_PATTER
 
 5. **The event log is the source of truth.** Projections — including xlsx workbooks, SQLite read tables, dashboard caches — are derived. Never write to a projection except through a projector. Never mutate an event after it is recorded.
 
-6. **Propose, then commit, for LLM-authored state changes.** Pipelines running LLM skills emit *proposal events* (`CommitmentProposed`, `TaskProposed`, `PartyMergeSuggested`). Humans approve via the inbox; approval emits a confirmation event (`CommitmentConfirmed`); projections update from the confirmed event. Direct LLM writes to "live" state are prohibited. Deterministic adapters and deterministic pipelines may write directly (e.g., `MessageReceived` is direct from the IMAP adapter; no human approval needed to record that a message arrived).
+6. **Propose, then commit, for LLM-authored state changes.** Pipelines running LLM skills emit *proposal events* (`CommitmentProposed`, `TaskProposed`, `PartyMergeSuggested`). Humans approve through Triage; approval emits a confirmation event (`CommitmentConfirmed`); projections update from the confirmed event. Direct LLM writes to "live" state are prohibited. Deterministic source observations may write facts directly (e.g., `MessageReceived` is direct from the IMAP adapter; no human approval is needed to record that a message arrived), but deterministic derivations that would create household truth still propose first per D26.
 
 7. **Observation mode is first-class and default-on.** At bootstrap, `ADMINME_OBSERVATION_MODE=true`. Every outbound adapter (email send, iMessage send, SMS send, voice call, physical mail, Privacy.com charge, Apple Reminders write, Plaid-triggered alert) and every proactive pipeline (digest, reward, paralysis, reminder dispatch) checks observation mode before firing externally. In observation mode the action is composed and recorded as an event (`OutboundSuppressed`), not fired. The tenant flips observation off after 5-7 days of review (during Phase B, after bootstrap).
 
@@ -105,9 +105,9 @@ When the files appear to disagree: **BUILD.md wins for contracts, CONSOLE_PATTER
 
 11. **Children are data-model members, not users.** Kids exist in the Party table (with `kind: person`, age, Memberships to the household). They do not receive agent bindings. They do not receive outbound messages. They interact only through display-only surfaces (scoreboard) and parent-mediated captures.
 
-12. **Coparents are Parties of kind `person` with `Relationship(label: parent_of, party_b: child, direction: →)`.** Their phones are in channel allowlists so their messages don't bounce. Their messages create events and projections, but they receive no autonomous outbound; all replies go through an inbox approval.
+12. **Coparents are Parties of kind `person` with `Relationship(label: parent_of, party_b: child, direction: →)`.** Their phones are in channel allowlists so their messages don't bounce. Their messages create scoped facts and may yield extracted Triage candidates, but they receive no autonomous outbound; all replies require governed principal approval.
 
-13. **Mode 1 only for sending.** The assistant sends as itself (persona handle). Mode 2 (draft-for-principal-to-send) is routed to the principal's approval inbox. Mode 3 (auto-send as a principal) is prohibited.
+13. **Mode 1 only for sending.** The assistant sends as itself (persona handle). Mode 2 (draft-for-principal-to-send) is routed to the principal's governed approval path. Mode 3 (auto-send as a principal) is prohibited.
 
 14. **Never reference private medical, legal, or financial details to outside parties.** Enforced at the outbound adapter layer via a final content-filter pass that checks for PII leakage using a dedicated skill.
 
@@ -150,7 +150,7 @@ When the files appear to disagree: **BUILD.md wins for contracts, CONSOLE_PATTER
 - **Pipeline** — a subscriber to events that produces derived events, proposals, or triggers LLM skills. Pipelines never write projections directly.
 - **Skill** — a versioned, provenance-tracked LLM call. Markdown + YAML frontmatter + input/output JSON schemas. Every call recorded as a `SkillCallRecorded` event.
 - **Surface** — where a human touches the system: console panes (Node shell at :3330 proxying to Python product APIs), iMessage, Telegram, Apple Reminders, morning digest, scoreboard TV, quick-capture bar, voice.
-- **Product** — a logical grouping of pipelines+skills+slash-commands+API endpoints into a shippable unit. Four ship with the platform: **Core** (CoS), **Comms** (unified inbox), **Capture** (quick-capture and mining), **Automation** (financial signals, sensors, Plaid). Products share the event log and projections; they do not have separate data stores.
+- **Product** — a logical grouping of pipelines+skills+slash-commands+API endpoints into a shippable unit. Four ship with the platform: **Core** (CoS and Triage), **Comms** (communication interactions and commitment extraction/review), **Capture/Knowledge** (read-only knowledge and CRM), **Automation** (financial signals, sensors, Plaid). Products share the event log and projections; they do not have separate data stores.
 - **Substrate** — the shared infrastructure all products use: event log, projections, Pydantic models, event bus, Skill runner, Session/scope enforcement, authority gate, observation mode, adapter registry, pipeline registry, pack registry.
 
 
@@ -173,8 +173,8 @@ Read this section carefully. Many things in this spec only make sense if you alr
 - **The Skills** (most of them) — AdministrateMe's skill packs (classify_commitment_candidate, extract_commitment_fields, compose_morning_digest, classify_thank_you_candidate, etc.) are installed into OpenClaw via ClawHub or as local skill packs. When a pipeline needs a skill, it invokes it through OpenClaw's skill runner — same mechanism as slash commands, same session scoping, same approval gates. AdministrateMe's skill pack format (REFERENCE_EXAMPLES.md §3) is compatible with OpenClaw's SKILL.md format.
 - **The Slash Commands** — AdministrateMe registers household-CoS slash commands as OpenClaw slash commands: `/digest`, `/whatnow`, `/capture`, `/comms`, `/bill`, `/approve`, `/crm`, `/commit`, `/review`, `/scoreboard`. When James types `/digest` in iMessage, OpenClaw routes it to the AdministrateMe slash-command handler, which reads projections and returns a response.
 - **Persona = SOUL.md.** AdministrateMe's active persona pack compiles to a `SOUL.md` that OpenClaw loads. Persona theme tokens live in AdministrateMe's pack (consumed by the Node console), but the persona's name, voice, emoji, and voice guidelines are written into the SOUL.md so OpenClaw renders them across every channel.
-- **The console** (L5 Node) — AdministrateMe's console at :3330 is a separate surface from OpenClaw's channels; it provides the visual consoles (Today, Inbox, CRM, Capture, Finance, Calendar, Scoreboard, Settings) that OpenClaw's text-first channels can't represent well. The console talks to AdministrateMe's Python product APIs (:3333-:3336), not to OpenClaw. The chat pane inside the console is the one place the two systems meet: the console SSE chat endpoint proxies into OpenClaw's gateway so the chat experience is consistent with iMessage and Telegram.
-- **The Python product APIs** (L5 Python) — Core, Comms, Capture, Automation. These expose AdministrateMe-layer state (tasks, commitments, inbox, parties, transactions, calendar) over HTTP for the console and for slash-command handlers to read. They do not replace OpenClaw's gateway API.
+- **The console** (L5 Node) — AdministrateMe's console at :3330 is a separate surface from OpenClaw's channels; it provides the visual consoles (Today, Triage, CRM, Capture, Finance, Calendar, Scoreboard, Settings) that OpenClaw's text-first channels can't represent well. The console talks to AdministrateMe's Python product APIs (:3333-:3336), not to OpenClaw. The chat pane inside the console is the one place the two systems meet: the console SSE chat endpoint proxies into OpenClaw's gateway so the chat experience is consistent with iMessage and Telegram.
+- **The Python product APIs** (L5 Python) — Core, Comms, Capture, Automation. These expose AdministrateMe-layer state (tasks, commitments, Triage, parties, transactions, calendar) over HTTP for the console and for slash-command handlers to read. They do not replace OpenClaw's gateway API.
 - **Standing Orders** — AdministrateMe installs standing orders into OpenClaw for the proactive behaviors that need to run regardless of console state: paralysis detection, morning digest delivery, reward dispatch, reminder dispatch, CRM gap nudges, coparent brief generation. Each one is an OpenClaw standing order whose handler is an AdministrateMe skill.
 
 **Where OpenClaw and AdministrateMe share state.** They share the **session** (via `dmScope` rules), they share the **member roster** (OpenClaw's nodes correspond to AdministrateMe's Members + Parties), they share **skills** (OpenClaw's skill runner invokes AdministrateMe's skill packs), they share **slash commands** (AdministrateMe registers its verbs with OpenClaw), and they share **standing orders** (AdministrateMe registers its proactive rules with OpenClaw). They do **not** share an event log: OpenClaw's memory is OpenClaw's; AdministrateMe's event log is AdministrateMe's. Relevant OpenClaw memory (session history, conversation summaries) is ingested into AdministrateMe as events via a dedicated OpenClaw plugin (`openclaw-memory-bridge`), which emits `messaging.received` and `conversation.turn.recorded` events so pipelines can subscribe.
@@ -456,6 +456,8 @@ Subscribers are the same code against both. An integration test runs the full pi
 - `commitment.*` — commitment lifecycle
 - `task.*` — task lifecycle (AdministrateMe-specific)
 - `recurrence.*` — recurrence lifecycle
+- `triage.item.*` — derived candidate adjudication lifecycle
+- `external_sync.*` — governed provider-write command and terminal result lifecycle
 - `skill.*` — skill call records
 - `adminme.reward.*`, `adminme.paralysis.*`, `adminme.digest.*` — CoS events
 - `observation.*` — observation-mode suppression log
@@ -632,7 +634,7 @@ CREATE TABLE commitments (
 ```
 
 ### 3.5 `tasks` projection — household work (AdministrateMe-specific, not Hearth)
-Tasks are not Commitments. Commitments are owed to a Party; Tasks are household work (mow lawn, renew license, reorder filter). The ADHD neuroprosthetic (rewards, paralysis, whatnow) operates primarily over Tasks + Commitments together, unified in the inbox.
+Tasks are not Commitments. Commitments are owed to a Party; Tasks are household work (mow lawn, renew license, reorder filter). The ADHD neuroprosthetic (rewards, paralysis, whatnow) operates primarily over confirmed Tasks + Commitments together in Today and Scoreboard. Triage contains only unresolved proposals.
 
 ```sql
 CREATE TABLE tasks (
@@ -1208,7 +1210,7 @@ Subscribes: `contacts.record_changed`, `messaging.received`, `messaging.sent`, `
 On a new Identifier (email, phone, handle):
 1. Check `identifiers.value_normalized` for exact match → link to existing Party
 2. If no match, compute similarity (Levenshtein on display name, domain heuristics for email, carrier lookup for phone)
-3. Above threshold 0.85 → emit `identity.merge_suggested` (not auto-merged; goes to human review queue in the inbox)
+3. Above threshold 0.85 → emit `identity.merge_suggested` (not auto-applied; goes to human review in Triage)
 4. Below threshold → emit `party.created` with new Party and first Identifier
 5. Confidence-scored; all merges are provenance-tracked via `source_skill` or `source_heuristic`
 
@@ -1217,7 +1219,7 @@ Never auto-merges above threshold. Always human-approved. Humans can accept merg
 #### `noise_filtering`
 Subscribes: `messaging.received`, `telephony.sms_received`.
 
-Classifies inbound messages as: `noise` (bulk marketing, alerts you've filtered before), `transactional` (receipts, shipping notifications), `personal`, `professional`, `promotional`. Skill: `classify_message_nature@v2`. Learns from user feedback (thumbs-up/down in inbox).
+Classifies inbound messages as: `noise` (bulk marketing, alerts you've filtered before), `transactional` (receipts, shipping notifications), `personal`, `professional`, `promotional`. Skill: `classify_message_nature@v2`. Learns from user feedback attached to the authorized interaction view.
 
 Emits `messaging.classified` with the classification + confidence + skill version. The `interactions` projection uses this to decide whether to create an Interaction row or suppress to the noise bucket.
 
@@ -1230,7 +1232,7 @@ Scans interactions for implied commitments:
 - "I'll get back to you tomorrow on this" → commitment(owed_by: <self>, owed_to: <recipient>, kind: follow_up, due_at: tomorrow)
 - "The plumber came by and fixed the leak; we owe him $450" → commitment(owed_by: household, owed_to: plumber_party, kind: payment, amount: 450)
 
-Skill: `extract_commitments@v4`. Output: list of `CommitmentProposed` events. Humans approve via inbox; approval emits `commitment.confirmed`; projection promotes to active commitment.
+Skill: `extract_commitments@v4`. Output: list of `CommitmentProposed` events. Humans approve via Triage; approval emits `commitment.confirmed`; projection promotes to active commitment.
 
 #### `thank_you_detection`
 Specialization of commitment extraction for gratitude. Subscribes: same as above, plus `financial.money_flow_recorded` (e.g., a completed service).
@@ -1278,16 +1280,16 @@ Queries:
 - Recurrences next_occurrence <= now + lead_time
 - Tasks due_date <= today, status IN (inbox, next)
 
-For each, emits `reminder.surfaceable` — picked up by surfaces (inbox pane, morning digest, optional outbound to member's preferred channel).
+For each, emits `reminder.surfaceable` — picked up by Today/activity, the morning digest, or optional outbound to the member's preferred channel.
 
 Observation-mode aware.
 
 ### AdministrateMe-specific CoS pipelines
 
 #### `morning_digest`
-Scheduled per member (default 06:30 local in that member's timezone). Gathers: today's calendar events (via `calendars` projection, respecting privacy), due commitments + tasks, due recurrences, overnight inbox count, streak status, reward stats. Runs `compose_digest@v3` skill with profile-appropriate format. Runs the **validation guard**: every claimed calendar event, every claimed commitment/task id is verified against projections post-composition. Any fabrication zeroes the message with sentinel "No morning brief available; underlying data changed."
+Scheduled per member (default 06:30 local in that member's timezone). Gathers: today's calendar events (via `calendars` projection, respecting privacy), due commitments + tasks, due recurrences, overnight Triage count, streak status, reward stats. Runs `compose_digest@v3` skill with profile-appropriate format. Runs the **validation guard**: every claimed calendar event, every claimed commitment/task id is verified against projections post-composition. Any fabrication zeroes the message with sentinel "No morning brief available; underlying data changed."
 
-Output: `adminme.digest.composed` event → surface delivery (outbound adapter in member's preferred channel, OR inbox display, per config).
+Output: `adminme.digest.composed` event → surface delivery (outbound adapter in the member's preferred channel, or Today/activity display, per config).
 
 #### `reward_dispatch`
 Subscribes: `task.completed`, `commitment.completed`.
@@ -1299,7 +1301,7 @@ Scheduled per ADHD-profile member (configurable; default 15:00 and 17:00 local).
 
 Pre-condition: no completions in prior 2 hours, `adminme_energy_states.level <= low`, it's currently within the member's fog window.
 
-**Deterministic.** Never invokes LLM. Picks a template from persona's `paralysis_templates.yaml`. Emits `adminme.paralysis.triggered` with template id + single-action framing. Surface: inbox + optional outbound.
+**Deterministic.** Never invokes LLM. Picks a template from persona's `paralysis_templates.yaml`. Emits `adminme.paralysis.triggered` with template id + single-action framing. Surface: Today/activity + optional outbound.
 
 #### `whatnow_ranking`
 On-demand (via `/whatnow` slash command or API call).
@@ -1314,7 +1316,7 @@ Maintains streak counters, completion rates, grace tokens per member. Fed to the
 #### `custody_brief`
 Scheduled 20:00 local daily (if household has a coparent Relationship).
 
-Composes a brief summary of the day's child-related events relevant to custody coordination. Owner-scoped to the custodial parent. Skill: `compose_custody_brief@v1`. Output surfaces in the parent's inbox.
+Composes a brief summary of the day's child-related events relevant to custody coordination. Owner-scoped to the custodial parent. Skill: `compose_custody_brief@v1`. Output surfaces in the parent's Today/activity view.
 
 #### `crm_surface`
 Scheduled weekly + on-demand.
@@ -1325,7 +1327,7 @@ For each active Party:
 - Upcoming birthdays (next 14 days) → emit `crm.birthday_upcoming`
 - Hosting balance asymmetry (we've hosted them N times; they've hosted us M times; |N-M| > threshold) → emit `crm.hosting_imbalance`
 
-Surfaces in inbox.
+Surfaces in Today/activity as a non-authoritative relationship nudge.
 
 #### `graph_miner`
 Scheduled nightly 03:00 (runs on `adminme-vault` if present, else on hub).
@@ -1507,7 +1509,7 @@ Standalone Python adapters are loaded via `adminme.adapters` entry point → bui
 **`messaging:apple_reminders`** — full implementation. Bidirectional via ClawHub `apple-reminders` skill (wraps EventKit) primary, `osascript` fallback. 
 - **Inbound:** watches assistant's iCloud Reminders lists. `reminders-list-mapping.yaml` routes each list to a target (tasks, lists, captures). Reminder created externally → `reminder.created_externally` event → pipeline routes to `task.created`, `list_item.added`, or `capture.created` based on mapping.
 - **Outbound:** when a task is created/updated, if its list is in the mapping, update corresponding Reminder. Observation-mode aware. Never-sync rules: lists with substrings "Work/Case/Client/Evolve"; items tagged `#private`; items owned by child or ambient members.
-- **Conflicts:** `reminder_sync_map` projection tracks reminder UUID ↔ task_id mapping. Last-writer-wins with 5s debounce. Conflicts → `reminder.conflict` event → inbox with diff.
+- **Conflicts:** `reminder_sync_map` projection tracks reminder UUID ↔ task_id mapping. Last-writer-wins with 5s debounce. Conflicts → `reminder.conflict` event → Settings/activity with diff.
 
 **`financial:plaid`** — full implementation (not stub). Replaces manual bank-CSV import as primary path:
 - Uses Plaid products: Link (OAuth-style connect), Transactions (incremental sync via cursor), Balance (real-time), Identity (account owner → Party resolution), Investments (balance sheet), Liabilities (mortgages, credit cards).
@@ -1518,9 +1520,9 @@ Standalone Python adapters are loaded via `adminme.adapters` entry point → bui
 - Webhook handler at `/hooks/plaid` (Tailscale Funnel), HMAC-authenticated. Handles: `TRANSACTIONS:DEFAULT_UPDATE`, `ITEM:ERROR`, `ITEM:PENDING_EXPIRATION`.
 - Owner detection: on account discovery, uses Plaid Identity → matches account holder name against Parties → links account to member; creates Party proposal if no match.
 
-**`financial:bank_csv_watcher`** — full implementation (fallback). Watches `~/.adminme/inbox/bank/` for CSVs. Per-bank parser config. Emits same events as Plaid. Used when a bank isn't on Plaid or during Plaid outages.
+**`financial:bank_csv_watcher`** — full implementation (fallback). Watches the external-ingest folder `~/.adminme/inbox/bank/` for CSVs. This folder name is not the member surface. Per-bank parser config. Emits same events as Plaid. Used when a bank isn't on Plaid or during Plaid outages.
 
-**`financial:privacy_com`** — stub interface. Monitors Privacy.com virtual card charges; surfaces unexpected charges as TASKs in inbox.
+**`financial:privacy_com`** — stub interface. Monitors Privacy.com virtual card charges; surfaces proposed responses in Triage or confirmed tasks in Today.
 
 **`manual:ios_shortcuts`** — full implementation. Configurable webhook endpoint (Tailscale-internal) accepting POSTs from iOS Shortcuts. Standard payloads: quick-capture text, voice-memo audio, location drop, photo drop. Emits `capture.created`, `artifact.discovered`, etc.
 
@@ -2068,7 +2070,7 @@ These three system events are added to `ALLOWED_EMITS` in `scripts/verify_invari
 
 ### Conflict resolution
 
-Last-writer-wins per the per-source-kind capability matrix (§LISTS / [PM-31]). iCloud-sync race losses are recorded in `note.write_failed` and surfaced to the operator's inbox if they persist over multiple retry attempts.
+Last-writer-wins per the per-source-kind capability matrix (§LISTS / [PM-31]). iCloud-sync race losses are recorded in `note.write_failed` and surfaced in operator Settings/activity if they persist over multiple retry attempts.
 
 ---
 
@@ -2137,8 +2139,8 @@ The framework's `OutboundActionAdapter` base class handles the observation-mode 
 
 ### Failure modes
 
-- HA host unreachable: REST POST fails with `ConnectionError`; emit `action.failed@v1` with `reason: 'ha_unreachable'`. Operator's inbox surfaces the failure.
-- Long-lived token expired or revoked: HA returns 401; emit `action.failed@v1` with `reason: 'auth_expired'`. Operator's inbox surfaces with a refresh-credential prompt.
+- HA host unreachable: REST POST fails with `ConnectionError`; emit `action.failed@v1` with `reason: 'ha_unreachable'`. Operator Settings/activity surfaces the failure.
+- Long-lived token expired or revoked: HA returns 401; emit `action.failed@v1` with `reason: 'auth_expired'`. Operator Settings surfaces a refresh-credential prompt.
 - WebSocket disconnect: adapter falls back to REST polling at 30s intervals; emits `ha.state_changed@v1` events at lower frequency until WebSocket reconnects.
 
 ### Observation-mode test case
@@ -2256,10 +2258,10 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 
 ### Product B: `comms` — Unified Communications (FastAPI at :3334)
 
-**Owns:** Inbox aggregation across channels, propose/commit outbound, approval queue, per-member-per-channel access control, batch windows.
+**Owns:** scoped interaction aggregation across channels, extraction into Triage, propose/commit outbound, per-member-per-channel access control, and batch windows.
 
 **Routers:**
-- `/api/comms/inbox` — unified inbox view (across all adapters)
+- `/api/core/v1/triage` — scope-filtered proposal adjudication queue (all extraction families)
 - `/api/comms/draft-queue` — pending drafts
 - `/api/comms/approve` — approve a draft (emits approval event, triggers actual send)
 - `/api/comms/send` — compose outbound (routes to appropriate adapter)
@@ -2275,7 +2277,7 @@ The four "products" are FastAPI services. Each on its own port. Each with its ow
 - `draft_reply@v2` (outbound drafts)
 - `draft_thank_you@v2` (thank-you notes)
 
-**Slash commands:** `/inbox`, `/approve`, `/send`, `/snooze`, `/comms health`
+**Slash commands:** `/adminme-triage`, `/approve`, `/send`, `/snooze`, `/comms health`
 
 **No scheduled jobs of its own**; all work is event-driven. Adapters poll on their own schedules and emit events; pipelines subscribe and react.
 
@@ -2373,15 +2375,15 @@ A reply arrives in the assistant's Gmail:
    - `commitment_extraction` — if the message implies a commitment, emits `commitment.proposed`
 5. `interactions` projection (L3) creates/updates Interaction row
 6. `parties` projection updates last_seen_at on sender's Identifier
-7. If commitment proposed, appears in inbox surface (L5) via comms API
-8. Human approves via inbox UI → POST to `/api/comms/approve` → emits `commitment.confirmed`
+7. If commitment proposed, appears in Triage surface (L5) via comms API
+8. Human approves via Triage UI → POST to `/api/comms/approve` → emits `commitment.confirmed`
 9. `commitments` projection promotes proposal to active commitment
 10. Tomorrow morning, `morning_digest` pipeline includes the commitment in James's digest
 11. Reward toast fires when commitment marked complete → `task.completed` event → `reward_dispatch` pipeline → `adminme.reward.dispatched` event → surface toast
 
 **At every step, if observation mode is on**, the outbound surface (digest delivery, toast display on another's screen, etc.) records `observation.suppressed` instead of firing.
 
-**At every step, scope is enforced.** If the email arrived on Laura's privileged work account, `sensitivity: privileged`, `owner_scope: private:m-laura` — it never reaches the vector index, never reaches the graph miner, never appears in James's inbox view.
+**At every step, scope is enforced.** If the email arrived on Laura's privileged work account, `sensitivity: privileged`, `owner_scope: private:m-laura` — it never reaches the vector index, never reaches the graph miner, never appears in James's Triage view.
 
 ---
 
@@ -2397,11 +2399,11 @@ What the CRM gives you once it's properly built:
 
 **Proper identity resolution.** Kate's email is an Identifier linked to her Party. Her phone is another Identifier. Her iMessage handle is another. When Kate emails from a new address, identity_resolution proposes adding it to her Party rather than creating a new "Kate?" duplicate. Adapter-agnostic — doesn't matter whether her message came via Gmail or iMessage or SMS, the participant resolves to the same Party.
 
-**Commitment tracking with provenance.** "You said you'd send Kate the plumber's number by Friday" is a Commitment with a source_interaction pointing to the email exchange that created it, a source_skill pointing to the extraction skill version, a confirmed_by pointing to you, and a due_at on Friday. It appears in your inbox daily until resolved. When resolved, it's resolved *with provenance* — why it existed, when it was confirmed, when it was completed.
+**Commitment tracking with provenance.** "You said you'd send Kate the plumber's number by Friday" first appears in Triage as an unconfirmed candidate with source evidence. After confirmation it becomes a Commitment with a source_interaction, source_skill version, confirmed_by, and due_at, and appears in Today until resolved. When resolved, it is resolved *with provenance* — why it existed, when it was confirmed, and when it was completed.
 
 **Relationship semantics.** "Kate is Laura's sister" is a Relationship. "Atlanta Water Authority supplies water to 761 E Morningside Dr NE" is a Relationship. "James is a coparent with Mike re: Charlie" is a Relationship. Queries like "who's family" or "which vendors serve this property" or "which people does Charlie have coparents" become direct graph queries, not inferences.
 
-**Closeness tier + contact gap as surfacing mechanisms.** Every Party has a closeness tier (1-4) computed from interaction data. Every Party has a `desired_contact_frequency`. The `crm_surface` pipeline surfaces Parties whose contact gap exceeds their desired frequency — "you haven't meaningfully talked to Kate in 6 weeks; you'd intended to be weekly" — as inbox items. The intended cadence is tenant-editable; the pipeline is deterministic about reminding.
+**Closeness tier + contact gap as surfacing mechanisms.** Every Party has a closeness tier (1-4) computed from interaction data. Every Party has a `desired_contact_frequency`. The `crm_surface` pipeline surfaces Parties whose contact gap exceeds their desired frequency — "you haven't meaningfully talked to Kate in 6 weeks; you'd intended to be weekly" — as non-authoritative Today/activity nudges. If the member elects to turn a nudge into a task or external reminder, that new candidate is routed through Triage. The intended cadence is tenant-editable; the pipeline is deterministic about reminding.
 
 **Hosting balance.** Interactions tagged `hosting_us` (we went to their place) vs `hosting_them` (they came to ours) accumulate. Large asymmetries surface as "you've had the Kleins over four times; they haven't had you in return since 2024" — useful, not judgmental. Optional (toggle per tenant).
 
@@ -2409,7 +2411,7 @@ What the CRM gives you once it's properly built:
 
 **Shared vendors across household members.** James and Laura use the same lawn service. The lawn service is one Party. Memberships let both of them "own" the relationship. Commitments route correctly (who's supposed to pay, who handles scheduling) via owner_scope.
 
-**Why the CRM needs to be this load-bearing.** A household CoS whose CRM is shallow (just a contacts list, or just an inbox view of senders) has to keep reinventing identity and relationship tracking inside every other feature — commitments can't trace back to "who asked," calendars can't link to "whose vendor," finance can't link to "which service provider." When Party is first-class and every other projection links to it, a lot of features fall out for free. The household's specific CRM data — every friend, every doctor, every vendor, every school, every government-services entity — lives in that tenant's event log and projections, populated by the bootstrap wizard seed questions plus ongoing ingest from contacts/email/iMessage/calendar. The tenant never types a contact into a flat list; contacts accrue from the actual communication and are enriched by the identity-resolution pipeline.
+**Why the CRM needs to be this load-bearing.** A household CoS whose CRM is shallow (just a contacts list or communication-sender timeline) has to keep reinventing identity and relationship tracking inside every other feature — commitments can't trace back to "who asked," calendars can't link to "whose vendor," finance can't link to "which service provider." When Party is first-class and every other projection links to it, a lot of features fall out for free. The household's specific CRM data — every friend, every doctor, every vendor, every school, every government-services entity — lives in that tenant's event log and projections, populated by the bootstrap wizard seed questions plus ongoing ingest from contacts/email/iMessage/calendar. The tenant never types a contact into a flat list; contacts accrue from the actual communication and are enriched by the identity-resolution pipeline.
 
 ---
 
@@ -2426,7 +2428,7 @@ profiles/<profile_id>/
 │   ├── today.jsx                  # Today pane (Core)
 │   ├── tasks.jsx                  # Tasks pane
 │   ├── schedule.jsx               # Calendar pane
-│   ├── inbox.jsx                  # Comms Stream inbox
+│   ├── triage.jsx                 # proposal-only human gate
 │   ├── capture.jsx                # Capture pane
 │   ├── parties.jsx                # CRM list
 │   ├── party_detail.jsx           # CRM Party detail
@@ -2629,7 +2631,7 @@ Unchanged from prior design; preserved here for completeness.
 
 Cross-agent memory: family/house/money/travel/health get ro access to main; `-kids` gets none.
 Coach-role sessions strip financial+health context via `before_prompt_build` hook.
-Coparent phones: `allowFrom` but no agent binding; messages → inbox.
+Coparent phones: `allowFrom` but no agent binding; messages are scoped facts and extracted action candidates → Triage.
 Session scope: `dmScope: per-channel-peer` (not main) — multi-principal isolation.
 
 ---
@@ -2743,7 +2745,7 @@ never:
   - reference_in_outbound: privileged_legal
   - describe_as_prestigious: [schools, clubs, institutions]
   - auto_send_as: principal                   # Mode 3 prohibited
-  - auto_answer: unknown_sender_coparent      # always inbox
+  - auto_answer: unknown_sender_coparent      # always manual review; never autonomous
 ```
 
 ### `config/governance.yaml` — console gates
@@ -2811,7 +2813,7 @@ The bootstrap wizard takes a fresh machine from zero to a running AdministrateMe
 
 **Section 6: Plaid.** Plaid account setup, client_id + sandbox secret, initial Link flow for first institution. Safe in sandbox — no real money moves.
 
-**Section 7: Seed household data.** Address, secondary properties, vehicles, mortgage, recurring bills, healthcare providers, schools, active projects, vendors, friends & family (CRM). Each answer maps to specific events (`party.created`, `place.added`, `asset.added`, `account.added`, `recurrence.added`, `relationship.added`, `task.created` for project goals). **Skipped sections create inbox tasks** prompting completion later.
+**Section 7: Seed household data.** Address, secondary properties, vehicles, mortgage, recurring bills, healthcare providers, schools, active projects, vendors, friends & family (CRM). Each answer maps to specific events (`party.created`, `place.added`, `asset.added`, `account.added`, `recurrence.added`, `relationship.added`, `task.created` for project goals). **Skipped sections create explicit Today follow-up tasks** prompting completion later.
 
 **Section 8: Channel pairing.** Interactive pairing per selected channel. Each paired channel is registered with OpenClaw via its channel API (see OpenClaw's `channels/pairing` docs). For iMessage: verify assistant's Apple ID signin on the Mac Mini, install BlueBubbles, register the BlueBubbles channel with OpenClaw, test send. For Telegram/Discord: create bot, exchange tokens, register with OpenClaw. For Apple Reminders central variant: list iCloud lists shared TO the assistant Apple ID, configure list_filtering, test bidirectional (bridge variant per-member is handled in §10). For Gmail: OAuth flow with assistant's Workspace, PubSub setup, Funnel endpoint (standalone Python adapter). This section also installs AdministrateMe's skill packs + plugins into OpenClaw (`openclaw skill install <path>`, `openclaw plugin install <path>` for each) and registers AdministrateMe's slash commands and standing orders via OpenClaw's CLI.
 
@@ -2902,7 +2904,7 @@ This section shows the concrete end-state a successful bootstrap produces. Claud
 │   │   │   ├── pack.yaml
 │   │   │   ├── reward_sampling.yaml
 │   │   │   ├── views/today.jsx
-│   │   │   ├── views/inbox.jsx
+│   │   │   ├── views/triage.jsx
 │   │   │   ├── views/crm.jsx
 │   │   │   ├── tests/
 │   │   │   └── compiled/                     # produced at install time
@@ -3264,7 +3266,7 @@ lists:
   - icloud_list_name: "James Tasks"
     target: "tasks"
     owner_member_id: "stice-james"
-    auto_commit: false                         # route to inbox for approval
+    auto_commit: false                         # route to Triage for approval
   - icloud_list_name: "Laura Tasks"
     target: "tasks"
     owner_member_id: "stice-laura"
@@ -3313,7 +3315,7 @@ Signs that a bootstrap succeeded and the platform is steady:
 - The Node console at `:3330` responds to `curl -H 'X-Tailscale-User-Login: james@stice.family.ts.net' http://localhost:3330/api/today` with the six-task payload.
 - `adminme status` exits zero with `health: healthy` for all subsystems.
 - `adminme projection rebuild parties --dry-run` shows no pending deltas (the projection matches the event log).
-- Logs in `~/.adminme/logs/adminme.jsonl` show correlation IDs flowing end-to-end — one inbound message → one classify skill call → one extract skill call → one commitment.proposed event → one inbox surface update.
+- Logs in `~/.adminme/logs/adminme.jsonl` show correlation IDs flowing end-to-end — one inbound message → one classify skill call → one extract skill call → one commitment.proposed event → one Triage surface update.
 
 ### What to build to verify it all works
 
@@ -3324,7 +3326,7 @@ End-to-end test in `tests/e2e/test_bootstrap_to_populated.py`:
 3. Assert the directory tree matches the structure above.
 4. Assert all platform services start.
 5. Post a fixture `messaging.received` event.
-6. Assert within 10s: `commitment.proposed` event is emitted, inbox projection updates, xlsx forward regenerates with a new Commitments row.
+6. Assert within 10s: `commitment.proposed` event is emitted, Triage projection updates, xlsx forward regenerates with a new Commitments row.
 7. Tear down cleanly.
 
 If this test passes, the 16-phase build is substantially done.
@@ -3456,7 +3458,7 @@ adminme/
 │   │   │   └── observation.js
 │   │   ├── routes/
 │   │   │   ├── today.js
-│   │   │   ├── inbox.js
+│   │   │   ├── triage.js
 │   │   │   ├── crm.js
 │   │   │   ├── capture.js
 │   │   │   ├── finance.js
@@ -3848,7 +3850,7 @@ Build the JSX-compile-at-install pipeline (esbuild invoked by pack install flow)
 
 ### PHASE 12: Node Console Shell
 
-Implement the L5 Node console shell per **CONSOLE_PATTERNS.md** (all 12 patterns: Tailscale identity, session model, guardedWrite, RateLimiter, SSE chat, privacy filter, HIDDEN_FOR_CHILD, reward toast emission, degraded mode, HTTP bridge, observation-mode enforcement, error handling). Match the visual + interaction vocabulary from **CONSOLE_REFERENCE.html** (carousel/compressed/child view modes, Party detail page, inbox approval flow, Settings panes, quick-capture bar, chat FAB). Implement profile view loader (serves compiled JSX from `~/.adminme/packs/profiles/<id>/compiled/`), persona theme loader, observation-mode banner, degraded mode, pack management UI, settings panes (Plaid, Reminders, packs).
+Implement the L5 Node console shell per **CONSOLE_PATTERNS.md** (all 12 patterns: Tailscale identity, session model, guardedWrite, RateLimiter, SSE chat, privacy filter, HIDDEN_FOR_CHILD, reward toast emission, degraded mode, HTTP bridge, observation-mode enforcement, error handling). Match the visual + interaction vocabulary from **CONSOLE_REFERENCE.html** (carousel/compressed/child view modes, Party detail page, Triage approval flow, Settings panes, quick-capture bar, chat FAB). Implement profile view loader (serves compiled JSX from `~/.adminme/packs/profiles/<id>/compiled/`), persona theme loader, observation-mode banner, degraded mode, pack management UI, settings panes (Plaid, Reminders, packs).
 
 **Commit:** `phase 12: node console shell`
 
@@ -3962,7 +3964,7 @@ Public GitHub repo at `adminme/registry` with packs.yaml index. `adminme pack` C
 Product level:
 
 - [ ] Core product: all pipelines wired; slash commands functional; scheduled jobs firing
-- [ ] Comms product: identity_resolution + noise_filtering + commitment_extraction at ≥80% accuracy on 20 synthetic messages; coparent routing to inbox; Mode 3 refused
+- [ ] Comms product: identity_resolution + noise_filtering + commitment_extraction at ≥80% accuracy on 20 synthetic messages; coparent routing to Triage; Mode 3 refused
 - [ ] Capture product: quick-capture prefix routing; triage flow; CRM Party detail page shows interactions/commitments/artifacts/relationships/summary/tier/gap/balance; graph_miner nightly
 - [ ] Automation product: Plaid sandbox sync working; categorization ≥90% on fixtures; Assumptions sheet write without approval_token refused; bank-CSV fallback operational
 
@@ -4007,7 +4009,7 @@ Apple Reminders:
 
 - [ ] Bidirectional canaries pass (both directions within 60s)
 - [ ] Never-sync rules enforced
-- [ ] Conflicts surface to inbox with diff
+- [ ] Conflicts surface in Settings/activity with diff
 - [ ] Observation mode suppresses writes, allows reads
 
 Plaid:

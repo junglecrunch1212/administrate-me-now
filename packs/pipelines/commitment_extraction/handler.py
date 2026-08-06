@@ -192,7 +192,7 @@ class CommitmentExtractionPipeline:
 
         # 1. Sender resolution. Outbound (`messaging.sent`) does not
         # carry `from_identifier` — treat as unresolvable and suppress
-        # (defense-in-depth path). The inbox surface gets a record of
+        # (defense-in-depth path). Triage gets a record of
         # the suppressed evaluation either way.
         if ctx.parties_conn_factory is None:
             await self._emit_suppressed(

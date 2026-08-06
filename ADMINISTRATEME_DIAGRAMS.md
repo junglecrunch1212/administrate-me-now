@@ -54,7 +54,7 @@ Not exhaustive by design — these are the ten diagrams that earn their place be
                 │                     L5 : SURFACES                        │
                 │  Node console @ :3330  ·  Python product APIs            │
                 │  :3333 core   :3334 comms   :3335 capture   :3336 autom. │
-                │  Chat (proxies to OpenClaw :18789) · Inbox · CRM ·       │
+                │  Chat (proxies to OpenClaw :18789) · Triage · CRM ·       │
                 │  Capture · Finance · Calendar · Scoreboard · Settings ·  │
                 │  xlsx workbooks · morning digest · scoreboard TV         │
                 │  (iMessage/SMS/Telegram/Discord surfaces = OpenClaw)     │
@@ -194,9 +194,9 @@ The arrows to internalize: **OpenClaw runs the conversation. AdministrateMe runs
                   │ event bus dispatch (same event, different subscriber)
                   ▼
   ┌────────────────────────────────────────────┐
-  │  [5]  PROJECTION  inbox_surface            │
+  │  [5]  PROJECTION  triage                   │
   │  handler: append proposal card to member's │
-  │  inbox list with UI hints + actions        │
+  │  Triage list with UI hints + actions        │
   └────────────────────────────────────────────┘
                   │
        ┌──────────┴──────────────────────────────┐
@@ -316,7 +316,7 @@ James writes a note in Apple Notes on his iPhone
 │
 (continues identically to the iMessage example
 from this point — proposal lands in
-commitments projection + inbox surface,
+commitments projection + Triage surface,
 James confirms, reward dispatch fires.)
 Total events emitted from this one Apple Note:
 1  note.added
@@ -687,10 +687,8 @@ The arrows to internalize: Cat-E adapters integrate observation mode at the **ac
   james viewing laura:   viewMember=laura,  authMember=james
     read: laura's data through james's privacy lens
           (her privileged work events → "[busy]")
-    write: if james approves a commitment in her inbox view,
-           commitment.confirmed.approved_by = james,
-                                   .owner    = laura
-           both IDs captured; never collapsed.
+    write: Triage decisions are self-only and unavailable while view-as
+           is active. James cannot approve Laura's candidate from her view.
 
   charlie viewing laura:  403 at session build
     children cannot view-as regardless of target.
@@ -1134,7 +1132,7 @@ The arrows to internalize: Cat-E adapters integrate observation mode at the **ac
                                                      morning digest composed
                                                      reward preview returned
                                                      locally on click
-                                                     inbox shows new items
+                                                     Triage shows new items
 
                                                                │
                                                                │
@@ -1215,7 +1213,7 @@ The arrows to internalize: Cat-E adapters integrate observation mode at the **ac
 
 **Canonical in BUILD.md:** "BOOTSTRAP WIZARD" section.
 
-**What to notice.** Each section is independently resumable. Skipping a section doesn't abort — it leaves an inbox task for later completion. The wizard writes every answer to an encrypted answers file; re-running the wizard jumps to the last incomplete section.
+**What to notice.** Each section is independently resumable. Skipping a section doesn't abort — it leaves an explicit Today follow-up task for later completion. The wizard writes every answer to an encrypted answers file; re-running the wizard jumps to the last incomplete section.
 
 ```
                               START
@@ -1330,7 +1328,7 @@ The arrows to internalize: Cat-E adapters integrate observation mode at the **ac
      │   ─ many party.created, place.added, asset.added,  │
      │     account.added, recurrence.added events         │
      │   ─ skipped subsections: task.created "fill in     │
-     │     later: <section>" for each, placed in inbox    │
+     │     later: <section>" for each, shown in Today      │
      │                                                    │
      └──────────────────────────┬─────────────────────────┘
                                 │

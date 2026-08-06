@@ -28,7 +28,7 @@ Compose skill for the `morning_digest` proactive pipeline per
 [BUILD.md §1289] and [BUILD.md §2242] (cataloged as
 `compose_morning_digest@v3`). Takes an aggregated projection-state
 payload (today's calendar events, due commitments + tasks, due
-recurrences, overnight inbox count, streak status, reward stats) plus
+recurrences, overnight Triage count, streak status, reward stats) plus
 the member's `profile_format` and renders the digest body the member
 will see at their wake time.
 

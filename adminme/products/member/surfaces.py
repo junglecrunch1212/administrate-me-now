@@ -12,7 +12,7 @@ from adminme.lib.session import Session
 from adminme.products.core import main as core
 from adminme.projections.artifacts.queries import linked_to, list_recent
 from adminme.projections.calendars.queries import week
-from adminme.projections.commitments.queries import by_party, pending_approval
+from adminme.projections.commitments.queries import by_party
 from adminme.projections.interactions.queries import (
     closeness_signals,
     recent,
@@ -31,11 +31,12 @@ from adminme.projections.parties.queries import (
 from adminme.projections.places_assets_accounts.queries import linked_to_party
 from adminme.projections.recurrences.queries import for_member
 from adminme.projections.tasks.queries import open_for_member
+from adminme.projections.triage.queries import pending_for_member as pending_triage
 
 
 ADULT_SURFACES = (
     "today",
-    "inbox",
+    "triage",
     "people",
     "knowledge",
     "finance",
@@ -48,7 +49,7 @@ DEVICE_SURFACES = ("scoreboard",)
 
 SURFACE_LABELS = {
     "today": "Today",
-    "inbox": "Inbox",
+    "triage": "Triage",
     "people": "People",
     "knowledge": "Knowledge",
     "finance": "Finance",
@@ -163,17 +164,15 @@ def build_surface(runtime: Any, session: Session, surface: str) -> dict[str, Any
         base["lists"] = open_items_for_member(
             runtime.projections.connection("lists"), session, member_id=member
         )[:8]
-    elif surface == "inbox":
-        base["review"] = [
-            row
-            for row in pending_approval(
-                runtime.projections.connection("commitments"), session
-            )
-            if row.get("owed_by_party") == member
-        ]
-        base["tasks"] = open_for_member(
-            runtime.projections.connection("tasks"), session, member_party_id=member
+    elif surface == "triage":
+        base["items"] = pending_triage(
+            runtime.projections.connection("triage"), session, member_id=member
         )
+        base["contract"] = {
+            "facts_are_not_queued": True,
+            "human_gate_required": True,
+            "states": ["pending_review", "confirmed", "dismissed"],
+        }
     elif surface == "people":
         base["people"] = all_parties(runtime.projections.connection("parties"), session)
         base["recent_interactions"] = recent(

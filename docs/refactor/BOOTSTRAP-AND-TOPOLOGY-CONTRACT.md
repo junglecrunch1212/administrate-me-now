@@ -8,7 +8,7 @@ Gate 5 realization: `bootstrap/` now implements the ten-section encrypted journa
 
 The first supported central deployment contains exactly:
 
-1. `adminme-runtime`: one long-lived Python process composing the event log, bus, all thirteen projections, reactive pipelines, adapter supervisors, xlsx forward/reverse services, product router namespaces, health/Doctor, and built family assets.
+1. `adminme-runtime`: one long-lived Python process composing the event log, bus, all thirteen domain projections plus Triage, reactive pipelines, adapter supervisors, xlsx forward/reverse services, product router namespaces, health/Doctor, and built family assets.
 2. One OpenClaw Gateway process pinned to package/source version `2026.7.2` / commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`, owning generic assistant runtime concerns.
 3. Operator-owned platform services that are not AdministrateMe runtimes: Tailscale Serve, 1Password, backup tooling, and external channel servers when selected.
 
@@ -28,7 +28,7 @@ Startup order is transactional and health-visible:
 2. Verify schema/migration compatibility, exact OpenClaw version and commit, Node prerequisite, native plugin manifest/build, filesystem ownership, encryption key reference, and observation default.
 3. Open/migrate encrypted event log; refuse plaintext or invalid keys.
 4. Open durable bus offsets and construct a single append-and-publish port so commit always precedes notification.
-5. Register all thirteen projections and schemas; open/rebuild/migrate as required.
+5. Register all fourteen projections and schemas (thirteen domain truth plus Triage); open/rebuild/migrate as required.
 6. Register reactive pipelines and durable consumer ids; reconcile pack registry.
 7. Start central adapters and xlsx services with durable watermarks/circuit state.
 8. Validate/install/reconcile the one native OpenClaw plugin, compiled workspace/SOUL, typed skill, slash commands, dashboard bindings, and automation standing orders against the pinned host; require runtime inspect and deep RPC health.
@@ -70,4 +70,4 @@ Release requires fresh install, interrupted resume at every section boundary, re
 
 ## Gate 5 implementation status
 
-The central runtime foundation remains unchanged. Gate 5 adds a real installer and operations layer without another central application process. Section 1 fails before instance mutation; completed section versions/input digests are idempotent; interrupted sections resume from encrypted state. Doctor checks exact pins, architecture, loopback ports, SQLCipher/migrations, 13 projections, adapter categories, launchd, mappings, observation, disk/backup, and the canonical production-composition proof. Backup authenticates every staged file and proves replay before replacement. Live provider success is never inferred from fixture state.
+The central runtime foundation remains unchanged. Gate 5 adds a real installer and operations layer without another central application process. Section 1 fails before instance mutation; completed section versions/input digests are idempotent; interrupted sections resume from encrypted state. Doctor checks exact pins, architecture, loopback ports, SQLCipher/migrations, fourteen projections, adapter categories, launchd, mappings, observation, disk/backup, and the canonical production-composition proof. Backup authenticates every staged file and proves replay before replacement. Live provider success is never inferred from fixture state.
