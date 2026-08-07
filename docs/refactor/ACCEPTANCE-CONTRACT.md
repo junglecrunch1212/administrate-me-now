@@ -19,7 +19,9 @@ alias-aware production-store and adapter reads, and preservation of the
 unaliased rollback keyring path. Long values must survive the Apple prompt
 reader through bounded, versioned fragments and a manifest-last, checksummed
 envelope; tampering, truncation, missing parts, and partial publication fail
-closed without exposing a value.
+closed without exposing a value. Candidate preflight excludes the generated
+alias map from configured-reference discovery and resolves every logical
+reference through the production alias-aware store.
 
 CO-006 amendment (2026-08-07): AC-32 proves Finance through the production
 composition without adding a projection or provider write seam. The Finance

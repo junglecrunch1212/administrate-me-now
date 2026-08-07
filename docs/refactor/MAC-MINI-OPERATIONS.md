@@ -240,7 +240,7 @@ versioned Keychain fragments plus a checksummed root manifest committed last;
 no fragment crosses the Apple prompt reader's input limit. Only then does it atomically publish
 `state/config/keychain-runtime-aliases.json`, which contains references and
 release metadata but no values. The candidate probes every configured logical
-and physical reference with an eight-second bound and refuses the migration
+reference through the alias-aware production store with an eight-second bound and refuses the migration
 before release preparation, backup, service stop, or pointer mutation if a
 source is missing, the copy cannot be verified, an alias is invalid, or an ACL
 prompt remains. An older rollback release ignores the alias map and keeps using

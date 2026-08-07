@@ -14,7 +14,9 @@ Apple's signed Keychain client over anonymous pipes, while rollback originals
 retain their reviewed interpreter-bound path. Adapter credential reads share
 the validated alias map. Long records use bounded, manifest-last Keychain
 fragments with deterministic reassembly and digest verification; no secret,
-provider SDK, or second store is added.
+provider SDK, or second store is added. Candidate preflight proves configured
+logical references through that seam and does not reinterpret generated
+physical aliases as independent rollback-keyring configuration.
 
 CO-005 constitutional audit amendment (2026-08-07): direct production and
 live-portal reconciliation found semantic drift that the aggregate gates did

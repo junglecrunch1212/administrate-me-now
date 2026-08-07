@@ -828,6 +828,17 @@ def test_keychain_probe_discovers_nested_instance_references(
         json.dumps({"reference": "keychain://another-instance/ignored"}),
         encoding="utf-8",
     )
+    physical = f"{first}-runtime-py314-deadbeefcafe"
+    (config / ALIAS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runtime_tag": "py314",
+                "aliases": {first: physical},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     assert configured_keychain_references(test_paths) == (first, second)
 
