@@ -895,10 +895,13 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
         ),
         encoding="utf-8",
     )
-    candidate_python = test_paths.root / "candidate-python"
-    candidate_python.parent.mkdir(parents=True, exist_ok=True)
-    candidate_python.write_text("#!/bin/sh\n", encoding="utf-8")
-    candidate_python.chmod(0o700)
+    candidate_real = test_paths.root / "candidate-real-python"
+    candidate_real.parent.mkdir(parents=True, exist_ok=True)
+    candidate_real.write_text("#!/bin/sh\n", encoding="utf-8")
+    candidate_real.chmod(0o700)
+    candidate_python = test_paths.root / "candidate-venv" / "bin" / "python"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.symlink_to(candidate_real)
     encoded_secret = base64.urlsafe_b64encode(b"never-log-this").decode("ascii")
     requested_services: list[str] = []
 
@@ -933,6 +936,9 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
     )
 
     assert result["count"] == 1
+    invoked = transferred["command"]
+    assert isinstance(invoked, list)
+    assert invoked[0] == str(candidate_python)
     assert requested_services[0].endswith(".event-log-runtime-py314-oldcommit000")
     assert encoded_secret not in " ".join(transferred["command"])
     document = json.loads((config / ALIAS_FILENAME).read_text("utf-8"))
