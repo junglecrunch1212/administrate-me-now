@@ -57,6 +57,16 @@ Poetry kept outside that venv, and invokes the candidate upgrade manager from
 there. The ordinary same-runtime updater continues to execute the active
 release's trusted controller. Neither path mutates the active application venv.
 
+macOS Keychain items retain an application allowlist. Before release
+preparation or service mutation, the migration controller probes every
+Keychain reference present in validated instance JSON from the candidate
+interpreter in bounded child processes. A prompt, timeout, or inaccessible item
+fails closed while the old release remains active. The operator must keep
+`Confirm before allowing access` and add only the reviewed Python 3.14
+application alongside the existing Python entry for every AdministrateMe item;
+`Allow all applications` is prohibited. Secret values never cross command
+arguments or diagnostic output.
+
 Rollback may cross the version boundary because it restores a previously
 reviewed immutable release and its own venv. Stable wrappers resolve the active
 release first, then select both its interpreter and the Node formula declared
@@ -64,6 +74,12 @@ by its own `bootstrap/versions.json`; a candidate checkout cannot leak its
 runtime path into an older active release. The wrappers retain a 3.11 parser
 fallback only to read an older release pointer during migration or rollback;
 that fallback is not a future application-runtime target.
+
+Launch sequencing probes the lightweight `/api/system/live` endpoint before
+starting OpenClaw. Full `/api/system/ready` capability diagnostics remain the
+health/status contract and the post-switch Doctor remains authoritative. This
+prevents a busy provider refresh from being misclassified as a dead Python
+process without weakening any readiness or release gate.
 
 ## Consequences
 

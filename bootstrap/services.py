@@ -176,13 +176,12 @@ class ServiceManager:
                     f"launchd could not start {label}: {kickstart.stderr.strip()}"
                 )
             if label == RUNTIME_LABEL:
-                runtime = self._runtime_health()
-                for _ in range(30):
-                    if runtime in {"healthy", "observation_only"}:
-                        break
+                deadline = time.monotonic() + 90
+                runtime_live = self._runtime_liveness()
+                while not runtime_live and time.monotonic() < deadline:
                     time.sleep(1)
-                    runtime = self._runtime_health()
-                if runtime not in {"healthy", "observation_only"}:
+                    runtime_live = self._runtime_liveness()
+                if not runtime_live:
                     raise RuntimeError(
                         "AdministrateMe runtime did not become ready before OpenClaw startup"
                     )
@@ -223,12 +222,26 @@ class ServiceManager:
         state[label] = "failed"
         self._write_test_state(state)
 
+    def _runtime_liveness(self) -> bool:
+        """Use the intentionally cheap endpoint while launchd is starting."""
+
+        port = load_versions()["administrateme"]["runtime_port"]
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/system/live",
+                timeout=5,
+            ) as response:
+                data = json.loads(response.read())
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            return False
+        return data.get("status") == "alive" and data.get("runtime_started") is True
+
     def _runtime_health(self) -> str:
         port = load_versions()["administrateme"]["runtime_port"]
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/api/system/ready",
-                timeout=2,
+                timeout=5,
             ) as response:
                 data = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError):

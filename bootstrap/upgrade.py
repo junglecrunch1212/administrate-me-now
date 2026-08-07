@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from bootstrap.contracts import (
     load_versions,
 )
 from bootstrap.doctor import Doctor
+from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.services import ServiceManager
 from bootstrap.wizard import install_launch_agents
 
@@ -197,14 +199,21 @@ class UpgradeManager:
         ]
         if not include_synthetic_proof:
             command.append("--no-synthetic-proof")
-        completed = subprocess.run(
-            command,
-            cwd=release,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=release,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise UpgradeError(
+                "candidate Doctor exceeded 120 seconds; verify candidate-runtime "
+                "Keychain access and inspect the redacted service logs"
+            ) from exc
         try:
             result = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
@@ -214,6 +223,56 @@ class UpgradeManager:
         if not isinstance(result, dict):
             raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
         return result
+
+    def _preflight_keychain_access(self, candidate: Path) -> None:
+        """Fail before preparation or service mutation when macOS ACLs would prompt."""
+
+        if self.test_mode or not self.approve_runtime_migration:
+            return
+        references = configured_keychain_references(self.paths)
+        if not references:
+            raise UpgradeError(
+                "candidate runtime migration found no configured macOS Keychain references"
+            )
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("VIRTUAL_ENV", None)
+        environment["ADMINME_REPOSITORY_ROOT"] = str(candidate)
+        for reference in references:
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "bootstrap.keychain_probe",
+                        "--instance-root",
+                        str(self.paths.root),
+                        reference,
+                    ],
+                    cwd=candidate,
+                    env=environment,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except subprocess.TimeoutExpired as exc:
+                item_names = ", ".join(
+                    sorted(value.rsplit("/", 1)[-1] for value in references)
+                )
+                raise UpgradeError(
+                    "candidate Python is waiting on macOS Keychain access before "
+                    "cutover. In Keychain Access > login, keep 'Confirm before "
+                    "allowing access' and add the reviewed Python 3.14 application "
+                    f"to these AdministrateMe items: {item_names}. Never select "
+                    "'Allow all applications'. The active release was not changed."
+                ) from exc
+            if completed.returncode:
+                raise UpgradeError(
+                    "candidate Python cannot resolve every configured macOS Keychain "
+                    "reference; repair the item ACL or restore the missing item before "
+                    "migration. The active release was not changed."
+                )
 
     def activate(self, candidate: Path) -> dict[str, Any]:
         evidence = validate_candidate(
@@ -225,6 +284,7 @@ class UpgradeManager:
         commit = self._candidate_commit(candidate)
         release = self.paths.app_dir / "releases" / commit
         ensure_within(release, self.paths.app_dir / "releases")
+        self._preflight_keychain_access(candidate)
         if not release.exists():
             shutil.copytree(
                 candidate,
@@ -271,7 +331,7 @@ class UpgradeManager:
                 )
             if not was_running:
                 self.services.stop()
-        except Exception:
+        except Exception as candidate_error:
             self.services.stop()
             if previous:
                 atomic_write(
@@ -287,8 +347,18 @@ class UpgradeManager:
                 )
             else:
                 pointer.unlink(missing_ok=True)
+            rollback_error: Exception | None = None
             if was_running:
-                self.services.start()
+                try:
+                    self.services.start()
+                except Exception as exc:  # preserve the candidate failure as primary
+                    rollback_error = exc
+            if rollback_error is not None:
+                raise UpgradeError(
+                    f"candidate failed ({candidate_error}); the previous release "
+                    "pointer and launchd definitions were restored, but its restart "
+                    f"also reported: {rollback_error}"
+                ) from candidate_error
             raise
         return {
             "status": "upgraded",
