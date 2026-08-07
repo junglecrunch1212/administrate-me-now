@@ -76,6 +76,12 @@ any source, copy, receipt, map, or bounded candidate probe is invalid. This is
 an operational repair, not a new credential store or a weakening of Keychain
 policy.
 
+The first reviewed alias-copy attempt also exposed a launcher-path defect before
+service mutation: resolving the controller venv's `python` symlink selected the
+Homebrew base interpreter without the controller dependencies. The coordinator
+now normalizes the absolute launcher path without dereferencing it, and the
+regression test requires the venv path to reach the child process.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

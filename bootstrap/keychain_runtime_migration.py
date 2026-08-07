@@ -206,7 +206,9 @@ def migrate(
         or root == Path.home().resolve()
     ):
         raise KeychainRuntimeMigrationError("refusing a broad deployment root")
-    candidate_python = candidate_python.resolve()
+    # Preserve the venv launcher path. Resolving this symlink escapes the venv
+    # and makes the Homebrew base interpreter lose the controller dependencies.
+    candidate_python = Path(os.path.abspath(candidate_python.expanduser()))
     if not candidate_python.is_file() or not os.access(candidate_python, os.X_OK):
         raise KeychainRuntimeMigrationError("candidate Python is unavailable")
     if not _COMMIT_PATTERN.fullmatch(candidate_commit):
