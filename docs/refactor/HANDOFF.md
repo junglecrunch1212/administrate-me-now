@@ -99,6 +99,15 @@ logical originals; a matching active runtime continues through its effective
 aliases. The regression test preserves the stale map while proving the
 rolled-back interpreter reads the original service name.
 
+The reviewed retry then encountered one more pre-mutation compatibility edge
+on the actual installed release: its D10-era `versions.json` records
+`python@3.11` in `python.formula` but predates `python.preferred`. Runtime-tag
+selection now accepts either the current exact preferred version or that
+strict legacy Homebrew formula shape, while rejecting ambiguous receipts.
+Focused evidence covers both formats and the installed receipt resolves to
+`py311`. The failed attempt did not create a backup, stop a service, replace a
+pointer, publish a new alias map, or expose a secret.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

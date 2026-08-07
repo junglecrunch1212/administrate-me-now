@@ -78,6 +78,13 @@ copy, invalid map, prompt, timeout, or failed candidate probe aborts before
 release preparation or service mutation. Secret values never cross command
 arguments, files, stdout, stderr, or diagnostic output.
 
+Runtime-tag comparison accepts the current receipt's exact
+`python.preferred` value and the older D10 receipt's strict
+`python@major.minor` formula when `preferred` is absent. It does not infer a
+runtime from an open-ended compatibility range or an ambiguous executable
+name. This preserves rollback from reviewed legacy releases without weakening
+the receipt boundary.
+
 Rollback may cross the version boundary because it restores a previously
 reviewed immutable release and its own venv. Stable wrappers resolve the active
 release first, then select both its interpreter and the Node formula declared
