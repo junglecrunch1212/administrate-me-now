@@ -77,6 +77,15 @@ configure_active_runtime_path() {
   formula="$("$parser" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["node"]["formula"])' "$manifest")" \
     || fail "the active release version manifest is invalid"
   [[ "$formula" =~ ^node@[0-9]+$ ]] || fail "the active release Node formula is invalid"
+  if [[ "${ADMINME_TEST_MODE:-0}" == "1" ]]; then
+    local test_node test_node_major
+    test_node="$(command -v node || true)"
+    [[ -n "$test_node" ]] || fail "Node is unavailable in the test environment"
+    test_node_major="$("$test_node" -p 'process.versions.node.split(".")[0]')"
+    [[ "$formula" == "node@$test_node_major" ]] \
+      || fail "the test Node runtime does not match the active release manifest"
+    return
+  fi
   node_prefix="$(brew --prefix "$formula" 2>/dev/null || true)"
   [[ -n "$node_prefix" && -d "$node_prefix/bin" ]] \
     || fail "the active release requires unavailable Homebrew formula $formula"

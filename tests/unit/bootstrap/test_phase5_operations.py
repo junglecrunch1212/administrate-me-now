@@ -100,6 +100,8 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'formula="$("$parser" -c' in common
     assert 'brew --prefix "$formula"' in common
     assert "configure_active_runtime_path" in common
+    assert '"${ADMINME_TEST_MODE:-0}" == "1"' in common
+    assert "the test Node runtime does not match" in common
     installer = (REPO_ROOT / "bootstrap" / "bootstrap-macos.sh").read_text("utf-8")
     assert "--expected-commit" in installer
     assert 'ADMINME_REVIEWED_COMMIT="$commit"' in installer
