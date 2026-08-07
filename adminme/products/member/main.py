@@ -47,6 +47,7 @@ from adminme.products.member.surfaces import (
     build_surface,
     communication_accounts,
     crm_detail,
+    crm_search,
     evaluate_query,
     experience_mode,
     navigation,
@@ -334,6 +335,29 @@ class KnowledgeGrantRequest(BaseModel):
 class KnowledgeGrantRevokeRequest(BaseModel):
     model_config = {"extra": "forbid"}
     request_id: str = Field(min_length=8, max_length=120)
+
+
+class PeopleProfileRequest(BaseModel):
+    """Member-owned relationship cue policy; never inferred by a model."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str | None = Field(default=None, max_length=240)
+    circle: str | None = Field(default=None, max_length=240)
+    desired_cadence_days: int | None = Field(default=None, ge=1, le=3650)
+    cues_enabled: bool = False
+    favorite: bool = False
+    suppressed: bool = False
+    suppression_reason: str | None = Field(default=None, max_length=500)
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+class PeopleLifecycleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal["archive", "restore"]
+    reason: str | None = Field(default=None, max_length=500)
 
 
 def _runtime(request: Request) -> Any:
@@ -906,6 +930,142 @@ def _materialization_envelopes(
                     "value_normalized": str(candidate["candidate_value_normalized"]),
                     "verified": False,
                     "primary_for_kind": False,
+                },
+            )
+        ]
+
+    if target_kind == "party_candidate":
+        party_kind = str(candidate.get("kind") or "")
+        if party_kind not in {"person", "organization"}:
+            raise HTTPException(
+                422, "a People candidate must be a person or organization"
+            )
+        display_name = str(candidate.get("display_name") or title).strip()
+        if not display_name:
+            raise HTTPException(422, "a People candidate requires a display name")
+        seed = f"{session.tenant_id}:{target_member}:{item['proposal_id']}"
+        party_id = f"party_triage_{hashlib.sha256(seed.encode()).hexdigest()[:22]}"
+        envelopes = [
+            EventEnvelope(
+                **common,
+                type="party.created",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:party",
+                payload={
+                    "party_id": party_id,
+                    "kind": party_kind,
+                    "display_name": display_name,
+                    "sort_name": str(
+                        candidate.get("sort_name") or display_name
+                    ).casefold(),
+                    "nickname": candidate.get("nickname"),
+                    "attributes": {
+                        "organization_name": candidate.get("organization_name"),
+                        "job_title": candidate.get("job_title"),
+                    },
+                },
+            )
+        ]
+        identifier_value = str(candidate.get("identifier_value") or "").strip()
+        normalized = str(candidate.get("identifier_value_normalized") or "").strip()
+        identifier_kind = str(candidate.get("identifier_kind") or "").strip()
+        if any((identifier_value, normalized, identifier_kind)):
+            if not all((identifier_value, normalized, identifier_kind)):
+                raise HTTPException(
+                    422, "a People endpoint requires kind, value, and normalized value"
+                )
+            envelopes.append(
+                EventEnvelope(
+                    **common,
+                    type="identifier.added",
+                    schema_version=1,
+                    idempotency_key=f"triage:materialize:{item['proposal_id']}:identifier",
+                    payload={
+                        "identifier_id": f"triage_identifier_{item['proposal_id']}",
+                        "party_id": party_id,
+                        "kind": identifier_kind,
+                        "value": identifier_value,
+                        "value_normalized": normalized,
+                        "verified": False,
+                        "primary_for_kind": True,
+                    },
+                )
+            )
+        return envelopes
+
+    if target_kind == "party_relationship":
+        party_a = str(candidate.get("party_a") or "")
+        party_b = str(candidate.get("party_b") or "")
+        direction = str(candidate.get("direction") or "")
+        if direction not in {"a_to_b", "b_to_a", "mutual"}:
+            raise HTTPException(422, "a relationship requires a supported direction")
+        if not party_a or not party_b or party_a == party_b:
+            raise HTTPException(422, "a relationship requires two different Parties")
+        if runtime.projections is None:
+            raise HTTPException(503, "parties projection unavailable")
+        parties = runtime.projections.connection("parties")
+        if any(
+            get_party(parties, session, party_id=value) is None
+            for value in (party_a, party_b)
+        ):
+            raise HTTPException(422, "a relationship Party is unavailable")
+        return [
+            EventEnvelope(
+                **common,
+                type="relationship.added",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:relationship",
+                payload={
+                    "relationship_id": f"triage_relationship_{item['proposal_id']}",
+                    "party_a": party_a,
+                    "party_b": party_b,
+                    "label": str(candidate.get("label") or title),
+                    "direction": direction,
+                    "since": candidate.get("since"),
+                    "attributes": {},
+                },
+            )
+        ]
+
+    if target_kind == "relationship_fact":
+        fact_kind = str(candidate.get("kind") or "")
+        if fact_kind not in {
+            "birthday",
+            "important_date",
+            "employer",
+            "role",
+            "preference",
+            "address",
+            "context",
+        }:
+            raise HTTPException(422, "unsupported relationship-fact kind")
+        party_id = str(candidate.get("party_id") or "")
+        if (
+            runtime.projections is None
+            or get_party(
+                runtime.projections.connection("parties"), session, party_id=party_id
+            )
+            is None
+        ):
+            raise HTTPException(422, "relationship-fact Party is unavailable")
+        return [
+            EventEnvelope(
+                **common,
+                type="relationship_fact.confirmed",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:relationship-fact",
+                payload={
+                    "fact_id": f"triage_fact_{item['proposal_id']}",
+                    "member_id": target_member,
+                    "party_id": party_id,
+                    "kind": fact_kind,
+                    "label": candidate.get("label"),
+                    "value": str(candidate.get("value") or ""),
+                    "effective_date": candidate.get("effective_date"),
+                    "source_event_id": item["source_event_id"],
+                    "evidence_quote": candidate.get("evidence_quote"),
+                    "confirmed_at": now,
+                    "confirmed_by_member_id": session.auth_member_id,
                 },
             )
         ]
@@ -3016,6 +3176,160 @@ async def _communication_command_locked(
         "event_id": event_id,
         "observation_mode": runtime._observation_active,
     }
+
+
+@router.post("/api/member/v1/people/{party_id}/profile", status_code=202)
+async def set_people_profile(
+    party_id: str,
+    body: PeopleProfileRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "People settings are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "People state is unavailable")
+    parties = runtime.projections.connection("parties")
+    person = get_party(parties, session, party_id=party_id)
+    if person is None or person.get("qualification") != "qualified":
+        raise HTTPException(404, "person not found")
+    existing = parties.execute(
+        "SELECT last_event_id FROM member_relationship_profiles "
+        "WHERE tenant_id=? AND member_id=? AND party_id=?",
+        (session.tenant_id, session.auth_member_id, party_id),
+    ).fetchone()
+    if (
+        existing is not None
+        and body.expected_last_event_id != existing["last_event_id"]
+    ):
+        raise HTTPException(409, "relationship settings changed; refresh before saving")
+    if body.suppressed and not (body.suppression_reason or "").strip():
+        raise HTTPException(422, "suppression requires a reason")
+    now = EventEnvelope.now_utc_iso()
+    profile_id = f"people_profile_{hashlib.sha256(f'{session.auth_member_id}:{party_id}'.encode()).hexdigest()[:22]}"
+    payload = {
+        "profile_id": profile_id,
+        "member_id": session.auth_member_id,
+        "party_id": party_id,
+        "circle": body.circle,
+        "desired_cadence_days": body.desired_cadence_days,
+        "cues_enabled": body.cues_enabled,
+        "favorite": body.favorite,
+        "suppressed": body.suppressed,
+        "suppression_reason": body.suppression_reason,
+        "tags": sorted({value.strip() for value in body.tags if value.strip()}),
+        "changed_at": now,
+    }
+    await _guard_member_write(
+        runtime, session, "member_relationship.profile_set", payload
+    )
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="member_relationship.profile_set",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-people",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            causation_id=person["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"people-profile:{session.auth_member_id}:{body.request_id}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("parties", event_id)
+    return {"accepted": True, "event_id": event_id, "profile_id": profile_id}
+
+
+@router.post("/api/member/v1/people/{party_id}/lifecycle", status_code=202)
+async def change_people_lifecycle(
+    party_id: str,
+    body: PeopleLifecycleRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "People lifecycle is unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "People state is unavailable")
+    party = get_party(
+        runtime.projections.connection("parties"), session, party_id=party_id
+    )
+    if party is None or party.get("owner_scope") != f"private:{session.auth_member_id}":
+        raise HTTPException(404, "member-owned person not found")
+    if party["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "person changed; refresh before acting")
+    if body.action == "archive" and party.get("qualification") == "archived":
+        raise HTTPException(409, "person is already archived")
+    if body.action == "restore" and party.get("qualification") != "archived":
+        raise HTTPException(409, "person is not archived")
+    now = EventEnvelope.now_utc_iso()
+    event_type = "party.archived" if body.action == "archive" else "party.restored"
+    payload = (
+        {
+            "party_id": party_id,
+            "archived_at": now,
+            "archived_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+        if body.action == "archive"
+        else {
+            "party_id": party_id,
+            "restored_at": now,
+            "restored_by_member_id": session.auth_member_id,
+        }
+    )
+    await _guard_member_write(runtime, session, event_type, payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-people",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=cast(Sensitivity, party.get("sensitivity") or "normal"),
+            correlation_id=session.correlation_id,
+            causation_id=party["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"people-lifecycle:{session.auth_member_id}:{body.request_id}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("parties", event_id)
+    return {"accepted": True, "event_id": event_id, "state": body.action}
+
+
+@router.get("/api/member/v1/people/search")
+async def people_search(
+    request: Request, session: SessionDep, q: str = ""
+) -> dict[str, Any]:
+    query = q.strip()
+    if len(query) < 2:
+        return {
+            "query": query,
+            "results": [],
+            "contract": "authorized-people-search-v1",
+        }
+    if len(query) > 200:
+        raise HTTPException(422, "search is too long")
+    return crm_search(_runtime(request), session, query)
 
 
 @router.get("/api/member/v1/people/{party_id}")

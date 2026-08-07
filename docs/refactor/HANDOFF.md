@@ -17,6 +17,56 @@ next_phase: co002_observation_review_and_personal_knowledge_bridge_enrollment
 
 # Release handoff
 
+## 2026-08-06 CO-003 People and relationship memory candidate
+
+The principal approved CO-003 on 2026-08-06. ADR-0004 and
+`CHANGE-ORDER-003-PEOPLE-AND-RELATIONSHIP-MEMORY.md` now govern People. The
+change **PRESERVES** the encrypted append-only log, provider authority, typed
+domain separation, member isolation, Triage human gating, external-write
+governance, observation, replay, and the pinned OpenClaw seam. It
+**MODERNIZES** People into deterministic relationship memory. It
+**SUPERSEDES** sender-as-person creation, tenant-wide exact-identifier
+assumptions, implicit provider-share authorization, generic CRM cards, model
+closeness/ranking, moralized overdue cues, and per-contact/account agent
+proliferation.
+
+Parties v2 separates unresolved Endpoints, exact provider Contact Records,
+qualified Parties, scoped Identifier Links, Memberships, Relationships,
+member-specific profiles, typed facts, and explicit grants. Ambiguous exact
+matches are retained as evidence and fail closed. The identity-resolution
+pipeline observes unknown inbound/outbound endpoints instead of minting
+people. Only household enrollment, explicit entry, an eligible curated contact
+record, or a human-confirmed Triage candidate can qualify a Party.
+
+The member portal and pinned `administrateme.dashboard.people` binding consume
+`deterministic-people-cockpit-v1`. The portal adds authorized search,
+All/Household/Favorites/Organizations/Suppressed lenses, truthful contact
+sources, explicit relationship cues, a qualified Party master/detail view,
+authorized contact/fact/activity context, and member-owned relationship
+settings. Children, devices, ambient identities, cross-adult private reads,
+and view-as mutations fail closed. Search indexing is audience-specific;
+granted fact/identifier searches re-check the active grant at query time so
+expiry or revocation cannot leave a searchable side channel.
+
+Four reviewed contact-source packs establish provider-neutral, loss-aware
+contracts for Apple Contacts, Google People, Microsoft Graph Contacts, and
+CardDAV. They preserve exact member/provider/account/container/native id/
+revision, capabilities, tombstones, groups, cursor, and revision conflict.
+No source is presented as configured until its member-specific client and
+permission are actually enrolled. All contact provider writes remain disabled
+by observation and require the existing guarded external-sync path.
+
+AC-30 passes through the production composition root. The complete release
+candidate command passed 30/30 strict acceptance tests, 1,550/1,550 Python
+code-and-pack tests, 60/60 standalone bridge tests, Ruff format/lint across 489
+files, mypy across 216 source files, Pyright, dependency audits, performance
+budgets, both package builds, architecture negatives, clean install, tenant
+isolation, authenticated backup/restore, shell validation, exact OpenClaw
+2026.7.2 contract validation, and 14/14 pinned plugin tests. Provider clients,
+live provider mutations, and live browser evidence are deliberately outside
+this credential-free candidate claim. The immutable commit, backup, Doctor,
+and browser evidence are recorded after the observation-mode release switch.
+
 ## 2026-08-06 CO-002 Notes and authorized family recall
 
 The principal approved CO-002 on 2026-08-06. ADR-0003 and

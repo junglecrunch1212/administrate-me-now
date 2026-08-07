@@ -23,6 +23,9 @@ TriageTargetKind = Literal[
     "list_item",
     "recurrence",
     "party_identifier",
+    "party_candidate",
+    "party_relationship",
+    "relationship_fact",
 ]
 TriageProvider = Literal[
     "google_calendar",

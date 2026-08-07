@@ -17,6 +17,7 @@ _SURFACE_PATHS = {
     "comms": "/member/comms",
     "reminders": "/member/reminders",
     "calendar": "/member/calendar",
+    "people": "/member/people",
 }
 
 

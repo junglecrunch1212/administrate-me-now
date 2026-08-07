@@ -7,11 +7,9 @@ the runner, register pipeline packs via ``register()`` directly (bypass
 by 10a's integration suite already).
 
 Tests:
-1. identity_resolution emits party.created + identifier.added for an
-   unknown sender, both with causation_id = triggering event_id.
-2. identity_resolution skips messaging.sent (outbound) — uses the
-   "absence" pattern: append a follow-up innocuous event, wait on its
-   checkpoint, then assert the absence.
+1. identity_resolution emits endpoint.observed for an unknown sender without
+   claiming that an inbox address is a Person.
+2. identity_resolution also retains an outbound recipient endpoint.
 3. noise_filtering emits messaging.classified for an inbound message,
    with the stubbed skill's classification + confidence.
 4. noise_filtering emits the defensive default ("personal" / 0.0) when
@@ -56,8 +54,8 @@ def _envelope(
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="test",
         source_account_id="test-acct",
-        owner_scope="shared:household",
-        visibility_scope="shared:household",
+        owner_scope="private:member-test",
+        visibility_scope="private:member-test",
         sensitivity=sensitivity,  # type: ignore[arg-type]
         payload=payload,
     )
@@ -91,7 +89,7 @@ def _clear_caches() -> Any:
     invalidate_cache()
 
 
-async def test_identity_resolution_emits_party_created_for_unknown_sender(
+async def test_identity_resolution_retains_endpoint_for_unknown_sender(
     tmp_path: Path,
 ) -> None:
     instance_dir = tmp_path / "instance"
@@ -125,21 +123,20 @@ async def test_identity_resolution_emits_party_created_for_unknown_sender(
         all_events = await _read_all(log)
         derived = [e for e in all_events if e.get("causation_id") == triggering_eid]
         types = sorted(e["type"] for e in derived)
-        assert types == ["identifier.added", "party.created"]
+        assert types == ["endpoint.observed"]
         for e in derived:
             assert e["correlation_id"] is None or isinstance(e["correlation_id"], str)
-        # party.created and identifier.added share a party_id
-        party = next(e for e in derived if e["type"] == "party.created")
-        ident = next(e for e in derived if e["type"] == "identifier.added")
-        assert ident["payload"]["party_id"] == party["payload"]["party_id"]
-        assert ident["payload"]["value_normalized"] == "unknown@example.com"
+        assert derived[0]["payload"]["classification"] == "unresolved"
+        assert derived[0]["payload"]["value_normalized"] == "unknown@example.com"
     finally:
         await runner.stop()
         await bus.stop()
         await log.close()
 
 
-async def test_identity_resolution_skips_messaging_sent(tmp_path: Path) -> None:
+async def test_identity_resolution_retains_messaging_sent_endpoint(
+    tmp_path: Path,
+) -> None:
     instance_dir = tmp_path / "instance"
     instance_dir.mkdir()
     config = load_instance_config(instance_dir)
@@ -185,15 +182,14 @@ async def test_identity_resolution_skips_messaging_sent(tmp_path: Path) -> None:
         )
 
         all_events = await _read_all(log)
-        # Nothing should have been derived from the messaging.sent event.
         derived_from_sent = [e for e in all_events if e.get("causation_id") == sent_eid]
-        assert derived_from_sent == []
-        # The follow-up SMS DOES produce a party.created + identifier.added
-        # (sender unknown). That confirms the subscriber is healthy.
+        assert [event["type"] for event in derived_from_sent] == ["endpoint.observed"]
+        assert derived_from_sent[0]["payload"]["value_normalized"] == "ada@example.com"
+        # The follow-up SMS also remains an unconfirmed endpoint.
         derived_from_sms = [
             e for e in all_events if e.get("causation_id") == followup_eid
         ]
-        assert any(e["type"] == "party.created" for e in derived_from_sms)
+        assert any(e["type"] == "endpoint.observed" for e in derived_from_sms)
     finally:
         await runner.stop()
         await bus.stop()

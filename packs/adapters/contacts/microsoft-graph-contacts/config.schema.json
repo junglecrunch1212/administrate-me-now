@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "title": "Microsoft Graph contacts adapter config", "type": "object", "additionalProperties": false,
+  "required": ["member_id", "provider_account_id", "credentials_ref"],
+  "properties": {
+    "member_id": {"type": "string", "minLength": 1}, "provider_account_id": {"type": "string", "minLength": 1}, "account_label": {"type": "string", "minLength": 1},
+    "credentials_ref": {"type": "string", "pattern": "^keychain://[^/]+/[^/]+$"}, "container_external_id": {"type": "string", "default": "default-folder"},
+    "poll_interval_s": {"type": "integer", "minimum": 10, "default": 300}, "sensitivity_floor": {"type": "string", "enum": ["normal", "privileged"], "default": "normal"}
+  }
+}

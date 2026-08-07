@@ -24,6 +24,11 @@ const state = {
   calendarHiddenSources: [],
   calendarSelectedEvent: null,
   calendarDuration: 60,
+  peopleLens: "all",
+  peopleSelected: null,
+  peopleQuery: "",
+  peopleResults: null,
+  peopleDetail: null,
   notesLens: "all",
   notesSource: "all",
   notesSelected: null,
@@ -130,6 +135,10 @@ async function reloadActiveSurface() {
   }
   if (active === "notes") {
     state.notesResults = null; state.notesQuery = ""; replaceQuery({ q: null });
+  }
+  if (active === "people") {
+    state.peopleResults = null; state.peopleQuery = ""; state.peopleDetail = null;
+    replaceQuery({ q: null });
   }
   renderSurface(await api(path));
 }
@@ -243,7 +252,7 @@ function triageDetail(item, data, readOnly = false) {
   const grid = document.createElement("div"); grid.className = "field-grid";
   const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
   grid.append(field("Review title", title, "field-span"));
-  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier"].map((value) => ({ value, label: titleCase(value) }));
+  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"].map((value) => ({ value, label: titleCase(value) }));
   const target = selectControl(targetOptions, item.target_kind, ""); target.name = "target_kind"; target.disabled = item.source_kind === "commitment_proposal";
   grid.append(field("Creates", target));
   const members = (data.destinations?.members || []).map((value) => ({ value: value.member_id, label: `${value.label} · ${value.role || "member"}` }));
@@ -254,6 +263,26 @@ function triageDetail(item, data, readOnly = false) {
   if (item.target_kind === "commitment") {
     const owed = document.createElement("input"); owed.name = "owed_to_party_id"; owed.value = candidate.owed_to_party_id || ""; owed.placeholder = "Required party ID";
     grid.append(field("Owed to", owed));
+  }
+  if (item.target_kind === "party_candidate") {
+    const kind = selectControl([{ value: "person", label: "Person" }, { value: "organization", label: "Organization" }], candidate.kind || "person", ""); kind.name = "kind";
+    const displayName = document.createElement("input"); displayName.name = "display_name"; displayName.value = candidate.display_name || item.title || "";
+    const identifierKind = document.createElement("input"); identifierKind.name = "identifier_kind"; identifierKind.value = candidate.identifier_kind || ""; identifierKind.placeholder = "Optional: email, phone, or handle";
+    const identifierValue = document.createElement("input"); identifierValue.name = "identifier_value"; identifierValue.value = candidate.identifier_value || ""; identifierValue.placeholder = "Optional observed endpoint";
+    const identifierNormalized = document.createElement("input"); identifierNormalized.name = "identifier_value_normalized"; identifierNormalized.value = candidate.identifier_value_normalized || ""; identifierNormalized.placeholder = "Normalized endpoint";
+    grid.append(field("Party kind", kind), field("Display name", displayName), field("Endpoint kind", identifierKind), field("Endpoint", identifierValue), field("Normalized endpoint", identifierNormalized));
+  } else if (item.target_kind === "party_relationship") {
+    const partyA = document.createElement("input"); partyA.name = "party_a"; partyA.value = candidate.party_a || "";
+    const partyB = document.createElement("input"); partyB.name = "party_b"; partyB.value = candidate.party_b || "";
+    const label = document.createElement("input"); label.name = "label"; label.value = candidate.label || ""; label.placeholder = "For example: coparent";
+    const direction = selectControl(["a_to_b", "b_to_a", "mutual"].map((value) => ({ value, label: titleCase(value) })), candidate.direction || "mutual", ""); direction.name = "direction";
+    grid.append(field("First Party", partyA), field("Second Party", partyB), field("Relationship", label), field("Direction", direction));
+  } else if (item.target_kind === "relationship_fact") {
+    const partyId = document.createElement("input"); partyId.name = "party_id"; partyId.value = candidate.party_id || "";
+    const factKind = selectControl(["birthday", "important_date", "employer", "role", "preference", "address", "context"].map((value) => ({ value, label: titleCase(value) })), candidate.kind || "context", ""); factKind.name = "kind";
+    const value = document.createElement("input"); value.name = "value"; value.value = candidate.value || "";
+    const factLabel = document.createElement("input"); factLabel.name = "label"; factLabel.value = candidate.label || "";
+    grid.append(field("Person", partyId), field("Fact kind", factKind), field("Confirmed value", value), field("Label", factLabel));
   }
   if (item.target_kind === "calendar_event") {
     const start = document.createElement("input"); start.name = "start"; start.value = candidate.start || candidate.due || ""; start.placeholder = "ISO 8601 with time zone";
@@ -1526,6 +1555,145 @@ function renderReminders(data) {
   workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
 }
 
+function peopleMatchesLens(person) {
+  if (state.peopleLens === "favorites") return Boolean(person.favorite);
+  if (state.peopleLens === "organizations") return person.kind === "organization";
+  if (state.peopleLens === "suppressed") return Boolean(person.suppressed);
+  if (state.peopleLens === "household") return !["Contact", "Organization"].includes(person.relationship_label);
+  return !person.suppressed;
+}
+
+function peopleHero(cockpit) {
+  const section = document.createElement("section"); section.className = "hero-card people-hero";
+  section.append(
+    text("p", "PRIVATE RELATIONSHIP MEMORY", "eyebrow"),
+    text("h2", "Remember the person, not another inbox.", "action-title"),
+    text("p", "People joins only confirmed identity, relationship, contact, commitment, and interaction facts. Observed senders wait outside the directory until you confirm them."),
+  );
+  const stats = document.createElement("dl"); stats.className = "brief-stats people-stats";
+  for (const [label, value] of [["People", cockpit.lens_counts?.all || 0], ["Household", cockpit.lens_counts?.household || 0], ["Gentle cues", cockpit.cues?.length || 0], ["Needs review", cockpit.needs_review?.unconfirmed_endpoint_count || 0]]) {
+    const item = document.createElement("div"); item.className = "stat"; item.append(text("dt", label), text("dd", value)); stats.append(item);
+  }
+  section.append(stats); return section;
+}
+
+function peopleControls(data) {
+  const cockpit = data.cockpit || {}; const section = document.createElement("section"); section.className = "card people-controls";
+  const search = document.createElement("form"); search.className = "people-search";
+  const input = document.createElement("input"); input.type = "search"; input.value = state.peopleQuery; input.placeholder = "Search names, organizations, circles, and confirmed facts"; input.setAttribute("aria-label", "Search people you are authorized to see");
+  const submit = text("button", "Search", "button button-primary"); submit.type = "submit";
+  const clear = text("button", "Clear", "button button-quiet"); clear.type = "button"; clear.hidden = !state.peopleQuery;
+  search.append(input, submit, clear);
+  search.addEventListener("submit", async (event) => {
+    event.preventDefault(); const query = input.value.trim(); if (query.length < 2) return;
+    submit.disabled = true; setBanner("Searching only relationship memory you are authorized to see…");
+    try {
+      const result = await api(`/api/member/v1/people/search?q=${encodeURIComponent(query)}`);
+      const originals = new Map((cockpit.directory || []).map((person) => [person.party_id, person]));
+      state.peopleQuery = query; state.peopleResults = result.results.map((person) => ({ ...(originals.get(person.party_id) || {}), ...person }));
+      state.peopleSelected = state.peopleResults[0]?.party_id || null; state.peopleDetail = null;
+      replaceQuery({ q: query, item: state.peopleSelected }); renderPeople(data);
+      setBanner(`${state.peopleResults.length} authorized result${state.peopleResults.length === 1 ? "" : "s"}.`);
+    } catch (error) { setBanner(`${error.message} No relationship data was changed.`); submit.disabled = false; }
+  });
+  clear.addEventListener("click", () => { state.peopleQuery = ""; state.peopleResults = null; state.peopleSelected = null; state.peopleDetail = null; clearBanner(); replaceQuery({ q: null, item: null }); renderPeople(data); });
+  const lenses = document.createElement("div"); lenses.className = "comms-filter-row"; lenses.setAttribute("role", "group"); lenses.setAttribute("aria-label", "People lenses");
+  for (const [key, label] of [["all", "All"], ["household", "Household"], ["favorites", "Favorites"], ["organizations", "Organizations"], ["suppressed", "Suppressed"]]) {
+    const button = text("button", `${label} ${cockpit.lens_counts?.[key] || 0}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.peopleLens === key));
+    button.addEventListener("click", () => { state.peopleLens = key; state.peopleSelected = null; state.peopleDetail = null; clearBanner(); replaceQuery({ view: key, item: null }); renderPeople(data); }); lenses.append(button);
+  }
+  section.append(search, lenses); return section;
+}
+
+function peopleSources(cockpit) {
+  const section = document.createElement("section"); section.className = "card people-sources";
+  section.append(text("h2", "Sources"), text("p", "Each member's contacts stay private unless a Party or field group is explicitly shared.", "state-note"));
+  const list = document.createElement("div"); list.className = "people-source-list";
+  if (!(cockpit.sources || []).length) list.append(text("p", "No contact adapter is configured. Confirmed household Parties still remain available.", "empty"));
+  for (const source of cockpit.sources || []) {
+    const row = document.createElement("div"); row.className = "people-source-row";
+    row.append(text("strong", source.label || titleCase(source.provider)), text("span", titleCase(source.state || "projected"), `pill state-label state-${String(source.state || "projected").replaceAll("_", "-")}`), text("small", `${source.record_count || 0} projected contact${Number(source.record_count || 0) === 1 ? "" : "s"} · ${titleCase(source.runtime)}`));
+    if ((source.limitations || []).length) row.title = source.limitations.join(" "); list.append(row);
+  }
+  section.append(list);
+  const settings = text("a", "Connect or review sources", "button button-quiet"); settings.href = "/member/settings"; section.append(settings); return section;
+}
+
+function peopleCuePanel(cockpit) {
+  const section = document.createElement("section"); section.className = "card people-cues"; section.append(text("h2", "Relationship cues"), text("p", "Only cadences you explicitly enable can appear here.", "state-note"));
+  if (!(cockpit.cues || []).length) { section.append(text("p", "No one is overdue by an enabled cadence. Silence is a valid result.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "item-list";
+  for (const cue of cockpit.cues) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", cue.title), text("small", cue.reason)); const open = text("button", "Open person", "link-button"); open.type = "button"; open.addEventListener("click", () => document.querySelector(`[data-party-id="${CSS.escape(cue.party_id)}"]`)?.click()); item.append(open); list.append(item); }
+  section.append(list); return section;
+}
+
+function peopleDirectory(people) {
+  const section = document.createElement("section"); section.className = "card people-master";
+  section.append(text("h2", state.peopleQuery ? `Results for “${state.peopleQuery}”` : titleCase(state.peopleLens)));
+  if (!people.length) { section.append(text("p", state.peopleQuery ? "No authorized person matches this search." : "No confirmed people appear in this lens.", "empty")); return section; }
+  const list = document.createElement("ol"); list.className = "people-master-list";
+  for (const person of people) {
+    const item = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "people-master-button"; button.dataset.partyId = person.party_id; button.setAttribute("aria-current", String(person.party_id === state.peopleSelected));
+    const heading = document.createElement("span"); heading.className = "people-person-heading"; heading.append(text("strong", person.display_name || "Unnamed person")); if (person.favorite) heading.append(text("span", "Favorite", "pill pill-lavender"));
+    const context = [person.relationship_label, person.organization, person.job_title].filter(Boolean).join(" · ");
+    const contact = person.last_contact_at ? `Last visible contact ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(person.last_contact_at))}` : "No visible interaction yet";
+    button.append(heading, text("span", context || "Confirmed Party", "people-context"), text("small", contact));
+    button.addEventListener("click", () => { state.peopleSelected = person.party_id; state.peopleDetail = null; replaceQuery({ item: person.party_id }); renderPeople(state.surface); });
+    item.append(button); list.append(item);
+  }
+  section.append(list); return section;
+}
+
+function peopleDetail(person, detail) {
+  const section = document.createElement("section"); section.className = "card people-detail";
+  if (!person) { section.append(text("h2", "Choose a person"), text("p", "Select one confirmed Party to see authorized relationship context, source records, commitments, and interactions.", "empty")); return section; }
+  section.append(text("p", person.relationship_label || titleCase(person.kind), "eyebrow"), text("h2", person.display_name || "Unnamed person"), text("p", [person.organization, person.job_title].filter(Boolean).join(" · ") || "Confirmed identity", "meta"));
+  if (!detail) { section.append(text("p", "Loading authorized relationship memory…", "empty")); return section; }
+  const facts = document.createElement("dl"); facts.className = "people-facts";
+  const identifiers = (detail.identifiers || []).map((value) => `${titleCase(value.kind)} · ${value.value}`);
+  for (const [label, value] of [["Access", titleCase(detail.party?.access_mode || "authorized")], ["Contact", identifiers.join("\n") || "No authorized endpoint"], ["Sources", `${(detail.contact_records || []).length} member-owned record${(detail.contact_records || []).length === 1 ? "" : "s"}`], ["Last contact", detail.contact_gap?.last_contact_iso ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(detail.contact_gap.last_contact_iso)) : "No visible interaction"]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  if (["owner", "household_shared"].includes(detail.party?.access_mode)) {
+    const profile = detail.member_profile || {}; const settings = document.createElement("details"); settings.className = "people-settings"; settings.append(text("summary", "Relationship settings"));
+    const form = document.createElement("form"); form.className = "people-settings-form";
+    const circle = document.createElement("input"); circle.value = profile.circle || ""; circle.placeholder = "Family, friend, school, professional…";
+    const cadence = document.createElement("input"); cadence.type = "number"; cadence.min = "1"; cadence.max = "3650"; cadence.value = profile.desired_cadence_days || ""; cadence.placeholder = "No cadence";
+    const tags = document.createElement("input"); tags.value = (profile.tags || []).join(", "); tags.placeholder = "Comma-separated private tags";
+    const favorite = document.createElement("input"); favorite.type = "checkbox"; favorite.checked = Boolean(profile.favorite);
+    const cues = document.createElement("input"); cues.type = "checkbox"; cues.checked = Boolean(profile.cues_enabled);
+    const suppressed = document.createElement("input"); suppressed.type = "checkbox"; suppressed.checked = Boolean(profile.suppressed);
+    const reason = document.createElement("input"); reason.value = profile.suppression_reason || ""; reason.placeholder = "Required when suppressed";
+    const check = (label, control) => { const wrapper = document.createElement("label"); wrapper.className = "people-check"; wrapper.append(control, document.createTextNode(label)); return wrapper; };
+    const toggles = document.createElement("div"); toggles.className = "people-toggle-row"; toggles.append(check("Favorite", favorite), check("Enable cadence cue", cues), check("Suppress cues", suppressed));
+    const save = text("button", "Save relationship settings", "button button-primary"); save.type = "submit";
+    form.append(field("Circle", circle), field("Cadence in days", cadence), field("Private tags", tags), toggles, field("Suppression reason", reason), save);
+    form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; setBanner("Saving your explicit relationship policy…"); try { await api(`/api/member/v1/people/${encodeURIComponent(person.party_id)}/profile`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: profile.last_event_id || null, circle: circle.value.trim() || null, desired_cadence_days: cadence.value ? Number(cadence.value) : null, cues_enabled: cues.checked, favorite: favorite.checked, suppressed: suppressed.checked, suppression_reason: reason.value.trim() || null, tags: tags.value.split(",").map((value) => value.trim()).filter(Boolean) }) }); setBanner("Relationship settings saved. Cues remain deterministic and opt-in."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Relationship settings were not changed.`); save.disabled = false; } });
+    settings.append(form); section.append(settings);
+  }
+  const relationshipFacts = (detail.relationship_facts || []).filter((value) => !value.revoked_at);
+  const factSection = document.createElement("section"); factSection.className = "people-detail-section"; factSection.append(text("h3", "Confirmed relationship facts"));
+  if (!relationshipFacts.length) factSection.append(text("p", "No evidence-backed relationship facts have been confirmed.", "empty"));
+  else { const list = document.createElement("ul"); list.className = "item-list"; for (const fact of relationshipFacts) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", fact.label || titleCase(fact.kind)), text("span", fact.value), text("small", `Confirmed from event ${fact.source_event_id}`)); list.append(item); } factSection.append(list); }
+  const activity = document.createElement("section"); activity.className = "people-detail-section"; activity.append(text("h3", "Visible activity"));
+  const combined = [...(detail.commitments || []).map((value) => ({ ...value, _kind: "Commitment" })), ...(detail.interactions || []).slice(0, 8).map((value) => ({ ...value, _kind: titleCase(value.channel || value.kind || "Interaction") }))];
+  if (!combined.length) activity.append(text("p", "No visible commitments or interactions. AdministrateMe does not invent relationship history.", "empty"));
+  else { const list = document.createElement("ul"); list.className = "item-list"; for (const value of combined.slice(0, 12)) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", value.title || value.subject || value.description || value._kind), text("small", value.occurred_at || value.due_at || value.status || value._kind)); list.append(item); } activity.append(list); }
+  section.append(factSection, activity); return section;
+}
+
+function renderPeople(data) {
+  const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit || { directory: [], sources: [], cues: [], lens_counts: {} };
+  $("#mode-label").textContent = "Private · confirmed identity · deterministic cues";
+  const sourcePeople = state.peopleResults || cockpit.directory || []; const visible = sourcePeople.filter(peopleMatchesLens);
+  if (!state.peopleSelected || !visible.some((person) => person.party_id === state.peopleSelected)) { state.peopleSelected = visible[0]?.party_id || null; state.peopleDetail = null; }
+  const selected = visible.find((person) => person.party_id === state.peopleSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "people-workspace";
+  const rail = document.createElement("div"); rail.className = "people-rail-stack"; rail.append(peopleSources(cockpit), peopleCuePanel(cockpit));
+  workspace.append(rail, peopleDirectory(visible), peopleDetail(selected, state.peopleDetail));
+  root.append(freshnessStrip(data), peopleHero(cockpit), peopleControls(data), workspace);
+  if (selected && !state.peopleDetail) api(`/api/member/v1/people/${encodeURIComponent(selected.party_id)}`).then((detail) => { if (state.peopleSelected === selected.party_id) { state.peopleDetail = detail; renderPeople(state.surface); } }).catch((error) => setBanner(`${error.message} Nothing was changed.`));
+}
+
 function parseJsonList(value) {
   if (Array.isArray(value)) return value;
   if (typeof value !== "string" || !value) return [];
@@ -1782,7 +1950,7 @@ function renderSurface(data) {
   } else if (data.surface === "reminders") {
     renderReminders(data);
   } else if (data.surface === "people") {
-    root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
+    renderPeople(data);
   } else if (data.surface === "notes") {
     renderNotes(data);
   } else if (data.surface === "finance") {
@@ -1942,6 +2110,11 @@ async function initialize() {
       state.calendarAnchor = params.get("date");
       state.calendarSelectedEvent = params.get("event");
     }
+    if (active === "people") {
+      if (["all", "household", "favorites", "organizations", "suppressed"].includes(requestedView)) state.peopleLens = requestedView;
+      state.peopleSelected = params.get("item");
+      state.peopleQuery = params.get("q") || "";
+    }
     if (active === "notes") {
       if (["all", "recent", "shared", "meetings", "triage"].includes(requestedView)) state.notesLens = requestedView;
       state.notesSource = params.get("source") || "all";
@@ -1965,6 +2138,15 @@ async function initialize() {
           const result = await api(`/api/member/v1/notes/search?${query}`);
           const originals = new Map((data.notes || []).map((note) => [note.knowledge_id, note]));
           state.notesResults = result.items.map((note) => ({ ...(originals.get(note.knowledge_id) || {}), ...note }));
+        }
+        renderSurface(data);
+      });
+    } else if (active === "people") {
+      surfaceRequest = api(path).then(async (data) => {
+        if (state.peopleQuery) {
+          const result = await api(`/api/member/v1/people/search?q=${encodeURIComponent(state.peopleQuery)}`);
+          const originals = new Map((data.cockpit?.directory || []).map((person) => [person.party_id, person]));
+          state.peopleResults = result.results.map((person) => ({ ...(originals.get(person.party_id) || {}), ...person }));
         }
         renderSurface(data);
       });

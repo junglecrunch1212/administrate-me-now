@@ -1,5 +1,16 @@
 # Migration map
 
+People semantics update (2026-08-06): CO-003 **MODERNIZES COMPLETE IN CODE**
+the historical CRM projection and generic member cards into deterministic
+relationship memory. Parties v2 separates unresolved Endpoints, exact
+provider Contact Records, qualified Parties, scoped Identifier Links,
+Relationships, member profiles, facts, grants, and authorized FTS. Identity
+resolution retains ambiguous evidence and fails closed; only curated contacts,
+enrollment, explicit entry, or human-confirmed Triage candidates qualify a
+Party. Four contact-source packs expose truthful capability/revision contracts;
+live source enrollment remains per member and does not block the People
+function or AC-30 fixture proof.
+
 Today semantics update (2026-08-06): Today is **MODERNIZED COMPLETE IN CODE**
 from a raw What Now plus “Open lists” surface into one deterministic Daily
 Brief shared by the member portal and pinned OpenClaw dashboard. It composes
@@ -143,7 +154,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Durable in-process bus | `adminme/events/bus.py` | durable offsets/retry/degrade exist; checkpoint test fails in baseline | HARDEN | Fix ordering/race in Phase 2; poison isolation, restart, drain; event-log append must notify only after commit. |
 | Central composition root | absent | no process instantiates log+bus+all runners/APIs | REWRITE | Create one lifecycle owner with truthful readiness and ordered shutdown. |
 | Projection protocol/runner | `adminme/projections/base.py`, `runner.py` | replay/registration mechanisms; default tuple only `lists` | HARDEN | Exact fourteen registry (thirteen domain plus Triage), shared bus ownership, per-capability replay/idempotency/status. |
-| Parties projection | `adminme/projections/parties/` | schema/handlers/queries/tests | KEEP | Register and prove live/replay/privacy in composition. |
+| Parties projection | `adminme/projections/parties/` | v2 schema/handlers/queries, `adminme/people.py`, identity pipeline, contact packs, AC-30 | KEEP/HARDEN COMPLETE IN CO-003 CANDIDATE | Registered and additive/replayable; separates endpoints/provider records/qualified Parties; scopes identifiers, relationships, profiles, facts, grants, and FTS; ambiguous/hidden resolution fails closed. |
 | Interactions projection | `adminme/projections/interactions/` | v4 account/workspace/body/provider-state plus additive semantic-feature/provenance columns, repeated-source lookup, scoped thread queries, command results, migration/replay tests | HARDEN COMPLETE | Preserve every message observation in `raw_event_ids`; attach schema-bound features only to the exact source interaction; fold repeated native observations only within tenant/member/provider/account; preserve privacy. Comms grouping and Focus remain deterministic read-time composition. |
 | Artifacts projection | `adminme/projections/artifacts/` | schema/handlers/queries/tests | KEEP | Register; scope/provenance/correction. |
 | Commitments projection | `adminme/projections/commitments/` | schema/handlers/queries/tests | KEEP | Register; full proposal-review-completion feedback. |
@@ -178,6 +189,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Product Comms | `adminme/products/comms/main.py`, `adminme/comms.py`, member Comms surface | `deterministic-comms-cockpit-v2`, Focus v2, safe entity normalization, exact account capability, attention explanations, local focus commands, Triage/source links, and governed provider command spine | REWRITE/MODERNIZE COMPLETE FOR PRODUCT CORE | Unread is visual only; Triage remains the only proposal queue; Comms is not generic chat; missing Outlook/BlueBubbles/Twilio provider packs stay disabled and explicit. |
 | Product Reminders | `adminme/reminders.py`, Lists v3 projection, member Reminders/Today surfaces and command/cue APIs | Shared effective-reminder composer, deterministic activation lenses, exact capabilities, transparent read-only possible-copy groups, structured dialogs, typed context facts/cues, and Google Tasks full supported CRUD/move/complete mirror | MODERNIZE COMPLETE IN CODE | Provider remains authoritative; every copy remains independently inspectable; list items remain distinct from Tasks/Commitments/calendar events; live propagation remains acceptance evidence. |
 | Product Calendar | `adminme/calendar.py`, Calendars v3 projection, member Calendar/onboarding/Triage/Today surfaces, Google Calendar discovery | Existing deterministic household reasoning plus Triage candidate preview through the same effective-event/conflict/buffer/guardrail code and reviewed write destinations; exact deep links and URL selection remain presentation-only | MODERNIZE COMPLETE IN CODE; LIVE READ/POLICY PROOF COMPLETE | SUPERSEDE naïve every-event-is-busy, single-primary-calendar, context-as-next-event, and agenda-only UI; preserve provider authority, privacy, typed event separation, governance, and post-observation write evidence. |
+| Product People | `adminme/people.py`, Parties v2, member People surface, identity pipeline, four contact packs | `deterministic-people-cockpit-v1`, qualified directory, authorized audience-specific search, source/lens rail, master/detail context, explicit cues/settings, reversible lifecycle, Triage promotion, and pinned OpenClaw read binding | REWRITE/MODERNIZE COMPLETE IN CO-003 CANDIDATE | SUPERSEDE sender-as-person, generic CRM cards, tenant-wide identifier assumptions, implicit provider sharing, model closeness/ranking, and guilt cues; live contact enrollment/write remains per member and observation-gated. |
 | Product Capture compatibility | `adminme/products/capture/main.py` | stale quick-capture docstring-only stub | REWRITE/COMPATIBILITY | Notes owns the member recall experience; Capture retains legacy domain read/search APIs where required; quick capture/central voice claims stay deleted and Knowledge routes are deprecated aliases. |
 | Product Automation | `adminme/products/automation/main.py` | docstring-only stub | REWRITE | Finance/signal/action namespace with scoped reads and governed writes. |
 | Bridge product | `adminme/products/bridge/` | only implemented FastAPI app; separate `:3337` | HARDEN | Move router into central root; preserve endpoint compatibility/auth; no separate central process. |

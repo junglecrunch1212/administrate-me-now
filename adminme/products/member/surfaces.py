@@ -12,6 +12,8 @@ from fastapi import HTTPException
 
 from adminme.calendar import compose_calendar_cockpit, preview_calendar_candidate
 from adminme.comms import compose_comms_cockpit
+from adminme.people import PROVIDER_CONTRACTS as PEOPLE_PROVIDER_CONTRACTS
+from adminme.people import compose_people_cockpit
 from adminme.reminders import (
     APPLE_OPERATIONS,
     GOOGLE_OPERATIONS,
@@ -35,7 +37,6 @@ from adminme.projections.commitments.queries import by_party
 from adminme.projections.interactions.queries import (
     closeness_signals,
     participants_for,
-    recent,
     recent_for_member,
     recent_with,
 )
@@ -50,10 +51,16 @@ from adminme.projections.member_knowledge.queries import grants_for_note, list_v
 from adminme.projections.money.queries import flows_in_range
 from adminme.projections.parties.queries import (
     all_parties,
-    get_party,
-    identifiers_of,
+    contact_records_for_person,
+    get_visible_person,
+    identifiers_for_person,
+    list_visible_people,
+    member_relationship_profile,
     memberships_of,
+    people_source_summary,
+    relationship_facts_for_person,
     relationships_of,
+    search_visible_people,
 )
 from adminme.projections.places_assets_accounts.queries import linked_to_party
 from adminme.projections.recurrences.queries import for_member
@@ -106,6 +113,54 @@ _PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
     "twilio_sms": frozenset({"reply", "send"}),
     "twilio_whatsapp": frozenset({"reply", "send"}),
 }
+
+
+def people_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
+    """Return member-bound contact sources with truthful capability state."""
+
+    accounts: list[dict[str, Any]] = []
+    aliases = {
+        "apple-contacts": "apple_contacts",
+        "google-people": "google_people",
+        "microsoft-graph-contacts": "microsoft_graph",
+        "carddav-contacts": "carddav",
+    }
+    for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        adapter_id = str(
+            entry.get("id") or entry.get("kind") or entry.get("pack_id") or ""
+        ).removeprefix("adapter:")
+        provider = next(
+            (value for token, value in aliases.items() if token in adapter_id), None
+        )
+        config = entry.get("config") or {}
+        if provider is None or not isinstance(config, dict):
+            continue
+        if config.get("member_id") != member_id:
+            continue
+        contract = PEOPLE_PROVIDER_CONTRACTS[provider]
+        account_id = str(
+            config.get("provider_account_id")
+            or config.get("user_email")
+            or config.get("account_url")
+            or f"{provider}-{index}"
+        )
+        accounts.append(
+            {
+                "id": str(entry.get("id") or f"{provider}-{index}"),
+                "provider": provider,
+                "provider_account_id": account_id,
+                "label": str(config.get("account_label") or contract["label"]),
+                "runtime": contract["runtime"],
+                "operations": list(contract["operations"]),
+                "limitations": list(contract["limitations"]),
+                "state": "observation_only"
+                if runtime._observation_active
+                else "configured",
+            }
+        )
+    return accounts
 
 
 def reminder_accounts(
@@ -498,6 +553,19 @@ def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
             "candidate_value",
             "candidate_value_normalized",
         ):
+            if not candidate.get(field):
+                missing.append(field)
+    if target == "party_candidate":
+        if not candidate.get("display_name") and not item.get("title"):
+            missing.append("display_name")
+        if candidate.get("kind") not in {"person", "organization"}:
+            missing.append("person_or_organization")
+    if target == "party_relationship":
+        for field in ("party_a", "party_b", "label", "direction"):
+            if not candidate.get(field):
+                missing.append(field)
+    if target == "relationship_fact":
+        for field in ("party_id", "kind", "value"):
             if not candidate.get(field):
                 missing.append(field)
     if target in {"calendar_event", "reminder", "list", "list_item"}:
@@ -903,9 +971,51 @@ def build_surface(
             configured=bool(accounts),
         )
     elif surface == "people":
-        base["people"] = all_parties(runtime.projections.connection("parties"), session)
-        base["recent_interactions"] = recent(
-            runtime.projections.connection("interactions"), session, limit=20
+        parties_conn = runtime.projections.connection("parties")
+        interactions_conn = runtime.projections.connection("interactions")
+        people = list_visible_people(parties_conn, session)
+        interactions = recent_for_member(
+            interactions_conn, session, member_id=member, limit=1000
+        )
+        participant_map = participants_for(
+            interactions_conn,
+            session,
+            interaction_ids=[str(row["interaction_id"]) for row in interactions],
+        )
+        people_by_id = {str(row["party_id"]): row for row in people}
+        for interaction in interactions:
+            occurred_at = interaction.get("occurred_at")
+            for participant in participant_map.get(
+                str(interaction["interaction_id"]), []
+            ):
+                person = people_by_id.get(str(participant["party_id"]))
+                if person is None:
+                    continue
+                if not person.get("last_contact_at") or str(occurred_at or "") > str(
+                    person["last_contact_at"]
+                ):
+                    person["last_contact_at"] = occurred_at
+        unconfirmed_count = int(
+            parties_conn.execute(
+                "SELECT COUNT(*) FROM people_endpoints WHERE tenant_id=? AND member_id=? "
+                "AND classification='unresolved'",
+                (session.tenant_id, member),
+            ).fetchone()[0]
+        )
+        base["cockpit"] = compose_people_cockpit(
+            member_id=member,
+            people=people,
+            sources=people_source_summary(parties_conn, session),
+            configured_sources=people_accounts(runtime, member),
+            unconfirmed_endpoint_count=unconfirmed_count,
+            now=now,
+        )
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(interactions, "occurred_at"),
+            stale_after_seconds=604800,
+            row_count=len(people),
+            configured=bool(base["cockpit"]["sources"]),
         )
     elif surface == "notes":
         knowledge_conn = runtime.projections.connection("member_knowledge")
@@ -1106,7 +1216,7 @@ def build_surface(
 
 def crm_detail(runtime: Any, session: Session, party_id: str) -> dict[str, Any]:
     authorize_surface(session, "people")
-    party = get_party(
+    party = get_visible_person(
         runtime.projections.connection("parties"), session, party_id=party_id
     )
     if party is None:
@@ -1136,13 +1246,22 @@ def crm_detail(runtime: Any, session: Session, party_id: str) -> dict[str, Any]:
     ]
     return {
         "party": party,
-        "identifiers": identifiers_of(
+        "identifiers": identifiers_for_person(
             runtime.projections.connection("parties"), session, party_id=party_id
         ),
         "memberships": memberships_of(
             runtime.projections.connection("parties"), session, party_id=party_id
         ),
         "relationships": relationships_of(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
+        "contact_records": contact_records_for_person(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
+        "relationship_facts": relationship_facts_for_person(
+            runtime.projections.connection("parties"), session, party_id=party_id
+        ),
+        "member_profile": member_relationship_profile(
             runtime.projections.connection("parties"), session, party_id=party_id
         ),
         "interactions": interactions,
@@ -1170,6 +1289,21 @@ def crm_detail(runtime: Any, session: Session, party_id: str) -> dict[str, Any]:
             party_id=party_id,
         ),
         "evidence_policy": "scope-filtered projection provenance",
+    }
+
+
+def crm_search(runtime: Any, session: Session, query: str) -> dict[str, Any]:
+    """Search only the caller-authorized People index."""
+
+    authorize_surface(session, "people")
+    return {
+        "query": query,
+        "results": search_visible_people(
+            runtime.projections.connection("parties"),
+            session,
+            query=query,
+        ),
+        "contract": "authorized-people-search-v1",
     }
 
 
@@ -1222,6 +1356,7 @@ __all__ = [
     "authorize_surface",
     "build_surface",
     "crm_detail",
+    "crm_search",
     "evaluate_query",
     "experience_mode",
     "navigation",

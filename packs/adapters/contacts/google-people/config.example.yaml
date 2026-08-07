@@ -1,0 +1,6 @@
+member_id: member-id
+provider_account_id: member@example.com
+account_label: Personal Google Contacts
+credentials_ref: keychain://administrateme/google-people-member
+container_external_id: myContacts
+poll_interval_s: 300

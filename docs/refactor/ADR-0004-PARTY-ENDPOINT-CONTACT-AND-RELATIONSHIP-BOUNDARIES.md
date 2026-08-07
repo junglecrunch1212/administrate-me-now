@@ -1,0 +1,101 @@
+# ADR-0004 — Party, endpoint, contact, and relationship boundaries
+
+Status: **ACCEPTED**
+
+Date: 2026-08-06
+
+Decision owners: household principals and AdministrateMe product/engineering
+
+Governing change order: `CHANGE-ORDER-003-PEOPLE-AND-RELATIONSHIP-MEMORY.md`
+
+## Context
+
+The historical People/CRM path treated an unresolved message sender as a
+person. That shortcut made retailers, newsletters, service addresses, and
+ambiguous shared endpoints look like canonical household relationships. It
+also obscured provider authority, member privacy, and the distinction between
+what a source observed and what the household has decided is true.
+
+Relationship memory must reduce recall burden without creating a model-owned
+social graph, a guilt score, a copied address book, or a second communications
+inbox. The event log remains authoritative and all read models remain
+rebuildable.
+
+## Decision
+
+AdministrateMe represents five separate concepts:
+
+1. An **Endpoint** is an observed addressable value. It may belong to a person,
+   organization, service, shared mailbox, or unresolved sender. Observation of
+   an endpoint never creates a Party.
+2. A **Provider Contact Record** is one record from one exact member, provider,
+   account, container, native id, and revision. The provider remains
+   authoritative for mirrored fields and deletion state.
+3. A **Party** is a stable person, organization, or household identity. It is
+   created only by explicit entry, household enrollment, an eligible curated
+   provider contact, or a human-confirmed Triage candidate.
+4. An **Identifier Link** joins an Endpoint to a Party with scope, provenance,
+   verification, and revocation state. Exact duplicate evidence is retained;
+   an ambiguous or hidden match fails closed.
+5. **Memberships, Relationships, Relationship Facts, and Member Relationship
+   Profiles** remain distinct. Membership may grant household authority;
+   relationship labels never do. Facts retain provenance and sensitivity. A
+   member profile holds only that member's explicit cadence, favorite,
+   suppression, tags, and cue policy.
+
+Provider records, identifier links, facts, interactions, and member profiles
+are owner-private by default. Household-visible Parties do not expose another
+adult's private provider record, identifiers, interaction history, or member
+profile. Sharing requires a separate, revocable adult grant naming permitted
+field groups. Privileged facts are never shared, indexed for models, or
+returned through view-as. Child, device, ambient, operator, and generic
+OpenClaw sessions receive no People directory.
+
+Identity resolution is deterministic. A single authorized, qualified exact
+identifier may resolve; zero or multiple eligible matches remain unresolved.
+Name similarity, domain proximity, message volume, graph proximity, and model
+output may only create evidence-backed review candidates. Merge, split,
+relink, revoke, archive, restore, and relationship correction are explicit
+append-only events with reversible allocation evidence.
+
+Relationship cognition separates descriptive measures from member intent.
+Last contact, counts, open commitments, and confirmed dates are descriptive.
+Reconnect cadence, favorites, quieting, suppression, and cue budgets are
+explicit member settings. Deterministic code alone decides cue eligibility.
+An LLM may extract schema-bound, exact-evidence candidates through the pinned
+OpenClaw seam, but it cannot create or merge a Party, infer a relationship,
+rank people, authorize access, choose outreach, or write a provider record.
+
+OpenClaw retains channels, conversations, sessions, generic memory, routing,
+and agent orchestration. The one pinned Gateway uses member-bound sessions and
+exact provider-account routes. AdministrateMe does not create an agent per
+contact, inbox, or source and does not copy People truth into generic memory.
+
+## Consequences
+
+- The primary People directory includes only authorized, qualified person,
+  organization, and household Parties; raw endpoints remain review evidence.
+- Contact adapters are loss-aware mirrors with explicit source capability and
+  freshness. Schema support never claims that a provider is enrolled.
+- People becomes a deterministic master/detail relationship-memory workspace
+  shared by the member portal and `administrateme.dashboard.people` binding.
+- Triage gains distinct Party, relationship, and fact candidate kinds; no
+  candidate becomes canonical before human confirmation.
+- Local archive is reversible and preferred over provider deletion. Any
+  external contact write still crosses allowlist, governance, rate limit,
+  independent approvals, privacy guard, revision check, observation, and
+  terminal reconciliation.
+- AC-30 owns process, isolation, replay, adapter, and browser proof.
+
+## Classification
+
+- **PRESERVE:** event authority, provider authority, typed domain separation,
+  member isolation, human gating, governance, observation, and replay.
+- **MODERNIZE:** People as relationship memory; provider-neutral contact
+  records; scoped identity resolution; member-specific relationship profiles.
+- **SUPERSEDE:** sender-as-person, implicit provider-share authorization,
+  tenant-wide exact-identifier uniqueness, model closeness/ranking, and agent
+  proliferation.
+- **DEFER:** only live enrollment of an optional contact provider and its
+  separately approved write operations. The People product function, privacy
+  boundary, replay, and fixture-backed adapter contracts are not deferred.

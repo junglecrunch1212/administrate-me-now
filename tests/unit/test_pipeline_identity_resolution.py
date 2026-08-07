@@ -2,10 +2,10 @@
 
 Construct a fake PipelineContext and capture typed event-sink writes,
 exercising _classify_identifier (helper) and the three branches of
-``handle()``: outbound-skip, miss-with-empty-candidates (party.created
-+ identifier.added), miss-with-above-threshold-candidate
+``handle()``: outbound endpoint capture, miss-with-empty-candidates
+(``endpoint.observed``), miss-with-above-threshold-candidate
 (identity.merge_suggested), miss-with-below-threshold-candidate
-(party.created + identifier.added).
+(``endpoint.observed``).
 """
 
 from __future__ import annotations
@@ -100,8 +100,8 @@ def _messaging_received_event(
         "type": "messaging.received",
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
-        "owner_scope": "shared:household",
-        "visibility_scope": "shared:household",
+        "owner_scope": "private:pipeline_runner",
+        "visibility_scope": "private:pipeline_runner",
         "payload": {
             "source_channel": source_channel,
             "from_identifier": from_id,
@@ -117,8 +117,8 @@ def _telephony_sms_event(*, from_number: str = "+15551234567") -> dict[str, Any]
         "type": "telephony.sms_received",
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
-        "owner_scope": "shared:household",
-        "visibility_scope": "shared:household",
+        "owner_scope": "private:pipeline_runner",
+        "visibility_scope": "private:pipeline_runner",
         "payload": {
             "from_number": from_number,
             "to_number": "+15559999999",
@@ -170,37 +170,34 @@ def test_phone_classification() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messaging_sent_returns_without_emit() -> None:
+async def test_messaging_sent_retains_recipient_endpoint() -> None:
     log = _FakeEventLog()
     ctx = _make_ctx(log)
     pipeline = IdentityResolutionPipeline()
     event = _messaging_received_event()
     event["type"] = "messaging.sent"
     await pipeline.handle(event, ctx)
-    assert log.calls == []
+    assert [call.envelope.type for call in log.calls] == ["endpoint.observed"]
+    assert log.calls[0].envelope.payload["value_normalized"] == "me@example.com"
 
 
 @pytest.mark.asyncio
-async def test_unknown_sender_emits_party_and_identifier() -> None:
+async def test_unknown_sender_emits_endpoint_without_identity_claim() -> None:
     log = _FakeEventLog()
     ctx = _make_ctx(log)
     pipeline = IdentityResolutionPipeline(candidate_loader=lambda kind: [])
     event = _messaging_received_event(from_id="unknown@example.com")
     await pipeline.handle(event, ctx)
-    assert len(log.calls) == 2
-    assert log.calls[0].envelope.type == "party.created"
-    assert log.calls[1].envelope.type == "identifier.added"
+    assert len(log.calls) == 1
+    assert log.calls[0].envelope.type == "endpoint.observed"
     for call in log.calls:
         assert call.causation_id == "trigger-eid-001"
         assert call.correlation_id == "corr-001"
-    party_payload = log.calls[0].envelope.payload
-    ident_payload = log.calls[1].envelope.payload
-    assert party_payload["display_name"] == "unknown@example.com"
-    assert ident_payload["party_id"] == party_payload["party_id"]
-    assert ident_payload["kind"] == "email"
-    assert ident_payload["value_normalized"] == "unknown@example.com"
-    assert ident_payload["primary_for_kind"] is True
-    assert ident_payload["verified"] is False
+    payload = log.calls[0].envelope.payload
+    assert payload["member_id"] == "pipeline_runner"
+    assert payload["kind"] == "email"
+    assert payload["value_normalized"] == "unknown@example.com"
+    assert payload["classification"] == "unresolved"
 
 
 @pytest.mark.asyncio
@@ -239,7 +236,7 @@ async def test_above_threshold_emits_merge_suggested() -> None:
 
 
 @pytest.mark.asyncio
-async def test_below_threshold_emits_party_created() -> None:
+async def test_below_threshold_retains_endpoint() -> None:
     # Different local-part lengths → score below 0.85.
     candidates = [{"party_id": "party_existing", "value_normalized": "bob@example.com"}]
     log = _FakeEventLog()
@@ -250,7 +247,7 @@ async def test_below_threshold_emits_party_created() -> None:
     )
     await pipeline.handle(event, ctx)
     types = [c.envelope.type for c in log.calls]
-    assert types == ["party.created", "identifier.added"]
+    assert types == ["endpoint.observed"]
     assert all(c.causation_id == "trigger-eid-001" for c in log.calls)
 
 

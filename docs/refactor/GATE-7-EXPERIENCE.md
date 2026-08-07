@@ -81,8 +81,20 @@ unchanged.
   progress, bounded decisions, immediate outcome-to-recalculated-next action.
 - Compressed: minimalist/dense queue, restrained animation, strict proactive
   cap.
-- Child: warm language/rewards, no Comms/adult communications, Reminders, CRM, finance,
+- Child: warm language/rewards, no Comms/adult communications, Reminders, People, finance,
   Notes, settings, or operator control.
+
+People is an adult-only relationship-memory workspace, not a sender list or
+sales CRM. Its source/lens rail and authorized search lead to a qualified
+Party list and one progressively disclosed detail view. Provider Contact
+Records, Endpoints, Identifier Links, Relationships, member-specific profiles,
+typed facts, Interactions, Commitments, and Artifacts keep their own source and
+privacy semantics. Unknown endpoints stay out of the directory; provider
+records and private relationship context do not cross adult boundaries without
+an explicit field-group grant. Cues use only explicit cadence and typed facts,
+never model closeness or guilt. URL-backed search and selection change only the
+view. The pinned OpenClaw People binding consumes the same deterministic
+cockpit rather than generic memory or a separate agent.
 
 Notes is a private source/search/master-detail workspace with All, Recent,
 Shared, Meetings, and Needs Triage lenses. Provider sharing is explanatory

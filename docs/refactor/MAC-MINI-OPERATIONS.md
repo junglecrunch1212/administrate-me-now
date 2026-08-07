@@ -123,6 +123,19 @@ operator selects that integration:
   until their own reviewed adapter and member consent are configured.
 - Microphone/Voice Memos: required only for the optional Voice Memos bridge.
 
+Contact activation is source- and member-specific. Apple Contacts runs only
+on an enrolled member bridge after that member grants macOS Contacts access;
+the central service account does not acquire a personal Apple ID. Google
+People uses the exact enrolled Google account, Microsoft Graph uses delegated
+mailbox scopes, and CardDAV uses one discovered address-book collection. Begin
+with a read-only observation reconciliation and verify member, account,
+container, record id, revision/etag, group, tombstone, and permission state.
+An observed message or calendar endpoint is not a contact or Party. A provider
+share is not an AdministrateMe grant. Do not activate contact create/update/
+delete/group/photo operations until the exact operation has passed the normal
+approval, privacy, revision, observation, and terminal-reconciliation review;
+provider deletion always receives a separate confirmation.
+
 OAuth opens the provider's own page. Confirm the expected provider and least
 privilege before granting access. OpenClaw owns assistant-provider credentials.
 Plaid is sandbox-only during bootstrap. Home Assistant and optional providers

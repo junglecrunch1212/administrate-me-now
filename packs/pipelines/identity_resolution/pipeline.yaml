@@ -19,5 +19,5 @@ depends_on:
     - parties
 events_emitted:
   - identity.merge_suggested
-  - party.created
-  - identifier.added
+  - interaction.participant_resolved
+  - endpoint.observed
