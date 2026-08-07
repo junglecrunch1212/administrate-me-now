@@ -217,10 +217,19 @@ def test_governance_config_loads_action_gates(config: ActionGateConfig) -> None:
     assert config.gate("noise.create") == "deny"
 
 
-def test_governance_config_unknown_action_defaults_allow(
+def test_governance_config_unknown_action_fails_closed(
     config: ActionGateConfig,
 ) -> None:
-    assert config.gate("anything.never_seen") == "allow"
+    assert config.gate("anything.never_seen") == "deny"
+
+
+def test_governance_config_supports_reviewed_action_families() -> None:
+    config = ActionGateConfig(
+        action_gates={"__default__": "deny", "task.*": "allow"},
+        rate_limits={},
+    )
+    assert config.gate("task.created") == "allow"
+    assert config.gate("tasks.created") == "deny"
 
 
 def test_governance_config_rate_limit_default(config: ActionGateConfig) -> None:
@@ -337,8 +346,7 @@ async def test_layer3_rate_limit_exhaustion(
 ) -> None:
     # burst.action: window 1s, max 2.  But governance.yaml doesn't have
     # an allowlist entry for it.  Use system:internal which has '*'.
-    # Rebuild config with burst.action gated as 'allow' (the default).
-    # The fixture's burst.action gate is implicitly 'allow' (not in dict).
+    # The reviewed fixture explicitly allows burst.action.
     gw = GuardedWrite(
         config=config,
         limiter=RateLimiter(),

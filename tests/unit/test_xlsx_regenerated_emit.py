@@ -188,7 +188,20 @@ async def test_regenerate_finance_emits_finance_name(rig: dict[str, Any]) -> Non
     evt = await _latest_xlsx_event(log)
     assert evt is not None
     assert evt["payload"]["workbook_name"] == FINANCE_WORKBOOK_NAME
-    assert evt["payload"]["sheets_regenerated"] == ["Raw Data", "Accounts", "Metadata"]
+    assert evt["payload"]["sheets_regenerated"] == [
+        "Assumptions",
+        "Budget vs Actual",
+        "Scenarios",
+        "Goals",
+        "Raw Data",
+        "Dashboard",
+        "Cash Flow Plan",
+        "Balance Sheet",
+        "Accounts",
+        "Checks",
+        "Metadata",
+        "Instructions",
+    ]
 
 
 async def test_regenerate_duration_ms_sensible(rig: dict[str, Any]) -> None:

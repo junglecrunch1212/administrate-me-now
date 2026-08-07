@@ -17,9 +17,7 @@ from adminme.events.registry import registry
 
 
 CalendarProvider = Literal["google_calendar", "apple_calendar"]
-CalendarAccessRole = Literal[
-    "none", "free_busy", "reader", "writer", "owner"
-]
+CalendarAccessRole = Literal["none", "free_busy", "reader", "writer", "owner"]
 CalendarEffect = Literal["hard_block", "soft_hold", "context", "ignore"]
 CalendarPurpose = Literal[
     "personal",
@@ -32,9 +30,7 @@ CalendarPurpose = Literal[
     "test",
     "other",
 ]
-DestinationKind = Literal[
-    "personal", "work", "household", "coparenting", "property"
-]
+DestinationKind = Literal["personal", "work", "household", "coparenting", "property"]
 
 
 class CalendarSourceObservedV1(BaseModel):

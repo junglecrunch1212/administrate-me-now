@@ -32,8 +32,8 @@ def test_member_bridge_helpers_execute_from_the_archived_release() -> None:
     assert 'cd "$release_root"' in helper
     assert ".administrateme-source-commit" in installer
     assert ".administrateme-bridge-installed-commit" in installer
-    assert 'poetry_venv="$BRIDGE_ROOT/app/tooling/poetry-2.2.1"' in installer
-    assert '"$poetry_venv/bin/poetry" -C bridge install' in installer
+    assert 'poetry_venv="$BRIDGE_ROOT/app/tooling/poetry-2.4.1"' in installer
+    assert '"$poetry_venv/bin/poetry" -C bridge sync' in installer
 
 
 def test_credential_free_bootstrap_doctor_backup_restore_round_trip(

@@ -9,8 +9,8 @@ either:
   do — the parties projection already has the link); or
 - score the unresolved identifier against existing identifiers of the
   same kind. Above threshold 0.85, emit ``identity.merge_suggested``
-  for human review (NEVER auto-merged per [§1130]); below threshold,
-  emit ``party.created`` + ``identifier.added`` to mint a new party.
+  for human review (NEVER auto-merged per [§1130]); below threshold, retain
+  only an ``endpoint.observed`` fact. An inbox sender is not a Person.
 
 The production runner supplies a read-only Parties connection so exact matches
 and merge suggestions execute against the real projection. Tests may inject a
@@ -49,7 +49,11 @@ def _classify_identifier(
         value_normalized = "".join(c for c in from_id if c.isdigit())
         return from_id, kind, value_normalized
 
-    from_id = str(payload.get("from_identifier", ""))
+    from_id = str(
+        payload.get("to_identifier")
+        if event_type == "messaging.sent"
+        else payload.get("from_identifier", "")
+    )
     channel = str(payload.get("source_channel", "")).lower()
     if "sms" in channel:
         kind = "phone"
@@ -174,12 +178,9 @@ class IdentityResolutionPipeline:
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
-        # Outbound events skip — outbound resolution is the recipient's
-        # responsibility per [BUILD.md §1120], deferred.
-        if event_type == "messaging.sent":
-            return
         if event_type not in (
             "messaging.received",
+            "messaging.sent",
             "telephony.sms_received",
         ):
             return
@@ -193,14 +194,20 @@ class IdentityResolutionPipeline:
             candidates = self._candidate_loader(kind)
         elif ctx.parties_conn_factory is not None:
             with parties_connection(ctx.parties_conn_factory) as conn:
+                private_scope = f"private:{ctx.session.auth_member_id}"
                 candidates = [
                     dict(row)
                     for row in conn.execute(
-                        """SELECT party_id, value, value_normalized
-                             FROM identifiers
-                            WHERE tenant_id = ? AND kind = ?
-                            ORDER BY rowid DESC LIMIT 100""",
-                        (ctx.session.tenant_id, kind),
+                        """SELECT i.party_id, i.value, i.value_normalized
+                             FROM identifiers i
+                             JOIN parties p
+                               ON p.tenant_id=i.tenant_id AND p.party_id=i.party_id
+                            WHERE i.tenant_id = ? AND i.kind = ?
+                              AND i.revoked_at IS NULL
+                              AND p.qualification = 'qualified'
+                              AND i.owner_scope IN (?, 'shared:household')
+                            ORDER BY i.rowid DESC LIMIT 100""",
+                        (ctx.session.tenant_id, kind, private_scope),
                     ).fetchall()
                 ]
         else:
@@ -208,17 +215,32 @@ class IdentityResolutionPipeline:
         # If a candidate already owns this exact value_normalized, it's a
         # hit — nothing to emit (the parties projection already has the
         # link).
-        for cand in candidates:
-            if str(cand.get("value_normalized", "")) == value_normalized:
-                if ctx.parties_conn_factory is not None:
-                    await self._emit_participant_resolved(
-                        event=event,
-                        ctx=ctx,
-                        party_id=str(cand["party_id"]),
-                        kind=kind,
-                        value_normalized=value_normalized,
-                    )
-                return
+        exact = {
+            str(cand["party_id"])
+            for cand in candidates
+            if str(cand.get("value_normalized", "")) == value_normalized
+            and cand.get("party_id")
+        }
+        if len(exact) == 1:
+            if ctx.parties_conn_factory is not None:
+                await self._emit_participant_resolved(
+                    event=event,
+                    ctx=ctx,
+                    party_id=next(iter(exact)),
+                    kind=kind,
+                    value_normalized=value_normalized,
+                )
+            return
+        if len(exact) > 1:
+            await self._emit_endpoint(
+                event=event,
+                ctx=ctx,
+                value=from_id,
+                kind=kind,
+                value_normalized=value_normalized,
+                evidence=["ambiguous_exact_match"],
+            )
+            return
 
         best = _pick_best_match(
             candidates, kind=kind, my_value_normalized=value_normalized
@@ -240,15 +262,15 @@ class IdentityResolutionPipeline:
             )
             return
 
-        # Below threshold (or no candidates): mint a new party + first
-        # identifier. Both events use causation_id=triggering_event_id
-        # per the 10a carry-forward.
-        await self._emit_party_and_identifier(
+        # Below threshold (or no candidates), retain the addressable fact but
+        # make no identity claim. Promotion is a human-gated Triage action.
+        await self._emit_endpoint(
             event=event,
             ctx=ctx,
-            from_id=from_id,
+            value=from_id,
             kind=kind,
             value_normalized=value_normalized,
+            evidence=["observed_interaction_endpoint", "identity_unconfirmed"],
         )
 
     async def _emit_participant_resolved(
@@ -272,12 +294,15 @@ class IdentityResolutionPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
-            idempotency_key=f"identity:resolved:{source_event_id}:from",
+            idempotency_key=(
+                f"identity:resolved:{source_event_id}:"
+                f"{'to' if event.get('type') == 'messaging.sent' else 'from'}"
+            ),
             payload={
                 "source_event_id": source_event_id,
                 "interaction_id": f"ix_{source_event_id}",
                 "party_id": party_id,
-                "role": "from",
+                "role": "to" if event.get("type") == "messaging.sent" else "from",
                 "identifier_kind": kind,
                 "identifier_normalized": value_normalized,
             },
@@ -328,66 +353,51 @@ class IdentityResolutionPipeline:
             causation_id=ctx.triggering_event_id,
         )
 
-    async def _emit_party_and_identifier(
+    async def _emit_endpoint(
         self,
         *,
         event: dict[str, Any],
         ctx: PipelineContext,
-        from_id: str,
+        value: str,
         kind: str,
         value_normalized: str,
+        evidence: list[str],
     ) -> None:
-        stable_seed = f"{kind}:{value_normalized}"
-        party_id = _stable_id("party", stable_seed)
-        identifier_id = _stable_id("ident", stable_seed)
-        party_envelope = EventEnvelope(
+        payload = event.get("payload") or {}
+        member_id = str(payload.get("member_id") or "")
+        if not member_id and str(event.get("owner_scope") or "").startswith("private:"):
+            member_id = str(event["owner_scope"]).removeprefix("private:")
+        if not member_id:
+            return
+        stable_seed = f"{member_id}:{kind}:{value_normalized}"
+        envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
-            type="party.created",
+            type="endpoint.observed",
             schema_version=1,
             occurred_at=EventEnvelope.now_utc_iso(),
             source_adapter="identity_resolution",
             source_account_id="pipeline",
-            owner_scope=event["owner_scope"],
-            visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
-            idempotency_key=f"identity:party:{stable_seed}",
+            owner_scope=f"private:{member_id}",
+            visibility_scope=f"private:{member_id}",
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=f"identity:endpoint:{stable_seed}",
             payload={
-                "party_id": party_id,
-                "kind": "person",
-                "display_name": from_id,
-                "sort_name": from_id.lower(),
-            },
-        )
-        await ctx.event_sink.write(
-            party_envelope,
-            correlation_id=ctx.correlation_id,
-            causation_id=ctx.triggering_event_id,
-        )
-        identifier_envelope = EventEnvelope(
-            event_at_ms=event["event_at_ms"],
-            tenant_id=event["tenant_id"],
-            type="identifier.added",
-            schema_version=1,
-            occurred_at=EventEnvelope.now_utc_iso(),
-            source_adapter="identity_resolution",
-            source_account_id="pipeline",
-            owner_scope=event["owner_scope"],
-            visibility_scope=event["visibility_scope"],
-            sensitivity="normal",
-            idempotency_key=f"identity:identifier:{stable_seed}",
-            payload={
-                "identifier_id": identifier_id,
-                "party_id": party_id,
+                "endpoint_id": _stable_id("endpoint", stable_seed),
+                "member_id": member_id,
                 "kind": kind,
-                "value": from_id,
+                "value": value,
                 "value_normalized": value_normalized,
-                "verified": False,
-                "primary_for_kind": True,
+                "classification": "unresolved",
+                "provider": payload.get("provider") or payload.get("source_channel"),
+                "provider_account_id": payload.get("provider_account_id"),
+                "source_interaction_id": f"ix_{event.get('event_id', '')}",
+                "observed_at": event.get("occurred_at") or EventEnvelope.now_utc_iso(),
+                "evidence": evidence,
             },
         )
         await ctx.event_sink.write(
-            identifier_envelope,
+            envelope,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.triggering_event_id,
         )

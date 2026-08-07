@@ -39,6 +39,9 @@ depends_on:
     - adapter.error
     - adapter.authenticated
     - adapter.cursor_advanced
+    - money_flow.provider_observed
+    - money_flow.provider_removed
+    - financial.account_observed
     - money_flow.plaid_synced
 
 # Config schema reference. The supervisor's loader validates each
@@ -71,7 +74,11 @@ documentation:
 capabilities:
   - kind: Cat-C
     runtime: central
-    event_families: [money_flow.plaid_synced]
+    event_families:
+      - money_flow.provider_observed
+      - money_flow.provider_removed
+      - financial.account_observed
+      - money_flow.plaid_synced
 sensitivity_default: privileged
 sharing_model_discriminator: owner_member_id
 dedup_strategy:

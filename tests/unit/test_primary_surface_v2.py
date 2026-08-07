@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+
+import pytest
+from pydantic import ValidationError
 from pathlib import Path
 
 from adminme.events.schemas.external_sync import ExternalWriteRequestedV1
@@ -228,6 +231,22 @@ def test_external_write_command_keeps_optimistic_revision() -> None:
         }
     )
     assert command.expected_provider_revision == '"etag-1"'
+
+
+def test_notes_are_ingest_only_and_cannot_enter_external_write_spine() -> None:
+    with pytest.raises(ValidationError):
+        ExternalWriteRequestedV1.model_validate(
+            {
+                "command_id": "request-notes-1",
+                "member_id": "member-a",
+                "provider": "apple_notes",
+                "provider_account_id": "local-notes",
+                "operation": "update_note",
+                "target_external_id": "note-1",
+                "payload": {"title": "Mutate source"},
+                "requested_at": datetime.now(timezone.utc),
+            }
+        )
 
 
 def test_rrule_parser_and_serializer_preserve_advanced_selectors() -> None:

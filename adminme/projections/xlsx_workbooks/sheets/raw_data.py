@@ -40,6 +40,12 @@ HEADERS: list[str] = [
     "assigned_category",
     "notes",
     "is_manual",
+    "member_id",
+    "account_id",
+    "currency",
+    "included",
+    "pending",
+    "source_adapter",
 ]
 
 # Columns always derived (backend-assigned).
@@ -47,7 +53,15 @@ HEADERS: list[str] = [
 # principal-authored on the sheet. Kept in sync with the descriptor's
 # always_derived in adminme/daemons/xlsx_sync/sheet_schemas.py;
 # equivalence is asserted in tests/unit/test_xlsx_finance_workbook.py.
-ALWAYS_DERIVED: set[str] = {"txn_id", "plaid_category", "is_manual"}
+ALWAYS_DERIVED: set[str] = {
+    "txn_id",
+    "account_last4",
+    "plaid_category",
+    "is_manual",
+    "member_id",
+    "pending",
+    "source_adapter",
+}
 
 # Columns Plaid owns on non-manual rows.
 PLAID_AUTHORITATIVE: set[str] = {
@@ -55,6 +69,8 @@ PLAID_AUTHORITATIVE: set[str] = {
     "account_last4",
     "merchant_name",
     "amount",
+    "account_id",
+    "currency",
 }
 
 
@@ -90,10 +106,14 @@ def build(
     rows = ctx.money_conn.execute(
         """
         SELECT flow_id, occurred_at, linked_account, amount_minor, currency,
-               notes, category, is_manual
+               notes, memo, category, provider_category, assigned_category,
+               member_id, merchant_name, merchant_category, pending, included,
+               source_adapter, is_manual
           FROM money_flows
          WHERE tenant_id = ?
            AND deleted_at IS NULL
+           AND removed_at IS NULL
+           AND owner_scope = 'shared:household'
          ORDER BY occurred_at DESC, flow_id ASC
         """,
         (tenant_id,),
@@ -107,20 +127,26 @@ def build(
             plaid_category = None
             assigned_category = row["category"]
         else:
-            plaid_category = row["category"]
-            assigned_category = None
+            plaid_category = row["provider_category"] or row["category"]
+            assigned_category = row["assigned_category"]
         values = [
             row["flow_id"],
             row["occurred_at"],
             last4_by_account.get(row["linked_account"] or ""),
-            None,  # merchant_name — not yet modelled at v1
-            None,  # merchant_category
+            row["merchant_name"],
+            row["merchant_category"],
             row["amount_minor"] / 100.0 if row["amount_minor"] is not None else None,
-            row["notes"],
+            row["memo"],
             plaid_category,
             assigned_category,
-            None,  # notes_2 column is unused; kept to preserve header shape
+            row["notes"],
             is_manual,
+            row["member_id"],
+            row["linked_account"],
+            row["currency"],
+            bool(row["included"]),
+            bool(row["pending"]),
+            row["source_adapter"],
         ]
         for col_idx, value in enumerate(values, start=1):
             ws.cell(row=i, column=col_idx, value=value)

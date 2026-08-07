@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from adminme.calendar import compose_calendar_cockpit
+from adminme.calendar import compose_calendar_cockpit, preview_calendar_candidate
 from adminme.events.schemas.calendar_policy import (
     CalendarRuleConfiguredV1,
     CalendarSchedulePolicyConfiguredV1,
@@ -157,6 +157,61 @@ def test_provider_free_event_does_not_become_a_hard_block() -> None:
     )
     assert cockpit["events"][0]["effect"] == "context"
     assert cockpit["counts"]["hard_block"] == 0
+
+
+def test_triage_preview_exposes_conflict_destination_guardrail_and_observation() -> (
+    None
+):
+    preview = preview_calendar_candidate(
+        member_id="member-a",
+        timezone_name="UTC",
+        as_of=datetime(2026, 8, 6, 14, tzinfo=timezone.utc),
+        item={
+            "proposal_id": "proposal-calendar",
+            "title": "Proposed appointment",
+            "candidate": {
+                "start": "2026-08-06T15:30:00Z",
+                "end": "2026-08-06T16:30:00Z",
+            },
+            "route": {
+                "member_id": "member-a",
+                "provider": "google_calendar",
+                "provider_account_id": "account-a",
+                "container_external_id": "calendar-personal",
+            },
+            "last_event_id": "event-proposal",
+        },
+        events=[
+            _event(
+                "existing-event",
+                "calendar-personal",
+                "2026-08-06T15:00:00Z",
+                "2026-08-06T16:00:00Z",
+            )
+        ],
+        sources=[_source("calendar-personal", "Personal")],
+        rules=[_rule("calendar-personal", "hard_block", "personal")],
+        schedule_policy={
+            "windows": [
+                {
+                    "days": [3],
+                    "start_local": "15:00",
+                    "end_local": "17:00",
+                    "kind": "protected",
+                    "effect": "hard_block",
+                    "label": "Protected window",
+                }
+            ],
+            "buffer_minutes": {},
+        },
+        observation_active=True,
+    )
+    assert preview["state"] == "ready"
+    assert preview["destination"]["destination_kind"] == "personal"
+    assert preview["conflicts"][0]["kind"] == "conflict"
+    assert preview["guardrails"][0]["label"] == "Protected window"
+    assert preview["observation"]["effect"] == "would_record_without_provider_write"
+    assert preview["model_decisions"] is False
 
 
 def test_policy_schemas_reject_ambiguous_write_and_unknown_buffer() -> None:

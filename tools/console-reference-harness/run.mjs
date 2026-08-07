@@ -30,6 +30,13 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function referenceDigest(bytes) {
+  // The constitutional hash was recorded from the original CRLF artifact on
+  // Windows. Git stores the same text with LF, so normalize line endings before
+  // checking content identity on macOS/Linux.
+  return sha256(Buffer.from(bytes.toString("utf8").replace(/\r?\n/g, "\r\n"), "utf8"));
+}
+
 async function fileDigest(path) {
   return sha256(await readFile(path));
 }
@@ -226,7 +233,7 @@ async function activateNavTab(page, pageName) {
 async function run() {
   await mkdir(evidenceDir, { recursive: true });
   const referenceBytes = await readFile(referencePath);
-  const actualReferenceSha = sha256(referenceBytes);
+  const actualReferenceSha = referenceDigest(referenceBytes);
   if (actualReferenceSha !== REFERENCE_SHA256) {
     throw new Error(`Reference SHA-256 mismatch: expected ${REFERENCE_SHA256}, got ${actualReferenceSha}`);
   }

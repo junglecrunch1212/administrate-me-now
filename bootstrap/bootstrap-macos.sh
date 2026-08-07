@@ -112,7 +112,7 @@ echo "macOS will request Calendar, Reminders, Contacts, Notes, or microphone per
 echo "OAuth sign-in happens on the provider's page; credentials go to Keychain/OpenClaw, never a .env file."
 
 if ((DRY_RUN == 0)); then
-  for formula in python@3.11 node@22; do
+  for formula in python@3.14 node@24; do
     if ! brew list --versions "$formula" >/dev/null 2>&1; then
       echo "Installing required Homebrew formula: $formula"
       brew install "$formula"
@@ -120,19 +120,19 @@ if ((DRY_RUN == 0)); then
   done
 fi
 
-python_bin="$(brew --prefix python@3.11)/bin/python3.11"
-node_bin_dir="$(brew --prefix node@22)/bin"
+python_bin="$(brew --prefix python@3.14)/bin/python3.14"
+node_bin_dir="$(brew --prefix node@24)/bin"
 export PATH="$node_bin_dir:$PATH"
-[[ -x "$python_bin" ]] || fail "Python 3.11 is missing"
+[[ -x "$python_bin" ]] || fail "Python 3.14 is missing"
 node_version="$(node -p 'process.versions.node')"
-IFS=. read -r node_major node_minor node_patch <<<"$node_version"
-if ((node_major != 22 || node_minor < 22 || (node_minor == 22 && node_patch < 3))); then
-  fail "Node $node_version is outside >=22.22.3,<23"
+IFS=. read -r node_major node_minor _ <<<"$node_version"
+if ((node_major != 24 || node_minor < 15)); then
+  fail "Node $node_version is outside >=24.15,<25"
 fi
 npm_version="$(npm --version)"
 IFS=. read -r npm_major npm_minor _ <<<"$npm_version"
-if ((npm_major != 10 || npm_minor < 9)); then
-  fail "npm $npm_version is outside >=10.9,<11"
+if ((npm_major != 11 || npm_minor < 6)); then
+  fail "npm $npm_version is outside >=11.6,<12"
 fi
 
 "$BOOTSTRAP_DIR/install-openclaw-source.sh" \
@@ -158,10 +158,10 @@ fi
   && "$(<"$release_dir/.administrateme-source-commit")" == "$commit" ]] \
   || fail "the immutable release directory is incomplete; preserve it for diagnosis and deploy into a new instance root"
 
-poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.2.1"
+poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.4.1"
 if [[ ! -x "$poetry_venv/bin/poetry" ]]; then
   "$python_bin" -m venv "$poetry_venv"
-  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
+  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.4.1"
 fi
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   "$python_bin" -m venv "$release_dir/.venv"
@@ -171,7 +171,7 @@ if [[ ! -f "$venv_receipt" || "$(<"$venv_receipt")" != "$commit" ]]; then
   (
     cd "$release_dir"
     VIRTUAL_ENV="$release_dir/.venv" \
-      "$poetry_venv/bin/poetry" install --only main --sync --no-interaction
+      "$poetry_venv/bin/poetry" sync --only main --no-interaction
   )
   printf '%s\n' "$commit" >"$venv_receipt"
 fi

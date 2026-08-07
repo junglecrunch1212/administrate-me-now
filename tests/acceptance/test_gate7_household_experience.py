@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from adminme import temporary_surfaces as temporary_surface_clock
 from adminme.events.envelope import EventEnvelope
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
+from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +94,46 @@ def _settings(instance_dir: Path, *, model_configured: bool = True) -> RuntimeSe
     )
 
 
+def _settings_control_fixture(instance_dir: Path) -> RuntimeSettings:
+    base = _settings(instance_dir)
+    return replace(
+        base,
+        household_mapping={
+            "household_label": "Fixture household",
+            "members": [
+                {
+                    "member_id": PRINCIPAL,
+                    "label": "Primary adult",
+                    "role": "principal",
+                },
+                {"member_id": ADULT, "label": "Second adult", "role": "principal"},
+                {"member_id": CHILD, "label": "Child member", "role": "child"},
+                {"member_id": DEVICE, "label": "Shared screen", "role": "device"},
+            ],
+            "memberships": [],
+            "relationships": [],
+            "parties": [],
+        },
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "gmail-fixture",
+                    "kind": "messaging-gmail-api",
+                    "config": {
+                        "member_id": PRINCIPAL,
+                        "user_email": "fixture@example.invalid",
+                        "account_label": "Personal email",
+                        "workspace": "personal",
+                        "oauth_credentials_ref": "keychain://fixture/gmail",
+                        "enable_writes": True,
+                    },
+                }
+            ],
+        },
+    )
+
+
 async def _events(runtime: Any, *types: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(types=list(types) or None):
@@ -104,6 +147,10 @@ async def _wait_for_command_result(runtime: Any, command_id: str) -> dict[str, A
             types=["external_sync.write_completed", "external_sync.write_failed"]
         ):
             if event["payload"].get("command_id") == command_id:
+                # A terminal event is durable before its deterministic read model
+                # necessarily catches up.  Wait on the production projection
+                # checkpoint so this process-level observer never races the bus.
+                await runtime.wait_for_projection("interactions", event["event_id"])
                 return event
         await asyncio.sleep(0.01)
     raise AssertionError(f"no terminal result for {command_id}")
@@ -202,6 +249,126 @@ async def _seed_today_truth(runtime: Any) -> dict[str, str]:
         "routine": routine_event_id,
         "calendar": calendar_event_id,
     }
+
+
+async def _seed_finance_truth(runtime: Any) -> None:
+    now = datetime.now(timezone.utc)
+    private = {
+        "event_at_ms": int(now.timestamp() * 1000),
+        "tenant_id": runtime.settings.instance.tenant_id,
+        "occurred_at": now.isoformat(),
+        "source_adapter": "gate7-finance-fixture",
+        "source_account_id": "credential-free",
+        "owner_scope": f"private:{PRINCIPAL}",
+        "visibility_scope": f"private:{PRINCIPAL}",
+        "sensitivity": "privileged",
+        "actor_identity": PRINCIPAL,
+    }
+    shared = {
+        **private,
+        "owner_scope": "shared:household",
+        "visibility_scope": "shared:household",
+        "sensitivity": "sensitive",
+    }
+    await runtime.events.write(
+        EventEnvelope(
+            type="financial.account_observed",
+            schema_version=1,
+            payload={
+                "member_id": PRINCIPAL,
+                "plaid_item_id": "fixture-item",
+                "account_id": "fixture-account",
+                "institution_id": "fixture-institution",
+                "institution_name": "Fixture institution",
+                "display_name": "Fixture checking",
+                "account_type": "depository",
+                "last4": "1234",
+                "current_balance_minor": 500_000,
+                "available_balance_minor": 450_000,
+                "currency": "USD",
+                "as_of": now.isoformat(),
+                "link_healthy": True,
+            },
+            **private,
+        )
+    )
+    await runtime.events.write(
+        EventEnvelope(
+            type="money_flow.provider_observed",
+            schema_version=1,
+            payload={
+                "member_id": PRINCIPAL,
+                "plaid_item_id": "fixture-item",
+                "account_id": "fixture-account",
+                "transaction_id": "fixture-transaction",
+                "amount_minor": 12_000,
+                "currency": "USD",
+                "occurred_at": now.date().isoformat(),
+                "kind": "paid",
+                "merchant_name": "Fixture merchant",
+                "provider_category": "Groceries",
+                "pending": False,
+                "provider_revision": "fixture-cursor",
+                "observed_at": now.isoformat(),
+            },
+            **private,
+        )
+    )
+    for event_type, payload in (
+        (
+            "finance.assumption_set",
+            {
+                "assumption_id": "base_monthly_income",
+                "category": "cash_flow",
+                "label": "Base monthly income",
+                "value_decimal": "6000",
+                "unit": "USD/month",
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.assumption_set",
+            {
+                "assumption_id": "base_monthly_expenses",
+                "category": "cash_flow",
+                "label": "Base monthly expenses",
+                "value_decimal": "4000",
+                "unit": "USD/month",
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.budget_set",
+            {
+                "budget_id": "fixture-budget",
+                "category": "Groceries",
+                "amount_minor": 10_000,
+                "currency": "USD",
+                "cadence": "monthly",
+                "active": True,
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.scenario_set",
+            {
+                "scenario_id": "fixture-base",
+                "name": "Current plan",
+                "is_baseline": True,
+                "horizon_months": 24,
+                "active": True,
+            },
+        ),
+    ):
+        last = await runtime.events.write(
+            EventEnvelope(
+                type=event_type,
+                schema_version=1,
+                payload=payload,
+                **shared,
+            )
+        )
+    await runtime.wait_for_projection("money", last)
 
 
 def _portal_provenance(
@@ -370,7 +537,18 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "Time guardrails" in js_asset.text
         assert "Month at a glance" in js_asset.text
         assert "Calendars in view" in js_asset.text
+        assert "window.prompt" not in js_asset.text
+        assert "triage-workspace" in css_asset.text
+        assert "observation-banner" in member_page.text
         assert "calendar-time-grid" in css_asset.text
+        assert ".surface > * { min-width: 0; }" in css_asset.text
+        assert ".calendar-board-layout { grid-template-columns: minmax(0, 1fr); }" in (
+            css_asset.text
+        )
+        assert (
+            ".reminder-add-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }"
+            in css_asset.text
+        )
         assets = (
             js_asset.text
             + css_asset.text
@@ -410,7 +588,7 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             "reminders",
             "calendar",
             "people",
-            "knowledge",
+            "notes",
             "finance",
             "scoreboard",
             "settings",
@@ -443,6 +621,7 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             "comms",
             "reminders",
             "people",
+            "notes",
             "knowledge",
             "finance",
             "calendar",
@@ -459,6 +638,20 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
                 == 404
             )
 
+        legacy_notes = client.get(
+            "/member/knowledge", headers=HEADERS[ADULT], follow_redirects=False
+        )
+        assert legacy_notes.status_code == 308
+        assert legacy_notes.headers["location"] == "/member/notes"
+        legacy_notes_api = client.get(
+            "/api/member/v1/surfaces/knowledge", headers=HEADERS[ADULT]
+        )
+        assert legacy_notes_api.status_code == 200
+        assert legacy_notes_api.json()["deprecated_alias"] == "knowledge"
+        assert legacy_notes_api.json()["canonical_path"] == (
+            "/api/member/v1/surfaces/notes"
+        )
+
         screen = client.get("/api/member/v1/bootstrap", headers=HEADERS[DEVICE]).json()
         assert [item["id"] for item in screen["navigation"]] == ["scoreboard"]
         assert screen["chat"]["state"] == "unauthorized"
@@ -467,6 +660,414 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
                 "/api/member/v1/surfaces/today", headers=HEADERS[DEVICE]
             ).status_code
             == 404
+        )
+
+
+def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
+    tmp_path: Path,
+) -> None:
+    """CO-006 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        client.portal.call(_seed_finance_truth, runtime)
+        response = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        )
+        assert response.status_code == 200
+        data = response.json()
+        cockpit = data["cockpit"]
+        assert cockpit["contract_version"] == "deterministic-finance-cockpit-v1"
+        assert cockpit["summary"]["cash_minor"] == 500_000
+        assert cockpit["summary"]["base_monthly_income_minor"] == 600_000
+        assert cockpit["summary"]["base_monthly_expenses_minor"] == 400_000
+        assert cockpit["budgets"][0]["state"] == "watch"
+        assert cockpit["focus"]["state"] == "budget_watch"
+        assert data["contract"] == {
+            "workbook_planning_inputs_authoritative": True,
+            "provider_observations_protected": True,
+            "provider_writeback": False,
+            "model_decides_financial_action": False,
+            "external_financial_writes": False,
+        }
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/finance", headers=HEADERS[CHILD]
+            ).status_code
+            == 404
+        )
+        other_adult = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[ADULT]
+        ).json()["cockpit"]
+        assert other_adult["data_health"]["account_count"] == 0
+        assert other_adult["summary"]["cash_minor"] == 0
+
+        assert runtime.xlsx_projection is not None
+        assert runtime.xlsx_reverse is not None
+        client.portal.call(
+            runtime.xlsx_projection.regenerate_now, FINANCE_WORKBOOK_NAME
+        )
+        workbook_path = (
+            runtime.settings.instance.xlsx_workbooks_dir / FINANCE_WORKBOOK_NAME
+        )
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        assert budget_sheet.cell(5, 2).value == "Groceries"
+        budget_sheet.cell(5, 3, value=150)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        client.portal.call(
+            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+        )
+        after_valid_save = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_valid_save["budgets"][0]["planned_minor"] == 15_000
+        assert after_valid_save["workbook"]["validation_state"] == "valid"
+
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        budget_sheet.cell(5, 3, value=-25)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        published_events = client.portal.call(
+            _events, runtime, "finance.workbook_published"
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "money", published_events[-1]["event_id"]
+        )
+        after_rejected_save = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_rejected_save["budgets"][0]["planned_minor"] == 15_000
+        assert after_rejected_save["workbook"]["validation_state"] == "rejected"
+
+        # The rejected save did not consume the accepted sidecar. Correcting
+        # the same cell therefore emits the intended planning change.
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        budget_sheet.cell(5, 3, value=200)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        client.portal.call(
+            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+        )
+        after_correction = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_correction["budgets"][0]["planned_minor"] == 20_000
+        assert after_correction["workbook"]["validation_state"] == "valid"
+
+        before = cockpit["summary"]
+        client.portal.call(runtime.projections.rebuild, "money")
+        after = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]["summary"]
+        assert after == before
+
+        js = client.get("/member-assets/member.js").text
+        css = client.get("/member-assets/member.css").text
+        for copy in (
+            "Cash flow plan",
+            "Scenario lab",
+            "Goals and capital plans",
+            "Net worth inputs",
+            "Source and model health",
+        ):
+            assert copy in js
+        assert ".finance-kpi-grid" in css
+
+
+def test_ac29_notes_authorized_recall_and_explicit_grant_round_trip(
+    tmp_path: Path,
+) -> None:
+    """CO-002 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "ac29-fixture-notes",
+            "source_account_id": "fixture-notes-account",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "actor_identity": PRINCIPAL,
+        }
+        note_payload = {
+            "knowledge_id": "ac29-meeting-note",
+            "member_id": PRINCIPAL,
+            "title": "School planning call",
+            "body": "The school planning call covered the autumn pickup routine.",
+            "body_format": "transcript",
+            "source_kind": "fathom",
+            "source_type": "meeting_note",
+            "source_external_id": "meeting-fixture-29",
+            "source_url": "https://example.invalid/meeting-fixture-29",
+            "account_external_id": "fathom-fixture-account",
+            "account_name": "Meeting notes",
+            "folder_path": "Calls/School",
+            "content_sha256": "a" * 64,
+            "captured_at": now.isoformat(),
+            "provider_modified_at": now.isoformat(),
+            "provider_revision": "fixture-revision-1",
+            "tags": ["school", "planning"],
+            "capability_warnings": ["speaker_identity_unverified"],
+        }
+        note_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="normal",
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="ac29:note",
+                payload=note_payload,
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "member_knowledge", note_id)
+        privileged_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="privileged",
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="ac29:privileged-note",
+                payload={
+                    "knowledge_id": "ac29-privileged-note",
+                    "member_id": PRINCIPAL,
+                    "title": "Privileged fixture",
+                    "body": "privileged-corpus-canary",
+                    "source_kind": "apple_notes",
+                    "source_external_id": "privileged-fixture-29",
+                    "content_sha256": "b" * 64,
+                    "captured_at": now.isoformat(),
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "member_knowledge", privileged_id
+        )
+
+        surface = client.get(
+            "/api/member/v1/surfaces/notes", headers=HEADERS[PRINCIPAL]
+        )
+        assert surface.status_code == 200, surface.text
+        payload = surface.json()
+        assert payload["label"] == "Notes"
+        assert payload["counts"]["notes"] == 2
+        note = next(
+            row
+            for row in payload["notes"]
+            if row["knowledge_id"] == "ac29-meeting-note"
+        )
+        assert note["source_type"] == "meeting_note"
+        assert note["capability_warnings_json"] == '["speaker_identity_unverified"]'
+        assert payload["contract"] == {
+            "source_apps_authoritative": True,
+            "provider_sharing_is_not_authorization": True,
+            "triage_is_only_promotion_gate": True,
+            "model_decides_scope_or_route": False,
+            "privileged_model_processing": False,
+        }
+
+        search = client.get(
+            "/api/member/v1/notes/search?q=autumn%20pickup",
+            headers=HEADERS[PRINCIPAL],
+        )
+        assert search.status_code == 200, search.text
+        assert [row["knowledge_id"] for row in search.json()["items"]] == [
+            "ac29-meeting-note"
+        ]
+        assert (
+            client.get(
+                "/api/member/v1/notes/search?q=privileged-corpus-canary",
+                headers=HEADERS[PRINCIPAL],
+            ).json()["items"]
+            == []
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get("/api/member/v1/notes", headers=HEADERS[CHILD]).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes",
+                headers={
+                    **HEADERS[PRINCIPAL],
+                    "X-AdminMe-View-Member": ADULT,
+                },
+            ).status_code
+            == 403
+        )
+
+        expired_grant = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-expired-grant",
+                "grantee_member_id": ADULT,
+                "permissions": ["read"],
+                "expires_at": "2020-01-01T00:00:00Z",
+            },
+        )
+        assert expired_grant.status_code == 422, expired_grant.text
+        grant = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["search"],
+            },
+        )
+        assert grant.status_code == 202, grant.text
+        grant_id = grant.json()["grant_id"]
+        assert grant.json()["duplicate"] is False
+        grant_retry = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["search"],
+            },
+        )
+        assert grant_retry.status_code == 202, grant_retry.text
+        assert grant_retry.json() == {**grant.json(), "duplicate": True}
+        grant_conflict = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["read"],
+            },
+        )
+        assert grant_conflict.status_code == 409, grant_conflict.text
+        shared = client.get(
+            "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+        )
+        assert shared.status_code == 200, shared.text
+        assert shared.json()["access_mode"] == "shared_reference"
+        assert shared.json()["grant_permissions"] == ["read", "search"]
+        shared_search = client.get(
+            "/api/member/v1/notes/search?q=autumn%20pickup", headers=HEADERS[ADULT]
+        )
+        assert [row["knowledge_id"] for row in shared_search.json()["items"]] == [
+            "ac29-meeting-note"
+        ]
+        privileged_correction_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="privileged",
+                type="member_knowledge.note_corrected",
+                schema_version=3,
+                idempotency_key="ac29:note-privileged",
+                payload={
+                    **note_payload,
+                    "content_sha256": "c" * 64,
+                    "provider_revision": "fixture-revision-2",
+                    "supersedes_event_id": note_id,
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection,
+            "member_knowledge",
+            privileged_correction_id,
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        normal_correction_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="normal",
+                type="member_knowledge.note_corrected",
+                schema_version=3,
+                idempotency_key="ac29:note-normal-again",
+                payload={
+                    **note_payload,
+                    "content_sha256": "d" * 64,
+                    "provider_revision": "fixture-revision-3",
+                    "supersedes_event_id": privileged_correction_id,
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "member_knowledge", normal_correction_id
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        ), "a privileged reclassification must not silently reactivate an old grant"
+        assert (
+            client.post(
+                "/api/member/v1/notes/ac29-privileged-note/grants",
+                headers=HEADERS[PRINCIPAL],
+                json={
+                    "request_id": "ac29-privileged-grant",
+                    "grantee_member_id": ADULT,
+                    "permissions": ["read"],
+                },
+            ).status_code
+            == 403
+        )
+
+        revoked = client.post(
+            f"/api/member/v1/notes/ac29-meeting-note/grants/{grant_id}/revoke",
+            headers=HEADERS[PRINCIPAL],
+            json={"request_id": "ac29-revoke-request"},
+        )
+        assert revoked.status_code == 202, revoked.text
+        assert revoked.json()["duplicate"] is False
+        revoke_retry = client.post(
+            f"/api/member/v1/notes/ac29-meeting-note/grants/{grant_id}/revoke",
+            headers=HEADERS[PRINCIPAL],
+            json={"request_id": "ac29-revoke-request"},
+        )
+        assert revoke_retry.status_code == 202, revoke_retry.text
+        assert revoke_retry.json() == {**revoked.json(), "duplicate": True}
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/search?q=autumn%20pickup",
+                headers=HEADERS[ADULT],
+            ).json()["items"]
+            == []
         )
 
 
@@ -720,7 +1321,8 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
         )
         assert response.status_code == 200, response.text
         cockpit = response.json()["cockpit"]
-        assert cockpit["contract"] == "deterministic-comms-cockpit-v1"
+        assert cockpit["contract"] == "deterministic-comms-cockpit-v2"
+        assert cockpit["attention_policy"]["unread_is_visual_state_only"] is True
         assert cockpit["decision_maker"] == "rules_not_model"
         assert cockpit["combined_view_is_union_not_copy"] is True
         assert cockpit["official_items_require_triage"] is True
@@ -822,7 +1424,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         surface = response.json()
         brief = surface["brief"]
         assert "lists" not in surface
-        assert brief["contract"] == "deterministic-daily-brief-v1"
+        assert brief["contract"] == "deterministic-daily-brief-v2"
         assert brief["timezone"] == "Etc/UTC"
         assert brief["carousel"]["later_is_view_only"] is True
         assert brief["what_now"] == surface["what_now"]
@@ -1352,3 +1954,356 @@ def test_calendar_onboarding_drives_calendar_today_and_triage_routes(
         assert triage["calendar_destinations"][0]["calendar_external_id"] == (
             "calendar-personal"
         )
+
+
+def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
+    tmp_path: Path,
+) -> None:
+    """CO-001 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "ac28-credential-free",
+            "source_account_id": "fixture-account",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        message_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="messaging.received",
+                schema_version=3,
+                idempotency_key="ac28:message",
+                payload={
+                    "source_channel": "fixture",
+                    "from_identifier": "sender@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "body_text": "Please review the school form today.",
+                    "received_at": now.isoformat(),
+                    "native_message_id": "ac28-message-native",
+                    "member_id": PRINCIPAL,
+                    "provider": "fixture",
+                    "provider_account_id": "fixture-account",
+                    "workspace": "personal",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "interactions", message_event)
+        semantic_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="messaging.semantic_features_extracted",
+                schema_version=1,
+                idempotency_key="ac28:semantic",
+                causation_id=message_event,
+                payload={
+                    "source_event_id": message_event,
+                    "reply_signal": "required",
+                    "automated": False,
+                    "transactional_due": False,
+                    "security_code": False,
+                    "person_to_person": True,
+                    "deadline": "today",
+                    "confidence": 0.97,
+                    "reasons": ["Explicit request and deadline"],
+                    "skill_name": "classify_message_nature",
+                    "skill_version": "3.0.0",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "interactions", semantic_event)
+        proposal_event = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                type="triage.item.proposed",
+                schema_version=1,
+                idempotency_key="ac28:triage-proposal",
+                causation_id=message_event,
+                payload={
+                    "proposal_id": "ac28-school-form",
+                    "target_kind": "task",
+                    "owner_member_id": PRINCIPAL,
+                    "title": "Review the school form",
+                    "candidate": {"due": now.date().isoformat()},
+                    "route": {"member_id": PRINCIPAL},
+                    "source_event_id": message_event,
+                    "confidence": 0.94,
+                    "reasons": ["Explicit requested action"],
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", proposal_event)
+
+        comms = client.get(
+            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [thread] = comms["cockpit"]["threads"]
+        assert thread["bucket"] == "focus"
+        assert thread["attention"]["rule_id"] == "comms.focus-v2"
+        assert thread["surface_link"]["href"].startswith("/member/comms?thread=")
+        assert thread["triage_count"] == 1
+
+        triage = client.get(
+            "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [proposal] = triage["items"]
+        assert proposal["review_state"]["state"] == "ready"
+        assert proposal["source_event_id"] == message_event
+        assert triage["recent_items"] == []
+        approved = client.post(
+            "/api/member/v1/triage/ac28-school-form/approve",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac28-approve-school-form",
+                "expected_last_event_id": proposal["last_event_id"],
+            },
+        )
+        assert approved.status_code == 200, approved.text
+
+        seeded = client.portal.call(_seed_today_truth, runtime)
+        today = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        ).json()["brief"]
+        assert any(item["title"] == "Review the school form" for item in today["plan"])
+        assert today["stats"]["timed_events"] == 1
+        calendar_item = next(
+            item
+            for item in today["schedule"]
+            if item["last_event_id"] == seeded["calendar"]
+        )
+        assert calendar_item["surface_link"]["surface"] == "calendar"
+        assert calendar_item["surface_link"]["href"].startswith("/member/calendar?")
+
+        resolved = client.get(
+            "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert resolved["items"] == []
+        assert resolved["recent_items"][0]["state"] == "confirmed"
+        for surface in ("today", "triage", "comms", "reminders", "calendar"):
+            value = client.get(
+                f"/api/member/v1/surfaces/{surface}", headers=HEADERS[PRINCIPAL]
+            ).json()
+            assert value["observation"]["active"] is True
+
+
+def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> None:
+    """CO-004 process proof through the production composition root."""
+
+    instance = tmp_path / "settings-control"
+    instance.mkdir()
+    app = create_application(_settings_control_fixture(instance))
+    with TestClient(app) as client:
+        bootstrap = client.get("/api/member/v1/bootstrap", headers=HEADERS[PRINCIPAL])
+        assert bootstrap.status_code == 200
+        assert bootstrap.json()["member"] == {
+            "id": PRINCIPAL,
+            "role": "principal",
+            "auth_role": "principal",
+            "display_name": "Primary adult",
+            "authenticated_id": PRINCIPAL,
+            "authenticated_display_name": "Primary adult",
+            "authenticated_role": "principal",
+            "authentication_method": "Tailscale",
+            "viewing_as": False,
+        }
+
+        settings_response = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        )
+        assert settings_response.status_code == 200, settings_response.text
+        settings = settings_response.json()
+        assert settings["control"]["identity"]["can_mutate"] is True
+        assert settings["system"]["runtime"]["projection_count"] == 14
+        [connection] = settings["control"]["connections"]
+        assert connection["id"] == "gmail-fixture"
+        assert connection["setup"] == "configured"
+        assert connection["runtime"] in {"starting", "backoff", "crashed"}
+        assert connection["runtime"] != "healthy"
+        assert connection["permissions"]["credential_reference_present"] is True
+        assert connection["safety"]["observation_only"] is True
+        rendered = json.dumps(settings)
+        assert "keychain://" not in rendered
+        assert "oauth_credentials_ref" not in rendered
+
+        viewed = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={**HEADERS[PRINCIPAL], "X-AdminMe-View-Member": ADULT},
+        )
+        assert viewed.status_code == 200
+        assert viewed.json()["control"]["identity"]["viewing_as"] is True
+        assert viewed.json()["control"]["identity"]["can_mutate"] is False
+        denied_view_as = client.post(
+            "/api/member/v1/settings/preferences",
+            headers={**HEADERS[PRINCIPAL], "X-AdminMe-View-Member": ADULT},
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-view-as-denied",
+                "values": {"information_density": 2},
+            },
+        )
+        assert denied_view_as.status_code == 403
+
+        denied_non_adult_profile = client.post(
+            "/api/member/v1/settings/profile",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "profile_id": "kid_scoreboard",
+                "request_id": "ac31-kid-profile-denied",
+            },
+        )
+        assert denied_non_adult_profile.status_code == 422
+
+        profile = client.post(
+            "/api/member/v1/settings/profile",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "profile_id": "power_user",
+                "request_id": "ac31-profile-change",
+            },
+        )
+        assert profile.status_code == 202, profile.text
+        assert profile.json()["authority_changes"] is False
+        assert profile.json()["model_routing_changes"] is False
+
+        preferences = client.post(
+            "/api/member/v1/settings/preferences",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-preferences",
+                "values": {
+                    "information_density": 3,
+                    "planning_horizon_days": 5,
+                    "task_chunk_minutes": 20,
+                    "interruption_budget": 2,
+                    "reminder_escalation": 1,
+                    "celebration_intensity": 1,
+                    "digest_hour": 8,
+                    "quiet_start_hour": 21,
+                    "quiet_end_hour": 7,
+                    "location_cues": True,
+                },
+            },
+        )
+        assert preferences.status_code == 202, preferences.text
+        assert preferences.json()["revision"] == 1
+        replayed_preferences = client.post(
+            "/api/member/v1/settings/preferences",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-preferences",
+                "values": {
+                    "information_density": 3,
+                    "planning_horizon_days": 5,
+                    "task_chunk_minutes": 20,
+                    "interruption_budget": 2,
+                    "reminder_escalation": 1,
+                    "celebration_intensity": 1,
+                    "digest_hour": 8,
+                    "quiet_start_hour": 21,
+                    "quiet_end_hour": 7,
+                    "location_cues": True,
+                },
+            },
+        )
+        assert replayed_preferences.status_code == 202
+        assert replayed_preferences.json()["idempotent"] is True
+        today = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert today["semantics"]["information_density"] == 3
+        assert today["semantics"]["task_chunk_minutes"] == 20
+        assert today["semantics"]["location_cues"] is True
+
+        cross_adult_bridge = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 1,
+                "request_id": "ac31-cross-adult-bridge",
+                "member_id": ADULT,
+                "capabilities": ["apple_calendar"],
+            },
+        )
+        assert cross_adult_bridge.status_code == 403
+        child_bridge = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 1,
+                "request_id": "ac31-child-bridge",
+                "member_id": CHILD,
+                "capabilities": ["apple_calendar", "apple_reminders"],
+            },
+        )
+        assert child_bridge.status_code == 202, child_bridge.text
+        assert child_bridge.json()["revision"] == 2
+
+        paused = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-pause-gmail",
+                "action": "pause",
+            },
+        )
+        assert paused.status_code == 202, paused.text
+        assert paused.json()["state"] == "paused"
+        replayed_pause = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-pause-gmail",
+                "action": "pause",
+            },
+        )
+        assert replayed_pause.status_code == 202
+        assert replayed_pause.json()["idempotent"] is True
+        after_pause = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [paused_connection] = after_pause["control"]["connections"]
+        assert paused_connection["setup"] == "paused"
+        assert paused_connection["runtime"] == "not_running"
+
+        stale = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-stale-resume",
+                "action": "resume",
+            },
+        )
+        assert stale.status_code == 409
+
+        events = client.portal.call(
+            _events,
+            app.state.runtime,
+            "settings.profile_changed",
+            "settings.preferences_changed",
+            "settings.bridge_enrollment_requested",
+            "settings.connection_lifecycle_changed",
+        )
+        assert {event["type"] for event in events} == {
+            "settings.profile_changed",
+            "settings.preferences_changed",
+            "settings.bridge_enrollment_requested",
+            "settings.connection_lifecycle_changed",
+        }

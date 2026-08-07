@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field
 from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
+from adminme.extensions import ExtensionError
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
+from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
     ContextKind,
     ContextSource,
@@ -46,6 +48,7 @@ from adminme.products.member.surfaces import (
     build_surface,
     communication_accounts,
     crm_detail,
+    crm_search,
     evaluate_query,
     experience_mode,
     navigation,
@@ -67,7 +70,17 @@ from adminme.projections.recurrences.queries import (
     get_recurrence,
     get_routine_occurrence,
 )
+from adminme.projections.member_knowledge.queries import (
+    get_visible as get_visible_note,
+    grants_for_note,
+    list_visible as list_visible_notes,
+    search_visible as search_visible_notes,
+)
 from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.settings_control import (
+    compose_connections,
+    member_label,
+)
 from adminme.projections.lists.queries import (
     get_item as get_list_item,
     items_for_member as list_items_for_member,
@@ -103,6 +116,42 @@ class ChatRequest(BaseModel):
     model_config = {"extra": "forbid"}
     message: str = Field(min_length=1, max_length=4_000)
     request_id: str = Field(min_length=8, max_length=120)
+
+
+class SettingsProfileRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    profile_id: str = Field(min_length=1, max_length=120)
+    request_id: str = Field(min_length=8, max_length=120)
+
+
+class SettingsPreferencesRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    values: dict[str, int | bool | str] = Field(default_factory=dict)
+
+
+class SettingsConnectionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    action: Literal["pause", "resume"]
+
+
+class SettingsBridgeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    member_id: str = Field(min_length=1, max_length=240)
+    capabilities: list[
+        Literal[
+            "apple_calendar",
+            "apple_reminders",
+            "apple_notes",
+            "apple_voice_memos",
+            "obsidian",
+        ]
+    ] = Field(min_length=1, max_length=5)
 
 
 class PromotionRequest(BaseModel):
@@ -162,12 +211,10 @@ class CalendarRuleRequest(BaseModel):
         "other",
     ]
     effect: Literal["hard_block", "soft_hold", "context", "ignore"]
-    tentative_effect: Literal[
-        "hard_block", "soft_hold", "context", "ignore"
-    ] = "soft_hold"
-    caregiving_load: Literal[
-        "hard_block", "soft_hold", "context", "ignore"
-    ] = "ignore"
+    tentative_effect: Literal["hard_block", "soft_hold", "context", "ignore"] = (
+        "soft_hold"
+    )
+    caregiving_load: Literal["hard_block", "soft_hold", "context", "ignore"] = "ignore"
     caregiving_summary_values: list[str] = Field(default_factory=list, max_length=20)
     buffer_kind: Literal[
         "auto",
@@ -179,9 +226,9 @@ class CalendarRuleRequest(BaseModel):
         "deep_work",
     ] = "auto"
     write_target: bool = False
-    destination_kind: Literal[
-        "personal", "work", "household", "coparenting", "property"
-    ] | None = None
+    destination_kind: (
+        Literal["personal", "work", "household", "coparenting", "property"] | None
+    ) = None
     enabled: bool = True
 
 
@@ -204,25 +251,6 @@ class RoutineStepOutcomeRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1)
     outcome: Literal["completed", "skipped"]
-
-
-class ExternalWriteRequest(BaseModel):
-    """One member-authorized mutation of a primary external surface."""
-
-    model_config = {"extra": "forbid"}
-    provider: Literal[
-        "google_calendar",
-        "google_tasks",
-        "apple_calendar",
-        "apple_reminders",
-        "apple_notes",
-    ]
-    provider_account_id: str = Field(min_length=1, max_length=500)
-    operation: str = Field(min_length=1, max_length=120)
-    target_external_id: str | None = Field(default=None, max_length=1000)
-    expected_provider_revision: str | None = Field(default=None, max_length=1000)
-    payload: dict[str, Any] = Field(default_factory=dict)
-    request_id: str = Field(min_length=8, max_length=120)
 
 
 class CommsCommandRequest(BaseModel):
@@ -316,8 +344,118 @@ class TriageDecisionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class KnowledgeGrantRequest(BaseModel):
+    """One explicit owner decision to expose one note to one adult member."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    grantee_member_id: str = Field(min_length=1, max_length=240)
+    permissions: list[KnowledgeGrantPermission] = Field(min_length=1, max_length=3)
+    expires_at: datetime | None = None
+
+
+class KnowledgeGrantRevokeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+
+
+class PeopleProfileRequest(BaseModel):
+    """Member-owned relationship cue policy; never inferred by a model."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str | None = Field(default=None, max_length=240)
+    circle: str | None = Field(default=None, max_length=240)
+    desired_cadence_days: int | None = Field(default=None, ge=1, le=3650)
+    cues_enabled: bool = False
+    favorite: bool = False
+    suppressed: bool = False
+    suppression_reason: str | None = Field(default=None, max_length=500)
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+class PeopleLifecycleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal["archive", "restore"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
 def _runtime(request: Request) -> Any:
     return request.app.state.runtime
+
+
+def _require_self_settings(session: Session) -> None:
+    if session.auth_role in {"child", "device", "ambient"}:
+        raise HTTPException(403, "Settings changes require an authenticated adult")
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Settings are read-only while viewing another member")
+
+
+async def _write_settings_receipt(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    request_id: str,
+    request_fingerprint: str,
+    owner_member_id: str,
+) -> str:
+    if runtime.events is None:
+        raise HTTPException(503, "Settings audit log is unavailable")
+    now = EventEnvelope.now_utc_iso()
+    return await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-settings-control-plane",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{owner_member_id}",
+            visibility_scope=f"private:{owner_member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=(
+                f"member-settings:{event_type}:{session.auth_member_id}:{request_id}"
+            ),
+            raw_ref=f"request-sha256:{request_fingerprint}",
+            payload=payload,
+        )
+    )
+
+
+def _settings_request_fingerprint(event_type: str, values: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {"event_type": event_type, "values": values},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+async def _prior_settings_receipt(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    request_id: str,
+    request_fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "Settings audit log is unavailable")
+    key = f"member-settings:{event_type}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior.get("raw_ref") != f"request-sha256:{request_fingerprint}":
+        raise HTTPException(409, "request id conflicts with a prior Settings command")
+    return prior
 
 
 _EXTERNAL_OPERATIONS = {
@@ -351,16 +489,6 @@ _EXTERNAL_OPERATIONS = {
         "create_list",
         "update_list",
         "delete_list",
-    },
-    "apple_notes": {
-        "create_note",
-        "update_note",
-        "append_note",
-        "move_note",
-        "delete_note",
-        "create_folder",
-        "update_folder",
-        "delete_folder",
     },
 }
 _COMMS_EXTERNAL_OPERATIONS = {
@@ -569,6 +697,13 @@ def _require_configured_external_route(
         for record in runtime.settings.adapter_config.get("adapters", []):
             if not isinstance(record, dict):
                 continue
+            connection_id = str(record.get("id") or "")
+            if (
+                connection_id
+                and runtime.settings_control.connection_lifecycle(connection_id)
+                == "paused"
+            ):
+                continue
             adapter_id = str(
                 record.get("id")
                 or record.get("kind")
@@ -598,13 +733,13 @@ def _require_configured_external_route(
                     )
                 )
             ):
-                if provider == "google_calendar" and config.get(
-                    "discover_calendars"
-                ):
+                if provider == "google_calendar" and config.get("discover_calendars"):
                     if runtime.projections is None:
                         raise HTTPException(503, "calendar projection unavailable")
-                    row = runtime.projections.connection("calendars").execute(
-                        """
+                    row = (
+                        runtime.projections.connection("calendars")
+                        .execute(
+                            """
                         SELECT 1 FROM calendar_member_rules r
                         JOIN calendar_sources s
                           ON s.tenant_id=r.tenant_id
@@ -617,13 +752,15 @@ def _require_configured_external_route(
                           AND r.calendar_external_id=?
                           AND r.enabled=1 AND r.write_target=1 AND s.write_events=1
                         """,
-                        (
-                            runtime.settings.instance.tenant_id,
-                            target_member,
-                            provider_account_id,
-                            container_external_id,
-                        ),
-                    ).fetchone()
+                            (
+                                runtime.settings.instance.tenant_id,
+                                target_member,
+                                provider_account_id,
+                                container_external_id,
+                            ),
+                        )
+                        .fetchone()
+                    )
                     if row is None:
                         continue
                 return
@@ -641,6 +778,13 @@ def _require_configured_external_route(
         )
         for record in runtime.settings.adapter_config.get("adapters", []):
             if not isinstance(record, dict):
+                continue
+            connection_id = str(record.get("id") or "")
+            if (
+                connection_id
+                and runtime.settings_control.connection_lifecycle(connection_id)
+                == "paused"
+            ):
                 continue
             adapter_id = str(record.get("id") or record.get("kind") or "")
             raw_config = record.get("config")
@@ -666,6 +810,52 @@ def _require_configured_external_route(
             )
         return
     raise HTTPException(422, "the external route is not a configured writable adapter")
+
+
+def _require_reviewed_calendar_destination(
+    runtime: Any,
+    *,
+    target_member: str,
+    provider: str,
+    provider_account_id: str,
+    calendar_external_id: str,
+) -> None:
+    """Fail closed unless provider capability and member policy approve the route."""
+
+    if runtime.projections is None:
+        raise HTTPException(503, "calendar projection unavailable")
+    row = (
+        runtime.projections.connection("calendars")
+        .execute(
+            """
+        SELECT 1
+          FROM calendar_member_rules r
+          JOIN calendar_sources s
+            ON s.tenant_id=r.tenant_id
+           AND s.member_id=r.source_member_id
+           AND s.provider=r.provider
+           AND s.provider_account_id=r.provider_account_id
+           AND s.calendar_external_id=r.calendar_external_id
+         WHERE r.tenant_id=? AND r.subject_member_id=?
+           AND r.provider=? AND r.provider_account_id=?
+           AND r.calendar_external_id=?
+           AND r.enabled=1 AND r.write_target=1 AND s.write_events=1
+         LIMIT 1
+        """,
+            (
+                runtime.settings.instance.tenant_id,
+                target_member,
+                provider,
+                provider_account_id,
+                calendar_external_id,
+            ),
+        )
+        .fetchone()
+    )
+    if row is None:
+        raise HTTPException(
+            422, "calendar route is not a reviewed writable destination"
+        )
 
 
 def _materialization_envelopes(
@@ -714,6 +904,38 @@ def _materialization_envelopes(
                     "energy": candidate.get("energy"),
                     "effort_min": candidate.get("effort_min"),
                     "source_commitment_id": candidate.get("source_commitment_id"),
+                },
+            )
+        ]
+    if target_kind == "recurrence":
+        rrule = str(candidate.get("rrule") or "").strip()
+        next_occurrence = str(candidate.get("next_occurrence") or "").strip()
+        if not rrule or not next_occurrence:
+            raise HTTPException(
+                422, "a recurrence requires an RRULE and next occurrence"
+            )
+        linked_kind = str(candidate.get("linked_kind") or "party")
+        linked_id = str(candidate.get("linked_id") or target_member)
+        if linked_kind not in {"party", "asset", "account", "household"}:
+            raise HTTPException(422, "unsupported recurrence relationship")
+        return [
+            EventEnvelope(
+                **common,
+                type="recurrence.added",
+                schema_version=1,
+                idempotency_key=(
+                    f"triage:materialize:{item['proposal_id']}:recurrence"
+                ),
+                payload={
+                    "recurrence_id": f"triage_recurrence_{item['proposal_id']}",
+                    "linked_kind": linked_kind,
+                    "linked_id": linked_id,
+                    "kind": str(candidate.get("kind") or "household_rhythm"),
+                    "rrule": rrule,
+                    "next_occurrence": next_occurrence,
+                    "lead_time_days": int(candidate.get("lead_time_days") or 0),
+                    "trackable": bool(candidate.get("trackable", False)),
+                    "notes": candidate.get("notes") or title,
                 },
             )
         ]
@@ -810,6 +1032,142 @@ def _materialization_envelopes(
             )
         ]
 
+    if target_kind == "party_candidate":
+        party_kind = str(candidate.get("kind") or "")
+        if party_kind not in {"person", "organization"}:
+            raise HTTPException(
+                422, "a People candidate must be a person or organization"
+            )
+        display_name = str(candidate.get("display_name") or title).strip()
+        if not display_name:
+            raise HTTPException(422, "a People candidate requires a display name")
+        seed = f"{session.tenant_id}:{target_member}:{item['proposal_id']}"
+        party_id = f"party_triage_{hashlib.sha256(seed.encode()).hexdigest()[:22]}"
+        envelopes = [
+            EventEnvelope(
+                **common,
+                type="party.created",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:party",
+                payload={
+                    "party_id": party_id,
+                    "kind": party_kind,
+                    "display_name": display_name,
+                    "sort_name": str(
+                        candidate.get("sort_name") or display_name
+                    ).casefold(),
+                    "nickname": candidate.get("nickname"),
+                    "attributes": {
+                        "organization_name": candidate.get("organization_name"),
+                        "job_title": candidate.get("job_title"),
+                    },
+                },
+            )
+        ]
+        identifier_value = str(candidate.get("identifier_value") or "").strip()
+        normalized = str(candidate.get("identifier_value_normalized") or "").strip()
+        identifier_kind = str(candidate.get("identifier_kind") or "").strip()
+        if any((identifier_value, normalized, identifier_kind)):
+            if not all((identifier_value, normalized, identifier_kind)):
+                raise HTTPException(
+                    422, "a People endpoint requires kind, value, and normalized value"
+                )
+            envelopes.append(
+                EventEnvelope(
+                    **common,
+                    type="identifier.added",
+                    schema_version=1,
+                    idempotency_key=f"triage:materialize:{item['proposal_id']}:identifier",
+                    payload={
+                        "identifier_id": f"triage_identifier_{item['proposal_id']}",
+                        "party_id": party_id,
+                        "kind": identifier_kind,
+                        "value": identifier_value,
+                        "value_normalized": normalized,
+                        "verified": False,
+                        "primary_for_kind": True,
+                    },
+                )
+            )
+        return envelopes
+
+    if target_kind == "party_relationship":
+        party_a = str(candidate.get("party_a") or "")
+        party_b = str(candidate.get("party_b") or "")
+        direction = str(candidate.get("direction") or "")
+        if direction not in {"a_to_b", "b_to_a", "mutual"}:
+            raise HTTPException(422, "a relationship requires a supported direction")
+        if not party_a or not party_b or party_a == party_b:
+            raise HTTPException(422, "a relationship requires two different Parties")
+        if runtime.projections is None:
+            raise HTTPException(503, "parties projection unavailable")
+        parties = runtime.projections.connection("parties")
+        if any(
+            get_party(parties, session, party_id=value) is None
+            for value in (party_a, party_b)
+        ):
+            raise HTTPException(422, "a relationship Party is unavailable")
+        return [
+            EventEnvelope(
+                **common,
+                type="relationship.added",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:relationship",
+                payload={
+                    "relationship_id": f"triage_relationship_{item['proposal_id']}",
+                    "party_a": party_a,
+                    "party_b": party_b,
+                    "label": str(candidate.get("label") or title),
+                    "direction": direction,
+                    "since": candidate.get("since"),
+                    "attributes": {},
+                },
+            )
+        ]
+
+    if target_kind == "relationship_fact":
+        fact_kind = str(candidate.get("kind") or "")
+        if fact_kind not in {
+            "birthday",
+            "important_date",
+            "employer",
+            "role",
+            "preference",
+            "address",
+            "context",
+        }:
+            raise HTTPException(422, "unsupported relationship-fact kind")
+        party_id = str(candidate.get("party_id") or "")
+        if (
+            runtime.projections is None
+            or get_party(
+                runtime.projections.connection("parties"), session, party_id=party_id
+            )
+            is None
+        ):
+            raise HTTPException(422, "relationship-fact Party is unavailable")
+        return [
+            EventEnvelope(
+                **common,
+                type="relationship_fact.confirmed",
+                schema_version=1,
+                idempotency_key=f"triage:materialize:{item['proposal_id']}:relationship-fact",
+                payload={
+                    "fact_id": f"triage_fact_{item['proposal_id']}",
+                    "member_id": target_member,
+                    "party_id": party_id,
+                    "kind": fact_kind,
+                    "label": candidate.get("label"),
+                    "value": str(candidate.get("value") or ""),
+                    "effective_date": candidate.get("effective_date"),
+                    "source_event_id": item["source_event_id"],
+                    "evidence_quote": candidate.get("evidence_quote"),
+                    "confirmed_at": now,
+                    "confirmed_by_member_id": session.auth_member_id,
+                },
+            )
+        ]
+
     route = item.get("route") or {}
     provider = route.get("provider")
     provider_account_id = route.get("provider_account_id")
@@ -830,6 +1188,13 @@ def _materialization_envelopes(
             raise HTTPException(
                 422, "calendar candidates require a writable calendar route"
             )
+        _require_reviewed_calendar_destination(
+            runtime,
+            target_member=target_member,
+            provider=str(provider),
+            provider_account_id=str(provider_account_id),
+            calendar_external_id=str(container),
+        )
         if not candidate.get("start") or not candidate.get("end"):
             raise HTTPException(422, "calendar candidates require start and end")
         operation = "create_event"
@@ -880,64 +1245,6 @@ def _materialization_envelopes(
             payload=payload,
         )
     ]
-
-
-@router.post("/api/member/v1/external-sync/commands", status_code=202)
-async def request_external_write(
-    body: ExternalWriteRequest, request: Request, session: SessionDep
-) -> dict[str, Any]:
-    if session.auth_member_id != session.view_member_id:
-        raise HTTPException(
-            403, "external writes are unavailable while viewing another member"
-        )
-    if body.operation not in _EXTERNAL_OPERATIONS[body.provider]:
-        raise HTTPException(422, "operation is not supported by this provider")
-    runtime = _runtime(request)
-    now = EventEnvelope.now_utc_iso()
-    payload = {
-        "command_id": body.request_id,
-        "member_id": session.auth_member_id,
-        "provider": body.provider,
-        "provider_account_id": body.provider_account_id,
-        "operation": body.operation,
-        "target_external_id": body.target_external_id,
-        "expected_provider_revision": body.expected_provider_revision,
-        "payload": {
-            **body.payload,
-            **(
-                {"expected_provider_revision": body.expected_provider_revision}
-                if body.expected_provider_revision
-                else {}
-            ),
-        },
-        "requested_at": now,
-    }
-    decision = await runtime.guarded_write.check(
-        session, "external_sync.write_requested", payload
-    )
-    if not decision.pass_:
-        raise HTTPException(
-            409 if decision.layer_failed == "governance" else 403,
-            {"reason": decision.reason, "correlation_id": decision.correlation_id},
-        )
-    envelope = EventEnvelope(
-        event_at_ms=int(time.time() * 1000),
-        tenant_id=session.tenant_id,
-        type="external_sync.write_requested",
-        schema_version=1,
-        occurred_at=now,
-        source_adapter="member-portal",
-        source_account_id=session.auth_member_id,
-        owner_scope=f"private:{session.auth_member_id}",
-        visibility_scope=f"private:{session.auth_member_id}",
-        sensitivity="normal",
-        correlation_id=decision.correlation_id,
-        actor_identity=session.auth_member_id,
-        idempotency_key=f"external-sync:{session.auth_member_id}:{body.request_id}",
-        payload=payload,
-    )
-    event_id = await runtime.events.write(envelope)
-    return {"accepted": True, "command_id": body.request_id, "event_id": event_id}
 
 
 def _reminder_account_for_command(
@@ -2148,6 +2455,9 @@ async def member_page(
     if surface == "inbox":
         authorize_surface(session, "triage")
         return RedirectResponse(url="/member/triage", status_code=308)
+    if surface == "knowledge":
+        authorize_surface(session, "notes")
+        return RedirectResponse(url="/member/notes", status_code=308)
     authorize_surface(session, surface)
     return _member_index_response()
 
@@ -2189,6 +2499,12 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
             "id": session.view_member_id,
             "role": session.view_role,
             "auth_role": session.auth_role,
+            "display_name": member_label(runtime, session.view_member_id),
+            "authenticated_id": session.auth_member_id,
+            "authenticated_display_name": member_label(runtime, session.auth_member_id),
+            "authenticated_role": session.auth_role,
+            "authentication_method": "Tailscale",
+            "viewing_as": session.auth_member_id != session.view_member_id,
         },
         "navigation": navigation(session),
         "mode": experience_mode(runtime, session),
@@ -2229,6 +2545,12 @@ async def surface(
             "deprecated_alias": "inbox",
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
+    if surface == "knowledge":
+        return {
+            **build_surface(_runtime(request), session, "notes"),
+            "deprecated_alias": "knowledge",
+            "canonical_path": "/api/member/v1/surfaces/notes",
+        }
     return build_surface(
         _runtime(request),
         session,
@@ -2236,6 +2558,714 @@ async def surface(
         calendar_anchor=calendar_date,
         calendar_view=view,
     )
+
+
+@router.post("/api/member/v1/settings/profile", status_code=202)
+async def change_settings_profile(
+    body: SettingsProfileRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Activate one validated data-only profile for the authenticated member."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    fingerprint = _settings_request_fingerprint(
+        "settings.profile_changed", {"profile_id": body.profile_id}
+    )
+    lock = runtime.settings_command_locks.setdefault("profile-catalog", asyncio.Lock())
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.profile_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "profile_id": prior_receipt["payload"]["profile_id"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "deterministic": True,
+                "authority_changes": False,
+                "model_routing_changes": False,
+            }
+        try:
+            requested_profile = runtime.extensions.get("profile", body.profile_id)
+        except ExtensionError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if requested_profile.data.get("profile_format") in {"ambient", "scoreboard"}:
+            raise HTTPException(422, "profile is unavailable to an adult member")
+        prior = runtime.extensions.profile_for(session.auth_member_id)
+        previous_id = prior.get("id") if isinstance(prior, dict) else None
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.profile_changed",
+            {
+                "member_id": session.auth_member_id,
+                "previous_profile_id": previous_id,
+                "profile_id": body.profile_id,
+                "authority_changes": False,
+                "model_routing_changes": False,
+            },
+        )
+        activated = False
+        if previous_id != body.profile_id:
+            try:
+                token = runtime.extensions.stage("profile", body.profile_id)
+                tested = runtime.extensions.test_stage(token)
+                if tested["authority_changes"] or tested["model_routing_changes"]:
+                    raise HTTPException(409, "profile attempted to change authority")
+                runtime.extensions.activate(token, member_id=session.auth_member_id)
+                activated = True
+            except ExtensionError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.profile_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "member_id": session.auth_member_id,
+                    "previous_profile_id": previous_id,
+                    "profile_id": body.profile_id,
+                    "changed_by_member_id": session.auth_member_id,
+                    "authority_changes": False,
+                    "model_routing_changes": False,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception:
+            if activated:
+                runtime.extensions.rollback()
+            raise
+        return {
+            "accepted": True,
+            "profile_id": body.profile_id,
+            "event_id": event_id,
+            "deterministic": True,
+            "authority_changes": False,
+            "model_routing_changes": False,
+        }
+
+
+@router.post("/api/member/v1/settings/preferences", status_code=202)
+async def change_settings_preferences(
+    body: SettingsPreferencesRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Save bounded, replayable CoS presentation and cue preferences."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    fingerprint = _settings_request_fingerprint(
+        "settings.preferences_changed",
+        {"expected_revision": body.expected_revision, "values": body.values},
+    )
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.preferences_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "preferences": prior_receipt["payload"]["values"],
+            }
+        previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.preferences_changed",
+            {
+                "member_id": session.auth_member_id,
+                "expected_revision": body.expected_revision,
+                "values": body.values,
+            },
+        )
+        try:
+            mutation = runtime.settings_control.set_preferences(
+                session.auth_member_id,
+                body.values,
+                expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.preferences_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "member_id": session.auth_member_id,
+                    "changed_by_member_id": session.auth_member_id,
+                    "revision": mutation.revision,
+                    "values": mutation.current,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "revision": mutation.revision,
+            "event_id": event_id,
+            "preferences": mutation.current,
+        }
+
+
+@router.post("/api/member/v1/settings/connections/{connection_id}", status_code=202)
+async def change_settings_connection(
+    connection_id: str,
+    body: SettingsConnectionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Pause or resume one exact member-bound adapter instance."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    visible = {
+        row["id"]: row for row in compose_connections(runtime, session.auth_member_id)
+    }
+    if connection_id not in visible:
+        raise HTTPException(404, "connection not found")
+    if runtime.adapters is None:
+        raise HTTPException(503, "adapter supervisor is unavailable")
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    fingerprint = _settings_request_fingerprint(
+        "settings.connection_lifecycle_changed",
+        {
+            "connection_id": connection_id,
+            "expected_revision": body.expected_revision,
+            "action": body.action,
+        },
+    )
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.connection_lifecycle_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "connection_id": connection_id,
+                "state": (
+                    "paused"
+                    if prior_receipt["payload"]["action"] == "pause"
+                    else "connected"
+                ),
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+            }
+        previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.connection_lifecycle_changed",
+            {
+                "connection_id": connection_id,
+                "member_id": session.auth_member_id,
+                "action": body.action,
+                "expected_revision": body.expected_revision,
+            },
+        )
+        try:
+            candidate = runtime.settings_control.preview_connection(
+                connection_id,
+                body.action,
+                expected_revision=body.expected_revision,
+                actor_member_id=session.auth_member_id,
+            )
+            effective = runtime.settings_control.effective_adapter_config(
+                runtime.settings.adapter_config, state=candidate
+            )
+            snapshot = await runtime.adapters.reconcile(effective)
+            runtime.settings_control.save_candidate(candidate)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            try:
+                await runtime.adapters.reconcile(
+                    runtime.settings_control.effective_adapter_config(
+                        runtime.settings.adapter_config, state=previous_state
+                    )
+                )
+            except Exception:
+                pass
+            raise HTTPException(
+                503, "connection change failed; the prior runtime was restored"
+            ) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.connection_lifecycle_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "connection_id": connection_id,
+                    "member_id": session.auth_member_id,
+                    "action": body.action,
+                    "revision": candidate["revision"],
+                    "runtime_reconciled": True,
+                    "changed_by_member_id": session.auth_member_id,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception as exc:
+            try:
+                await runtime.adapters.reconcile(
+                    runtime.settings_control.effective_adapter_config(
+                        runtime.settings.adapter_config, state=previous_state
+                    )
+                )
+                runtime.settings_control.save_candidate(previous_state)
+            except Exception as rollback_exc:
+                raise HTTPException(
+                    503,
+                    "connection audit failed and rollback is incomplete; run Doctor",
+                ) from rollback_exc
+            raise HTTPException(
+                503, "connection audit failed; the prior runtime was restored"
+            ) from exc
+        return {
+            "accepted": True,
+            "connection_id": connection_id,
+            "state": "paused" if body.action == "pause" else "connected",
+            "revision": candidate["revision"],
+            "event_id": event_id,
+            "runtime": snapshot,
+        }
+
+
+@router.post("/api/member/v1/settings/bridges", status_code=202)
+async def request_settings_bridge(
+    body: SettingsBridgeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Create a scoped, resumable bridge-enrollment request without a token."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    role = runtime.settings.member_roles.get(body.member_id)
+    if role is None or role in {"device", "ambient"}:
+        raise HTTPException(422, "bridge target must be an enrolled household member")
+    if body.member_id != session.auth_member_id:
+        if session.auth_role != "principal" or role != "child":
+            raise HTTPException(403, "an adult must enroll their own private bridge")
+    if role == "child" and "obsidian" in body.capabilities:
+        raise HTTPException(403, "Obsidian is unavailable on a child bridge")
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    fingerprint = _settings_request_fingerprint(
+        "settings.bridge_enrollment_requested",
+        {
+            "expected_revision": body.expected_revision,
+            "member_id": body.member_id,
+            "capabilities": sorted(set(body.capabilities)),
+        },
+    )
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.bridge_enrollment_requested",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "member_id": body.member_id,
+                "state": prior_receipt["payload"]["state"],
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "next_step": (
+                    "Verify this member's Tailscale identity, then export the "
+                    "short-lived reviewed bridge package on the central Mac."
+                ),
+            }
+        previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.bridge_enrollment_requested",
+            {
+                "member_id": body.member_id,
+                "requested_by_member_id": session.auth_member_id,
+                "capabilities": sorted(set(body.capabilities)),
+                "expected_revision": body.expected_revision,
+            },
+        )
+        try:
+            mutation = runtime.settings_control.request_bridge(
+                body.member_id,
+                body.capabilities,
+                expected_revision=body.expected_revision,
+                requested_by_member_id=session.auth_member_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.bridge_enrollment_requested",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=body.member_id,
+                payload={
+                    "member_id": body.member_id,
+                    "requested_by_member_id": session.auth_member_id,
+                    "capabilities": mutation.current["capabilities"],
+                    "state": "enrollment_preparation_required",
+                    "revision": mutation.revision,
+                    "requested_at": mutation.current["requested_at"],
+                },
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "member_id": body.member_id,
+            "state": mutation.current["state"],
+            "revision": mutation.revision,
+            "event_id": event_id,
+            "next_step": (
+                "Verify this member's Tailscale identity, then export the "
+                "short-lived reviewed bridge package on the central Mac."
+            ),
+        }
+
+
+def _require_private_notes(session: Session) -> None:
+    if session.auth_role in {"ambient", "device", "child"}:
+        raise HTTPException(403, "Notes is private to an authenticated adult member")
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Notes is unavailable while viewing another member")
+
+
+def _notes_access_fingerprint(
+    action: str,
+    *,
+    knowledge_id: str,
+    grant_id: str | None,
+    values: dict[str, Any],
+) -> str:
+    canonical = json.dumps(
+        {
+            "action": action,
+            "knowledge_id": knowledge_id,
+            "grant_id": grant_id,
+            "values": values,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _prior_notes_access_command(
+    runtime: Any,
+    session: Session,
+    *,
+    action: str,
+    request_id: str,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    key = f"notes:{action}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior["raw_ref"] != f"request-sha256:{fingerprint}":
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        )
+    return prior
+
+
+@router.get("/api/member/v1/notes")
+async def notes_list(request: Request, session: SessionDep) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    return {
+        "member_id": session.auth_member_id,
+        "items": list_visible_notes(
+            runtime.projections.connection("member_knowledge"), session
+        ),
+    }
+
+
+@router.get("/api/member/v1/notes/search")
+async def notes_search(
+    request: Request,
+    session: SessionDep,
+    q: Annotated[str, Query(min_length=1, max_length=500)],
+    source: Annotated[str | None, Query(max_length=100)] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 25,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    items = search_visible_notes(
+        runtime.projections.connection("member_knowledge"),
+        session,
+        query=q,
+        limit=limit,
+        source_kind=source,
+    )
+    return {
+        "member_id": session.auth_member_id,
+        "query": q,
+        "source": source,
+        "items": items,
+        "contract": "deterministic-authorized-full-text-v1",
+    }
+
+
+@router.get("/api/member/v1/notes/{knowledge_id}")
+async def notes_detail(
+    knowledge_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    conn = runtime.projections.connection("member_knowledge")
+    note = get_visible_note(conn, session, knowledge_id=knowledge_id)
+    if note is None:
+        raise HTTPException(404, "note not found")
+    note["grants"] = (
+        grants_for_note(conn, session, knowledge_id=knowledge_id)
+        if note.get("access_mode") == "owner"
+        else []
+    )
+    return note
+
+
+@router.post("/api/member/v1/notes/{knowledge_id}/grants", status_code=202)
+async def grant_note_access(
+    knowledge_id: str,
+    body: KnowledgeGrantRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    permissions = set(body.permissions)
+    if "search" in permissions:
+        permissions.add("read")
+    expires_at = body.expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+            raise HTTPException(422, "note grant expiry requires a timezone")
+        expires_at = expires_at.astimezone(timezone.utc)
+    fingerprint = _notes_access_fingerprint(
+        "grant",
+        knowledge_id=knowledge_id,
+        grant_id=None,
+        values={
+            "grantee_member_id": body.grantee_member_id,
+            "permissions": sorted(permissions),
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+    prior = await _prior_notes_access_command(
+        runtime,
+        session,
+        action="grant",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "grant_id": prior["payload"]["grant_id"],
+            "event_id": prior["event_id"],
+        }
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(422, "note grant expiry must be in the future")
+    conn = runtime.projections.connection("member_knowledge")
+    note = get_visible_note(conn, session, knowledge_id=knowledge_id)
+    if note is None or note.get("access_mode") != "owner":
+        raise HTTPException(404, "owned note not found")
+    if note.get("sensitivity") == "privileged":
+        raise HTTPException(403, "privileged notes cannot be shared")
+    role = runtime.settings.member_roles.get(body.grantee_member_id)
+    if role in {None, "device", "child"}:
+        raise HTTPException(
+            422, "Notes may only be shared with an enrolled adult member"
+        )
+    if body.grantee_member_id == session.auth_member_id:
+        raise HTTPException(422, "a note is already visible to its owner")
+    grant_id = (
+        "note_grant_"
+        + hashlib.sha256(
+            f"{session.tenant_id}:{knowledge_id}:{body.grantee_member_id}".encode()
+        ).hexdigest()[:24]
+    )
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "grant_id": grant_id,
+        "knowledge_id": knowledge_id,
+        "owner_member_id": session.auth_member_id,
+        "grantee_member_id": body.grantee_member_id,
+        "permissions": sorted(permissions),
+        "granted_at": now,
+        "expires_at": expires_at,
+    }
+    await _guard_member_write(
+        runtime, session, "member_knowledge.access_granted", payload
+    )
+    envelope = EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type="member_knowledge.access_granted",
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity="normal",
+        actor_identity=session.auth_member_id,
+        correlation_id=session.correlation_id,
+        idempotency_key=f"notes:grant:{session.auth_member_id}:{body.request_id}",
+        raw_ref=f"request-sha256:{fingerprint}",
+        payload=payload,
+    )
+    try:
+        event_id = await runtime.events.write(envelope)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        ) from exc
+    await runtime.wait_for_projection("member_knowledge", event_id)
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "grant_id": grant_id,
+        "event_id": event_id,
+    }
+
+
+@router.post(
+    "/api/member/v1/notes/{knowledge_id}/grants/{grant_id}/revoke",
+    status_code=202,
+)
+async def revoke_note_access(
+    knowledge_id: str,
+    grant_id: str,
+    body: KnowledgeGrantRevokeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    fingerprint = _notes_access_fingerprint(
+        "revoke",
+        knowledge_id=knowledge_id,
+        grant_id=grant_id,
+        values={},
+    )
+    prior = await _prior_notes_access_command(
+        runtime,
+        session,
+        action="revoke",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "grant_id": prior["payload"]["grant_id"],
+            "event_id": prior["event_id"],
+        }
+    conn = runtime.projections.connection("member_knowledge")
+    grants = grants_for_note(conn, session, knowledge_id=knowledge_id)
+    grant = next((row for row in grants if row["grant_id"] == grant_id), None)
+    if grant is None:
+        raise HTTPException(404, "note grant not found")
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "grant_id": grant_id,
+        "owner_member_id": session.auth_member_id,
+        "revoked_by_member_id": session.auth_member_id,
+        "revoked_at": now,
+    }
+    await _guard_member_write(
+        runtime, session, "member_knowledge.access_revoked", payload
+    )
+    envelope = EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type="member_knowledge.access_revoked",
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity="normal",
+        actor_identity=session.auth_member_id,
+        correlation_id=session.correlation_id,
+        idempotency_key=f"notes:revoke:{session.auth_member_id}:{body.request_id}",
+        raw_ref=f"request-sha256:{fingerprint}",
+        payload=payload,
+    )
+    try:
+        event_id = await runtime.events.write(envelope)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        ) from exc
+    await runtime.wait_for_projection("member_knowledge", event_id)
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "grant_id": grant_id,
+        "event_id": event_id,
+    }
 
 
 @router.post("/api/member/v1/calendar/onboarding", status_code=202)
@@ -2257,7 +3287,9 @@ async def configure_calendar_policy(
     try:
         ZoneInfo(body.timezone)
     except ZoneInfoNotFoundError as exc:
-        raise HTTPException(422, "calendar policy timezone is not an IANA zone") from exc
+        raise HTTPException(
+            422, "calendar policy timezone is not an IANA zone"
+        ) from exc
     fingerprint = hashlib.sha256(
         json.dumps(
             body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
@@ -2597,6 +3629,160 @@ async def _communication_command_locked(
         "event_id": event_id,
         "observation_mode": runtime._observation_active,
     }
+
+
+@router.post("/api/member/v1/people/{party_id}/profile", status_code=202)
+async def set_people_profile(
+    party_id: str,
+    body: PeopleProfileRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "People settings are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "People state is unavailable")
+    parties = runtime.projections.connection("parties")
+    person = get_party(parties, session, party_id=party_id)
+    if person is None or person.get("qualification") != "qualified":
+        raise HTTPException(404, "person not found")
+    existing = parties.execute(
+        "SELECT last_event_id FROM member_relationship_profiles "
+        "WHERE tenant_id=? AND member_id=? AND party_id=?",
+        (session.tenant_id, session.auth_member_id, party_id),
+    ).fetchone()
+    if (
+        existing is not None
+        and body.expected_last_event_id != existing["last_event_id"]
+    ):
+        raise HTTPException(409, "relationship settings changed; refresh before saving")
+    if body.suppressed and not (body.suppression_reason or "").strip():
+        raise HTTPException(422, "suppression requires a reason")
+    now = EventEnvelope.now_utc_iso()
+    profile_id = f"people_profile_{hashlib.sha256(f'{session.auth_member_id}:{party_id}'.encode()).hexdigest()[:22]}"
+    payload = {
+        "profile_id": profile_id,
+        "member_id": session.auth_member_id,
+        "party_id": party_id,
+        "circle": body.circle,
+        "desired_cadence_days": body.desired_cadence_days,
+        "cues_enabled": body.cues_enabled,
+        "favorite": body.favorite,
+        "suppressed": body.suppressed,
+        "suppression_reason": body.suppression_reason,
+        "tags": sorted({value.strip() for value in body.tags if value.strip()}),
+        "changed_at": now,
+    }
+    await _guard_member_write(
+        runtime, session, "member_relationship.profile_set", payload
+    )
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="member_relationship.profile_set",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-people",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            causation_id=person["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"people-profile:{session.auth_member_id}:{body.request_id}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("parties", event_id)
+    return {"accepted": True, "event_id": event_id, "profile_id": profile_id}
+
+
+@router.post("/api/member/v1/people/{party_id}/lifecycle", status_code=202)
+async def change_people_lifecycle(
+    party_id: str,
+    body: PeopleLifecycleRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "People lifecycle is unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.events is None:
+        raise HTTPException(503, "People state is unavailable")
+    party = get_party(
+        runtime.projections.connection("parties"), session, party_id=party_id
+    )
+    if party is None or party.get("owner_scope") != f"private:{session.auth_member_id}":
+        raise HTTPException(404, "member-owned person not found")
+    if party["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "person changed; refresh before acting")
+    if body.action == "archive" and party.get("qualification") == "archived":
+        raise HTTPException(409, "person is already archived")
+    if body.action == "restore" and party.get("qualification") != "archived":
+        raise HTTPException(409, "person is not archived")
+    now = EventEnvelope.now_utc_iso()
+    event_type = "party.archived" if body.action == "archive" else "party.restored"
+    payload = (
+        {
+            "party_id": party_id,
+            "archived_at": now,
+            "archived_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+        if body.action == "archive"
+        else {
+            "party_id": party_id,
+            "restored_at": now,
+            "restored_by_member_id": session.auth_member_id,
+        }
+    )
+    await _guard_member_write(runtime, session, event_type, payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-people",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=cast(Sensitivity, party.get("sensitivity") or "normal"),
+            correlation_id=session.correlation_id,
+            causation_id=party["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=f"people-lifecycle:{session.auth_member_id}:{body.request_id}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("parties", event_id)
+    return {"accepted": True, "event_id": event_id, "state": body.action}
+
+
+@router.get("/api/member/v1/people/search")
+async def people_search(
+    request: Request, session: SessionDep, q: str = ""
+) -> dict[str, Any]:
+    query = q.strip()
+    if len(query) < 2:
+        return {
+            "query": query,
+            "results": [],
+            "contract": "authorized-people-search-v1",
+        }
+    if len(query) > 200:
+        raise HTTPException(422, "search is too long")
+    return crm_search(_runtime(request), session, query)
 
 
 @router.get("/api/member/v1/people/{party_id}")

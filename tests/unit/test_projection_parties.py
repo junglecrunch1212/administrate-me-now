@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlcipher3
 
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -22,10 +23,13 @@ from adminme.lib.session import Session, build_internal_session
 from adminme.projections.parties import PartiesProjection
 from adminme.projections.parties.queries import (
     all_parties,
+    contact_records_for_person,
     find_party_by_identifier,
     get_party,
     list_household_members,
+    list_visible_people,
     relationships_of,
+    search_visible_people,
 )
 from adminme.projections.runner import ProjectionRunner
 
@@ -37,6 +41,31 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     only. 08a + scope filtering use principal role so allowed_read accepts
     shared:household + private:<self> rows."""
     return build_internal_session("test_actor", "principal", tenant_id)
+
+
+def test_existing_identifiers_schema_adds_scope_columns_before_index() -> None:
+    conn = sqlcipher3.connect(":memory:")
+    try:
+        conn.execute(
+            "CREATE TABLE identifiers ("
+            "identifier_id TEXT NOT NULL, tenant_id TEXT NOT NULL, "
+            "party_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, "
+            "value_normalized TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, "
+            "primary_for_kind INTEGER NOT NULL DEFAULT 0, "
+            "last_event_id TEXT NOT NULL, PRIMARY KEY (tenant_id, identifier_id))"
+        )
+        projection = PartiesProjection()
+        schema = Path(projection.schema_path).read_text(encoding="utf-8")
+        conn.executescript(schema)
+        projection.migrate_schema(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(identifiers)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(identifiers)")}
+        assert {"owner_scope", "visibility_scope", "sensitivity", "revoked_at"} <= (
+            columns
+        )
+        assert "idx_identifiers_scope" in indexes
+    finally:
+        conn.close()
 
 
 @pytest.fixture
@@ -150,7 +179,9 @@ async def test_party_created_idempotent(rig: dict[str, Any]) -> None:
     assert eid1 != eid2
 
 
-async def test_identifier_unique_constraint(rig: dict[str, Any]) -> None:
+async def test_ambiguous_identifier_is_retained_and_resolution_fails_closed(
+    rig: dict[str, Any],
+) -> None:
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -191,8 +222,7 @@ async def test_identifier_unique_constraint(rig: dict[str, Any]) -> None:
             },
         )
     )
-    # Second identifier claims the same normalized value for a different party —
-    # merge-candidate guard drops it.
+    # Conflicting provider evidence is retained. Resolution must not guess.
     last = await log.append(
         _envelope(
             "identifier.added",
@@ -216,7 +246,16 @@ async def test_identifier_unique_constraint(rig: dict[str, Any]) -> None:
         "WHERE tenant_id = ? AND kind = ? AND value_normalized = ?",
         ("tenant-a", "email", "a@example.com"),
     ).fetchall()
-    assert [r["party_id"] for r in rows] == ["p1"]
+    assert [r["party_id"] for r in rows] == ["p1", "p2"]
+    assert (
+        find_party_by_identifier(
+            conn,
+            _S("tenant-a"),
+            kind="email",
+            value_normalized="a@example.com",
+        )
+        is None
+    )
 
 
 async def test_membership_roundtrip(rig: dict[str, Any]) -> None:
@@ -551,3 +590,223 @@ async def test_all_parties_filters_by_kind(rig: dict[str, Any]) -> None:
     assert [p["party_id"] for p in persons] == ["p1"]
     assert [o["party_id"] for o in orgs] == ["org1"]
     assert len(all_) == 2
+
+
+async def test_contact_record_qualifies_person_but_endpoint_does_not(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "endpoint.observed",
+            {
+                "endpoint_id": "endpoint-marketing",
+                "member_id": "test_actor",
+                "kind": "email",
+                "value": "automated@example.test",
+                "value_normalized": "automated@example.test",
+                "classification": "automated",
+                "observed_at": EventEnvelope.now_utc_iso(),
+                "evidence": ["inbound sender"],
+            },
+            owner_scope="private:test_actor",
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "contact.record.observed",
+            {
+                "contact_record_id": "contact-1",
+                "member_id": "test_actor",
+                "provider": "fixture",
+                "provider_account_id": "fixture-account",
+                "container_external_id": "contacts",
+                "external_id": "person-1",
+                "provider_revision": "rev-1",
+                "kind": "person",
+                "display_name": "Example Person",
+                "identifiers": [
+                    {
+                        "kind": "email",
+                        "value": "person@example.test",
+                        "value_normalized": "person@example.test",
+                        "primary": True,
+                    }
+                ],
+                "observed_at": EventEnvelope.now_utc_iso(),
+            },
+            owner_scope="private:test_actor",
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:parties", last)
+
+    conn = runner.connection("parties")
+    visible = list_visible_people(conn, _S("tenant-a"))
+    assert [person["display_name"] for person in visible] == ["Example Person"]
+    records = contact_records_for_person(
+        conn, _S("tenant-a"), party_id=visible[0]["party_id"]
+    )
+    assert records[0]["fields"] == {}
+    assert records[0]["provider_revision"] == "rev-1"
+    other = build_internal_session("other-adult", "principal", "tenant-a")
+    assert list_visible_people(conn, other) == []
+
+
+async def test_people_search_terms_are_member_isolated(rig: dict[str, Any]) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "party.created",
+            {
+                "party_id": "shared-person",
+                "kind": "person",
+                "display_name": "Shared Person",
+                "sort_name": "Shared Person",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "member_relationship.profile_set",
+            {
+                "profile_id": "profile-a",
+                "member_id": "adult-a",
+                "party_id": "shared-person",
+                "circle": "private-alpha-circle",
+                "desired_cadence_days": None,
+                "cues_enabled": False,
+                "favorite": False,
+                "suppressed": False,
+                "suppression_reason": None,
+                "tags": ["confidential-alpha-tag"],
+                "changed_at": EventEnvelope.now_utc_iso(),
+            },
+            owner_scope="private:adult-a",
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "relationship_fact.confirmed",
+            {
+                "fact_id": "fact-a",
+                "member_id": "adult-a",
+                "party_id": "shared-person",
+                "kind": "context",
+                "label": "private context",
+                "value": "confidential-alpha-fact",
+                "source_event_id": "source-a",
+                "confirmed_at": EventEnvelope.now_utc_iso(),
+                "confirmed_by_member_id": "adult-a",
+            },
+            owner_scope="private:adult-a",
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:parties", last)
+
+    conn = runner.connection("parties")
+    adult_a = build_internal_session("adult-a", "principal", "tenant-a")
+    adult_b = build_internal_session("adult-b", "principal", "tenant-a")
+    assert [
+        row["party_id"]
+        for row in search_visible_people(conn, adult_a, query="confidential-alpha-fact")
+    ] == ["shared-person"]
+    assert search_visible_people(conn, adult_b, query="confidential-alpha-fact") == []
+    assert search_visible_people(conn, adult_b, query="confidential-alpha-tag") == []
+    assert [
+        row["party_id"]
+        for row in search_visible_people(conn, adult_b, query="Shared Person")
+    ] == ["shared-person"]
+
+
+async def test_party_merge_and_allocated_split_are_reversible(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    for party_id, name in (("survivor", "Survivor"), ("duplicate", "Duplicate")):
+        await log.append(
+            _envelope(
+                "party.created",
+                {
+                    "party_id": party_id,
+                    "kind": "person",
+                    "display_name": name,
+                    "sort_name": name,
+                },
+            )
+        )
+    await log.append(
+        _envelope(
+            "identifier.added",
+            {
+                "identifier_id": "duplicate-email",
+                "party_id": "duplicate",
+                "kind": "email",
+                "value": "duplicate@example.test",
+                "value_normalized": "duplicate@example.test",
+                "verified": True,
+                "primary_for_kind": True,
+            },
+        )
+    )
+    merged = await log.append(
+        _envelope(
+            "party.merged",
+            {
+                "surviving_party_id": "survivor",
+                "merged_party_id": "duplicate",
+                "merged_at": EventEnvelope.now_utc_iso(),
+                "merged_by_member_id": "test_actor",
+                "rationale": "acceptance correction",
+            },
+        )
+    )
+    await bus.notify(merged)
+    await _wait_for_checkpoint(bus, "projection:parties", merged)
+
+    conn = runner.connection("parties")
+    archived = get_party(conn, _S(), party_id="duplicate")
+    assert archived is not None
+    assert archived["qualification"] == "archived"
+    assert archived["merged_into_party_id"] == "survivor"
+    assert (
+        conn.execute(
+            "SELECT party_id FROM identifiers WHERE tenant_id=? AND identifier_id=?",
+            ("tenant-a", "duplicate-email"),
+        ).fetchone()["party_id"]
+        == "survivor"
+    )
+
+    split = await log.append(
+        _envelope(
+            "party.split",
+            {
+                "merged_party_id": "survivor",
+                "restored_party_id": "duplicate",
+                "split_at": EventEnvelope.now_utc_iso(),
+                "split_by_member_id": "test_actor",
+                "rationale": "undo mistaken merge",
+                "identifier_ids": ["duplicate-email"],
+            },
+        )
+    )
+    await bus.notify(split)
+    await _wait_for_checkpoint(bus, "projection:parties", split)
+    restored = get_party(conn, _S(), party_id="duplicate")
+    assert restored is not None
+    assert restored["qualification"] == "qualified"
+    assert restored["merged_into_party_id"] is None
+    assert (
+        conn.execute(
+            "SELECT party_id FROM identifiers WHERE tenant_id=? AND identifier_id=?",
+            ("tenant-a", "duplicate-email"),
+        ).fetchone()["party_id"]
+        == "duplicate"
+    )

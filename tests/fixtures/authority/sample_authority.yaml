@@ -23,6 +23,7 @@ agent_allowlist:
       - "commitment.*"
       - "recurrence.*"
       - "money_flow.*"
+      - "finance.*"
 
   # The xlsx forward daemon emits only the projection-completion signal
   # (xlsx.regenerated).  See SYSTEM_INVARIANTS.md §2.2.
@@ -37,6 +38,7 @@ agent_allowlist:
       - "commitment.*"
       - "recurrence.*"
       - "money_flow.*"
+      - "finance.*"
       - "outbound.send"
       - "observation.*"
       - "projections.rebuild"

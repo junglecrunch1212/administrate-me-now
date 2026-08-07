@@ -350,6 +350,100 @@ async def test_accounts_sheet_rows(populated: dict[str, Any]) -> None:
     assert set(last4s) == {"1111", "2222", "3333"}
 
 
+async def test_finance_workbook_excludes_private_member_planning_rows(
+    populated: dict[str, Any],
+) -> None:
+    log = populated["log"]
+    bus = populated["bus"]
+    config = populated["config"]
+    ctx = populated["ctx"]
+    await log.append(
+        _envelope(
+            "finance.assumption_set",
+            {
+                "assumption_id": "shared_plan",
+                "category": "cash_flow",
+                "label": "Shared plan",
+                "value_decimal": "1000",
+                "unit": "USD/month",
+                "as_of": "2026-08-01T00:00:00Z",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "finance.assumption_set",
+            {
+                "assumption_id": "private_plan",
+                "category": "cash_flow",
+                "label": "Private plan",
+                "value_decimal": "2000",
+                "unit": "USD/month",
+                "as_of": "2026-08-01T00:00:00Z",
+            },
+            owner_scope="private:member-private",
+        )
+    )
+    await bus.notify(last)
+    await _wait_idle(bus, "projection:money")
+
+    path = config.xlsx_workbooks_dir / "adminme-finance.xlsx"
+    build_finance_workbook(path, ctx, tenant_id=config.tenant_id, last_event_id=last)
+    workbook = load_workbook(str(path))
+    assumptions = workbook["Assumptions"]
+    ids = {
+        assumptions.cell(row=row, column=1).value
+        for row in range(5, assumptions.max_row + 1)
+    }
+    assert "shared_plan" in ids
+    assert "private_plan" not in ids
+
+
+async def test_cash_flow_plan_columns_match_contract(populated: dict[str, Any]) -> None:
+    config = populated["config"]
+    last = await populated["log"].append(
+        _envelope(
+            "finance.scenario_set",
+            {
+                "scenario_id": "opening-delta",
+                "name": "Opening delta",
+                "is_baseline": True,
+                "horizon_months": 12,
+                "opening_cash_delta_minor": 10_000,
+                "monthly_income_delta_minor": 0,
+                "monthly_expense_delta_minor": 0,
+                "one_time_amount_minor": 0,
+                "active": True,
+            },
+        )
+    )
+    await populated["bus"].notify(last)
+    await _wait_idle(populated["bus"], "projection:money")
+    path = config.xlsx_workbooks_dir / "adminme-finance.xlsx"
+    build_finance_workbook(
+        path,
+        populated["ctx"],
+        tenant_id=config.tenant_id,
+        last_event_id="ev_test",
+    )
+    sheet = load_workbook(str(path))["Cash Flow Plan"]
+    assert [sheet.cell(4, column).value for column in range(1, 9)] == [
+        "scenario",
+        "month",
+        "opening_cash",
+        "income",
+        "expenses",
+        "one_time",
+        "ending_cash",
+        "reserve_state",
+    ]
+    assert sheet.max_column == 8
+    assert sheet.cell(5, 3).value == 100
+    assert sheet.cell(5, 6).value == 0
+    assert isinstance(sheet.cell(5, 7).value, (int, float))
+    assert sheet.cell(5, 8).value in {"Within reserve", "Below reserve"}
+
+
 async def test_finance_metadata_populated(populated: dict[str, Any]) -> None:
     config = populated["config"]
     ctx = populated["ctx"]

@@ -7,6 +7,7 @@
 # their own governance.yaml from the bootstrap wizard (prompt 16).
 
 action_gates:
+  __default__: deny
   task.create: allow
   task.complete: allow
   task.delete: review
@@ -19,6 +20,9 @@ action_gates:
   recurrence.updated: allow
   money_flow.manually_added: allow
   money_flow.manually_deleted: allow
+  money_flow.manually_updated: allow
+  money_flow.classification_set: allow
+  finance.*: allow
   outbound.send: review
   plaid.go_live: review
   observation.off: review
@@ -28,6 +32,7 @@ action_gates:
   reference_privileged_medical_in_outbound: hard_refuse
   reference_privileged_legal_in_outbound: hard_refuse
   noise.create: deny
+  burst.action: allow
 
 rate_limits:
   __default__:

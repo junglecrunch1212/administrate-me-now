@@ -15,7 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-python_bin="$(command -v python3.11 || command -v python3 || command -v python)"
+python_bin="$(command -v python3.14 || command -v python3 || command -v python)"
 "$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh" \
   --instance-root "$TEST_ROOT" \
   --python "$python_bin"

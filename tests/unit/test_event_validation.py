@@ -217,7 +217,7 @@ async def test_valid_commitment_proposed(log: EventLog) -> None:
         {
             "commitment_id": "c-1",
             "kind": "reply",
-            "owed_by_member_id": "m-james",
+            "owed_by_member_id": "m-principal",
             "owed_to_party_id": "p-kate",
             "text_summary": "Reply to Kate's kitchen proposal",
             "suggested_due": "2026-04-26T00:00:00Z",
@@ -238,7 +238,7 @@ async def test_valid_commitment_confirmed(log: EventLog) -> None:
         1,
         {
             "commitment_id": "c-1",
-            "confirmed_by_member_id": "m-james",
+            "confirmed_by_member_id": "m-principal",
             "confirmed_at": "2026-04-23T15:00:00Z",
             "note": None,
         },
@@ -254,7 +254,7 @@ async def test_valid_task_created(log: EventLog) -> None:
             "task_id": "t-1",
             "title": "Reply to Kate",
             "description": None,
-            "owner_member_id": "m-james",
+            "owner_member_id": "m-principal",
             "due": "2026-04-26T00:00:00Z",
             "energy": "low",
             "effort_min": 15,
@@ -270,7 +270,7 @@ async def test_valid_task_completed(log: EventLog) -> None:
         1,
         {
             "task_id": "t-1",
-            "completed_by_member_id": "m-james",
+            "completed_by_member_id": "m-principal",
             "completed_at": "2026-04-23T16:00:00Z",
             "note": "replied via email",
         },

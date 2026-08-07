@@ -15,8 +15,8 @@ license = "PolyForm-Noncommercial-1.0.0"
 packages = [{ include = "adminme" }]
 
 [tool.poetry.dependencies]
-# Python 3.11 per docs/DECISIONS.md D10 (platform version lock).
-python = "^3.11"
+# Python 3.14 per ADR-0005. Existing 3.11 deployments require a reviewed cutover.
+python = ">=3.14,<3.15"
 
 # L2: event log + crypto
 pydantic = ">=2.6"
@@ -91,7 +91,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 
 [tool.ruff.lint.per-file-ignores]
 "docs/reference/plaid/python-sdk-plaid_api.py" = ["F401"]

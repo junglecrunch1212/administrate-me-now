@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Apple Contacts adapter config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["member_id", "provider_account_id"],
+  "properties": {
+    "member_id": {"type": "string", "minLength": 1},
+    "provider_account_id": {"type": "string", "minLength": 1},
+    "account_label": {"type": "string", "minLength": 1},
+    "container_external_id": {"type": "string", "default": "all-containers"},
+    "poll_interval_s": {"type": "integer", "minimum": 10, "default": 300},
+    "bridge_socket": {"type": "string", "minLength": 1},
+    "sensitivity_floor": {"type": "string", "enum": ["normal", "privileged"], "default": "normal"}
+  }
+}

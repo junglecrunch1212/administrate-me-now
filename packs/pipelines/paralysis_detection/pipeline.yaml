@@ -5,7 +5,7 @@ pack:
   kind: pipeline
 runtime:
   language: python
-  python_version: ">=3.11"
+  python_version: ">=3.14,<3.15"
   entrypoint: handler.py
   class: ParalysisDetectionPipeline
 # Documentation-only triggers per [BUILD.md §1297-1302]; this is a

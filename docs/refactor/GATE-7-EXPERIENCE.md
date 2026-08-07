@@ -7,7 +7,7 @@ flowchart LR
     P["Principal"] --> OC["Pinned OpenClaw Control UI"]
     A["Authenticated adult"] --> MP["Narrow member portal"]
     C["Child or shared screen"] --> MP
-    OC --> B["Nine typed dashboard bindings"]
+    OC --> B["Ten typed dashboard bindings"]
     MP --> V["Authorized domain views"]
     MP --> R["Protocol-v4 text relay"]
     R --> G["Loopback OpenClaw Gateway"]
@@ -73,7 +73,7 @@ unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Triage, Comms, Reminders, Calendar, People, Knowledge, Finance,
+- Adults: Today, Triage, Comms, Reminders, Calendar, People, Notes, Finance,
   Scoreboard, Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.
@@ -81,8 +81,26 @@ unchanged.
   progress, bounded decisions, immediate outcome-to-recalculated-next action.
 - Compressed: minimalist/dense queue, restrained animation, strict proactive
   cap.
-- Child: warm language/rewards, no Comms/adult communications, Reminders, CRM, finance,
-  knowledge, settings, or operator control.
+- Child: warm language/rewards, no Comms/adult communications, Reminders, People, finance,
+  Notes, settings, or operator control.
+
+People is an adult-only relationship-memory workspace, not a sender list or
+sales CRM. Its source/lens rail and authorized search lead to a qualified
+Party list and one progressively disclosed detail view. Provider Contact
+Records, Endpoints, Identifier Links, Relationships, member-specific profiles,
+typed facts, Interactions, Commitments, and Artifacts keep their own source and
+privacy semantics. Unknown endpoints stay out of the directory; provider
+records and private relationship context do not cross adult boundaries without
+an explicit field-group grant. Cues use only explicit cadence and typed facts,
+never model closeness or guilt. URL-backed search and selection change only the
+view. The pinned OpenClaw People binding consumes the same deterministic
+cockpit rather than generic memory or a separate agent.
+
+Notes is a private source/search/master-detail workspace with All, Recent,
+Shared, Meetings, and Needs Triage lenses. Provider sharing is explanatory
+evidence only; one explicit AdministrateMe grant controls each shared
+reference. Notes renders untrusted content as text, exposes provenance and
+source limits, and links candidates to Triage without an inline approval path.
 
 Calendar is the deterministic time-capacity cockpit, not a raw provider list.
 Calendar-list observations record capabilities; principal-approved per-member
@@ -105,6 +123,33 @@ settings disclosure.
 The page route and data route each enforce the role allowlist. Navigation
 hiding is presentation only. All untrusted values are assigned with
 `textContent`; the production portal contains no `innerHTML` rendering seam.
+
+## Five-surface executive loop
+
+CO-001 **MODERNIZES** Today, Triage, Comms, Reminders, and Calendar as one
+closed member workflow while preserving their independent domain types and
+sources of truth. Exact, URL-backed surface links carry the member from a
+Today card to the originating thread, proposal, provider reminder, or calendar
+event. These links and shared freshness/attention DTOs are presentation
+contracts only; they cannot authorize or materialize state.
+
+Comms Focus v2 treats unread as visual state and requires an explicit typed
+action signal or linked Triage candidate. Today passes the same inputs through
+the same pure predicate. Triage uses structured authorized directories and
+shows candidate readiness, source evidence, recent outcomes, and the existing
+Calendar reasoning preview before confirmation. Reminders and Today consume
+one effective-reminder composer; strict possible-copy clusters group only the
+read view and retain every provider item. Today separates timed events from
+all-day/context facts so context cannot become “next on the clock.” The five
+action-capable surfaces persistently explain observation and freshness, and
+the OpenClaw chat rail becomes an explicit drawer below 1600 px.
+
+The existing `classify_message_nature` skill is schema-bound through pinned
+OpenClaw and may report bounded language features/candidates only. Fixed
+pipeline code validates confidence, scope, sensitivity, supported target kind,
+and closed candidate fields before emitting a private Triage proposal. No
+model ranks, routes, authorizes, schedules, sends, completes, suppresses, or
+mutates.
 
 ## Degraded and diagnostic truth
 

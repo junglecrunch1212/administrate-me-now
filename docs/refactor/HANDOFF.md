@@ -3,19 +3,429 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CODE_REVIEWED_MERGED_MAIN_AWAITING_LIVE_MAC_ACTIVATION
-verified_local_date: 2026-08-05
-verified_github_date: 2026-08-05
-branch: main
-candidate_commit_resolution: git rev-parse HEAD
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
+gate_result: CO006_CANDIDATE_VALIDATION_LIVE_RUNTIME_UNCHANGED
+verified_local_date: 2026-08-07
+verified_github_date: 2026-08-07
+branch: codex/administrateme-v2-runtime
+candidate_commit_resolution: current_reviewed_commit_after_final_validation
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: central_observation_then_live_provider_activation
+next_phase: co006_review_then_explicit_runtime_migration_decision
 ---
 
 # Release handoff
+
+## 2026-08-07 CO-006 Finance workbook and cash-flow candidate
+
+CO-006 is implemented in the candidate under ADR-0007. It **PRESERVES** the
+encrypted append-only log, private provider authority, member isolation,
+deterministic projections, workbook round-trip, observation, and exact
+OpenClaw boundary. It **MODERNIZES** the existing money projection into one
+cash-flow/scenario engine shared by the Finance portal and Finance workbook. It
+**SUPERSEDES** the thin three-sheet workbook, summary-only Plaid receipts,
+hidden spreadsheet constants, brittle zero-result formulas, and static Finance
+card.
+
+The canonical workbook now has twelve sheets with protected provider/derived
+facts and editable assumptions, budgets, scenarios, goals, classifications,
+and manual transactions. Validation fails closed before planning changes.
+Plaid emits detailed private account/transaction/removal observations and a
+terminal receipt, and its durable member/item cursor advances only after all
+events are accepted. The portal exposes Overview, Cash flow, Spending,
+Scenarios, Net worth, and Data health from
+`deterministic-finance-cockpit-v1`; fixed code, not a model, chooses the one
+next review.
+
+The supplied private household planner was repaired and visually/formula
+validated as an ignored local output. No household financial values entered
+tracked code, docs, fixtures, or tests. Real Plaid Link/consent, explicit
+cross-member account sharing, and provider propagation remain post-merge live
+activation evidence. No bank write seam was added.
+
+Final candidate validation passed the complete release command under Python
+3.14.6 and Node 24.19.0: 32/32 strict acceptance tests, 1,580/1,580 root,
+code, and pack tests, 60/60 bridge tests, the 14/14 pinned OpenClaw plugin
+tests, both Python type checkers, lint/format/shell checks, dependency audits,
+performance budgets, clean install, tenant isolation, encrypted backup/restore,
+architecture negatives, and package builds. The Chrome-backed Gate 7 harness
+passed 136/136 checks, including all six Finance views, URL restoration, and
+deterministic scenario changes; direct desktop/mobile browser simulation found
+no overflow, console, page, or request failures.
+
+CO-006 does not authorize a deployment, service restart, observation change,
+provider enrollment, or the staged Python 3.14/Node 24 runtime migration. The
+current family release remains unchanged pending review and an explicit
+runtime migration decision.
+
+## 2026-08-07 CO-005 constitutional audit candidate
+
+CO-005 is implemented in the candidate under ADR-0006/D30 and
+`CHANGE-ORDER-005-CONSTITUTIONAL-AUDIT.md`. It **PRESERVES** the event-sourced
+topology, exact OpenClaw pin, SQLCipher boundary, member isolation, provider
+authority, Triage human gate, observation, backup, and rollback. It
+**MODERNIZES** production governance, cross-surface freshness/copy/identity
+truth, tenant scanning, and the future runtime baseline. It **SUPERSEDES**
+default-allow unknown governance, the generic provider mutation endpoint,
+Notes provider writes, event-start freshness, unresolved-endpoint-as-review,
+and D10 as the future architecture.
+
+The audit first proved the active immutable release healthy and then passed
+the unchanged candidate baseline release suite. Direct production inspection
+found that the runtime composed `GuardedWrite` with empty policy even though
+fixture tests proved a stronger configuration. The candidate now loads
+reviewed tenant-neutral policy (or an instance override), denies unknown
+actions, preserves strict allowlist -> governance -> rate-limit order, and
+routes Settings changes through it. The unaudited generic external-sync route
+is removed; Notes is rejected by the external-write schema and remains
+ingest/query/Triage-only.
+
+Calendar/Today freshness now uses provider/source update watermarks rather
+than future event starts. Reminders conservatively mark a missing-account
+legacy row as a possible copy only when one concrete provider account is
+possible, never merges/deletes source rows, and isolates ambiguous accounts.
+People reports unresolved senders without linking raw endpoint observations to
+an empty Triage queue. Household-specific built-in/test fixture tokens were
+removed and the tenant canary now includes bridge, packs, and tests.
+
+The candidate targets Python 3.14.6, Node 24.19.0, Homebrew 6, Poetry 2.4.1,
+and npm 11. Node 24 was installed keg-only beside the linked Node 22; Python
+3.14 was already present. No global link, active-release pointer, LaunchAgent,
+service, observation state, provider connection, or production venv changed.
+The candidate upgrade path builds a new release-local environment and refuses
+a Python/Node baseline change before service replacement unless the separate
+runtime-migration flag is explicitly supplied after the complete rehearsal.
+
+Final candidate validation passed 31 acceptance tests, 1,558 root/code/pack
+tests, 60 standalone bridge tests, all Python and TypeScript static/security/
+package gates, clean install, tenant isolation, encrypted backup/restore,
+architecture negatives, performance budgets, and shell validation. The Gate 7
+Chrome-backed production-surface harness also passed. The immutable historical
+console-reference digest is now line-ending portable; its Edge-only interaction
+run remains environment-skipped because Edge is not installed on this Mac.
+
+A final stable-wrapper audit caught and fixed one cutover-safety defect: the
+candidate wrapper briefly selected its Node 24 path before resolving the older
+active release. Wrappers now resolve `current-release.json` first and load the
+Node formula from that release's own manifest. Post-fix live Doctor is healthy
+on Python 3.11.15 / Node 22.23.2 with fourteen healthy projections, five
+reconciled jobs, exact plugin discovery, and observation still active.
+
+The audit does not relabel unfinished required product scope as optional:
+Finance, Scoreboard/reward UX, and privileged-read audit depth require focused
+follow-up. No member bridge is active and Notes remains unconfigured on the
+live instance. Optional Outlook/BlueBubbles/Twilio and other provider edges
+remain truthful disabled capabilities.
+
+## 2026-08-07 CO-004 Settings control plane live observation release
+
+The principal approved CO-004 on 2026-08-07. ADR-0005 and
+`CHANGE-ORDER-004-SETTINGS-IDENTITY-AND-CONNECTION-CONTROL.md` now govern
+Settings. The change **PRESERVES** Tailscale trusted ingress,
+`authMember`/`viewMember`, provider authority, secret references, the encrypted
+append-only audit log, observation, exactly fourteen projections, one central
+Python runtime, the pinned OpenClaw boundary, and separate per-member bridges.
+It **MODERNIZES** Settings into a deterministic member control plane. It
+**SUPERSEDES** the opaque initial avatar, configuration-as-health, overloaded
+status, truncated capability dump, static workbook/chat rows, model-decided
+preferences, broad operator controls, and unreviewed provider buttons.
+
+The shell now identifies the authenticated member, role, trusted Tailscale
+ingress, read member, and action member. View-as is conspicuous and read-only.
+Seven URL-backed areas cover Overview, My account, CoS behavior, Connections,
+Bridges & devices, Household & privacy, and Safety & system. Adult Settings
+offers only adult support profiles. Bounded member preferences feed the
+existing deterministic member-experience composer; they cannot change
+authority, privacy, or model routing.
+
+Each connection keeps setup, runtime, reviewed capability, and safety as
+separate evidence. A stored credential reference is reported only as stored;
+connected requires a live adapter handshake. The supervisor now returns a
+secret-free per-instance inventory and atomically reconciles a completely
+constructed candidate set for pause/resume. The secret-free revisioned
+`settings-control.json` journal stores only operational desired state. All
+journal mutations share one lock, reject stale revisions, and emit typed
+private receipts. If a receipt fails, profile, preference, bridge-request, or
+adapter desired/runtime state rolls back so an unaudited terminal change
+cannot remain active.
+
+Add Bridge records a scoped, resumable request only. Adult private-device
+enrollment remains self-owned; a principal may request a child bridge but not
+another adult's bridge. Target consent, Tailscale identity, OS permissions,
+reviewed capability acceptance, owner-scoped ingest proof, and bootstrap
+material revocation remain the existing secure enrollment ceremony. OAuth and
+OS consent for accounts not already enrolled, and optional adapter families
+without reviewed implementations, remain truthful provider-specific activation
+work rather than simulated Connect controls.
+
+AC-31 passed through the production composition root. The aggregate release
+candidate passed 31/31 strict acceptance tests, 1,553/1,553 Python
+code-and-pack tests, 60/60 standalone bridge tests, Ruff lint/format, mypy,
+Pyright, dependency audits, performance budgets, Python and bridge builds,
+architecture negatives, clean install, tenant isolation, authenticated
+backup/restore, shell validation, exact OpenClaw 2026.7.2 contract validation,
+and 14/14 pinned plugin tests. The retained Gate 7 browser run passed 129/129
+checks across desktop, tablet, and phone, including Settings identity/action
+separation, seven areas, URL restoration, connection-truth explanation,
+adult-only profiles, keyboard/accessibility checks, and phone reflow without
+horizontal overflow.
+
+Live observation activation completed on immutable revision
+`b9f340a82d2430171fca38a8fc0f529577b35813`. The final guarded switch created
+encrypted backup `administrateme-20260807T124248Z.ambackup`; the prior release
+remains pointer-addressable for rollback. Stable-wrapper status and the full
+post-switch Doctor are healthy: the Python runtime remains observation-only,
+OpenClaw runs the exact reviewed 2026.7.2 source and discovered plugin contract,
+fourteen of fourteen projection checkpoints are healthy, five of five managed
+jobs reconcile, four secure references resolve, and the canonical synthetic
+round trip passes with zero external side effects.
+
+The live portal was refreshed against the final revision and verified without
+mutating any connection. It shows the authenticated principal, zero settings
+items needing intervention, three live central connections with independent
+setup/runtime/credential/safety axes, and external writes suppressed by
+observation. The read-only mail connection now explicitly says it has no
+reviewed provider write capability; the calendar and task connections show
+their reviewed write ceilings without claiming writes execute. Every Settings
+area opened successfully, the selected area survived its URL, and the current
+production viewport had no horizontal overflow.
+
+## 2026-08-06 CO-003 People and relationship memory live observation release
+
+The principal approved CO-003 on 2026-08-06. ADR-0004 and
+`CHANGE-ORDER-003-PEOPLE-AND-RELATIONSHIP-MEMORY.md` now govern People. The
+change **PRESERVES** the encrypted append-only log, provider authority, typed
+domain separation, member isolation, Triage human gating, external-write
+governance, observation, replay, and the pinned OpenClaw seam. It
+**MODERNIZES** People into deterministic relationship memory. It
+**SUPERSEDES** sender-as-person creation, tenant-wide exact-identifier
+assumptions, implicit provider-share authorization, generic CRM cards, model
+closeness/ranking, moralized overdue cues, and per-contact/account agent
+proliferation.
+
+Parties v2 separates unresolved Endpoints, exact provider Contact Records,
+qualified Parties, scoped Identifier Links, Memberships, Relationships,
+member-specific profiles, typed facts, and explicit grants. Ambiguous exact
+matches are retained as evidence and fail closed. The identity-resolution
+pipeline observes unknown inbound/outbound endpoints instead of minting
+people. Only household enrollment, explicit entry, an eligible curated contact
+record, or a human-confirmed Triage candidate can qualify a Party.
+
+The member portal and pinned `administrateme.dashboard.people` binding consume
+`deterministic-people-cockpit-v1`. The portal adds authorized search,
+All/Household/Favorites/Organizations/Suppressed lenses, truthful contact
+sources, explicit relationship cues, a qualified Party master/detail view,
+authorized contact/fact/activity context, and member-owned relationship
+settings. Children, devices, ambient identities, cross-adult private reads,
+and view-as mutations fail closed. Search indexing is audience-specific;
+granted fact/identifier searches re-check the active grant at query time so
+expiry or revocation cannot leave a searchable side channel.
+
+The reviewed household enrollment now crosses the event boundary before
+runtime readiness. It records the household Party, member Parties,
+Memberships, explicit Relationships, and optional reviewed external contacts
+idempotently; it does not grant an external contact membership, helper status,
+portal identity, provider data, or hidden identifiers. A restart/replay process
+test proves no duplicate enrollment events and the People surface labels the
+authenticated member as “You.” Contact freshness no longer borrows an
+unrelated message watermark when no contact provider is configured.
+
+Four reviewed contact-source packs establish provider-neutral, loss-aware
+contracts for Apple Contacts, Google People, Microsoft Graph Contacts, and
+CardDAV. They preserve exact member/provider/account/container/native id/
+revision, capabilities, tombstones, groups, cursor, and revision conflict.
+No source is presented as configured until its member-specific client and
+permission are actually enrolled. All contact provider writes remain disabled
+by observation and require the existing guarded external-sync path.
+
+AC-30 passes through the production composition root. The complete release
+candidate command passed 30/30 strict acceptance tests, 1,552/1,552 Python
+code-and-pack tests, 60/60 standalone bridge tests, Ruff format/lint across 489
+files, mypy across 216 source files, Pyright, dependency audits, performance
+budgets, both package builds, architecture negatives, clean install, tenant
+isolation, authenticated backup/restore, shell validation, exact OpenClaw
+2026.7.2 contract validation, and 14/14 pinned plugin tests. Provider clients
+and live provider mutations are deliberately outside this credential-free
+candidate claim.
+
+Live observation activation completed on immutable revision
+`40d85aab141ac74032579cf8953ecc1c5f53f311`. The guarded updater created
+encrypted backup `administrateme-20260807T031528Z.ambackup` before switching.
+Status and Doctor are healthy: the Python runtime is observation-only,
+OpenClaw is running on its exact reviewed contract, fourteen of fourteen
+projections are healthy, five of five managed cron jobs reconcile, the
+canonical synthetic round trip passes, and there are no live provider claims.
+The live People route shows the five reviewed scoped identities with
+member-relative relationship labels, honest no-source/no-interaction states,
+working URL-backed search and Household lens/detail selection, the canonical
+ten-surface navigation, and no horizontal overflow at the production desktop
+viewport. AC-30 covers the remaining responsive contract viewports. Contact
+source enrollment and any provider mutation remain separate per-member,
+per-account, observation-governed evidence boundaries.
+
+The first guarded switch of implementation commit `5f5f58d` was refused when
+the live pre-v2 identifiers table exposed a schema-ordering defect: the
+bootstrap schema attempted to create the new scope index before the additive
+scope columns existed. The updater automatically restored the prior immutable
+release and Doctor returned healthy. The correction moves the index to
+`PartiesProjection.migrate_schema()` and adds a regression that executes the
+real schema-then-migration ordering against a legacy identifiers table. The
+complete release candidate command then passed again with the count above.
+
+## 2026-08-06 CO-002 Notes and authorized family recall
+
+The principal approved CO-002 on 2026-08-06. ADR-0003 and
+`CHANGE-ORDER-002-NOTES-AND-FAMILY-RECALL.md` now govern the former Knowledge
+surface. The adult navigation and pinned OpenClaw binding use **Notes**;
+Knowledge remains a deprecated compatibility alias only. This change
+**PRESERVES** encrypted event-log authority, Cat-D source ownership, private
+scope, domain-type separation, human gating, and the pinned OpenClaw
+`llm-task` seam. It **MODERNIZES** provider-neutral note normalization,
+authorized recall/search, source capability truth, and explicit adult sharing.
+It **SUPERSEDES** a Notion/Obsidian second authority, provider-share inference,
+autonomous whole-corpus mining, and direct note-to-domain/provider writes.
+
+The release candidate adds additive member-note v3 fields, explicit
+grant/revoke events and projection rows, deterministic FTS, derived-vector
+revocation, and a bounded `extract_note_semantics` skill. Exact-evidence,
+allowlisted, confidence-qualified results become private Triage proposals only.
+Source correction, deletion, or privileged reclassification supersedes pending
+candidates and removes ineligible derived search state. Recurrence remains
+separate from tasks, calendar events, reminders, lists, list items, and
+OpenClaw scheduler jobs.
+
+The built-in skill inventory is now eleven: CO-002 adds one Notes-only
+extraction pack without removing or weakening any of the prior ten. Model
+routing, fallback, credentials, and generic conversation state remain wholly
+OpenClaw-owned.
+
+The member Notes workspace supplies source rail, authorized search, All,
+Recent, Shared, Meetings, and Needs Triage lenses, master/detail reading,
+provenance, capability warnings, explicit per-note adult grant/revoke, safe
+text rendering, and exact Triage/source-evidence links. Principal view-as,
+children, devices, ambient sessions, generic OpenClaw memory, and operator
+scope do not grant note access. AC-29 is the governing process gate. The exact
+release-candidate suite passed 29/29 acceptance tests, 1,544/1,544 Python
+code-and-pack tests, 60/60 standalone bridge tests, and 14/14 pinned OpenClaw
+plugin tests. Ruff format/lint (480 files), mypy (213 source files), pyright,
+architecture negatives, invariant/identity/path scans, dependency audits,
+Python/bridge/OpenClaw builds, clean install, tenant isolation, authenticated
+backup/restore, and performance budgets passed. The rendered Gate 7 portal run
+passed 119/119 checks across desktop, tablet, and phone with zero failed checks,
+including search restoration from a URL reload.
+The reviewed candidate was then switched into observation and verified as
+recorded below.
+
+Live activation completed on immutable commit
+`7e7cff75cbc0d04fedd79cb8e5ef85743ebe5553`. The authenticated pre-switch
+backup is `administrateme-20260807T000806Z.ambackup`; the prior release remains
+pointer-addressable for rollback. Stable-wrapper status and the full candidate
+Doctor report healthy loopback services, observation-only runtime state, 14/14
+projection stores and checkpoints, 5/5 managed OpenClaw jobs, exact reviewed
+OpenClaw `2026.7.2` plugin discovery, and a passing canonical synthetic round
+trip with zero external side effects.
+
+The in-app browser verified the canonical `/member/notes` route and the
+`/member/knowledge` 308 compatibility redirect against the running release.
+The adult rail contains exactly ten destinations with Notes active after
+People; observation, source freshness, and a truthful Not Configured empty
+state remain visible. A read-only search restored exactly from its URL after a
+reload and cleared back to the canonical route. The surface had no document
+overflow at 1440x1000, the active 966 px window, or 390x844; its source/search
+controls and chat drawer remained available on phone; and the browser reported
+no warnings or errors. Personal knowledge truthfully remains `pending-bridge`;
+this deployment does not claim a live Notes provider or enable any external
+write.
+
+## 2026-08-06 CO-001 five-surface executive loop
+
+The principal approved CO-001 on 2026-08-06. The implementation
+**PRESERVES** event-log authority, provider truth, member isolation, typed
+domain separation, dual approval/governance, observation, and the pinned
+OpenClaw `llm-task` seam. It **MODERNIZES** the Today, Triage, Comms,
+Reminders, and Calendar read compositions and browser workflow. It
+**SUPERSEDES** unread-as-Focus, all-day/context-as-next-event, raw reminder
+recomposition in Today, free-text/native-prompt routing, and a permanent chat
+rail on dense workspaces. No required product function is deferred.
+
+`adminme/surface_contracts.py` supplies disposable non-authorizing deep-link,
+attention, provider-action, and freshness DTOs. Daily Brief v2 separates timed
+schedule and day context, consumes the shared effective-reminder composer, and
+uses the same Focus v2 predicate/inputs as Comms. Comms v2 treats unread as
+presentation only and safely normalizes provider text. Triage exposes
+structured authorized destinations, deterministic readiness, recent decisions,
+exact source evidence, and Calendar candidate previews through the existing
+household reasoning contract. Strict reminder possible-copy groups reduce
+duplicate cognitive load without merging, completing, deleting, or hiding any
+provider row.
+
+Interactions v4 additively stores schema-bound semantic features and provenance
+from `messaging.semantic_features_extracted`. The existing ten-skill inventory
+is unchanged: `classify_message_nature` v3 reports bounded features/candidates
+through pinned OpenClaw, and `noise_filtering` v2 applies fixed confidence,
+exact-private-member scope, sensitivity, target, and field allowlists before emitting private,
+human-gated Triage proposals. The model does not rank, route, authorize,
+schedule, send, complete, suppress, or mutate.
+
+AC-28 is the process-level proof in
+`tests/acceptance/test_gate7_household_experience.py`, supported by the pure
+surface/Today/Comms/Reminders/What Now/Calendar suites, Interaction migration
+and replay, pipeline defensive cases, server authorization, and Gate 7 browser
+checks. Final exact release counts and live immutable deployment evidence are
+recorded below after the release gates complete.
+
+Release-candidate evidence on the supported Mac is
+`bash scripts/acceptance/release-candidate.sh`: **PASS**. Its retained phases
+reported 27/27 acceptance tests with `--runxfail`, 1,537/1,537 Python
+code-and-pack tests, 60/60 standalone bridge tests, and 14/14 pinned OpenClaw
+plugin tests. Ruff lint/format, mypy (213 files), pyright, architecture
+negatives, invariant/identity/path scans, dependency audits, Python and bridge
+builds, OpenClaw TypeScript build/contract/pack, npm audit, shellcheck, and
+`git diff --check` passed. The credential-free performance smoke stayed inside
+every budget; clean install, tenant isolation, and authenticated backup/restore
+rehearsals passed. There were no unexpected skips or xfails and no known
+third-party vulnerabilities. Non-failing environment notices were the retained
+Starlette/httpx deprecation, Poetry metadata deprecations, pip-audit exclusions
+for the two unpublished local packages, cache-deserialization warnings, and an
+available newer pyright release.
+
+Observation remains active. This change does not activate optional providers,
+perform a real provider mutation, or change People, the then-Knowledge surface
+(now Notes under CO-002), Finance,
+Scoreboard, or Settings. Rollback is the existing authenticated immutable
+release-pointer rollback after service quiescence; the event migration is
+additive, so prior events are not rewritten or deleted.
+
+Live observation activation completed on immutable revision
+`eeec1a4bd8ef6955636871ff7cc75a41a571fc73`. The final authenticated switch
+backup is `administrateme-20260806T224346Z.ambackup`; the prior immutable
+revision remains pointer-addressable for rollback. Independent stable-wrapper
+status and full Doctor reported healthy loopback services, the exact reviewed
+OpenClaw `2026.7.2` source/commit, 14/14 projection checkpoints, 5/5 managed
+jobs, and a passing canonical synthetic round trip with zero external side
+effects. Runtime state remains `observation_only`.
+
+The live switch also strengthened deployment correctness. The first CO-001
+activation showed that post-switch Doctor could inspect new packs through the
+retiring release interpreter. `UpgradeManager` now invokes Doctor through the
+candidate release's `.venv` and supplies the exact instance, OpenClaw, and
+operator PATH environment. An intermediate candidate with incomplete runtime
+environment failed closed and rolled back automatically; the corrected
+candidate and both responsive follow-up revisions passed full post-switch
+Doctor before adoption.
+
+The in-app browser then exercised all five routes without provider writes.
+At both the previously failing 911 px width and a 390 px phone width, Today,
+Triage, Comms, Reminders, and Calendar showed exact active navigation,
+persistent observation/freshness state, a collapsed CoS drawer, no degraded
+banner, no document-level overflow, and zero browser warnings/errors. The live
+audit caught and repaired Calendar's intermediate-width board/header overflow
+and Reminders' five-control Quick Add overflow; process acceptance was rerun
+after each repair. Comms also demonstrated that unread is presentation-only:
+the live Focus lens was empty while the All lens retained the scoped source
+threads, and selecting one thread produced an exact URL-backed reader without
+sending or confirming anything.
 
 ## 2026-08-06 multi-calendar interaction reconciliation
 

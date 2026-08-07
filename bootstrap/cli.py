@@ -141,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("backup", type=Path)
         elif name == "upgrade":
             child.add_argument("candidate", type=Path)
+            child.add_argument(
+                "--approve-runtime-migration",
+                action="store_true",
+                help=("authorize a separately rehearsed Python/Node baseline cutover"),
+            )
         elif name == "bridge-export":
             child.add_argument("member_id")
             child.add_argument("output", type=Path)
@@ -336,7 +341,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        upgrades = UpgradeManager(paths, root=root, test_mode=test_mode)
+        upgrades = UpgradeManager(
+            paths,
+            root=root,
+            test_mode=test_mode,
+            approve_runtime_migration=(
+                bool(args.approve_runtime_migration)
+                if args.command == "upgrade"
+                else False
+            ),
+        )
         if args.command == "upgrade":
             _print(upgrades.activate(args.candidate))
         else:

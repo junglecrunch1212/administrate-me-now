@@ -21,7 +21,11 @@ TriageTargetKind = Literal[
     "reminder",
     "list",
     "list_item",
+    "recurrence",
     "party_identifier",
+    "party_candidate",
+    "party_relationship",
+    "relationship_fact",
 ]
 TriageProvider = Literal[
     "google_calendar",
@@ -99,10 +103,21 @@ class TriageItemDismissedV1(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class TriageItemSupersededV1(BaseModel):
+    """System invalidation when the exact source version has changed."""
+
+    model_config = {"extra": "forbid"}
+    proposal_id: str = Field(min_length=1, max_length=240)
+    superseded_at: str = Field(min_length=1)
+    replacement_source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal["source_changed", "source_deleted", "source_privileged"]
+
+
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.enriched", 1, TriageItemEnrichedV1)
 registry.register("triage.item.confirmed", 1, TriageItemConfirmedV1)
 registry.register("triage.item.dismissed", 1, TriageItemDismissedV1)
+registry.register("triage.item.superseded", 1, TriageItemSupersededV1)
 
 
 __all__ = [
@@ -110,6 +125,7 @@ __all__ = [
     "TriageItemDismissedV1",
     "TriageItemEnrichedV1",
     "TriageItemProposedV1",
+    "TriageItemSupersededV1",
     "TriageRouteV1",
     "TriageTargetKind",
 ]

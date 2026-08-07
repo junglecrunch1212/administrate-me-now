@@ -53,7 +53,12 @@ def test_capabilities_class_attribute_matches_manifest() -> None:
     assert (
         cls_entry["event_families"]
         == manifest_entry.event_families
-        == ["money_flow.plaid_synced"]
+        == [
+            "money_flow.provider_observed",
+            "money_flow.provider_removed",
+            "financial.account_observed",
+            "money_flow.plaid_synced",
+        ]
     )
 
 

@@ -41,8 +41,7 @@ npm run build
 npm pack --dry-run
 ```
 
-The exact host source requires Node `>=22.22.3 <23 || >=24.15.0 <25 ||
->=25.9.0`. The current
+AdministrateMe's reviewed runtime baseline requires Node `>=24.15.0 <25`. The current
 Windows development host is intentionally fixture-only. In a disposable Mac
 lab with the exact OpenClaw checkout, set `ADMINME_LIVE_GATE=1` and
 `OPENCLAW_SOURCE_DIR`, then run `npm run test:live:mac`. That gate links the

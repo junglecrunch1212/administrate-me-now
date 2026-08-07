@@ -67,6 +67,7 @@ def main() -> None:
             os.environ.get("ADMINME_REPOSITORY_ROOT", str(repository_root()))
         ),
         member_identities=member_identities,
+        household_mapping=mapping,
         bridge_enrollments=bridge_enrollments,
         member_roles=roles,
         deterministic_openclaw_fixture=False,

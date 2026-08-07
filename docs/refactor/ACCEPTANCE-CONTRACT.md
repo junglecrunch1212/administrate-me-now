@@ -6,11 +6,24 @@ existed; a dead command is not evidence. Every row below now names a retained
 test, script, build, or CI job. The aggregate interface is
 `scripts/acceptance/release-candidate.sh` on the supported macOS runner.
 
+CO-006 amendment (2026-08-07): AC-32 proves Finance through the production
+composition without adding a projection or provider write seam. The Finance
+workbook is the reviewed planning authority; Plaid owns private provider facts;
+the encrypted event log owns provenance/history; and the money projection owns
+the deterministic current read model. Real Plaid consent and provider
+propagation remain post-merge activation evidence.
+
+CO-005 amendment (2026-08-07): release candidates run on Python
+`>=3.14,<3.15` and Node `>=24.15,<25` under ADR-0006. A live 3.11/22 release
+is not migrated by test setup. Candidate preparation is side-by-side and a
+version-changing activation requires the explicit runtime-migration gate after
+clean bootstrap, replay, backup/restore, browser, Doctor, and rollback proof.
+
 Primary-surface amendment (2026-08-05): AC-05, AC-10, AC-11, AC-14, and AC-21
 also cover the bidirectional Google Calendar, Apple Calendar, Apple Reminders,
 and Apple Notes release. Deterministic tests exercise complete supported
 provider schemas, create/update/delete and completion feedback, recurrence and
-alarms, reminder lists and geofences, Notes folders and mutations, durable
+alarms, reminder lists and geofences, Notes folders and ingestion, durable
 cursors, bridge command idempotency, runtime adapter configuration, and
 observation/governance. Real OAuth, EventKit, Notes Automation consent, and
 iCloud propagation remain explicit live activation evidence.
@@ -23,8 +36,8 @@ xfail. Fakes may stand in for provider credentials and household data, but not
 for the event log, bus, projections, authorization, HTTP composition, backup,
 restore, OpenClaw protocol, or browser rendering boundary named by a row.
 
-The release environment is macOS 14 on Apple silicon, Python 3.11 from the
-lockfile, Node 22.23.1 (the preferred bootstrap pin), OpenClaw API
+The release environment is macOS 14 on Apple silicon, Python 3.14.6 from the
+lockfile, Node 24.19.0 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
 `944cf08f94c334cff2b0fdf7e01187a9efa42715`, installed from the exact
 SHA-256-pinned GitHub source archive because that version is not on npm,
@@ -64,6 +77,11 @@ post-merge activation boundary and cannot be represented as a fixture pass.
 | AC-25 | Gate 7 Comms process/browser slice, interaction replay tests, Cat-A adapter/supervisor suites, and OpenClaw contract checks | Member/account/workspace isolation, deterministic explained focus/noise rules, provider capability negotiation, local snooze/quiet replay, view-as/child denial, Triage linkage, independently approved governed reply/read/archive commands, observation suppression, and terminal provider outcomes pass without a model or second mailbox truth store. |
 | AC-26 | Reminders composition/schema/projection/API process tests, Apple EventKit and Google Tasks adapter/supervisor suites, Gate 7 browser harness, and pinned OpenClaw contract checks | Member/account/list isolation, deterministic explained activation lenses, provider capability ceilings, typed expiring context cues, view-as/child denial, independently approved governed writes, observation suppression, revision conflicts, bidirectional provider transitions, and migration/replay pass without a model, provider-fantasy fields, or collapsed task/calendar truth. |
 | AC-27 | `tests/unit/test_calendar_reasoning.py`, calendar projection and Google Calendar discovery suites, Gate 7 calendar-onboarding process proof, Triage vertical slice, and production browser simulation | Every authorized calendar is discovered with exact capabilities; provider event identity is account/calendar scoped; duplicate copies retain every source route but render once; timezone-local anchored Day/Week/Month/Agenda/Find-time ranges, spatial grids, all-day lanes, household guardrails, source filters, hard/soft/context/ignore, tentative/caregiving, buffers, conflict/pressure, Today, and reviewed Triage destinations all derive from typed policy without a model; display filters cannot change capacity and unreviewed/read-only routes cannot receive writes. |
+| AC-28 | `test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated` in `tests/acceptance/test_gate7_household_experience.py`; `tests/unit/test_{surface_contracts,today_brief,comms,reminders_cockpit,what_now_gate6,calendar_reasoning}.py`; Interaction migration/replay and noise-filtering pipeline suites; Gate 7 browser harness | One member-scoped source fact can acquire schema-bound semantic features, yield only human-gated typed candidates, expose the same explained attention and exact source links across Today/Comms/Triage/Reminders/Calendar, materialize only after confirmation, and recalculate read models under observation without a provider mutation. Unread alone never creates Focus; all-day/context never becomes the next timed event; provider items and domain kinds remain distinct; route capability, freshness, privacy, deterministic decision ownership, replay, and terminal evidence remain explicit. |
+| AC-29 | CO-002 Notes process tests in `tests/acceptance/test_member_bridge_knowledge_vertical_slice.py` and `tests/acceptance/test_gate7_household_experience.py`; member-knowledge/vector/Triage projection and `extract_note_semantics` skill suites; Gate 7 browser harness; pinned OpenClaw checks | Provider-neutral note observations reach the private Notes surface with authorized FTS, exact provenance, safe rendering, provider limits, explicit per-note adult grant/revoke, view-as/child/device denial, and replay. Privileged/deleted content is removed from derived indexes; changed source versions supersede pending candidates. A bounded pinned OpenClaw extraction can produce only deterministic exact-evidence Triage proposals and can never choose scope/route or materialize/write a domain/provider record. Canonical Notes routes and deprecated Knowledge aliases remain coherent. |
+| AC-30 | `tests/acceptance/test_people_vertical_slice.py`; runtime/parties/identity-resolution/contact-adapter unit and integration suites; pack validators; Gate 7/live People browser review; pinned OpenClaw checks | The production composition records reviewed household enrollment as idempotent Party/Membership/Relationship events; preserves exact provider contact identity and revision; qualifies eligible curated records while unknown endpoints remain outside People; resolves only one authorized qualified identifier and fails ambiguous/hidden matches closed; gates Party/relationship/fact promotion through Triage; enforces private source/profile/fact boundaries and child/view-as/device denial; replays lifecycle and authorized search deterministically; reports truthful Apple/Google/Microsoft/CardDAV capability ceilings; and serves one safe, responsive, deterministic People contract to the portal and pinned OpenClaw binding without a model-owned ranking or second truth store. |
+| AC-31 | `test_ac31_settings_is_a_truthful_member_control_plane` in `tests/acceptance/test_gate7_household_experience.py`; adapter-supervisor/runtime integration tests; Gate 7/live Settings browser review | The production composition displays authenticated/read/action member identity and trusted ingress; denies child and view-as mutations and cross-adult bridge enrollment; exposes setup/runtime/permission/safety without config-as-health; leaks no credential reference; activates only validated data profiles; propagates bounded deterministic preferences; records scoped bridge requests; atomically reconciles pause/resume; rejects stale revisions; emits typed private receipts; remains responsive and keyboard operable; and retains one Python runtime, pinned OpenClaw boundary, and exactly fourteen projections. |
+| AC-32 | `test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation` in `tests/acceptance/test_gate7_household_experience.py`; money, financial-schema, XLSX forward/reverse, Plaid pack/supervisor/cursor suites; isolated Gate 7 Finance browser review | Detailed provider/account facts and reviewed workbook assumptions, budgets, scenarios, goals, classifications, and manual rows append as typed scoped events; one deterministic Finance contract drives workbook and portal; invalid workbooks fail closed; Plaid authority and removal semantics remain intact; durable cursor restart cannot skip accepted facts; replay is equivalent; private member rows never enter another member view or the shared workbook; and the runtime retains exactly fourteen projections with no financial provider write seam. |
 
 ## Aggregate release command
 

@@ -254,9 +254,9 @@ class Doctor:
         )
         if self.test_mode:
             observed_versions = {
-                "python": "3.11.0",
+                "python": versions["python"]["preferred"],
                 "node": versions["node"]["preferred"],
-                "npm": "10.9.8",
+                "npm": "11.17.0",
                 "homebrew": "6.0.0",
                 "openclaw": versions["openclaw"]["version"],
             }
@@ -276,11 +276,11 @@ class Doctor:
             brew_text.splitlines()[0].replace("Homebrew", "").strip()
         )
         version_ok = (
-            python_version[:2] == (3, 11)
-            and node_version[0] == 22
-            and node_version >= (22, 22, 3)
-            and npm_version[0] == 10
-            and npm_version >= (10, 9, 0)
+            python_version[:2] == (3, 14)
+            and node_version[0] == 24
+            and node_version >= (24, 15, 0)
+            and npm_version[0] == 11
+            and npm_version >= (11, 6, 0)
             and 6 <= brew_version[0] < 7
             and versions["openclaw"]["version"] in str(observed_versions["openclaw"])
         )

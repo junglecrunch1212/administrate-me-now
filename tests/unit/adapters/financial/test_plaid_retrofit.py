@@ -135,7 +135,12 @@ def test_pack_yaml_capabilities_block_parses() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-C"
     assert cap.runtime == "central"
-    assert cap.event_families == ["money_flow.plaid_synced"]
+    assert cap.event_families == [
+        "money_flow.provider_observed",
+        "money_flow.provider_removed",
+        "financial.account_observed",
+        "money_flow.plaid_synced",
+    ]
 
 
 def test_pack_yaml_extension_fields_round_trip() -> None:

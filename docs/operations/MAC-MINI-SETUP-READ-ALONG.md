@@ -154,7 +154,9 @@ brew doctor
 Expected: `which brew` prints `/opt/homebrew/bin/brew`. Warnings from
 `brew doctor` need review; do not continue past an error. The bootstrap requires
 Homebrew `>=6,<7` because Homebrew 5 cannot consume the current Homebrew Core
-formula metadata. It installs its own Python 3.11 and Node 22 formulae.
+formula metadata. New releases install Python 3.14 and Node 24 side by side.
+An existing 3.11/22 service is not changed until a reviewed candidate passes
+the ADR-0006 migration gate and you explicitly authorize the cutover.
 
 ## Stage 3: install Tailscale before AdministrateMe
 

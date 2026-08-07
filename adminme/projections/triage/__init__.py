@@ -11,12 +11,13 @@ from adminme.projections.triage import handlers
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 1
+    version = 2
     subscribes_to = [
         "triage.item.proposed",
         "triage.item.enriched",
         "triage.item.confirmed",
         "triage.item.dismissed",
+        "triage.item.superseded",
         "household.action.proposed",
         "identity.merge_suggested",
         "commitment.proposed",
@@ -28,6 +29,11 @@ class TriageProjection(Projection):
 
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         handlers.apply_event(envelope, conn)
+
+    def migrate_schema(self, conn: Any) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(triage_items)")}
+        if "resolution_reason" not in columns:
+            conn.execute("ALTER TABLE triage_items ADD COLUMN resolution_reason TEXT")
 
 
 __all__ = ["TriageProjection"]

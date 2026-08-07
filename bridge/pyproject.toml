@@ -15,7 +15,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 packages = [{ include = "adminme_bridge" }]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.14,<3.15"
 
 # Schema-only import dependency: bridge daemon reads
 # `adminme.events.schemas.bridge.BridgeEnrolledV1` for envelope shape.
@@ -52,7 +52,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.14"
 
 [[tool.mypy.overrides]]
 module = ["yaml"]

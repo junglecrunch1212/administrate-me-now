@@ -15,7 +15,7 @@ sensitivity_floor: normal
 
 runtime:
   language: python
-  python_version: ">=3.11"
+  python_version: ">=3.14,<3.15"
   entrypoint: adapter.py
   class: GoogleCalendarAdapter
 

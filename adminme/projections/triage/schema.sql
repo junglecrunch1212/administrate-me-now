@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS triage_items (
     proposed_at                  TEXT NOT NULL,
     resolved_at                  TEXT,
     resolved_by                  TEXT,
+    resolution_reason            TEXT,
     materialized_event_ids_json  TEXT NOT NULL DEFAULT '[]',
     owner_scope                  TEXT NOT NULL,
     visibility_scope             TEXT NOT NULL,

@@ -41,6 +41,7 @@ from packs.adapters.financial.plaid.adapter import (
     UnknownError,
 )
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -70,6 +71,7 @@ def _make_ctx(
     config: dict[str, Any],
     *,
     now_factory: Any = None,
+    cursor_store: AdapterCursorStore | None = None,
 ) -> tuple[AdapterContext, _RecordingEventLog]:
     log = _RecordingEventLog()
     ctx = AdapterContext(
@@ -78,6 +80,7 @@ def _make_ctx(
         correlation_id_factory=lambda: "corr-plaid-test",
         now_factory=now_factory
         or (lambda: datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)),
+        cursor_store=cursor_store,
     )
     return ctx, log
 
@@ -556,7 +559,12 @@ def test_sync_transactions_emits_cursor_advanced_at_100_event_milestone() -> Non
     transactions OR every 5 minutes. A single sync cycle delivering ≥100
     transactions should fire the milestone exactly once."""
     big_added = [
-        {"transaction_id": f"txn-{i}", "account_id": "acct-checking-001"}
+        {
+            "transaction_id": f"txn-{i}",
+            "account_id": "acct-checking-001",
+            "date": "2026-05-16",
+            "amount": 1.0,
+        }
         for i in range(120)
     ]
     response = {
@@ -590,6 +598,63 @@ def test_sync_transactions_emits_cursor_advanced_at_100_event_milestone() -> Non
     assert payload["events_since_last"] == 120
     # Counter resets on emit so the next sub-100 cycle doesn't double-fire.
     assert adapter._events_since_last_cursor_advance == 0
+
+
+def test_sync_cursor_survives_adapter_restart(tmp_path: Path) -> None:
+    """Only a fully committed sync advances the durable Item watermark."""
+
+    store_path = tmp_path / "adapter-cursors.db"
+    first_store = AdapterCursorStore(store_path)
+    first_client = _FakePlaidClient(
+        responses=[
+            {
+                "added": [],
+                "modified": [],
+                "removed": [],
+                "accounts": [],
+                "next_cursor": "cursor-one",
+                "has_more": False,
+            }
+        ]
+    )
+    first_adapter = PlaidAdapter(plaid_client_factory=lambda *_a: first_client)
+    first_ctx, _first_log = _make_ctx(_valid_config(), cursor_store=first_store)
+
+    async def _first() -> None:
+        task = await _set_up_adapter_via_start(first_adapter, first_ctx)
+        await first_adapter._sync_transactions("item-sandbox-abc")
+        await _tear_down(first_adapter, task)
+
+    asyncio.run(_first())
+    cursor_id = "financial-plaid:member-001:item-sandbox-abc"
+    assert first_store.get(cursor_id).provider_watermark == "cursor-one"
+    first_store.close()
+
+    reopened = AdapterCursorStore(store_path)
+    second_client = _FakePlaidClient(
+        responses=[
+            {
+                "added": [],
+                "modified": [],
+                "removed": [],
+                "accounts": [],
+                "next_cursor": "cursor-two",
+                "has_more": False,
+            }
+        ]
+    )
+    second_adapter = PlaidAdapter(plaid_client_factory=lambda *_a: second_client)
+    second_ctx, _second_log = _make_ctx(_valid_config(), cursor_store=reopened)
+
+    async def _second() -> None:
+        task = await _set_up_adapter_via_start(second_adapter, second_ctx)
+        await second_adapter._sync_transactions("item-sandbox-abc")
+        await _tear_down(second_adapter, task)
+
+    asyncio.run(_second())
+    assert second_client.calls[0]["cursor"] == "cursor-one"
+    assert reopened.get(cursor_id).provider_watermark == "cursor-two"
+    reopened.close()
 
 
 def test_sync_transactions_skips_cursor_advanced_below_milestone() -> None:

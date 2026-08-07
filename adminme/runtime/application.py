@@ -21,18 +21,20 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
+from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog, new_correlation_id
 from adminme.events.writer import EventWriter
 from adminme.lib.governance import (
-    ActionGateConfig,
-    AgentAllowlist,
     GuardedWrite,
     RateLimiter,
+    load_agent_allowlist,
+    load_governance_config,
 )
 from adminme.extensions import ExtensionCatalog
 from adminme.lib.instance_config import (
@@ -68,6 +70,7 @@ from adminme.projections.base import Projection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.settings_control import SettingsControlStore
 from adminme.temporary_surfaces import TemporarySurfaceStore
 
 CapabilityState = Literal[
@@ -83,6 +86,7 @@ class RuntimeSettings:
     encryption_key: bytes = field(repr=False)
     repository_root: Path
     member_identities: dict[str, str] = field(default_factory=dict)
+    household_mapping: dict[str, Any] = field(default_factory=dict)
     bridge_enrollments: dict[str, dict[str, Any]] = field(default_factory=dict)
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
@@ -109,6 +113,7 @@ class RuntimeSettings:
         adapters = self.adapter_config.get("adapters", [])
         if not isinstance(adapters, list):
             raise ValueError("adapter_config.adapters must be a list")
+        self._validate_household_mapping()
         valid_bridge_states = {
             "package-created-not-live",
             "package-exported",
@@ -159,6 +164,91 @@ class RuntimeSettings:
             raise ValueError(
                 "member chat Gateway must remain on pinned loopback port 18789"
             )
+
+    def _validate_household_mapping(self) -> None:
+        mapping = self.household_mapping
+        if not mapping:
+            return
+        if not isinstance(mapping, dict):
+            raise ValueError("household mapping must be an object")
+        members = mapping.get("members")
+        memberships = mapping.get("memberships")
+        relationships = mapping.get("relationships")
+        parties = mapping.get("parties", [])
+        if (
+            not isinstance(members, list)
+            or not isinstance(memberships, list)
+            or not isinstance(relationships, list)
+            or not isinstance(parties, list)
+        ):
+            raise ValueError("household mapping collections must be lists")
+        known: set[str] = set()
+        for member in members:
+            if not isinstance(member, dict):
+                raise ValueError("household members must be objects")
+            member_id = member.get("member_id")
+            label = member.get("label")
+            role = member.get("role")
+            if (
+                not isinstance(member_id, str)
+                or not member_id.strip()
+                or not isinstance(label, str)
+                or not label.strip()
+                or not isinstance(role, str)
+                or not role.strip()
+            ):
+                raise ValueError("household members require member_id, label, and role")
+            if member_id in known:
+                raise ValueError("household Party ids must be unique")
+            known.add(member_id)
+        for party in parties:
+            if not isinstance(party, dict):
+                raise ValueError("additional household Parties must be objects")
+            party_id = party.get("party_id")
+            label = party.get("label")
+            if (
+                not isinstance(party_id, str)
+                or not party_id.strip()
+                or not isinstance(label, str)
+                or not label.strip()
+                or party.get("kind", "person") not in {"person", "organization"}
+                or party_id in known
+            ):
+                raise ValueError(
+                    "additional household Parties are invalid or duplicated"
+                )
+            scope = party.get("visibility_scope", "shared:household")
+            if scope != "shared:household" and not (
+                isinstance(scope, str) and scope.startswith("private:")
+            ):
+                raise ValueError("additional household Party scope is invalid")
+            known.add(party_id)
+        for membership in memberships:
+            if (
+                not isinstance(membership, dict)
+                or not isinstance(membership.get("membership_id"), str)
+                or not isinstance(membership.get("party_id"), str)
+                or not isinstance(membership.get("role"), str)
+                or membership["party_id"] not in known
+            ):
+                raise ValueError("household membership is invalid")
+        for relationship in relationships:
+            if (
+                not isinstance(relationship, dict)
+                or not all(
+                    isinstance(relationship.get(key), str)
+                    and bool(relationship[key].strip())
+                    for key in (
+                        "relationship_id",
+                        "from_party_id",
+                        "to_party_id",
+                        "kind",
+                    )
+                )
+                or relationship["from_party_id"] not in known
+                or relationship["to_party_id"] not in known
+            ):
+                raise ValueError("household relationship is invalid")
 
     @classmethod
     def from_environment(cls) -> "RuntimeSettings":
@@ -238,6 +328,7 @@ class RuntimeSettings:
         encryption_key: bytes,
         repository_root: Path,
         member_identities: dict[str, str] | None = None,
+        household_mapping: dict[str, Any] | None = None,
         bridge_enrollments: dict[str, dict[str, Any]] | None = None,
         deterministic_openclaw_fixture: bool = False,
         member_roles: dict[str, str] | None = None,
@@ -260,6 +351,7 @@ class RuntimeSettings:
             encryption_key=encryption_key,
             repository_root=repository_root,
             member_identities=dict(member_identities or {}),
+            household_mapping=dict(household_mapping or {}),
             bridge_enrollments={
                 key: dict(value) for key, value in (bridge_enrollments or {}).items()
             },
@@ -313,14 +405,17 @@ class AdministrateMeRuntime:
         self.events: EventWriter | None = None
         self.projections: ProjectionRunner | None = None
         self.xlsx_projection: XlsxWorkbooksProjection | None = None
+        self.xlsx_reverse: XlsxReverseDaemon | None = None
         self.pipelines: PipelineRunner | None = None
         self.adapters: AdapterSupervisor | None = None
+        self.adapter_cursor_store: AdapterCursorStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
+        self.settings_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -333,6 +428,9 @@ class AdministrateMeRuntime:
         )
         self.extensions = ExtensionCatalog(
             settings.repository_root, settings.instance.instance_dir
+        )
+        self.settings_control = SettingsControlStore(
+            settings.instance.config_dir / "settings-control.json"
         )
         self.temporary_surfaces = TemporarySurfaceStore(
             settings.instance.config_dir / "temporary-surfaces.json"
@@ -391,27 +489,20 @@ class AdministrateMeRuntime:
                         self.settings.instance.tenant_id,
                     ),
                 )
+            policy_root = self.settings.repository_root / "bootstrap" / "policy"
+            governance_path = self.settings.instance.config_dir / "governance.yaml"
+            authority_path = self.settings.instance.config_dir / "authority.yaml"
             self.guarded_write = GuardedWrite(
-                ActionGateConfig(action_gates={}, rate_limits={}),
+                load_governance_config(
+                    governance_path
+                    if governance_path.is_file()
+                    else policy_root / "governance.yaml"
+                ),
                 RateLimiter(),
-                AgentAllowlist(
-                    [
-                        (
-                            "user:*",
-                            [
-                                "commitment.*",
-                                "communication.*",
-                                "task.*",
-                                "triage.*",
-                                "calendar.event_outcome_recorded",
-                                "recurrence.completed",
-                                "routine.*",
-                                "identifier.added",
-                                "household.action.*",
-                                "external_sync.*",
-                            ],
-                        )
-                    ]
+                load_agent_allowlist(
+                    authority_path
+                    if authority_path.is_file()
+                    else policy_root / "authority.yaml"
                 ),
                 self.events,
             )
@@ -469,9 +560,14 @@ class AdministrateMeRuntime:
             self._inventory_optional_adapters()
             self._inventory_data_extensions()
 
+            self.adapter_cursor_store = AdapterCursorStore(
+                self.settings.instance.adapter_cursor_path
+            )
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
-                config_data=self.settings.adapter_config,
+                config_data=self.settings_control.effective_adapter_config(
+                    self.settings.adapter_config
+                ),
                 adapter_loader=lambda config: load_builtin_adapters(
                     config, repository_root=self.settings.repository_root
                 ),
@@ -487,6 +583,7 @@ class AdministrateMeRuntime:
                     ),
                     observation_manager=self.observation,
                     observation_event_sink=self._require_events(),
+                    cursor_store=self.adapter_cursor_store,
                 ),
             )
             self.adapters.prepare()
@@ -502,6 +599,18 @@ class AdministrateMeRuntime:
             await self.adapters.start()
             await asyncio.sleep(0)
             await self.bus.start()
+            # The workbook reverse path is part of the same production
+            # composition, not a prose-only or separately managed central
+            # process. It starts only after projection connections and the bus
+            # are ready, and shares the reviewed GuardedWrite policy.
+            self.xlsx_reverse = XlsxReverseDaemon(
+                self.settings.instance,
+                self._xlsx_query_context(),
+                event_sink=self.events,
+                guarded_write=self.guarded_write,
+            )
+            await self.xlsx_reverse.start()
+            await self._reconcile_household_enrollment()
             await self._refresh_capability_registry()
             self.started = True
 
@@ -536,8 +645,14 @@ class AdministrateMeRuntime:
             return
         self.stopping = True
         try:
+            if self.xlsx_reverse is not None:
+                await self.xlsx_reverse.stop()
+                self.xlsx_reverse = None
             if self.adapters is not None:
                 await self.adapters.stop()
+            if self.adapter_cursor_store is not None:
+                self.adapter_cursor_store.close()
+                self.adapter_cursor_store = None
             if self.events is not None:
                 self.events.stop_accepting()
             if self.pipelines is not None:
@@ -556,6 +671,167 @@ class AdministrateMeRuntime:
         if self.events is None:
             raise RuntimeError("event writer unavailable")
         return self.events
+
+    def _household_enrollment_envelopes(self) -> list[EventEnvelope]:
+        """Translate reviewed enrollment config into canonical domain events.
+
+        The member mapping remains the portal-authentication input.  These
+        idempotent events are its one-way receipt into household truth so the
+        People projection never has to query mutable bootstrap files.
+        """
+
+        mapping = self.settings.household_mapping
+        if not mapping:
+            return []
+        now = EventEnvelope.now_utc_iso()
+        household_party_id = str(
+            mapping.get("household_party_id")
+            or (
+                "household_"
+                + hashlib.sha256(
+                    self.settings.instance.tenant_id.encode("utf-8")
+                ).hexdigest()[:20]
+            )
+        )
+
+        def envelope(
+            event_type: str,
+            payload: dict[str, Any],
+            *,
+            domain_id: str,
+            scope: str = "shared:household",
+        ) -> EventEnvelope:
+            identity = json.dumps(
+                {
+                    "event_type": event_type,
+                    "payload": payload,
+                    "scope": scope,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+            domain_digest = hashlib.sha256(domain_id.encode("utf-8")).hexdigest()[:16]
+            return EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=self.settings.instance.tenant_id,
+                type=event_type,
+                schema_version=1,
+                occurred_at=now,
+                source_adapter="bootstrap-household-enrollment",
+                source_account_id="member-mapping",
+                owner_scope=scope,
+                visibility_scope=scope,
+                sensitivity="normal",
+                idempotency_key=(
+                    f"household-enrollment:{event_type}:{domain_digest}:{digest}"
+                ),
+                payload=payload,
+            )
+
+        values: list[EventEnvelope] = []
+        values.append(
+            envelope(
+                "party.created",
+                {
+                    "party_id": household_party_id,
+                    "kind": "household",
+                    "display_name": str(mapping.get("household_label") or "Household"),
+                    "sort_name": str(
+                        mapping.get("household_label") or "Household"
+                    ).casefold(),
+                    "attributes": {"source": "household_enrollment"},
+                },
+                domain_id=household_party_id,
+            )
+        )
+        for member in mapping["members"]:
+            party_id = str(member["member_id"])
+            label = str(member["label"]).strip()
+            values.append(
+                envelope(
+                    "party.created",
+                    {
+                        "party_id": party_id,
+                        "kind": "person",
+                        "display_name": label,
+                        "sort_name": label.casefold(),
+                        "attributes": {
+                            "source": "household_enrollment",
+                            "enrollment_role": str(member["role"]),
+                        },
+                    },
+                    domain_id=party_id,
+                )
+            )
+        for party in mapping.get("parties", []):
+            party_id = str(party["party_id"])
+            label = str(party["label"]).strip()
+            scope = str(party.get("visibility_scope") or "shared:household")
+            values.append(
+                envelope(
+                    "party.created",
+                    {
+                        "party_id": party_id,
+                        "kind": str(party.get("kind") or "person"),
+                        "display_name": label,
+                        "sort_name": str(party.get("sort_name") or label).casefold(),
+                        "nickname": party.get("nickname"),
+                        "attributes": {"source": "reviewed_household_party"},
+                    },
+                    domain_id=party_id,
+                    scope=scope,
+                )
+            )
+        for membership in mapping["memberships"]:
+            payload: dict[str, Any] = {
+                "membership_id": str(membership["membership_id"]),
+                "party_id": str(membership["party_id"]),
+                "parent_party_id": household_party_id,
+                "role": str(membership["role"]),
+                "attributes": {"source": "household_enrollment"},
+            }
+            values.append(
+                envelope(
+                    "membership.added",
+                    payload,
+                    domain_id=payload["membership_id"],
+                )
+            )
+        mutual_kinds = {"coparent", "partner", "sibling", "spouse"}
+        for relationship in mapping["relationships"]:
+            relationship_id = str(relationship["relationship_id"])
+            label = str(relationship["kind"])
+            direction = str(
+                relationship.get("direction")
+                or ("mutual" if label in mutual_kinds else "a_to_b")
+            )
+            if direction not in {"a_to_b", "b_to_a", "mutual"}:
+                raise ValueError("household relationship direction is invalid")
+            scope = str(relationship.get("visibility_scope") or "shared:household")
+            values.append(
+                envelope(
+                    "relationship.added",
+                    {
+                        "relationship_id": relationship_id,
+                        "party_a": str(relationship["from_party_id"]),
+                        "party_b": str(relationship["to_party_id"]),
+                        "label": label,
+                        "direction": direction,
+                        "attributes": {"source": "household_enrollment"},
+                    },
+                    domain_id=relationship_id,
+                    scope=scope,
+                )
+            )
+        return values
+
+    async def _reconcile_household_enrollment(self) -> None:
+        envelopes = self._household_enrollment_envelopes()
+        if not envelopes:
+            return
+        event_ids = await self._require_events().write_batch(envelopes)
+        await self.wait_for_projection("parties", max(event_ids))
 
     async def _dispatch_external_write(self, event: dict[str, Any]) -> None:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""

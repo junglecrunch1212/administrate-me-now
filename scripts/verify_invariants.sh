@@ -10,8 +10,7 @@
 #                    (anthropic, openai, sentence_transformers)
 #   [§15] / [D15]  — no hardcoded instance paths (~/.adminme, /.adminme)
 #                    in adminme/, bootstrap/, packs/
-#   [§12.4]        — no tenant identity (james/laura/charlie/stice/morningside)
-#                    in adminme/ outside tests/ or fixture-marked lines
+#   [§12.4]        — no protected tenant identity in code, built-ins, or tests
 #   [§2.2]         — projections emit only allowed SYSTEM events, and only
 #                    from allowed files
 #   pipeline→projection — no direct projection writes from adminme/pipelines/
@@ -82,17 +81,12 @@ fi
 
 # ─── [§12.4]: no tenant identity in platform code ────────────────────────
 #
-# These names are fixtures. Illustrative uses (docstrings that say "e.g.
-# James the principal") are excluded by the fixture-marker carveout below.
-# Platform code under adminme/ must not reference specific tenants; tests
-# may, with the `# fixture:tenant_data:ok` marker on the relevant line
-# where prudence warrants.
-
-tenant_hits=$(grep -rniE "\b(james|laura|charlie|stice|morningside)\b" adminme/ --include='*.py' 2>/dev/null \
-    | grep -v "tests/" \
-    | grep -v "# fixture:tenant_data:ok" \
-    | grep -v "# example" \
-    | grep -v "# illustration" \
+# Assemble the protected terms at runtime so the canary does not itself
+# embed tenant data in a tracked test or script.
+tenant_pattern="(ja""mes|jim""my|lau""ra|char""lie|est""her|sti""ce|morn""ingside|hol""land|jrs""tice|lchol""land12)"
+tenant_hits=$(grep -rniE "\b${tenant_pattern}\b" adminme/ bootstrap/ bridge/ packs/ tests/ \
+    --include='*.py' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.sql' --include='*.ts' 2>/dev/null \
+    | grep -v "tests/unit/test_no_hardcoded_identity.py" \
     || true)
 if [ -n "$tenant_hits" ]; then
     report "[§12.4] tenant identity in platform code:"

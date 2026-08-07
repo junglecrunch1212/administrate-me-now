@@ -52,6 +52,7 @@ class SheetDescriptor:
     updates_emit_event: str | None
     deletes_emit_event: str | None
 
+    header_row: int = 1
     deletes_use_undo_window: bool = False
     new_id_prefix: str | None = None
 
@@ -73,21 +74,28 @@ def _raw_data_editable(row: dict[str, Any]) -> frozenset[str]:
     Plaid rows: only ``assigned_category``, ``notes``, ``memo`` (Plaid is
     authoritative for the rest per [§10 invariant 4]).
     """
-    is_manual = bool(row.get("is_manual"))
+    raw_manual = row.get("is_manual")
+    is_manual = (
+        raw_manual is True
+        or raw_manual == 1
+        or (isinstance(raw_manual, str) and raw_manual.strip().lower() == "true")
+    )
     if is_manual:
         return frozenset(
             {
                 "date",
-                "account_last4",
+                "account_id",
                 "merchant_name",
                 "merchant_category",
                 "amount",
                 "memo",
                 "assigned_category",
                 "notes",
+                "included",
+                "currency",
             }
         )
-    return frozenset({"assigned_category", "notes", "memo"})
+    return frozenset({"assigned_category", "notes", "memo", "included"})
 
 
 _TASKS = SheetDescriptor(
@@ -164,9 +172,29 @@ _RAW_DATA = SheetDescriptor(
     sheet="Raw Data",
     id_column="txn_id",
     editable_columns=_raw_data_editable,
-    always_derived=frozenset({"txn_id", "plaid_category", "is_manual"}),
+    always_derived=frozenset(
+        {
+            "txn_id",
+            "account_last4",
+            "plaid_category",
+            "is_manual",
+            "member_id",
+            "pending",
+            "source_adapter",
+        }
+    ),
     plaid_authoritative_columns=frozenset(
-        {"date", "account_last4", "merchant_name", "amount"}
+        {
+            "date",
+            "account_last4",
+            "merchant_name",
+            "amount",
+            "account_id",
+            "currency",
+            "pending",
+            "member_id",
+            "source_adapter",
+        }
     ),
     # Adds / updates / deletes are dispatched per-row inside the daemon
     # based on is_manual, with non-manual rows hitting the drop reasons
@@ -174,7 +202,7 @@ _RAW_DATA = SheetDescriptor(
     # the manual-row case; the daemon checks the row's is_manual before
     # emitting.
     adds_emit_event="money_flow.manually_added",
-    updates_emit_event=None,  # money_flow.recategorized not registered yet
+    updates_emit_event="money_flow.classification_set",
     deletes_emit_event="money_flow.manually_deleted",
     deletes_use_undo_window=True,
     new_id_prefix="flow_",
@@ -189,11 +217,100 @@ _RAW_DATA = SheetDescriptor(
 )
 
 
+_ASSUMPTIONS = SheetDescriptor(
+    workbook=FINANCE_WORKBOOK_NAME,
+    sheet="Assumptions",
+    id_column="assumption_id",
+    header_row=4,
+    editable_columns=frozenset(
+        {"category", "label", "value", "unit", "notes", "as_of"}
+    ),
+    always_derived=frozenset({"assumption_id"}),
+    adds_emit_event="finance.assumption_set",
+    updates_emit_event="finance.assumption_set",
+    deletes_emit_event=None,
+    new_id_prefix="assumption_",
+    delete_drop_reason="planning rows are retired explicitly; deletion is ignored",
+)
+
+
+_BUDGETS = SheetDescriptor(
+    workbook=FINANCE_WORKBOOK_NAME,
+    sheet="Budget vs Actual",
+    id_column="budget_id",
+    header_row=4,
+    editable_columns=frozenset({"category", "monthly_budget", "notes", "active"}),
+    always_derived=frozenset({"budget_id", "actual_mtd", "remaining", "state"}),
+    adds_emit_event="finance.budget_set",
+    updates_emit_event="finance.budget_set",
+    deletes_emit_event=None,
+    new_id_prefix="budget_",
+    delete_drop_reason="set active=false instead of deleting a budget",
+)
+
+
+_SCENARIOS = SheetDescriptor(
+    workbook=FINANCE_WORKBOOK_NAME,
+    sheet="Scenarios",
+    id_column="scenario_id",
+    header_row=4,
+    editable_columns=frozenset(
+        {
+            "name",
+            "is_baseline",
+            "horizon_months",
+            "opening_cash_delta",
+            "monthly_income_delta",
+            "monthly_expense_delta",
+            "one_time_month",
+            "one_time_amount",
+            "notes",
+            "active",
+        }
+    ),
+    always_derived=frozenset({"scenario_id"}),
+    adds_emit_event="finance.scenario_set",
+    updates_emit_event="finance.scenario_set",
+    deletes_emit_event=None,
+    new_id_prefix="scenario_",
+    delete_drop_reason="set active=false instead of deleting a scenario",
+)
+
+
+_GOALS = SheetDescriptor(
+    workbook=FINANCE_WORKBOOK_NAME,
+    sheet="Goals",
+    id_column="goal_id",
+    header_row=4,
+    editable_columns=frozenset(
+        {
+            "name",
+            "target_amount",
+            "current_amount",
+            "target_date",
+            "priority",
+            "status",
+            "notes",
+        }
+    ),
+    always_derived=frozenset({"goal_id"}),
+    adds_emit_event="finance.goal_set",
+    updates_emit_event="finance.goal_set",
+    deletes_emit_event=None,
+    new_id_prefix="goal_",
+    delete_drop_reason="set status=complete or paused instead of deleting a goal",
+)
+
+
 BIDIRECTIONAL_DESCRIPTORS: tuple[SheetDescriptor, ...] = (
     _TASKS,
     _COMMITMENTS,
     _RECURRENCES,
     _RAW_DATA,
+    _ASSUMPTIONS,
+    _BUDGETS,
+    _SCENARIOS,
+    _GOALS,
 )
 
 

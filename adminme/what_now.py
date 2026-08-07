@@ -195,20 +195,69 @@ def rank_what_now(
             }
         )
 
+    grouped_list_items: list[dict[str, Any]] = []
+    possible_groups: dict[str, list[dict[str, Any]]] = {}
     for row in list_items or []:
+        possible_copy = row.get("possible_copy")
+        group_id = (
+            str(possible_copy.get("group_id"))
+            if isinstance(possible_copy, dict) and possible_copy.get("group_id")
+            else ""
+        )
+        if group_id:
+            possible_groups.setdefault(group_id, []).append(row)
+        else:
+            grouped_list_items.append(row)
+    for group_id, rows in possible_groups.items():
+        representative = min(
+            rows,
+            key=lambda item: (
+                _parse_time(item.get("due_at"))
+                or datetime.max.replace(tzinfo=timezone.utc),
+                str(item.get("id") or item.get("item_external_id") or ""),
+            ),
+        )
+        grouped_list_items.append(
+            {
+                **representative,
+                "id": group_id,
+                "kind": "reminder_group",
+                "possible_copy": {
+                    **representative["possible_copy"],
+                    "items": [
+                        {
+                            "id": item.get("id"),
+                            "title": item.get("title"),
+                            "list_name": item.get("list_name"),
+                            "due_at": item.get("due_at"),
+                            "surface_link": item.get("surface_link"),
+                        }
+                        for item in rows
+                    ],
+                },
+            }
+        )
+
+    for row in grouped_list_items:
         due = _parse_time(row.get("due_at"))
         urgency_score, urgency_reason = _urgency(due, as_of)
         priority_score = {1: 125, 5: 50, 9: 0, 0: 0}.get(
             int(row.get("priority") or 0), 0
         )
         provider = str(row.get("provider") or "external_list")
-        actions = ["evidence"]
-        if provider == "apple_reminders":
+        is_group = row.get("kind") == "reminder_group"
+        actions = ["open_reminder", "evidence"] if is_group else ["evidence"]
+        if not is_group and bool(
+            row.get("can_complete", provider == "apple_reminders")
+        ):
             actions.insert(0, "complete_external")
+        identifier = str(
+            row.get("id") or f"{row['list_external_id']}:{row['item_external_id']}"
+        )
         candidates.append(
             {
-                "id": f"{row['list_external_id']}:{row['item_external_id']}",
-                "kind": "list_item",
+                "id": identifier,
+                "kind": "reminder_group" if is_group else "list_item",
                 "title": row["title"],
                 "last_event_id": row.get("last_event_id"),
                 "due": row.get("due_at"),
@@ -223,6 +272,8 @@ def rank_what_now(
                 "list_external_id": row.get("list_external_id"),
                 "item_external_id": row.get("item_external_id"),
                 "provider_revision": row.get("provider_revision"),
+                "surface_link": row.get("surface_link"),
+                "possible_copy": row.get("possible_copy"),
                 "_score": 450 + urgency_score + priority_score + outcome_bias,
                 "_due": due,
                 "explanation": {
@@ -238,7 +289,11 @@ def rank_what_now(
                     "quiet_hours": in_quiet_hours,
                     "nudge_state": "profile_penalty" if nudge_penalty else "clear",
                     "recent_outcomes": outcome_bias,
-                    "obligation": "provider list item, not a household task",
+                    "obligation": (
+                        "possible provider copies awaiting member review; no rows were merged"
+                        if is_group
+                        else "provider list item, not a household task"
+                    ),
                 },
             }
         )

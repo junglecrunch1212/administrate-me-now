@@ -8,6 +8,8 @@ const state = {
   todayView: "brief",
   carouselIndex: 0,
   carouselItems: [],
+  triageView: "ready",
+  triageSelected: null,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -22,6 +24,19 @@ const state = {
   calendarHiddenSources: [],
   calendarSelectedEvent: null,
   calendarDuration: 60,
+  peopleLens: "all",
+  peopleSelected: null,
+  peopleQuery: "",
+  peopleResults: null,
+  peopleDetail: null,
+  notesLens: "all",
+  notesSource: "all",
+  notesSelected: null,
+  notesQuery: "",
+  notesResults: null,
+  financeView: "overview",
+  financeScenario: null,
+  settingsSection: "overview",
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -36,6 +51,16 @@ function currentSurface() {
   if (parts[1] === "quests" && parts[2]) return `quest:${parts[2]}`;
   const value = parts[1];
   return value || "today";
+}
+
+function replaceQuery(values) {
+  const params = new URLSearchParams(location.search);
+  for (const [key, value] of Object.entries(values)) {
+    if (value == null || value === "") params.delete(key);
+    else params.set(key, String(value));
+  }
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}`);
 }
 
 async function api(path, options = {}) {
@@ -102,6 +127,16 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
   return section;
 }
 
+function moneyMinor(value, { compact = false } = {}) {
+  const amount = Number(value || 0) / 100;
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: compact ? 0 : 2,
+    notation: compact ? "compact" : "standard",
+  }).format(amount);
+}
+
 async function reloadActiveSurface() {
   const active = currentSurface();
   if (active.startsWith("quest:")) return;
@@ -110,6 +145,13 @@ async function reloadActiveSurface() {
     const params = new URLSearchParams({ view: state.calendarView });
     if (state.calendarAnchor) params.set("date", state.calendarAnchor);
     path += `?${params}`;
+  }
+  if (active === "notes") {
+    state.notesResults = null; state.notesQuery = ""; replaceQuery({ q: null });
+  }
+  if (active === "people") {
+    state.peopleResults = null; state.peopleQuery = ""; state.peopleDetail = null;
+    replaceQuery({ q: null });
   }
   renderSurface(await api(path));
 }
@@ -131,90 +173,242 @@ async function decideTriage(item, action, buttons) {
   }
 }
 
-async function enrichTriage(item, buttons) {
-  const title = window.prompt("Confirm or correct the title", item.title || "");
-  if (title == null) return;
-  let targetKind = item.target_kind;
-  if (item.source_kind !== "commitment_proposal") {
-    targetKind = window.prompt("Target type (task, commitment, calendar_event, reminder, list, list_item, or party_identifier)", item.target_kind);
-    if (targetKind == null) return;
+function field(label, control, extraClass = "") {
+  const wrapper = document.createElement("label");
+  wrapper.className = `field ${extraClass}`.trim();
+  wrapper.append(text("span", label), control);
+  return wrapper;
+}
+
+function selectControl(options, selected, emptyLabel = "Choose…") {
+  const select = document.createElement("select");
+  if (emptyLabel) {
+    const empty = text("option", emptyLabel); empty.value = ""; select.append(empty);
   }
-  const external = ["calendar_event", "reminder", "list", "list_item"].includes(targetKind);
+  for (const option of options) {
+    const node = text("option", option.label); node.value = option.value;
+    if (option.value === selected) node.selected = true;
+    select.append(node);
+  }
+  return select;
+}
+
+function replaceSelectOptions(select, options, selected = "", emptyLabel = "Choose…") {
+  select.replaceChildren();
+  if (emptyLabel) {
+    const empty = text("option", emptyLabel); empty.value = ""; select.append(empty);
+  }
+  for (const option of options) {
+    const node = text("option", option.label); node.value = option.value;
+    if (option.value === selected) node.selected = true;
+    select.append(node);
+  }
+}
+
+async function saveTriageForm(item, form) {
+  const values = new FormData(form);
+  const targetKind = String(values.get("target_kind") || item.target_kind);
   const candidateUpdates = {};
-  let route = item.route || { member_id: state.bootstrap.member.id };
+  for (const key of ["due", "start", "end", "owed_to_party_id", "rrule", "next_occurrence", "recurrence_text", "notes"]) {
+    const value = String(values.get(key) || "").trim();
+    if (value) candidateUpdates[key] = value;
+  }
+  let route = null;
   if (item.source_kind !== "commitment_proposal") {
-    const member = window.prompt("Destination household member ID", route.member_id || state.bootstrap.member.id);
-    if (member == null) return;
-    route = { ...route, member_id: member };
-  } else {
-    route = null;
+    route = {
+      member_id: String(values.get("member_id") || state.bootstrap.member.id),
+      provider: String(values.get("provider") || "") || null,
+      provider_account_id: String(values.get("provider_account_id") || "") || null,
+      container_external_id: String(values.get("container_external_id") || "") || null,
+    };
   }
-  if (targetKind === "commitment" && item.source_kind !== "commitment_proposal") {
-    const owedTo = window.prompt("Party ID this commitment is owed to", item.candidate?.owed_to_party_id || "");
-    if (owedTo == null) return;
-    candidateUpdates.owed_to_party_id = owedTo;
-  }
-  if (targetKind === "calendar_event") {
-    const start = window.prompt("Start date/time (ISO 8601 with time zone)", item.candidate?.start || item.candidate?.due || "");
-    if (start == null) return;
-    const end = window.prompt("End date/time (ISO 8601 with time zone)", item.candidate?.end || "");
-    if (end == null) return;
-    candidateUpdates.start = start;
-    candidateUpdates.end = end;
-  }
-  if (external) {
-    const provider = window.prompt("Provider (google_calendar, google_tasks, apple_calendar, or apple_reminders)", route?.provider || "");
-    if (provider == null) return;
-    const account = window.prompt("Provider account ID", route?.provider_account_id || "");
-    if (account == null) return;
-    const container = targetKind === "list" ? route?.container_external_id || null : window.prompt("Destination calendar or list ID", route?.container_external_id || "");
-    if (container == null && targetKind !== "list") return;
-    route = { member_id: route.member_id, provider, provider_account_id: account, container_external_id: container || null };
-  }
+  const buttons = [...form.querySelectorAll("button")];
   buttons.forEach((button) => { button.disabled = true; });
-  const banner = $("#state-banner"); banner.hidden = false; banner.textContent = "Saving the enrichment without creating official household state…";
+  setBanner("Saving these details as a proposal—nothing official is being created yet…");
   try {
     await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, title, target_kind: targetKind, candidate_updates: candidateUpdates, route }),
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_last_event_id: item.last_event_id,
+        title: String(values.get("title") || item.title).trim(),
+        target_kind: targetKind,
+        candidate_updates: candidateUpdates,
+        route,
+      }),
     });
-    banner.textContent = "Enrichment saved. Review the candidate once more before confirming it.";
+    setBanner("Details saved. Review the destination and preview once more before confirming.");
     await reloadActiveSurface();
   } catch (error) {
-    banner.textContent = `${error.message} The candidate was not changed.`;
+    setBanner(`${error.message} The proposal was not changed.`);
     buttons.forEach((button) => { button.disabled = false; });
   }
 }
 
-function triageSurface(items, calendarDestinations = []) {
+function triageDetail(item, data, readOnly = false) {
+  const section = document.createElement("section"); section.className = "card triage-detail";
+  if (!item) {
+    section.append(text("h2", "Choose a proposal"), text("p", "Select one item to review its evidence, destination, and exact effect.", "empty"));
+    return section;
+  }
+  section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", item.title));
+  if (item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
+  if (readOnly) {
+    section.append(text("p", `${titleCase(item.state)} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, "review-state ready"));
+    if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
+    const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id)); section.append(evidence);
+    return section;
+  }
+
+  const form = document.createElement("form"); form.className = "triage-review-form";
+  const grid = document.createElement("div"); grid.className = "field-grid";
+  const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
+  grid.append(field("Review title", title, "field-span"));
+  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"].map((value) => ({ value, label: titleCase(value) }));
+  const target = selectControl(targetOptions, item.target_kind, ""); target.name = "target_kind"; target.disabled = item.source_kind === "commitment_proposal";
+  grid.append(field("Creates", target));
+  const members = (data.destinations?.members || []).map((value) => ({ value: value.member_id, label: `${value.label} · ${value.role || "member"}` }));
+  const member = selectControl(members, item.route?.member_id || state.bootstrap.member.id, ""); member.name = "member_id"; member.disabled = item.source_kind === "commitment_proposal";
+  grid.append(field("Household member", member));
+
+  const candidate = item.candidate || {};
+  if (item.target_kind === "commitment") {
+    const owed = document.createElement("input"); owed.name = "owed_to_party_id"; owed.value = candidate.owed_to_party_id || ""; owed.placeholder = "Required party ID";
+    grid.append(field("Owed to", owed));
+  }
+  if (item.target_kind === "party_candidate") {
+    const kind = selectControl([{ value: "person", label: "Person" }, { value: "organization", label: "Organization" }], candidate.kind || "person", ""); kind.name = "kind";
+    const displayName = document.createElement("input"); displayName.name = "display_name"; displayName.value = candidate.display_name || item.title || "";
+    const identifierKind = document.createElement("input"); identifierKind.name = "identifier_kind"; identifierKind.value = candidate.identifier_kind || ""; identifierKind.placeholder = "Optional: email, phone, or handle";
+    const identifierValue = document.createElement("input"); identifierValue.name = "identifier_value"; identifierValue.value = candidate.identifier_value || ""; identifierValue.placeholder = "Optional observed endpoint";
+    const identifierNormalized = document.createElement("input"); identifierNormalized.name = "identifier_value_normalized"; identifierNormalized.value = candidate.identifier_value_normalized || ""; identifierNormalized.placeholder = "Normalized endpoint";
+    grid.append(field("Party kind", kind), field("Display name", displayName), field("Endpoint kind", identifierKind), field("Endpoint", identifierValue), field("Normalized endpoint", identifierNormalized));
+  } else if (item.target_kind === "party_relationship") {
+    const partyA = document.createElement("input"); partyA.name = "party_a"; partyA.value = candidate.party_a || "";
+    const partyB = document.createElement("input"); partyB.name = "party_b"; partyB.value = candidate.party_b || "";
+    const label = document.createElement("input"); label.name = "label"; label.value = candidate.label || ""; label.placeholder = "For example: coparent";
+    const direction = selectControl(["a_to_b", "b_to_a", "mutual"].map((value) => ({ value, label: titleCase(value) })), candidate.direction || "mutual", ""); direction.name = "direction";
+    grid.append(field("First Party", partyA), field("Second Party", partyB), field("Relationship", label), field("Direction", direction));
+  } else if (item.target_kind === "relationship_fact") {
+    const partyId = document.createElement("input"); partyId.name = "party_id"; partyId.value = candidate.party_id || "";
+    const factKind = selectControl(["birthday", "important_date", "employer", "role", "preference", "address", "context"].map((value) => ({ value, label: titleCase(value) })), candidate.kind || "context", ""); factKind.name = "kind";
+    const value = document.createElement("input"); value.name = "value"; value.value = candidate.value || "";
+    const factLabel = document.createElement("input"); factLabel.name = "label"; factLabel.value = candidate.label || "";
+    grid.append(field("Person", partyId), field("Fact kind", factKind), field("Confirmed value", value), field("Label", factLabel));
+  }
+  if (item.target_kind === "calendar_event") {
+    const start = document.createElement("input"); start.name = "start"; start.value = candidate.start || candidate.due || ""; start.placeholder = "ISO 8601 with time zone";
+    const end = document.createElement("input"); end.name = "end"; end.value = candidate.end || ""; end.placeholder = "ISO 8601 with time zone";
+    grid.append(field("Starts", start), field("Ends", end));
+  } else if (item.target_kind === "recurrence") {
+    const rrule = document.createElement("input"); rrule.name = "rrule"; rrule.value = candidate.rrule || ""; rrule.placeholder = "For example: FREQ=WEEKLY;BYDAY=FR";
+    const next = document.createElement("input"); next.name = "next_occurrence"; next.value = candidate.next_occurrence || ""; next.placeholder = "ISO 8601 with time zone";
+    const recurrenceText = document.createElement("input"); recurrenceText.name = "recurrence_text"; recurrenceText.value = candidate.recurrence_text || ""; recurrenceText.placeholder = "Source wording, if useful";
+    const notes = document.createElement("input"); notes.name = "notes"; notes.value = candidate.notes || ""; notes.placeholder = "Optional context";
+    grid.append(field("Recurrence rule", rrule), field("Next occurrence", next), field("Source wording", recurrenceText), field("Notes", notes));
+  } else if (["task", "commitment", "reminder", "list_item"].includes(item.target_kind)) {
+    const due = document.createElement("input"); due.name = "due"; due.value = candidate.due || candidate.due_at || ""; due.placeholder = "Optional ISO 8601 date/time";
+    grid.append(field("Due", due));
+  }
+
+  const external = ["calendar_event", "reminder", "list", "list_item"].includes(item.target_kind);
+  if (external) {
+    const calendarRoutes = (data.destinations?.calendars || []).map((value) => ({
+      provider: value.provider, account: value.provider_account_id, container: value.calendar_external_id,
+      label: value.calendar_name || titleCase(value.destination_kind),
+    }));
+    const reminderRoutes = (data.destinations?.reminder_lists || []).map((value) => ({
+      provider: value.provider, account: value.provider_account_id, container: value.list_external_id,
+      label: value.list_name || "Reminder list",
+    }));
+    const routes = item.target_kind === "calendar_event" ? calendarRoutes : reminderRoutes;
+    const providers = [...new Set(routes.map((value) => value.provider))].map((value) => ({ value, label: titleCase(value) }));
+    const provider = selectControl(providers, item.route?.provider || ""); provider.name = "provider";
+    const account = document.createElement("select"); account.name = "provider_account_id";
+    const container = document.createElement("select"); container.name = "container_external_id";
+    const refreshContainers = (selected = "") => {
+      const options = routes.filter((value) => value.provider === provider.value && value.account === account.value).map((value) => ({ value: value.container, label: value.label }));
+      replaceSelectOptions(container, options, selected, item.target_kind === "list" ? "Provider default" : "Choose destination…");
+    };
+    const refreshAccounts = (selectedAccount = "", selectedContainer = "") => {
+      const options = [...new Set(routes.filter((value) => value.provider === provider.value).map((value) => value.account))].map((value) => ({ value, label: value }));
+      replaceSelectOptions(account, options, selectedAccount, "Choose account…");
+      refreshContainers(selectedContainer);
+    };
+    provider.addEventListener("change", () => refreshAccounts());
+    account.addEventListener("change", () => refreshContainers());
+    refreshAccounts(item.route?.provider_account_id || "", item.route?.container_external_id || "");
+    grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
+  }
+  form.append(grid);
+  if (item.calendar_preview) {
+    const preview = item.calendar_preview;
+    const box = document.createElement("section"); box.className = "state-card";
+    box.append(text("h3", "Calendar impact preview"));
+    if (preview.state === "needs_details") {
+      box.append(text("p", `Add ${preview.missing.map(titleCase).join(", ")} to calculate conflicts, buffers, and guardrails.`, "state-note"));
+    } else {
+      const event = preview.event || {};
+      const destination = preview.destination?.calendar_name || preview.destination?.destination_kind;
+      box.append(text("p", destination ? `Destination: ${destination}.` : "This is not an approved writable destination.", destination ? "calendar-route-ready" : "calendar-route-missing"));
+      box.append(text("p", `Effective load: ${titleCase(event.effect)} · buffer ${event.buffer_before_minutes || 0} min before / ${event.buffer_after_minutes || 0} min after.`, "meta"));
+      box.append(text("p", preview.conflicts?.length ? `${preview.conflicts.length} conflict or pressure warning${preview.conflicts.length === 1 ? "" : "s"}: ${preview.conflicts.map((value) => value.why).join(" · ")}` : "No buffered conflict appears in this range.", preview.conflicts?.length ? "calendar-route-missing" : "calendar-route-ready"));
+      box.append(text("p", preview.guardrails?.length ? `Overlaps ${preview.guardrails.map((value) => value.label || titleCase(value.kind)).join(", ")}.` : "No household guardrail overlaps this proposal.", "state-note"));
+      box.append(text("p", preview.observation?.active ? "Observation mode: confirmation would be audited without changing the provider." : "Confirmation would enter the governed provider-write path.", "meta"));
+    }
+    form.append(box);
+  }
+  const missing = item.review_state?.missing || [];
+  const review = text("p", missing.length ? `Needs: ${missing.map(titleCase).join(", ")}. Save the missing details before confirming.` : "Ready for your final confirmation. Every real write still passes governance and observation controls.", `review-state ${missing.length ? "" : "ready"}`.trim());
+  form.append(review);
+  const row = document.createElement("div"); row.className = "button-row";
+  const save = text("button", "Save details", "button button-quiet"); save.type = "submit";
+  const approve = text("button", "Confirm and route", "button button-primary"); approve.type = "button"; approve.disabled = missing.length > 0;
+  const dismiss = text("button", "Dismiss", "button button-quiet"); dismiss.type = "button";
+  const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
+  const buttons = [save, approve, dismiss];
+  form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
+  approve.addEventListener("click", () => decideTriage(item, "approve", buttons));
+  dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
+  evidence.addEventListener("click", () => showEvidence(item.source_event_id));
+  row.append(save, approve, dismiss, evidence); form.append(row); section.append(form);
+  return section;
+}
+
+function triageSurface(data) {
   const fragment = document.createDocumentFragment();
   const intro = document.createElement("section"); intro.className = "hero-card";
-  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "Nothing becomes household truth by inference alone.", "action-title"), text("p", "Review extracted candidates, add missing routing details, then confirm or dismiss. Provider observations remain facts and do not wait here."));
+  intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "One decision at a time.", "action-title"), text("p", "Derived candidates wait here until you verify their meaning and destination. Raw provider observations never enter this queue."));
   fragment.append(intro);
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Awaiting your decision"));
-  if (!Array.isArray(items) || items.length === 0) {
-    section.append(text("p", "Triage is clear. No extracted candidates are waiting for you.", "empty")); fragment.append(section); return fragment;
+  const pending = data.items || [];
+  const recent = data.recent_items || [];
+  const groups = {
+    ready: pending.filter((item) => item.review_state?.state === "ready"),
+    needs_details: pending.filter((item) => item.review_state?.state !== "ready"),
+    recent,
+  };
+  if (!groups[state.triageView]) state.triageView = "ready";
+  const controls = document.createElement("section"); controls.className = "card comms-controls";
+  const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
+  for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["recent", "Recent"]]) {
+    const button = text("button", `${label} ${groups[key].length}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
+    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
   }
-  const list = document.createElement("ul"); list.className = "item-list";
-  for (const item of items) {
-    const li = document.createElement("li"); li.className = "item triage-item";
-    li.append(text("strong", item.title), text("span", `${String(item.target_kind).replaceAll("_", " ")} · ${item.source_kind.replaceAll("_", " ")}`, "meta"));
-    if (item.reasons?.length) li.append(text("small", item.reasons.join(" · ")));
-    if (item.target_kind === "calendar_event") {
-      const route = item.route || {};
-      const destination = calendarDestinations.find((candidate) => candidate.provider === route.provider && candidate.provider_account_id === route.provider_account_id && candidate.calendar_external_id === route.container_external_id);
-      li.append(text("small", destination ? `Will write to ${destination.calendar_name || titleCase(destination.destination_kind)} after this confirmation.` : "Choose one approved calendar destination before confirming.", destination ? "calendar-route-ready" : "calendar-route-missing"));
-    }
-    const row = document.createElement("div"); row.className = "button-row";
-    const enrich = text("button", item.source_kind === "commitment_proposal" ? "Edit" : "Enrich", "button button-quiet");
-    const approve = text("button", "Confirm", "button button-primary");
-    const dismiss = text("button", "Dismiss", "button button-quiet");
-    const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id));
-    const buttons = [enrich, approve, dismiss]; buttons.forEach((button) => { button.type = "button"; });
-    enrich.addEventListener("click", () => enrichTriage(item, buttons)); approve.addEventListener("click", () => decideTriage(item, "approve", buttons)); dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
-    row.append(enrich, approve, dismiss, evidence); li.append(row); list.append(li);
+  controls.append(tabs); fragment.append(controls);
+  const visible = groups[state.triageView];
+  if (!state.triageSelected || !visible.some((item) => item.proposal_id === state.triageSelected)) state.triageSelected = visible[0]?.proposal_id || null;
+  const selected = visible.find((item) => item.proposal_id === state.triageSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "triage-workspace";
+  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Awaiting review"));
+  if (!visible.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : "No recent decisions yet.", "empty"));
+  const list = document.createElement("ul"); list.className = "triage-master-list";
+  for (const item of visible) {
+    const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
+    button.append(text("strong", item.title), text("small", `${titleCase(item.target_kind)} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}`));
+    button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
-  section.append(list); fragment.append(section); return fragment;
+  master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;
 }
 
 function rankedItems(value) {
@@ -305,13 +499,22 @@ function setBanner(message) {
   banner.textContent = message;
 }
 
+function clearBanner() {
+  const banner = $("#state-banner"); banner.hidden = true; banner.textContent = "";
+}
+
 async function executeTodayAction(item, action, container) {
   if (action === "evidence") {
     if (item.evidence_event_id || item.last_event_id) await showEvidence(item.evidence_event_id || item.last_event_id);
     return;
   }
-  if (action === "open_triage") {
-    location.href = "/member/triage";
+  if (["open_triage", "open_comms", "open_reminder", "open_calendar"].includes(action)) {
+    location.href = item.surface_link?.href || ({
+      open_triage: "/member/triage",
+      open_comms: "/member/comms",
+      open_reminder: "/member/reminders",
+      open_calendar: "/member/calendar",
+    })[action];
     return;
   }
   if (action === "open_chat") {
@@ -397,6 +600,9 @@ function actionButton(item, action, container) {
     attended: "Attended",
     missed: "Missed",
     open_triage: "Review",
+    open_comms: "Open conversation",
+    open_reminder: "Review copies",
+    open_calendar: "Open calendar",
     open_chat: "Talk it through",
     evidence: "Why this is here",
   };
@@ -405,6 +611,23 @@ function actionButton(item, action, container) {
   button.type = "button";
   button.addEventListener("click", () => executeTodayAction(item, action, container));
   return button;
+}
+
+function possibleCopySources(item, compact = false) {
+  const copies = item.possible_copy?.items || [];
+  if (!copies.length) return null;
+  const box = document.createElement(compact ? "small" : "section");
+  box.className = "possible-copy possible-copy-sources";
+  box.append(text("strong", `${copies.length} possible provider copies are grouped only in this view. `));
+  const links = document.createElement("span");
+  copies.forEach((copy, index) => {
+    if (index) links.append(document.createTextNode(" · "));
+    const anchor = text("a", copy.list_name || `Source ${index + 1}`);
+    anchor.href = copy.surface_link?.href || "/member/reminders";
+    links.append(anchor);
+  });
+  box.append(links);
+  return box;
 }
 
 function todayItem(item, { interactive = true } = {}) {
@@ -416,11 +639,12 @@ function todayItem(item, { interactive = true } = {}) {
   const meta = todayItemMeta(item);
   if (meta) body.append(text("span", meta, "meta"));
   if (item.micro_step) body.append(text("small", item.micro_step));
+  const copies = possibleCopySources(item, true); if (copies) body.append(copies);
   li.append(body);
   if (interactive) {
     const row = document.createElement("div");
     row.className = "day-item-actions";
-    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat", "evidence"].includes(action));
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat", "evidence"].includes(action));
     for (const action of actions) row.append(actionButton(item, action, li));
     if (actions.length) li.append(row);
   }
@@ -458,6 +682,7 @@ function todayViewControls(data) {
     button.setAttribute("aria-pressed", String(state.todayView === view));
     button.addEventListener("click", () => {
       state.todayView = view;
+      replaceQuery({ view });
       if (view === "carousel") state.carouselIndex = 0;
       renderToday(data);
     });
@@ -493,7 +718,7 @@ function briefHero(brief) {
   }
   const stats = document.createElement("dl");
   stats.className = "brief-stats";
-  for (const [label, value] of [["Events", brief.stats.events], ["Moves", brief.stats.moves], ["Messages", brief.stats.messages], ["Decisions", brief.stats.questions]]) {
+  for (const [label, value] of [["Timed", brief.stats.timed_events ?? brief.stats.events], ["Day context", brief.stats.day_context || 0], ["Moves", brief.stats.moves], ["Decisions", brief.stats.questions]]) {
     stats.append(text("div", "", "stat"));
     stats.lastElementChild.append(text("dt", label), text("dd", value));
   }
@@ -535,10 +760,11 @@ function renderDayBrief(brief) {
   const grid = document.createElement("div");
   grid.className = "brief-grid";
   grid.append(
-    daySection("On the clock", brief.schedule || [], "No timed events are on the calendar today."),
+    daySection("On the clock", brief.timed_schedule || [], "No timed events are on the calendar today."),
     daySection("Moves for today", brief.plan || [], "No planned moves are due today."),
   );
   fragment.append(grid);
+  if ((brief.day_context || []).length) fragment.append(daySection("Day context", brief.day_context, "No all-day context."));
   if ((brief.questions || []).length || (brief.messages || []).length) {
     const attention = document.createElement("div");
     attention.className = "brief-grid";
@@ -569,6 +795,7 @@ function renderCarousel(brief) {
   );
   const meta = todayItemMeta(item);
   if (meta) section.append(text("p", meta, "meta carousel-meta"));
+  const copies = possibleCopySources(item); if (copies) section.append(copies);
   const progress = document.createElement("div");
   progress.className = "progress-track carousel-progress";
   progress.setAttribute("role", "progressbar");
@@ -582,7 +809,7 @@ function renderCarousel(brief) {
   section.append(progress);
   const row = document.createElement("div");
   row.className = "button-row carousel-actions";
-  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_chat"].includes(value))) {
+  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat"].includes(value))) {
     row.append(actionButton(item, action, section));
   }
   if (items.length > 1) {
@@ -616,6 +843,7 @@ function renderToday(data) {
   const root = $("#surface");
   const brief = data.brief;
   root.replaceChildren();
+  root.append(freshnessStrip(data));
   $("#mode-label").textContent = brief?.date_label || "Your daily briefing";
   root.append(todayViewControls(data));
   root.append(state.todayView === "carousel" ? renderCarousel(brief) : renderDayBrief(brief));
@@ -639,7 +867,7 @@ function commsControls(cockpit, data) {
   views.setAttribute("role", "group");
   views.setAttribute("aria-label", "Communication focus view");
   const choices = [
-    ["focus", "Focus", cockpit.counts.needs_reply],
+    ["focus", "Focus", cockpit.counts.focus],
     ["waiting", "Waiting", cockpit.counts.waiting],
     ["snoozed", "Snoozed", cockpit.counts.snoozed],
     ["quieted", "Quieted", cockpit.counts.quieted],
@@ -649,7 +877,7 @@ function commsControls(cockpit, data) {
     const button = text("button", `${label} ${count}`, "comms-filter");
     button.type = "button";
     button.setAttribute("aria-pressed", String(state.commsView === value));
-    button.addEventListener("click", () => { state.commsView = value; renderComms(data); });
+    button.addEventListener("click", () => { state.commsView = value; replaceQuery({ view: value }); renderComms(data); });
     views.append(button);
   }
   const accounts = document.createElement("div");
@@ -660,7 +888,7 @@ function commsControls(cockpit, data) {
     const button = text("button", `${account.label}${account.workspace ? ` · ${titleCase(account.workspace)}` : ""}`, "account-filter");
     button.type = "button";
     button.setAttribute("aria-pressed", String(state.commsAccount === account.provider_account_id));
-    button.addEventListener("click", () => { state.commsAccount = account.provider_account_id; renderComms(data); });
+    button.addEventListener("click", () => { state.commsAccount = account.provider_account_id; replaceQuery({ account: state.commsAccount }); renderComms(data); });
     accounts.append(button);
   }
   controls.append(views, accounts);
@@ -672,8 +900,8 @@ function commsHero(cockpit) {
   hero.className = "hero-card comms-hero";
   hero.append(
     text("p", "COMMUNICATION COCKPIT", "eyebrow"),
-    text("h2", cockpit.counts.needs_reply === 1 ? "1 conversation deserves a look." : cockpit.counts.needs_reply ? `${cockpit.counts.needs_reply} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
-    text("p", "Focus is a deterministic lens over your connected accounts. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
+    text("h2", cockpit.counts.focus === 1 ? "1 conversation deserves a look." : cockpit.counts.focus ? `${cockpit.counts.focus} conversations deserve a look.` : "No conversation is pulling on your working memory.", "action-title"),
+    text("p", "Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.", "brief-summary"),
   );
   const stats = document.createElement("dl");
   stats.className = "brief-stats comms-stats";
@@ -741,6 +969,15 @@ function commsReadingPane(thread) {
   const badge = text("span", titleCase(thread.bucket), `pill ${thread.bucket === "focus" ? "pill-blush" : "pill-lavender"}`);
   heading.append(title, badge); pane.append(heading);
   const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode(thread.why.join(" · "))); pane.append(why);
+  if (thread.command_state) {
+    const labels = {
+      pending: "Provider change requested; awaiting a terminal observation.",
+      suppressed: "Observation mode recorded the approved change without contacting the provider.",
+      completed: "Provider reported the requested change complete.",
+      failed: "Provider change failed; the original message state remains authoritative.",
+    };
+    pane.append(text("p", labels[thread.command_state] || `Command state: ${titleCase(thread.command_state)}.`, `state-label state-${String(thread.command_state).replaceAll("_", "-")}`));
+  }
   if (thread.triage_count) {
     const triage = text("a", `${thread.triage_count} extracted candidate${thread.triage_count === 1 ? "" : "s"} awaiting Triage`, "triage-link"); triage.href = "/member/triage"; pane.append(triage);
   }
@@ -797,7 +1034,7 @@ function commsThreadList(threads) {
     const first = document.createElement("span"); first.className = "comms-thread-title"; first.append(text("strong", thread.title), text("span", thread.account_label, "meta"));
     const count = thread.unread_count ? text("span", thread.unread_count, "unread-badge") : text("span", titleCase(thread.bucket), "meta");
     button.append(first, count, text("span", thread.preview, "thread-preview"), text("span", thread.why[0], "focus-explanation"));
-    button.addEventListener("click", () => { state.commsThread = thread.thread_key; renderComms(state.surface); });
+    button.addEventListener("click", () => { state.commsThread = thread.thread_key; replaceQuery({ thread: thread.thread_key }); renderComms(state.surface); });
     li.append(button); items.append(li);
   }
   list.append(items); return list;
@@ -807,7 +1044,7 @@ function renderComms(data) {
   const root = $("#surface"); root.replaceChildren();
   const cockpit = data.cockpit;
   $("#mode-label").textContent = "Private · deterministic focus";
-  root.append(commsHero(cockpit), commsControls(cockpit, data));
+  root.append(freshnessStrip(data), commsHero(cockpit), commsControls(cockpit, data));
   const visible = cockpit.threads.filter(commsMatches);
   if (!state.commsThread || !visible.some((thread) => thread.thread_key === state.commsThread)) state.commsThread = visible[0]?.thread_key || null;
   const selected = visible.find((thread) => thread.thread_key === state.commsThread);
@@ -850,34 +1087,73 @@ async function runReminderCommand(item, operation, payload = {}) {
   }
 }
 
-async function configureReminderCue(item) {
-  const signalKey = window.prompt("Typed signal key (for example presence:home or weather:rain)", "");
-  if (!signalKey?.trim()) return;
-  const source = window.prompt("Signal source (home_assistant, member_bridge, weather, device, network, calendar, member_profile, or manual)", "home_assistant");
-  if (!source) return;
-  const kind = window.prompt("Signal kind (location, presence, weather, device_state, network_presence, calendar_transition, energy, or capacity)", "presence");
-  if (!kind) return;
-  const operator = window.prompt("Match rule (equals, not_equals, above, below, entered, left, or present)", "equals");
-  if (!operator) return;
-  const expected = ["equals", "not_equals"].includes(operator) ? window.prompt("Expected state", "present") : ["above", "below"].includes(operator) ? window.prompt("Threshold number", "0") : null;
-  if (["equals", "not_equals", "above", "below"].includes(operator) && expected == null) return;
-  setBanner("Saving a deterministic cue. This will not change the source reminder…");
-  try {
-    await api("/api/member/v1/reminders/cues", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({
-        cue_id: crypto.randomUUID(), list_external_id: item.list_external_id,
-        item_external_id: item.item_external_id, expected_last_event_id: item.last_event_id,
-        signal_key: signalKey.trim(), source, kind, operator,
-        expected_state: ["equals", "not_equals"].includes(operator) ? expected : null,
-        expected_number: ["above", "below"].includes(operator) ? Number(expected) : null,
-        enabled: true,
-      }),
-    });
-    setBanner("Cue saved. It activates only when a fresh authorized signal matches.");
-    await reloadActiveSurface();
-  } catch (error) { setBanner(`${error.message} No cue was created.`); }
+function openActionDialog(title, content) {
+  const dialog = $("#action-dialog");
+  $("#action-title").textContent = title;
+  $("#action-content").replaceChildren(content);
+  dialog.showModal();
+  content.querySelector("input, select, textarea, button")?.focus();
+}
+
+function closeActionDialog() { $("#action-dialog").close(); }
+
+function configureReminderCue(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const signalKey = document.createElement("input"); signalKey.required = true; signalKey.placeholder = "presence:home or weather:rain";
+  const source = selectControl(["home_assistant", "member_bridge", "weather", "device", "network", "calendar", "member_profile", "manual"].map((value) => ({ value, label: titleCase(value) })), "home_assistant", "");
+  const kind = selectControl(["location", "presence", "weather", "device_state", "network_presence", "calendar_transition", "energy", "capacity"].map((value) => ({ value, label: titleCase(value) })), "presence", "");
+  const operator = selectControl(["equals", "not_equals", "above", "below", "entered", "left", "present"].map((value) => ({ value, label: titleCase(value) })), "equals", "");
+  const expected = document.createElement("input"); expected.value = "present"; expected.placeholder = "State or numeric threshold";
+  const note = text("p", "This compares one fresh, scoped signal with one explicit operator. It does not change provider reminder truth.", "state-note");
+  const submit = text("button", "Save cue", "button button-primary"); submit.type = "submit";
+  form.append(field("Signal key", signalKey), field("Source", source), field("Signal kind", kind), field("Match rule", operator), field("Expected value", expected), note, submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true; setBanner("Saving a deterministic cue. This will not change the source reminder…");
+    try {
+      await api("/api/member/v1/reminders/cues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          cue_id: crypto.randomUUID(), list_external_id: item.list_external_id,
+          item_external_id: item.item_external_id, expected_last_event_id: item.last_event_id,
+          signal_key: signalKey.value.trim(), source: source.value, kind: kind.value, operator: operator.value,
+          expected_state: ["equals", "not_equals"].includes(operator.value) ? expected.value : null,
+          expected_number: ["above", "below"].includes(operator.value) ? Number(expected.value) : null,
+          enabled: true,
+        }),
+      });
+      closeActionDialog(); setBanner("Cue saved. It activates only when a fresh authorized signal matches."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} No cue was created.`); submit.disabled = false; }
+  });
+  openActionDialog("Add a context cue", form);
+}
+
+function editReminderDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const title = document.createElement("input"); title.required = true; title.maxLength = 1000; title.value = item.title;
+  const submit = text("button", "Save title", "button button-primary"); submit.type = "submit";
+  form.append(field("Reminder title", title), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "update"), { title: title.value.trim() }); });
+  openActionDialog("Edit provider reminder", form);
+}
+
+function moveReminderDialog(item, cockpit) {
+  const candidates = (cockpit.lists || []).filter((list) => list.provider === item.provider && list.provider_account_id === item.provider_account_id && list.list_external_id !== item.list_external_id);
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const destination = selectControl(candidates.map((list) => ({ value: list.list_external_id, label: list.list_name })), candidates[0]?.list_external_id || "", candidates.length ? "" : "No other list available"); destination.required = true;
+  const submit = text("button", "Move reminder", "button button-primary"); submit.type = "submit"; submit.disabled = !candidates.length;
+  form.append(field("Destination list", destination), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "move"), { destination_list_external_id: destination.value }); });
+  openActionDialog("Move provider reminder", form);
+}
+
+function deleteReminderDialog(item) {
+  const wrapper = document.createElement("div"); wrapper.className = "dialog-form";
+  wrapper.append(text("p", `Delete “${item.title}” from ${item.account_label}? This is a real provider action after approval; it is suppressed while observation mode is active.`));
+  const row = document.createElement("div"); row.className = "button-row";
+  const cancel = text("button", "Cancel", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+  const confirm = text("button", "Delete from provider", "button button-primary"); confirm.type = "button"; confirm.addEventListener("click", async () => { closeActionDialog(); await runReminderCommand(item, reminderOperation(item, "delete")); });
+  row.append(cancel, confirm); wrapper.append(row); openActionDialog("Confirm deletion", wrapper);
 }
 
 function reminderMatches(item) {
@@ -907,19 +1183,19 @@ function remindersControls(cockpit, data) {
   for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["completed", "Completed"]]) {
     const button = text("button", `${label} ${cockpit.counts[value] || 0}`, "comms-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersView === value));
-    button.addEventListener("click", () => { state.remindersView = value; renderReminders(data); }); views.append(button);
+    button.addEventListener("click", () => { state.remindersView = value; replaceQuery({ view: value }); renderReminders(data); }); views.append(button);
   }
   const accounts = document.createElement("div"); accounts.className = "comms-filter-row account-filters";
   for (const account of [{ provider_account_id: "all", label: "All accounts" }, ...(cockpit.accounts || [])]) {
     const button = text("button", account.label, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersAccount === account.provider_account_id));
-    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; renderReminders(data); }); accounts.append(button);
+    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; replaceQuery({ account: state.remindersAccount, list: null }); renderReminders(data); }); accounts.append(button);
   }
   const lists = document.createElement("div"); lists.className = "comms-filter-row account-filters";
   for (const list of [{ list_external_id: "all", list_name: "All lists" }, ...(cockpit.lists || []).filter((row) => state.remindersAccount === "all" || row.provider_account_id === state.remindersAccount)]) {
     const button = text("button", list.list_name, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersList === list.list_external_id));
-    button.addEventListener("click", () => { state.remindersList = list.list_external_id; renderReminders(data); }); lists.append(button);
+    button.addEventListener("click", () => { state.remindersList = list.list_external_id; replaceQuery({ list: state.remindersList }); renderReminders(data); }); lists.append(button);
   }
   controls.append(views, accounts, lists); return controls;
 }
@@ -931,7 +1207,7 @@ function reminderItemButton(item) {
   heading.append(text("strong", item.title), text("span", `${item.account_label} · ${item.list_name}`, "meta"));
   button.append(heading, text("span", item.why?.[0] || "Available", "focus-explanation"));
   if (item.due_at) button.append(text("span", new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(item.due_at)), "meta"));
-  button.addEventListener("click", () => { state.reminderItem = item.id; renderReminders(state.surface); });
+  button.addEventListener("click", () => { state.reminderItem = item.id; replaceQuery({ item: item.id }); renderReminders(state.surface); });
   return button;
 }
 
@@ -945,6 +1221,7 @@ function reminderDetail(item, cockpit) {
   const fields = [["Provider", item.account_label], ["Scheduled", item.due_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(new Date(item.due_at)) : "No date"], ["Priority", item.priority === 1 ? "High" : item.priority === 5 ? "Medium" : item.priority === 9 ? "Low" : "None"], ["Repeats", item.recurrence_rules?.length ? item.recurrence_rules.join(", ") : "No"], ["Context cues", item.cues?.length || 0]];
   for (const [label, value] of fields) facts.append(text("dt", label), text("dd", value)); pane.append(facts);
   if (item.read_only_reason) pane.append(text("p", item.read_only_reason, "state-note"));
+  if (item.possible_copy) pane.append(text("p", `${item.possible_copy.count} possible copies are preserved across provider lists. Review each source before changing or completing anything.`, "possible-copy"));
   const actions = document.createElement("div"); actions.className = "button-row";
   if (item.can_complete || item.completed) {
     const stem = item.completed ? "uncomplete" : "complete"; const button = text("button", item.completed ? "Restore" : "Done", "button button-primary"); button.type = "button";
@@ -952,11 +1229,11 @@ function reminderDetail(item, cockpit) {
   }
   if (item.can_edit) {
     const edit = text("button", "Edit title", "button button-quiet"); edit.type = "button";
-    edit.addEventListener("click", () => { const title = window.prompt("Reminder title", item.title); if (title?.trim()) runReminderCommand(item, reminderOperation(item, "update"), { title: title.trim() }); }); actions.append(edit);
+    edit.addEventListener("click", () => editReminderDialog(item)); actions.append(edit);
     const move = text("button", "Move", "button button-quiet"); move.type = "button";
-    move.addEventListener("click", () => { const candidates = (cockpit.lists || []).filter((list) => list.provider === item.provider && list.provider_account_id === item.provider_account_id && list.list_external_id !== item.list_external_id); const destination = window.prompt(`Destination list ID\n${candidates.map((list) => `${list.list_name}: ${list.list_external_id}`).join("\n")}`, candidates[0]?.list_external_id || ""); if (destination) runReminderCommand(item, reminderOperation(item, "move"), { destination_list_external_id: destination }); }); actions.append(move);
+    move.addEventListener("click", () => moveReminderDialog(item, cockpit)); actions.append(move);
     const remove = text("button", "Delete", "button button-quiet"); remove.type = "button";
-    remove.addEventListener("click", () => { if (window.confirm("Delete this reminder from its source provider?")) runReminderCommand(item, reminderOperation(item, "delete")); }); actions.append(remove);
+    remove.addEventListener("click", () => deleteReminderDialog(item)); actions.append(remove);
   }
   const cue = text("button", "Add context cue", "button button-quiet"); cue.type = "button";
   cue.addEventListener("click", () => configureReminderCue(item)); actions.append(cue);
@@ -1068,6 +1345,7 @@ async function setCalendarView(view, anchor = state.calendarAnchor) {
   state.calendarView = view;
   state.calendarAnchor = anchor || state.calendarToday || calendarLocalDate();
   state.calendarSelectedEvent = null;
+  replaceQuery({ view, date: state.calendarAnchor, event: null });
   await reloadActiveSurface();
 }
 
@@ -1148,7 +1426,7 @@ function calendarEventButton(event, cockpit, compact = false) {
   button.setAttribute("aria-label", `${event.title}, ${time}, ${calendarEffectLabel(event.effect)}`);
   if (compact) button.append(text("span", event.all_day ? "" : time, "calendar-event-time"), text("strong", event.title));
   else button.append(text("strong", event.title), text("span", `${time} · ${calendarEffectLabel(event.effect)}`, "calendar-event-meta"));
-  button.addEventListener("click", () => { state.calendarSelectedEvent = event.cluster_id || event.id; renderCalendar(state.surface); });
+  button.addEventListener("click", () => { state.calendarSelectedEvent = event.cluster_id || event.id; replaceQuery({ event: state.calendarSelectedEvent }); renderCalendar(state.surface); });
   return button;
 }
 
@@ -1268,7 +1546,7 @@ function renderCalendar(data) {
   state.calendarAnchor ||= data.calendar_anchor || calendarLocalDate();
   state.calendarToday = data.calendar_today || state.calendarToday || calendarLocalDate();
   $("#mode-label").textContent = "Private · deterministic calendar policy";
-  root.append(calendarHero(cockpit), calendarControls(cockpit));
+  root.append(freshnessStrip(data), calendarHero(cockpit), calendarControls(cockpit));
   if (state.calendarView !== "rules") root.append(calendarSourcePanel(cockpit, data));
   if (state.calendarView === "find") root.append(calendarFindTime(cockpit));
   else if (state.calendarView === "rules") root.append(calendarRuleEditor(cockpit, data));
@@ -1280,7 +1558,7 @@ function renderCalendar(data) {
 function renderReminders(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
   $("#mode-label").textContent = "Private · provider-backed · deterministic";
-  root.append(remindersHero(cockpit), remindersControls(cockpit, data));
+  root.append(freshnessStrip(data), remindersHero(cockpit), remindersControls(cockpit, data));
   const visible = cockpit.items.filter(reminderMatches);
   if (!state.reminderItem || !visible.some((item) => item.id === state.reminderItem)) state.reminderItem = visible[0]?.id || null;
   const selected = visible.find((item) => item.id === state.reminderItem);
@@ -1288,6 +1566,658 @@ function renderReminders(data) {
   const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} reminders`));
   if (!visible.length) list.append(text("p", "Nothing in this lens. Your provider truth is unchanged.", "empty")); else { const items = document.createElement("ol"); items.className = "reminder-items"; for (const item of visible) { const li = document.createElement("li"); li.append(reminderItemButton(item)); items.append(li); } list.append(items); }
   workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
+}
+
+function peopleMatchesLens(person) {
+  if (state.peopleLens === "favorites") return Boolean(person.favorite);
+  if (state.peopleLens === "organizations") return person.kind === "organization";
+  if (state.peopleLens === "suppressed") return Boolean(person.suppressed);
+  if (state.peopleLens === "household") return !["Contact", "Organization"].includes(person.relationship_label);
+  return !person.suppressed;
+}
+
+function peopleHero(cockpit) {
+  const section = document.createElement("section"); section.className = "hero-card people-hero";
+  section.append(
+    text("p", "PRIVATE RELATIONSHIP MEMORY", "eyebrow"),
+    text("h2", "Remember the person, not another inbox.", "action-title"),
+    text("p", "People joins only confirmed identity, relationship, contact, commitment, and interaction facts. Observed senders wait outside the directory until you confirm them."),
+  );
+  const stats = document.createElement("dl"); stats.className = "brief-stats people-stats";
+  for (const [label, value] of [["People", cockpit.lens_counts?.all || 0], ["Household", cockpit.lens_counts?.household || 0], ["Gentle cues", cockpit.cues?.length || 0], ["Unresolved senders", cockpit.unresolved_endpoints?.count || 0]]) {
+    const item = document.createElement("div"); item.className = "stat"; item.append(text("dt", label), text("dd", value)); stats.append(item);
+  }
+  section.append(stats); return section;
+}
+
+function peopleControls(data) {
+  const cockpit = data.cockpit || {}; const section = document.createElement("section"); section.className = "card people-controls";
+  const search = document.createElement("form"); search.className = "people-search";
+  const input = document.createElement("input"); input.type = "search"; input.value = state.peopleQuery; input.placeholder = "Search names, organizations, circles, and confirmed facts"; input.setAttribute("aria-label", "Search people you are authorized to see");
+  const submit = text("button", "Search", "button button-primary"); submit.type = "submit";
+  const clear = text("button", "Clear", "button button-quiet"); clear.type = "button"; clear.hidden = !state.peopleQuery;
+  search.append(input, submit, clear);
+  search.addEventListener("submit", async (event) => {
+    event.preventDefault(); const query = input.value.trim(); if (query.length < 2) return;
+    submit.disabled = true; setBanner("Searching only relationship memory you are authorized to see…");
+    try {
+      const result = await api(`/api/member/v1/people/search?q=${encodeURIComponent(query)}`);
+      const originals = new Map((cockpit.directory || []).map((person) => [person.party_id, person]));
+      state.peopleQuery = query; state.peopleResults = result.results.map((person) => ({ ...(originals.get(person.party_id) || {}), ...person }));
+      state.peopleSelected = state.peopleResults[0]?.party_id || null; state.peopleDetail = null;
+      replaceQuery({ q: query, item: state.peopleSelected }); renderPeople(data);
+      setBanner(`${state.peopleResults.length} authorized result${state.peopleResults.length === 1 ? "" : "s"}.`);
+    } catch (error) { setBanner(`${error.message} No relationship data was changed.`); submit.disabled = false; }
+  });
+  clear.addEventListener("click", () => { state.peopleQuery = ""; state.peopleResults = null; state.peopleSelected = null; state.peopleDetail = null; clearBanner(); replaceQuery({ q: null, item: null }); renderPeople(data); });
+  const lenses = document.createElement("div"); lenses.className = "comms-filter-row"; lenses.setAttribute("role", "group"); lenses.setAttribute("aria-label", "People lenses");
+  for (const [key, label] of [["all", "All"], ["household", "Household"], ["favorites", "Favorites"], ["organizations", "Organizations"], ["suppressed", "Suppressed"]]) {
+    const button = text("button", `${label} ${cockpit.lens_counts?.[key] || 0}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.peopleLens === key));
+    button.addEventListener("click", () => { state.peopleLens = key; state.peopleSelected = null; state.peopleDetail = null; clearBanner(); replaceQuery({ view: key, item: null }); renderPeople(data); }); lenses.append(button);
+  }
+  section.append(search, lenses); return section;
+}
+
+function peopleSources(cockpit) {
+  const section = document.createElement("section"); section.className = "card people-sources";
+  section.append(text("h2", "Sources"), text("p", "Each member's contacts stay private unless a Party or field group is explicitly shared.", "state-note"));
+  const list = document.createElement("div"); list.className = "people-source-list";
+  if (!(cockpit.sources || []).length) list.append(text("p", "No contact adapter is configured. Confirmed household Parties still remain available.", "empty"));
+  for (const source of cockpit.sources || []) {
+    const row = document.createElement("div"); row.className = "people-source-row";
+    row.append(text("strong", source.label || titleCase(source.provider)), text("span", titleCase(source.state || "projected"), `pill state-label state-${String(source.state || "projected").replaceAll("_", "-")}`), text("small", `${source.record_count || 0} projected contact${Number(source.record_count || 0) === 1 ? "" : "s"} · ${titleCase(source.runtime)}`));
+    if ((source.limitations || []).length) row.title = source.limitations.join(" "); list.append(row);
+  }
+  section.append(list);
+  const settings = text("a", "Connect or review sources", "button button-quiet"); settings.href = "/member/settings"; section.append(settings); return section;
+}
+
+function peopleCuePanel(cockpit) {
+  const section = document.createElement("section"); section.className = "card people-cues"; section.append(text("h2", "Relationship cues"), text("p", "Only cadences you explicitly enable can appear here.", "state-note"));
+  if (!(cockpit.cues || []).length) { section.append(text("p", "No one is overdue by an enabled cadence. Silence is a valid result.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "item-list";
+  for (const cue of cockpit.cues) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", cue.title), text("small", cue.reason)); const open = text("button", "Open person", "link-button"); open.type = "button"; open.addEventListener("click", () => document.querySelector(`[data-party-id="${CSS.escape(cue.party_id)}"]`)?.click()); item.append(open); list.append(item); }
+  section.append(list); return section;
+}
+
+function peopleDirectory(people) {
+  const section = document.createElement("section"); section.className = "card people-master";
+  section.append(text("h2", state.peopleQuery ? `Results for “${state.peopleQuery}”` : titleCase(state.peopleLens)));
+  if (!people.length) { section.append(text("p", state.peopleQuery ? "No authorized person matches this search." : "No confirmed people appear in this lens.", "empty")); return section; }
+  const list = document.createElement("ol"); list.className = "people-master-list";
+  for (const person of people) {
+    const item = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "people-master-button"; button.dataset.partyId = person.party_id; button.setAttribute("aria-current", String(person.party_id === state.peopleSelected));
+    const heading = document.createElement("span"); heading.className = "people-person-heading"; heading.append(text("strong", person.display_name || "Unnamed person")); if (person.favorite) heading.append(text("span", "Favorite", "pill pill-lavender"));
+    const context = [person.relationship_label, person.organization, person.job_title].filter(Boolean).join(" · ");
+    const contact = person.last_contact_at ? `Last visible contact ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(person.last_contact_at))}` : "No visible interaction yet";
+    button.append(heading, text("span", context || "Confirmed Party", "people-context"), text("small", contact));
+    button.addEventListener("click", () => { state.peopleSelected = person.party_id; state.peopleDetail = null; replaceQuery({ item: person.party_id }); renderPeople(state.surface); });
+    item.append(button); list.append(item);
+  }
+  section.append(list); return section;
+}
+
+function peopleDetail(person, detail) {
+  const section = document.createElement("section"); section.className = "card people-detail";
+  if (!person) { section.append(text("h2", "Choose a person"), text("p", "Select one confirmed Party to see authorized relationship context, source records, commitments, and interactions.", "empty")); return section; }
+  section.append(text("p", person.relationship_label || titleCase(person.kind), "eyebrow"), text("h2", person.display_name || "Unnamed person"), text("p", [person.organization, person.job_title].filter(Boolean).join(" · ") || "Confirmed identity", "meta"));
+  if (!detail) { section.append(text("p", "Loading authorized relationship memory…", "empty")); return section; }
+  const facts = document.createElement("dl"); facts.className = "people-facts";
+  const identifiers = (detail.identifiers || []).map((value) => `${titleCase(value.kind)} · ${value.value}`);
+  for (const [label, value] of [["Access", titleCase(detail.party?.access_mode || "authorized")], ["Contact", identifiers.join("\n") || "No authorized endpoint"], ["Sources", `${(detail.contact_records || []).length} member-owned record${(detail.contact_records || []).length === 1 ? "" : "s"}`], ["Last contact", detail.contact_gap?.last_contact_iso ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(detail.contact_gap.last_contact_iso)) : "No visible interaction"]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  if (["owner", "household_shared"].includes(detail.party?.access_mode)) {
+    const profile = detail.member_profile || {}; const settings = document.createElement("details"); settings.className = "people-settings"; settings.append(text("summary", "Relationship settings"));
+    const form = document.createElement("form"); form.className = "people-settings-form";
+    const circle = document.createElement("input"); circle.value = profile.circle || ""; circle.placeholder = "Family, friend, school, professional…";
+    const cadence = document.createElement("input"); cadence.type = "number"; cadence.min = "1"; cadence.max = "3650"; cadence.value = profile.desired_cadence_days || ""; cadence.placeholder = "No cadence";
+    const tags = document.createElement("input"); tags.value = (profile.tags || []).join(", "); tags.placeholder = "Comma-separated private tags";
+    const favorite = document.createElement("input"); favorite.type = "checkbox"; favorite.checked = Boolean(profile.favorite);
+    const cues = document.createElement("input"); cues.type = "checkbox"; cues.checked = Boolean(profile.cues_enabled);
+    const suppressed = document.createElement("input"); suppressed.type = "checkbox"; suppressed.checked = Boolean(profile.suppressed);
+    const reason = document.createElement("input"); reason.value = profile.suppression_reason || ""; reason.placeholder = "Required when suppressed";
+    const check = (label, control) => { const wrapper = document.createElement("label"); wrapper.className = "people-check"; wrapper.append(control, document.createTextNode(label)); return wrapper; };
+    const toggles = document.createElement("div"); toggles.className = "people-toggle-row"; toggles.append(check("Favorite", favorite), check("Enable cadence cue", cues), check("Suppress cues", suppressed));
+    const save = text("button", "Save relationship settings", "button button-primary"); save.type = "submit";
+    form.append(field("Circle", circle), field("Cadence in days", cadence), field("Private tags", tags), toggles, field("Suppression reason", reason), save);
+    form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; setBanner("Saving your explicit relationship policy…"); try { await api(`/api/member/v1/people/${encodeURIComponent(person.party_id)}/profile`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: profile.last_event_id || null, circle: circle.value.trim() || null, desired_cadence_days: cadence.value ? Number(cadence.value) : null, cues_enabled: cues.checked, favorite: favorite.checked, suppressed: suppressed.checked, suppression_reason: reason.value.trim() || null, tags: tags.value.split(",").map((value) => value.trim()).filter(Boolean) }) }); setBanner("Relationship settings saved. Cues remain deterministic and opt-in."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Relationship settings were not changed.`); save.disabled = false; } });
+    settings.append(form); section.append(settings);
+  }
+  const relationshipFacts = (detail.relationship_facts || []).filter((value) => !value.revoked_at);
+  const factSection = document.createElement("section"); factSection.className = "people-detail-section"; factSection.append(text("h3", "Confirmed relationship facts"));
+  if (!relationshipFacts.length) factSection.append(text("p", "No evidence-backed relationship facts have been confirmed.", "empty"));
+  else { const list = document.createElement("ul"); list.className = "item-list"; for (const fact of relationshipFacts) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", fact.label || titleCase(fact.kind)), text("span", fact.value), text("small", `Confirmed from event ${fact.source_event_id}`)); list.append(item); } factSection.append(list); }
+  const activity = document.createElement("section"); activity.className = "people-detail-section"; activity.append(text("h3", "Visible activity"));
+  const combined = [...(detail.commitments || []).map((value) => ({ ...value, _kind: "Commitment" })), ...(detail.interactions || []).slice(0, 8).map((value) => ({ ...value, _kind: titleCase(value.channel || value.kind || "Interaction") }))];
+  if (!combined.length) activity.append(text("p", "No visible commitments or interactions. AdministrateMe does not invent relationship history.", "empty"));
+  else { const list = document.createElement("ul"); list.className = "item-list"; for (const value of combined.slice(0, 12)) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", value.title || value.subject || value.description || value._kind), text("small", value.occurred_at || value.due_at || value.status || value._kind)); list.append(item); } activity.append(list); }
+  section.append(factSection, activity); return section;
+}
+
+function renderPeople(data) {
+  const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit || { directory: [], sources: [], cues: [], lens_counts: {} };
+  $("#mode-label").textContent = "Private · confirmed identity · deterministic cues";
+  const sourcePeople = state.peopleResults || cockpit.directory || []; const visible = sourcePeople.filter(peopleMatchesLens);
+  if (!state.peopleSelected || !visible.some((person) => person.party_id === state.peopleSelected)) { state.peopleSelected = visible[0]?.party_id || null; state.peopleDetail = null; }
+  const selected = visible.find((person) => person.party_id === state.peopleSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "people-workspace";
+  const rail = document.createElement("div"); rail.className = "people-rail-stack"; rail.append(peopleSources(cockpit), peopleCuePanel(cockpit));
+  workspace.append(rail, peopleDirectory(visible), peopleDetail(selected, state.peopleDetail));
+  root.append(freshnessStrip(data), peopleHero(cockpit), peopleControls(data), workspace);
+  if (selected && !state.peopleDetail) api(`/api/member/v1/people/${encodeURIComponent(selected.party_id)}`).then((detail) => { if (state.peopleSelected === selected.party_id) { state.peopleDetail = detail; renderPeople(state.surface); } }).catch((error) => setBanner(`${error.message} Nothing was changed.`));
+}
+
+function parseJsonList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function noteSourceLabel(note) {
+  return note.account_name || titleCase(note.source_kind || "note source");
+}
+
+function noteTimestamp(note) {
+  const value = note.provider_modified_at || note.captured_at;
+  if (!value) return "Time unavailable";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Time unavailable";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed);
+}
+
+function notePlainBody(note) {
+  const body = String(note.body || "");
+  if (note.body_format !== "html") return body;
+  return new DOMParser().parseFromString(body, "text/html").body.textContent || "";
+}
+
+function noteSourceKey(note) {
+  return `${note.source_kind || "unknown"}|${note.account_external_id || note.source_account_id || ""}`;
+}
+
+function noteMatchesLens(note) {
+  if (state.notesSource !== "all" && noteSourceKey(note) !== state.notesSource) return false;
+  if (state.notesLens === "recent") {
+    const value = new Date(note.provider_modified_at || note.captured_at || 0).getTime();
+    return value >= Date.now() - (30 * 24 * 60 * 60 * 1000);
+  }
+  if (state.notesLens === "shared") {
+    return note.access_mode === "shared_reference" || (note.grants || []).some((grant) => !grant.revoked_at);
+  }
+  if (state.notesLens === "meetings") return note.source_type === "meeting_note";
+  if (state.notesLens === "triage") return Number(note.triage_count || 0) > 0;
+  return true;
+}
+
+function notesHero(data) {
+  const counts = data.counts || {};
+  const section = document.createElement("section"); section.className = "hero-card notes-hero";
+  section.append(
+    text("p", "PRIVATE RECALL", "eyebrow"),
+    text("h2", "Write it down once. Find it when it matters.", "action-title"),
+    text("p", "Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here."),
+  );
+  const stats = document.createElement("dl"); stats.className = "brief-stats notes-stats";
+  for (const [label, value] of [["Visible notes", counts.notes || 0], ["Shared with me", counts.shared_with_me || 0], ["Meeting notes", counts.meeting_notes || 0], ["Needs Triage", counts.triage || 0]]) {
+    const item = document.createElement("div"); item.className = "stat";
+    item.append(text("dt", label), text("dd", value)); stats.append(item);
+  }
+  section.append(stats);
+  return section;
+}
+
+function notesControls(data) {
+  const section = document.createElement("section"); section.className = "card notes-controls";
+  const search = document.createElement("form"); search.className = "notes-search";
+  const input = document.createElement("input"); input.type = "search"; input.value = state.notesQuery; input.placeholder = "Search titles, notes, folders, and tags"; input.setAttribute("aria-label", "Search your authorized notes");
+  const submit = text("button", "Search", "button button-primary"); submit.type = "submit";
+  const clear = text("button", "Clear", "button button-quiet"); clear.type = "button"; clear.hidden = !state.notesQuery;
+  search.append(input, submit, clear);
+  search.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+    submit.disabled = true;
+    setBanner("Searching only notes you are authorized to search…");
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (state.notesSource !== "all") params.set("source", state.notesSource.split("|")[0]);
+      const result = await api(`/api/member/v1/notes/search?${params}`);
+      const originals = new Map((data.notes || []).map((note) => [note.knowledge_id, note]));
+      state.notesQuery = query;
+      state.notesResults = result.items.map((note) => ({ ...(originals.get(note.knowledge_id) || {}), ...note }));
+      state.notesSelected = state.notesResults[0]?.knowledge_id || null;
+      replaceQuery({ q: query, note: state.notesSelected });
+      renderNotes(data);
+      setBanner(`${state.notesResults.length} authorized search result${state.notesResults.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setBanner(`${error.message} No note content was changed.`);
+      submit.disabled = false;
+    }
+  });
+  clear.addEventListener("click", () => {
+    state.notesQuery = ""; state.notesResults = null; state.notesSelected = null;
+    clearBanner(); replaceQuery({ q: null, note: null }); renderNotes(data);
+  });
+  const lenses = document.createElement("div"); lenses.className = "comms-filter-row"; lenses.setAttribute("role", "group"); lenses.setAttribute("aria-label", "Note lenses");
+  for (const [key, label] of [["all", "All"], ["recent", "Recent"], ["shared", "Shared"], ["meetings", "Meetings"], ["triage", "Needs Triage"]]) {
+    const button = text("button", label, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.notesLens === key));
+    button.addEventListener("click", () => { state.notesLens = key; state.notesSelected = null; clearBanner(); replaceQuery({ view: key, note: null }); renderNotes(data); }); lenses.append(button);
+  }
+  section.append(search, lenses);
+  return section;
+}
+
+function notesSources(data) {
+  const section = document.createElement("section"); section.className = "card notes-sources";
+  section.append(text("h2", "Sources"), text("p", "Provider access and AdministrateMe sharing stay separate.", "state-note"));
+  const list = document.createElement("div"); list.className = "notes-source-list";
+  const all = text("button", `All sources · ${(data.notes || []).length}`, "notes-source-button"); all.type = "button"; all.setAttribute("aria-current", String(state.notesSource === "all"));
+  all.addEventListener("click", () => { state.notesSource = "all"; state.notesSelected = null; state.notesResults = null; state.notesQuery = ""; clearBanner(); replaceQuery({ source: null, note: null, q: null }); renderNotes(data); }); list.append(all);
+  for (const source of data.sources || []) {
+    const key = `${source.source_kind || "unknown"}|${source.account_external_id || ""}`;
+    const button = document.createElement("button"); button.type = "button"; button.className = "notes-source-button"; button.setAttribute("aria-current", String(state.notesSource === key));
+    const name = source.account_name || titleCase(source.source_kind);
+    button.append(text("strong", name), text("small", `${source.count} note${source.count === 1 ? "" : "s"} · ${source.state === "limited" ? "Limited" : "Ready"}`));
+    if ((source.warnings || []).length) button.title = source.warnings.map(titleCase).join(" · ");
+    button.addEventListener("click", () => { state.notesSource = key; state.notesSelected = null; state.notesResults = null; state.notesQuery = ""; clearBanner(); replaceQuery({ source: key, note: null, q: null }); renderNotes(data); }); list.append(button);
+  }
+  section.append(list);
+  const settings = text("a", "Connect or review sources", "button button-quiet"); settings.href = "/member/settings"; section.append(settings);
+  return section;
+}
+
+function noteMasterList(notes, data) {
+  const section = document.createElement("section"); section.className = "card notes-master";
+  section.append(text("h2", state.notesQuery ? `Results for “${state.notesQuery}”` : titleCase(state.notesLens)));
+  if (!notes.length) {
+    section.append(text("p", state.notesQuery ? "No authorized notes match this search." : "No notes appear in this lens. Connect a member-owned source in Settings, or choose another lens.", "empty"));
+    return section;
+  }
+  const list = document.createElement("ol"); list.className = "notes-master-list";
+  for (const note of notes) {
+    const item = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "notes-master-button"; button.setAttribute("aria-current", String(note.knowledge_id === state.notesSelected));
+    const title = note.title || "Untitled note";
+    const preview = notePlainBody(note).replace(/\s+/g, " ").trim().slice(0, 130);
+    button.append(text("strong", title), text("span", preview || "No note text", "notes-preview"), text("small", `${noteSourceLabel(note)} · ${noteTimestamp(note)}`));
+    if (note.access_mode === "shared_reference") button.append(text("span", "Shared with me", "pill pill-lavender"));
+    if (note.triage_count) button.append(text("span", `${note.triage_count} in Triage`, "pill pill-blush"));
+    button.addEventListener("click", () => { state.notesSelected = note.knowledge_id; replaceQuery({ note: note.knowledge_id }); renderNotes(data); });
+    item.append(button); list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
+function noteSharing(note, data) {
+  const section = document.createElement("section"); section.className = "notes-sharing";
+  section.append(text("h3", "AdministrateMe access"), text("p", "A provider share never grants access here. Share one note explicitly and revoke it independently.", "state-note"));
+  const activeGrants = (note.grants || []).filter((grant) => !grant.revoked_at);
+  for (const grant of activeGrants) {
+    const member = (data.sharing_members || []).find((value) => value.member_id === grant.grantee_member_id);
+    const row = document.createElement("div"); row.className = "notes-grant-row";
+    const body = document.createElement("div"); body.append(text("strong", member?.label || "Enrolled household adult"), text("small", (grant.permissions || []).map(titleCase).join(" · ")));
+    const revoke = text("button", "Revoke", "link-button"); revoke.type = "button";
+    revoke.addEventListener("click", async () => {
+      revoke.disabled = true; setBanner("Revoking this AdministrateMe note grant…");
+      try {
+        await api(`/api/member/v1/notes/${encodeURIComponent(note.knowledge_id)}/grants/${encodeURIComponent(grant.grant_id)}/revoke`, {
+          method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID() }),
+        });
+        setBanner("Access revoked. Provider sharing, if any, was not changed."); await reloadActiveSurface();
+      } catch (error) { setBanner(`${error.message} Access was not changed.`); revoke.disabled = false; }
+    });
+    row.append(body, revoke); section.append(row);
+  }
+  if (!(data.sharing_members || []).length) {
+    section.append(text("p", "No other enrolled adult member is eligible for an AdministrateMe grant.", "empty"));
+    return section;
+  }
+  const form = document.createElement("form"); form.className = "notes-share-form";
+  const member = selectControl((data.sharing_members || []).map((value) => ({ value: value.member_id, label: value.label })), "", "Choose household adult…"); member.name = "member"; member.required = true;
+  const submit = text("button", "Share note", "button button-quiet"); submit.type = "submit";
+  const permission = document.createElement("input"); permission.value = "Read and search"; permission.disabled = true;
+  form.append(field("Member", member), field("Permission", permission), submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true; setBanner("Recording one explicit note grant…");
+    try {
+      await api(`/api/member/v1/notes/${encodeURIComponent(note.knowledge_id)}/grants`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({ request_id: crypto.randomUUID(), grantee_member_id: member.value, permissions: ["read", "search"] }),
+      });
+      setBanner("Note access recorded. No provider permission was changed."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} Access was not changed.`); submit.disabled = false; }
+  });
+  section.append(form);
+  return section;
+}
+
+function noteDetail(note, data) {
+  const section = document.createElement("section"); section.className = "card notes-detail";
+  if (!note) {
+    section.append(text("h2", "Choose a note"), text("p", "Select one note to read its authorized copy, provenance, sharing state, and evidence-backed Triage candidates.", "empty"));
+    return section;
+  }
+  section.append(text("p", titleCase(note.source_type || "note"), "eyebrow"), text("h2", note.title || "Untitled note"), text("p", `${noteSourceLabel(note)} · ${noteTimestamp(note)}`, "meta"));
+  const tags = parseJsonList(note.tags_json);
+  if (tags.length) { const row = document.createElement("div"); row.className = "notes-tag-row"; for (const tag of tags) row.append(text("span", tag, "pill pill-lavender")); section.append(row); }
+  const body = text("pre", notePlainBody(note) || "This provider record has no readable note text.", "notes-body"); section.append(body);
+  const actions = document.createElement("div"); actions.className = "button-row";
+  if (note.source_url && /^https?:\/\//i.test(note.source_url)) { const open = text("a", "Open in source", "button button-quiet"); open.href = note.source_url; open.target = "_blank"; open.rel = "noopener noreferrer"; actions.append(open); }
+  if (note.triage_href) { const triage = text("a", `Review ${note.triage_count} in Triage`, "button button-primary"); triage.href = note.triage_href; actions.append(triage); }
+  if (note.last_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(note.last_event_id)); actions.append(evidence); }
+  section.append(actions);
+  const facts = document.createElement("dl"); facts.className = "notes-facts";
+  for (const [label, value] of [["Folder", note.folder_path || "Provider root"], ["Access", note.access_mode === "shared_reference" ? "Explicit shared reference" : "Owner"], ["Format", titleCase(note.body_format || "plain")], ["Revision", note.provider_revision || "Unreported"]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  const warnings = parseJsonList(note.capability_warnings_json);
+  if (warnings.length) section.append(text("p", `Provider limits: ${warnings.map(titleCase).join(" · ")}.`, "possible-copy"));
+  if (note.access_mode === "owner" && note.sensitivity !== "privileged") section.append(noteSharing(note, data));
+  else if (note.sensitivity === "privileged") section.append(text("p", "Privileged notes stay owner-only and are excluded from model processing and search indexes.", "review-state"));
+  return section;
+}
+
+function renderNotes(data) {
+  const root = $("#surface"); root.replaceChildren();
+  $("#mode-label").textContent = "Private · authorized recall · deterministic Triage";
+  const notes = (state.notesResults || data.notes || []).filter(noteMatchesLens);
+  if (!state.notesSelected || !notes.some((note) => note.knowledge_id === state.notesSelected)) state.notesSelected = notes[0]?.knowledge_id || null;
+  const selected = notes.find((note) => note.knowledge_id === state.notesSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "notes-workspace";
+  workspace.append(notesSources(data), noteMasterList(notes, data), noteDetail(selected, data));
+  root.append(freshnessStrip(data), notesHero(data), notesControls(data), workspace);
+}
+
+const FINANCE_VIEWS = [
+  ["overview", "Overview"],
+  ["cashflow", "Cash flow"],
+  ["spending", "Spending"],
+  ["scenarios", "Scenarios"],
+  ["networth", "Net worth"],
+  ["health", "Data health"],
+];
+
+function financeControls() {
+  const controls = document.createElement("nav"); controls.className = "finance-controls"; controls.setAttribute("aria-label", "Finance views");
+  for (const [value, label] of FINANCE_VIEWS) {
+    const button = text("button", label, "finance-view-button"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.financeView === value));
+    button.addEventListener("click", () => { state.financeView = value; replaceQuery({ view: value }); renderFinance(state.surface); });
+    controls.append(button);
+  }
+  return controls;
+}
+
+function financeHero(cockpit) {
+  const focus = cockpit.focus || {};
+  const hero = document.createElement("section"); hero.className = `hero-card finance-hero finance-${focus.state || "steady"}`;
+  const copy = document.createElement("div");
+  copy.append(text("p", "HOUSEHOLD CASH-FLOW COCKPIT", "eyebrow"), text("h2", focus.title || "Finance plan", "action-title"), text("p", focus.why || "Deterministic workbook and transaction state.", "brief-summary"), text("p", focus.action || "", "microstep"));
+  const baseline = (cockpit.scenarios || []).find((item) => item.is_baseline) || cockpit.scenarios?.[0];
+  const quick = document.createElement("dl"); quick.className = "finance-hero-stats";
+  for (const [label, value] of [
+    ["Cash", moneyMinor(cockpit.summary.cash_minor, { compact: true })],
+    ["Month-to-date", moneyMinor(cockpit.summary.mtd_net_minor, { compact: true })],
+    ["Monthly plan", moneyMinor((baseline || {}).monthly_net_minor, { compact: true })],
+    ["Cash runway", baseline?.cash_out_month ? `${baseline.cash_out_month} mo` : `>${baseline?.horizon_months || 60} mo`],
+  ]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); quick.append(item); }
+  hero.append(copy, quick); return hero;
+}
+
+function financeKpis(cockpit) {
+  const grid = document.createElement("section"); grid.className = "finance-kpi-grid"; grid.setAttribute("aria-label", "Finance summary");
+  const values = [
+    ["Forecast month-end", cockpit.summary.projected_month_income_minor - cockpit.summary.projected_month_expenses_minor, "Current pace, not a promise"],
+    ["Monthly plan", cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor, "Workbook baseline"],
+    ["Net worth", cockpit.summary.net_worth_minor, "Observed accounts + workbook assets − liabilities"],
+    ["Spending vs prior", cockpit.summary.mtd_expenses_minor - cockpit.summary.prior_month_expenses_minor, "Same elapsed time last month"],
+  ];
+  for (const [label, value, note] of values) { const item = document.createElement("article"); item.className = "card finance-kpi"; item.append(text("span", label, "eyebrow"), text("strong", moneyMinor(value, { compact: true })), text("small", note)); grid.append(item); }
+  return grid;
+}
+
+function financeCashFlow(cockpit) {
+  const section = document.createElement("section"); section.className = "card finance-cashflow"; section.append(text("h2", "Cash flow plan"), text("p", "Observed activity is compared with the workbook baseline. The dashboard never rewrites your bank.", "state-note"));
+  const rows = [
+    ["Income", cockpit.summary.mtd_income_minor, cockpit.summary.base_monthly_income_minor],
+    ["Expenses", cockpit.summary.mtd_expenses_minor, cockpit.summary.base_monthly_expenses_minor],
+    ["Net", cockpit.summary.mtd_net_minor, cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor],
+  ];
+  const table = document.createElement("table"); table.className = "finance-table"; const head = document.createElement("thead"); const headRow = document.createElement("tr"); for (const value of ["Measure", "Month to date", "Monthly plan"]) headRow.append(text("th", value)); head.append(headRow); const body = document.createElement("tbody");
+  for (const [label, actual, plan] of rows) { const row = document.createElement("tr"); row.append(text("th", label), text("td", moneyMinor(actual)), text("td", moneyMinor(plan))); body.append(row); }
+  table.append(head, body); section.append(table); return section;
+}
+
+function financeBudgets(cockpit) {
+  const section = document.createElement("section"); section.className = "card finance-budget"; section.append(text("h2", "Spending plan"));
+  if (!(cockpit.budgets || []).length) { section.append(text("p", "No category budgets are published yet. Add them in the workbook; the dashboard will not invent targets.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "finance-budget-list";
+  for (const item of cockpit.budgets) { const row = document.createElement("li"); const heading = document.createElement("div"); heading.append(text("strong", item.category), text("span", item.state === "watch" ? "Review" : "Within plan", `pill state-label state-${item.state === "watch" ? "degraded" : "healthy"}`)); const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); const ratio = item.planned_minor ? Math.min(1.2, item.actual_minor / item.planned_minor) : 0; fill.style.width = `${Math.min(100, ratio * 100)}%`; progress.append(fill); row.append(heading, progress, text("small", `${moneyMinor(item.actual_minor)} of ${moneyMinor(item.planned_minor)} · ${moneyMinor(item.remaining_minor)} remaining`)); list.append(row); }
+  section.append(list); return section;
+}
+
+function financeScenarios(cockpit) {
+  const section = document.createElement("section"); section.className = "card finance-scenarios"; section.append(text("h2", "Scenario lab"), text("p", "Scenarios are workbook-authored deltas. Switching here compares projections; it does not change the baseline.", "state-note"));
+  const scenarios = cockpit.scenarios || [];
+  if (!scenarios.length) { section.append(text("p", "No scenario is available.", "empty")); return section; }
+  if (!state.financeScenario || !scenarios.some((item) => item.scenario_id === state.financeScenario)) state.financeScenario = (scenarios.find((item) => item.is_baseline) || scenarios[0]).scenario_id;
+  const switcher = document.createElement("div"); switcher.className = "finance-scenario-switcher";
+  for (const scenario of scenarios) { const button = text("button", scenario.name, "finance-scenario-button"); button.type = "button"; button.setAttribute("aria-pressed", String(scenario.scenario_id === state.financeScenario)); button.addEventListener("click", () => { state.financeScenario = scenario.scenario_id; renderFinance(state.surface); }); switcher.append(button); }
+  const selected = scenarios.find((item) => item.scenario_id === state.financeScenario) || scenarios[0]; const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
+  for (const [label, value] of [["Monthly net", moneyMinor(selected.monthly_net_minor)], ["Ending cash", moneyMinor(selected.ending_cash_minor)], ["Below reserve", selected.below_floor_month ? `Month ${selected.below_floor_month}` : "Not in horizon"], ["Cash out", selected.cash_out_month ? `Month ${selected.cash_out_month}` : "Not in horizon"]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); stats.append(item); }
+  const chart = document.createElement("div"); chart.className = "finance-spark"; chart.setAttribute("aria-label", `${selected.name} cash forecast`); const points = selected.points || []; const max = Math.max(...points.map((item) => Math.abs(item.cash_minor)), 1); for (const point of points.filter((_item, index) => index % Math.max(1, Math.ceil(points.length / 24)) === 0)) { const bar = document.createElement("span"); bar.style.height = `${Math.max(4, Math.abs(point.cash_minor) / max * 100)}%`; bar.classList.toggle("negative", point.cash_minor < 0); bar.title = `Month ${point.month}: ${moneyMinor(point.cash_minor)}`; chart.append(bar); }
+  section.append(switcher, stats, chart); if (selected.notes) section.append(text("p", selected.notes, "meta")); return section;
+}
+
+function financeGoals(cockpit) {
+  const section = document.createElement("section"); section.className = "card finance-goals";
+  section.append(text("h2", "Goals and capital plans"), text("p", "Goals organize future uses of money. They never move funds or silently change a scenario.", "state-note"));
+  const goals = cockpit.goals || [];
+  if (!goals.length) { section.append(text("p", "No goals are published yet. Add a target in the workbook when it is useful.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "finance-goal-list";
+  for (const goal of goals) {
+    const row = document.createElement("li");
+    const heading = document.createElement("div"); heading.append(text("strong", goal.name), text("span", titleCase(goal.status), `pill state-label state-${goal.status === "complete" ? "healthy" : "ready"}`));
+    const target = Number(goal.target_minor || 0); const current = Number(goal.current_minor || 0); const ratio = target > 0 ? Math.min(1, current / target) : 0;
+    const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); fill.style.width = `${ratio * 100}%`; progress.append(fill);
+    const due = goal.target_date ? ` · target ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(`${goal.target_date}T00:00:00`))}` : "";
+    row.append(heading, progress, text("small", `${moneyMinor(current)} of ${moneyMinor(target)}${due}`)); if (goal.notes) row.append(text("small", goal.notes)); list.append(row);
+  }
+  section.append(list); return section;
+}
+
+function financeTransactions(cockpit) {
+  const section = document.createElement("section"); section.className = "card finance-transactions"; section.append(text("h2", "Recent money movement"));
+  const flows = cockpit.recent_flows || [];
+  if (!flows.length) { section.append(text("p", "No visible transactions in this scope.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "finance-transaction-list";
+  for (const flow of flows) {
+    const row = document.createElement("li"); const body = document.createElement("div");
+    body.append(text("strong", flow.merchant_name || flow.memo || flow.notes || titleCase(flow.kind || "Money movement")), text("small", `${flow.occurred_at || "Date unavailable"} · ${flow.assigned_category || flow.category || flow.provider_category || "Uncategorized"}`));
+    const signed = flow.kind === "received" ? Number(flow.amount_minor || 0) : -Math.abs(Number(flow.amount_minor || 0));
+    row.append(body, text("strong", moneyMinor(signed), signed < 0 ? "finance-outflow" : "finance-inflow")); list.append(row);
+  }
+  section.append(list); return section;
+}
+
+function financeAccounts(cockpit) {
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Net worth inputs"), text("p", `Computed net worth: ${moneyMinor(cockpit.summary.net_worth_minor)}. Account details remain member-scoped and privileged.`, "state-note"));
+  if (!(cockpit.accounts || []).length) { section.append(text("p", "No visible provider accounts. Workbook asset and liability assumptions still participate in the total.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "finance-account-list"; for (const account of cockpit.accounts) { const row = document.createElement("li"); const body = document.createElement("div"); const liability = ["credit", "loan"].includes(account.account_type); body.append(text("strong", account.display_name), text("small", `${account.institution_name} · ${liability ? "Liability" : "Asset"} · ${titleCase(account.account_type)} · •••• ${account.last4 || "—"}`)); const signed = liability ? -Math.abs(Number(account.current_balance_minor || 0)) : Number(account.current_balance_minor || 0); row.append(body, text("strong", moneyMinor(signed), liability ? "finance-outflow" : "")); list.append(row); } section.append(list); return section;
+}
+
+function financeHealth(cockpit) {
+  const health = cockpit.data_health || {}; const workbook = cockpit.workbook;
+  const section = document.createElement("section"); section.className = "card finance-health"; section.append(text("h2", "Source and model health"));
+  const facts = document.createElement("dl"); facts.className = "finance-health-grid"; for (const [label, value] of [["State", titleCase(health.state)], ["Transactions", health.transaction_count || 0], ["Accounts", health.account_count || 0], ["Accounts needing attention", health.unhealthy_account_count || 0], ["Pending", health.pending_count || 0], ["Uncategorized", health.uncategorized_count || 0], ["Non-USD rows excluded", health.unsupported_currency_count || 0], ["Latest source", health.latest_source_at ? new Date(health.latest_source_at).toLocaleString() : "No source watermark"], ["Workbook", workbook ? `${titleCase(workbook.validation_state)} · schema ${workbook.workbook_schema_version}` : "Not published"]]) facts.append(text("dt", label), text("dd", value)); section.append(facts);
+  if (workbook?.validation_failures?.length) { const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const failure of workbook.validation_failures) list.append(text("li", failure)); section.append(text("h3", "Workbook checks"), list); }
+  section.append(text("p", "Authority split: Plaid owns provider facts; the workbook owns reviewed planning inputs and manual overrides; the event log preserves provenance and replay.", "review-state")); return section;
+}
+
+function renderFinance(data) {
+  const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic planning · no bank writes";
+  const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
+  const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
+  root.append(freshnessStrip(data), financeHero(cockpit), financeControls());
+  if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit));
+  else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));
+  else if (state.financeView === "spending") root.append(financeBudgets(cockpit), financeTransactions(cockpit));
+  else if (state.financeView === "scenarios") root.append(financeScenarios(cockpit), financeGoals(cockpit));
+  else if (state.financeView === "networth") root.append(financeAccounts(cockpit));
+  else root.append(financeHealth(cockpit));
+}
+
+const SETTINGS_SECTIONS = [
+  ["overview", "Overview"],
+  ["account", "My account"],
+  ["behavior", "CoS behavior"],
+  ["connections", "Connections"],
+  ["bridges", "Bridges & devices"],
+  ["privacy", "Household & privacy"],
+  ["system", "Safety & system"],
+];
+
+function settingsNav() {
+  const nav = document.createElement("nav"); nav.className = "settings-nav"; nav.setAttribute("aria-label", "Settings sections");
+  for (const [value, label] of SETTINGS_SECTIONS) {
+    const button = text("button", label, "settings-nav-button"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.settingsSection === value));
+    button.addEventListener("click", () => { state.settingsSection = value; replaceQuery({ section: value }); renderSettings(state.surface); });
+    nav.append(button);
+  }
+  return nav;
+}
+
+function identitySummary(identity, compact = false) {
+  const section = document.createElement("section"); section.className = compact ? "settings-identity compact" : "card settings-identity";
+  const heading = document.createElement("div"); heading.append(text("p", "SIGNED-IN IDENTITY", "eyebrow"), text("h2", identity.authenticated_display_name));
+  const status = text("span", identity.identity_bound ? "Identity bound" : "Binding incomplete", `pill state-label state-${identity.identity_bound ? "healthy" : "blocked"}`);
+  section.append(heading, status);
+  const facts = document.createElement("dl"); facts.className = "settings-facts";
+  for (const [label, value] of [["Role", titleCase(identity.authenticated_role)], ["Authenticated through", identity.authentication_method], ["Reading as", identity.view_display_name], ["Actions execute as", identity.authenticated_display_name]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  if (identity.viewing_as) section.append(text("p", `You are viewing ${identity.view_display_name}. Settings changes are disabled; actions still belong to ${identity.authenticated_display_name}.`, "review-state"));
+  return section;
+}
+
+function settingsHero(data) {
+  const control = data.control; const identity = control.identity;
+  const hero = document.createElement("section"); hero.className = "hero-card settings-hero";
+  const copy = document.createElement("div"); copy.append(text("p", "MEMBER CONTROL PLANE", "eyebrow"), text("h2", `You’re signed in as ${identity.authenticated_display_name}.`, "action-title"), text("p", "See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.", "brief-summary"));
+  const stats = document.createElement("dl"); stats.className = "settings-hero-stats";
+  const healthy = control.connections.filter((item) => item.runtime === "running").length;
+  for (const [label, value] of [["Needs attention", control.needs_attention.length], ["Connected", control.connections.filter((item) => item.setup === "connected").length], ["Running", healthy], ["Writes execute", data.observation.active ? "No" : "Gated"]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); stats.append(item); }
+  hero.append(copy, stats); return hero;
+}
+
+function attentionCard(items) {
+  const section = document.createElement("section"); section.className = "card settings-attention"; section.append(text("h2", "Needs attention"));
+  if (!items.length) { section.append(text("p", "Nothing needs intervention. Unknown state will still remain visible in Connections.", "empty compact-empty")); return section; }
+  const list = document.createElement("ul"); list.className = "settings-attention-list";
+  for (const item of items) { const row = document.createElement("li"); row.append(text("span", titleCase(item.severity), `pill state-label state-${item.severity}`)); const body = document.createElement("div"); body.append(text("strong", item.title), text("small", item.detail)); const open = text("button", "Review", "link-button"); open.type = "button"; open.addEventListener("click", () => { state.settingsSection = item.section; replaceQuery({ section: item.section }); renderSettings(state.surface); }); row.append(body, open); list.append(row); }
+  section.append(list); return section;
+}
+
+function connectionAxis(label, value, stateClass = value) {
+  const axis = document.createElement("div"); axis.className = "connection-axis"; axis.append(text("span", label), text("strong", titleCase(value), `state-label state-${String(stateClass).replaceAll("_", "-")}`)); return axis;
+}
+
+function permissionList(title, values) {
+  const box = document.createElement("div"); box.className = "permission-box"; box.append(text("span", title));
+  if (!values.length) box.append(text("strong", "None"));
+  else { const list = document.createElement("ul"); for (const value of values) list.append(text("li", titleCase(value))); box.append(list); }
+  return box;
+}
+
+function connectionCard(connection, data) {
+  const section = document.createElement("article"); section.className = "card connection-card";
+  const head = document.createElement("div"); head.className = "connection-heading";
+  const copy = document.createElement("div"); copy.append(text("p", connection.product, "eyebrow"), text("h2", connection.label), text("small", `${connection.provider_label} · ${connection.account_hint} · ${titleCase(connection.workspace)}`)); head.append(copy, text("span", titleCase(connection.deployment), "pill pill-lavender")); section.append(head);
+  const axes = document.createElement("div"); axes.className = "connection-axes"; axes.append(connectionAxis("Setup", connection.setup), connectionAxis("Runtime", connection.runtime));
+  const credentialState = connection.permissions.credential_reference_present ? "stored" : "missing"; axes.append(connectionAxis("Credential ref", credentialState, credentialState === "stored" ? "healthy" : "blocked"), connectionAxis("Safety", connection.safety.observation_only ? "observation only" : connection.safety.writes_execute ? "writes gated" : "read only", connection.safety.observation_only ? "observation-only" : "healthy")); section.append(axes);
+  const permissions = document.createElement("div"); permissions.className = "permission-grid"; permissions.append(permissionList("Reviewed read operations", connection.permissions.read), permissionList("Reviewed write operations", connection.permissions.write)); section.append(permissions);
+  const note = !connection.safety.human_gate_required ? "This connection has no reviewed provider write capability." : connection.safety.observation_only ? "Observation mode suppresses provider changes even when a reviewed provider write capability exists." : "Writes still require member confirmation, governance, rate limits, privacy checks, and independent approval."; section.append(text("p", note, "state-note"));
+  if (connection.error) section.append(text("p", `${titleCase(connection.error.severity)} ${titleCase(connection.error.kind)} error${connection.error.occurred_at ? ` · ${new Date(connection.error.occurred_at).toLocaleString()}` : ""}.`, "review-state"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  for (const action of connection.actions || []) { const button = text("button", action === "pause" ? "Pause sync" : "Resume sync", action === "pause" ? "button button-quiet" : "button button-primary"); button.type = "button"; button.disabled = !data.control.identity.can_mutate; button.addEventListener("click", async () => { button.disabled = true; setBanner(`${action === "pause" ? "Pausing" : "Resuming"} ${connection.label}…`); try { const result = await api(`/api/member/v1/settings/connections/${encodeURIComponent(connection.id)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ action, expected_revision: data.control.revision, request_id: crypto.randomUUID() }) }); setBanner(`${connection.label} is ${result.state}. Runtime reconciliation was audited.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The connection was not changed.`); button.disabled = false; } }); actions.append(button); }
+  const technical = document.createElement("details"); technical.className = "settings-technical"; technical.append(text("summary", "Technical status")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Connection ID", connection.id], ["Provider", connection.provider], ["Last cursor evidence", connection.last_sync_at ? new Date(connection.last_sync_at).toLocaleString() : "No cursor evidence yet"]]) facts.append(text("dt", label), text("dd", value)); technical.append(facts); section.append(actions, technical); return section;
+}
+
+function renderConnections(data) {
+  const fragment = document.createDocumentFragment(); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Connection truth has four separate axes."), text("p", "Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
+  if (!data.control.connections.length) fragment.append(text("p", "No reviewed provider connection is configured for this member.", "empty card"));
+  else { const grid = document.createElement("div"); grid.className = "settings-card-grid"; for (const connection of data.control.connections) grid.append(connectionCard(connection, data)); fragment.append(grid); }
+  const add = document.createElement("section"); add.className = "card settings-add-provider"; add.append(text("h2", "Add a provider"), text("p", "Only reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.")); const list = document.createElement("div"); list.className = "provider-roadmap"; for (const value of ["Google account · reviewed central adapter", "Apple apps · requires a member bridge", "Outlook, Twilio and BlueBubbles · adapter not installed"]) list.append(text("span", value, "pill pill-lavender")); add.append(list); fragment.append(add); return fragment;
+}
+
+function defaultPreferenceValue(key, data) {
+  const saved = data.control.behavior.preferences || {}; if (saved[key] != null) return saved[key]; const semantic = data.semantics || {};
+  const defaults = { information_density: semantic.information_density ?? 2, planning_horizon_days: semantic.planning_horizon_days ?? 7, task_chunk_minutes: semantic.task_chunk_minutes ?? 15, interruption_budget: semantic.proactive_cap ?? 3, reminder_escalation: semantic.reminder_escalation ?? 1, celebration_intensity: semantic.celebration_intensity ?? 1, digest_hour: semantic.digest_hour ?? 8, quiet_start_hour: semantic.quiet_hours?.start ?? 22, quiet_end_hour: semantic.quiet_hours?.end ?? 7, location_cues: semantic.location_cues ?? false }; return defaults[key];
+}
+
+function behaviorSettings(data) {
+  const fragment = document.createDocumentFragment(); const profiles = document.createElement("section"); profiles.className = "card"; profiles.append(text("h2", "Support profile"), text("p", "Profiles are validated data, not model personalities. They change presentation defaults without changing authority, privacy, or model routing.", "state-note")); const grid = document.createElement("div"); grid.className = "profile-grid";
+  for (const profile of data.control.behavior.profiles) { const item = document.createElement("label"); item.className = "profile-choice"; const input = document.createElement("input"); input.type = "radio"; input.name = "profile"; input.value = profile.id; input.checked = profile.id === data.control.behavior.active_profile_id; input.disabled = !data.control.identity.can_mutate; const body = document.createElement("span"); body.append(text("strong", profile.label), text("small", `${titleCase(profile.format)} · ${profile.behavior.available_minutes} minute default steps`)); item.append(input, body); input.addEventListener("change", async () => { if (!input.checked) return; [...grid.querySelectorAll("input")].forEach((node) => { node.disabled = true; }); setBanner(`Activating ${profile.label} as deterministic member defaults…`); try { await api("/api/member/v1/settings/profile", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ profile_id: profile.id, request_id: crypto.randomUUID() }) }); setBanner(`${profile.label} is active. Authority and model routing were unchanged.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The profile was not changed.`); await reloadActiveSurface(); } }); grid.append(item); }
+  profiles.append(grid); fragment.append(profiles);
+  const form = document.createElement("form"); form.className = "card preference-form"; form.append(text("h2", "Fine-tune your CoS"), text("p", "These bounded values feed deterministic ranking and presentation. AdministrateMe does not infer them from a diagnosis or conversation.", "state-note")); const fields = document.createElement("div"); fields.className = "preference-grid";
+  const definitions = [["information_density", "Information shown at once", 1, 5], ["planning_horizon_days", "Default planning horizon (days)", 1, 14], ["task_chunk_minutes", "Default task chunk (minutes)", 5, 90], ["interruption_budget", "Proactive interruption budget", 0, 12], ["reminder_escalation", "Reminder escalation", 0, 3], ["celebration_intensity", "Celebration intensity", 0, 3], ["digest_hour", "Digest hour", 0, 23], ["quiet_start_hour", "Quiet hours start", 0, 23], ["quiet_end_hour", "Quiet hours end", 0, 23]];
+  for (const [name, label, min, max] of definitions) { const input = document.createElement("input"); input.type = "number"; input.name = name; input.min = min; input.max = max; input.required = true; input.value = defaultPreferenceValue(name, data); input.disabled = !data.control.identity.can_mutate; fields.append(field(label, input)); }
+  const location = document.createElement("input"); location.type = "checkbox"; location.name = "location_cues"; location.checked = Boolean(defaultPreferenceValue("location_cues", data)); location.disabled = !data.control.identity.can_mutate; const locationLabel = document.createElement("label"); locationLabel.className = "preference-check"; locationLabel.append(location, document.createTextNode(" Allow expiring, typed location cues from an authorized bridge")); fields.append(locationLabel); form.append(fields); const save = text("button", "Save fine-tuning", "button button-primary"); save.type = "submit"; save.disabled = !data.control.identity.can_mutate; form.append(save);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; const values = {}; for (const [name] of definitions) values[name] = Number(form.elements[name].value); values.location_cues = location.checked; setBanner("Saving bounded CoS preferences…"); try { await api("/api/member/v1/settings/preferences", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), values }) }); setBanner("CoS preferences saved and propagated to member surfaces."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Preferences were not changed.`); save.disabled = false; } }); fragment.append(form);
+  const persona = data.control.behavior.persona; const personaCard = document.createElement("section"); personaCard.className = "card"; personaCard.append(text("h2", "CoS voice"), text("p", persona.label || titleCase(persona.id)), text("small", "Instance-wide persona · wording only · cannot change authority or model routing")); fragment.append(personaCard); return fragment;
+}
+
+function bridgeSettings(data) {
+  const fragment = document.createDocumentFragment(); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "A bridge keeps private device sources on the member’s Mac."), text("p", "The target member accepts a short-lived enrollment package. Tailscale identity, owner scope, reviewed capabilities, and macOS permissions are verified independently.")); fragment.append(intro);
+  const grid = document.createElement("div"); grid.className = "settings-card-grid";
+  for (const bridge of data.control.bridges) { const cardNode = document.createElement("article"); cardNode.className = "card bridge-card"; cardNode.append(text("p", titleCase(bridge.role), "eyebrow"), text("h2", bridge.member_label), text("span", titleCase(bridge.status), `pill state-label state-${String(bridge.status).replaceAll("_", "-")}`), text("p", bridge.identity_bound ? "Tailscale identity is bound." : "A verified Tailscale identity is still required.", "state-note")); const capabilities = bridge.adapters_active?.length ? bridge.adapters_active : bridge.requested_capabilities || []; if (capabilities.length) cardNode.append(permissionList("Capabilities", capabilities)); grid.append(cardNode); }
+  if (data.control.bridges.length) fragment.append(grid);
+  const form = document.createElement("form"); form.className = "card bridge-form"; form.append(text("h2", "Add Bridge"), text("p", "Create a resumable, secret-free enrollment request. Package export and acceptance remain a separate short-lived handoff on the target member’s device.", "state-note")); const member = selectControl(data.control.bridge_candidates.map((item) => ({ value: item.member_id, label: `${item.label} · ${titleCase(item.role)}` })), data.control.identity.view_member_id, "Choose member…"); member.name = "member"; member.required = true; member.disabled = !data.control.identity.can_mutate; form.append(field("Member", member)); const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Device sources")); const choices = [["apple_calendar", "Apple Calendar"], ["apple_reminders", "Apple Reminders"], ["apple_notes", "Apple Notes"], ["apple_voice_memos", "Apple Voice Memos"], ["obsidian", "Obsidian vault"]]; for (const [value, label] of choices) { const wrap = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = value; input.checked = ["apple_calendar", "apple_reminders", "apple_notes"].includes(value); input.disabled = !data.control.identity.can_mutate; wrap.append(input, document.createTextNode(` ${label}`)); capabilities.append(wrap); } form.append(capabilities); const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate; form.append(submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); const selected = [...form.querySelectorAll('input[name="capability"]:checked')].map((input) => input.value); if (!selected.length) { setBanner("Choose at least one reviewed bridge capability."); return; } submit.disabled = true; setBanner("Recording a scoped bridge enrollment request…"); try { const result = await api("/api/member/v1/settings/bridges", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), member_id: member.value, capabilities: selected }) }); setBanner(result.next_step); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge request was not created.`); submit.disabled = false; } }); fragment.append(form); return fragment;
+}
+
+function privacySettings(data) {
+  const fragment = document.createDocumentFragment(); const rules = document.createElement("section"); rules.className = "card"; rules.append(text("h2", "Privacy rules that cannot be toggled")); const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const value of ["Adults control their own private provider credentials and device bridges.", "A principal may manage a child bridge, but cannot silently inspect another adult’s private sources.", "Provider-native sharing does not create AdministrateMe sharing.", "View-as changes what can be read; it never changes who performs an action.", "Privileged records never enter model processing or generic OpenClaw memory."]) list.append(text("li", value)); rules.append(list); fragment.append(rules);
+  const household = document.createElement("section"); household.className = "card"; household.append(text("h2", "Household portal identities")); const members = document.createElement("ul"); members.className = "household-settings-list"; for (const member of data.control.household) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", member.label), text("small", titleCase(member.role))); item.append(body, text("span", member.portal_identity_bound ? "Tailscale bound" : "No portal login", `pill state-label state-${member.portal_identity_bound ? "healthy" : "not-configured"}`)); members.append(item); } household.append(members); fragment.append(household); return fragment;
+}
+
+function systemSettings(data) {
+  const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 14)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
+  const workbooks = document.createElement("section"); workbooks.className = "card"; workbooks.append(text("h2", "Recovery and workbooks")); const workbookList = document.createElement("ul"); workbookList.className = "household-settings-list"; for (const workbook of data.system.workbooks) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", workbook.name), text("small", workbook.updated_at ? `Updated ${new Date(workbook.updated_at).toLocaleString()}` : "No workbook file yet")); item.append(body, text("span", titleCase(workbook.state), `pill state-label state-${String(workbook.state).replaceAll("_", "-")}`)); workbookList.append(item); } workbooks.append(workbookList); fragment.append(workbooks);
+  const advanced = document.createElement("details"); advanced.className = "card settings-advanced"; advanced.append(text("summary", "Advanced capability inventory"), text("p", "Pack validation, configuration and runtime provider health are different facts. This inventory is diagnostic and does not grant a capability.", "state-note")); const list = document.createElement("ul"); list.className = "advanced-capability-list"; for (const capability of data.system.capabilities) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", capability.name), text("small", capability.kind)); item.append(body, text("span", titleCase(capability.state), `pill state-label state-${String(capability.state).replaceAll("_", "-")}`)); list.append(item); } advanced.append(list); fragment.append(advanced); return fragment;
+}
+
+function accountSettings(data) {
+  const fragment = document.createDocumentFragment(); fragment.append(identitySummary(data.control.identity)); const explanation = document.createElement("section"); explanation.className = "card"; explanation.append(text("h2", "How sign-in works"), text("p", "Tailscale Serve authenticates the connecting user. AdministrateMe accepts that identity only from its loopback ingress and maps it to one reviewed household member."), text("p", "There is no separate AdministrateMe password or simulated logout. To change identity, switch the signed-in Tailscale user; bootstrap enrollment must review any mapping change.", "state-note")); fragment.append(explanation); return fragment;
+}
+
+function renderSettings(data) {
+  const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic control plane";
+  root.append(settingsHero(data), settingsNav()); const content = document.createElement("div"); content.className = "settings-content";
+  if (state.settingsSection === "overview") { const layout = document.createElement("div"); layout.className = "settings-overview-grid"; layout.append(attentionCard(data.control.needs_attention), identitySummary(data.control.identity, true)); content.append(layout); const summaries = document.createElement("div"); summaries.className = "settings-summary-grid"; for (const [title, value, copy, target] of [["Connections", data.control.connections.length, "Provider accounts with separate setup, runtime, permission, and safety state.", "connections"], ["Bridges", data.control.bridges.length, "Per-member device sources with explicit enrollment and consent.", "bridges"], ["CoS profile", data.control.behavior.profiles.find((item) => item.id === data.control.behavior.active_profile_id)?.label || "Not selected", "Validated behavior defaults; no authority or model-routing changes.", "behavior"]]) { const cardNode = document.createElement("button"); cardNode.type = "button"; cardNode.className = "card settings-summary-card"; cardNode.append(text("span", title, "eyebrow"), text("strong", value), text("small", copy)); cardNode.addEventListener("click", () => { state.settingsSection = target; replaceQuery({ section: target }); renderSettings(state.surface); }); summaries.append(cardNode); } content.append(summaries); }
+  else if (state.settingsSection === "account") content.append(accountSettings(data));
+  else if (state.settingsSection === "behavior") content.append(behaviorSettings(data));
+  else if (state.settingsSection === "connections") content.append(renderConnections(data));
+  else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
+  else if (state.settingsSection === "privacy") content.append(privacySettings(data));
+  else content.append(systemSettings(data));
+  root.append(content);
+}
+
+function freshnessStrip(data) {
+  const value = data.freshness;
+  const strip = document.createElement("div"); strip.className = "freshness-strip";
+  if (!value) return strip;
+  strip.append(text("span", titleCase(value.state), `pill state-label state-${String(value.state).replaceAll("_", "-")}`));
+  const latest = value.latest_source_at ? `Latest source ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
+  strip.append(text("span", `${latest} · ${value.row_count} visible record${value.row_count === 1 ? "" : "s"}`));
+  if (value.degraded_reason) strip.append(text("strong", value.degraded_reason));
+  return strip;
 }
 
 function renderSurface(data) {
@@ -1303,17 +2233,17 @@ function renderSurface(data) {
     state.carouselIndex = 0;
     renderToday(data);
   } else if (data.surface === "triage") {
-    root.append(triageSurface(data.items, data.calendar_destinations));
+    root.append(freshnessStrip(data), triageSurface(data));
   } else if (data.surface === "comms") {
     renderComms(data);
   } else if (data.surface === "reminders") {
     renderReminders(data);
   } else if (data.surface === "people") {
-    root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
-  } else if (data.surface === "knowledge") {
-    root.append(card("Private knowledge", data.knowledge), card("Capture evidence", data.artifacts), card("Lists", data.lists));
+    renderPeople(data);
+  } else if (data.surface === "notes") {
+    renderNotes(data);
   } else if (data.surface === "finance") {
-    root.append(card("Recent money movement", data.flows, "Finance is connected, with no visible movement in this period."));
+    renderFinance(data);
   } else if (data.surface === "calendar") {
     renderCalendar(data);
   } else if (data.surface === "scoreboard") {
@@ -1322,7 +2252,7 @@ function renderSurface(data) {
     hero.append(text("p", "YOUR RHYTHM", "eyebrow"), text("h2", `${score.open_count || 0} gentle next steps`, "action-title"), text("p", score.reward_language === "warm" ? "Every small finish counts. You’re building momentum." : "Progress is evidence, not pressure."));
     root.append(hero, card("Up next", score.next_steps));
   } else if (data.surface === "settings") {
-    root.append(card("Capability health", data.capabilities), card("Principal workbooks", data.workbooks), card("Chat transport", [data.chat]));
+    renderSettings(data);
   }
 }
 
@@ -1439,14 +2369,87 @@ async function initialize() {
   $("#chat-form").addEventListener("submit", sendChat);
   $("#chat-stop").addEventListener("click", async () => { state.controller?.abort(); await fetch("/api/member/v1/chat/abort", { method: "POST", credentials: "same-origin" }); });
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
+  $("[data-close-action]").addEventListener("click", closeActionDialog);
   try {
     state.bootstrap = await api("/api/member/v1/bootstrap"); renderNavigation(combinedNavigation(state.bootstrap)); configureChat(state.bootstrap.chat);
-    $("#member-button").textContent = state.bootstrap.member.id.slice(0, 1).toUpperCase();
+    const memberButton = $("#member-button"); memberButton.replaceChildren(); memberButton.className = "member-chip";
+    const memberCopy = document.createElement("span"); memberCopy.append(text("strong", state.bootstrap.member.authenticated_display_name), text("small", `${titleCase(state.bootstrap.member.authenticated_role)} · ${state.bootstrap.member.authentication_method}`)); memberButton.append(memberCopy);
+    memberButton.setAttribute("aria-label", `Open settings for ${state.bootstrap.member.authenticated_display_name}`);
     $("#observation-pill").textContent = state.bootstrap.observation_mode ? "Observation mode" : "Member-safe";
+    $("#observation-banner").hidden = !state.bootstrap.observation_mode;
+    const viewAs = $("#view-as-banner"); viewAs.hidden = !state.bootstrap.member.viewing_as;
+    if (state.bootstrap.member.viewing_as) viewAs.textContent = `Viewing ${state.bootstrap.member.display_name}. Reads follow that member’s scope; actions remain attributed to ${state.bootstrap.member.authenticated_display_name}, and Settings changes are disabled.`;
     const active = currentSurface();
-    const surfaceRequest = active.startsWith("quest:")
-      ? api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest)
-      : api(`/api/member/v1/surfaces/${encodeURIComponent(active)}`).then(renderSurface);
+    const params = new URLSearchParams(location.search);
+    const requestedView = params.get("view");
+    if (active === "today" && ["brief", "carousel"].includes(requestedView)) state.todayView = requestedView;
+    if (active === "triage") {
+      if (["ready", "needs_details", "recent"].includes(requestedView)) state.triageView = requestedView;
+      state.triageSelected = params.get("item");
+    }
+    if (active === "comms") {
+      if (["focus", "waiting", "snoozed", "quieted", "all"].includes(requestedView)) state.commsView = requestedView;
+      state.commsAccount = params.get("account") || "all";
+      state.commsThread = params.get("thread");
+    }
+    if (active === "reminders") {
+      if (["now", "scheduled", "places", "anytime", "completed"].includes(requestedView)) state.remindersView = requestedView;
+      state.remindersAccount = params.get("account") || "all";
+      state.remindersList = params.get("list") || "all";
+      state.reminderItem = params.get("item");
+    }
+    if (active === "calendar") {
+      if (["day", "week", "month", "agenda", "find", "rules"].includes(requestedView)) state.calendarView = requestedView;
+      state.calendarAnchor = params.get("date");
+      state.calendarSelectedEvent = params.get("event");
+    }
+    if (active === "people") {
+      if (["all", "household", "favorites", "organizations", "suppressed"].includes(requestedView)) state.peopleLens = requestedView;
+      state.peopleSelected = params.get("item");
+      state.peopleQuery = params.get("q") || "";
+    }
+    if (active === "notes") {
+      if (["all", "recent", "shared", "meetings", "triage"].includes(requestedView)) state.notesLens = requestedView;
+      state.notesSource = params.get("source") || "all";
+      state.notesSelected = params.get("note");
+      state.notesQuery = params.get("q") || "";
+    }
+    if (active === "settings") {
+      const requestedSection = params.get("section");
+      if (SETTINGS_SECTIONS.some(([value]) => value === requestedSection)) state.settingsSection = requestedSection;
+    }
+    let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
+    if (active === "calendar") {
+      const query = new URLSearchParams({ view: state.calendarView });
+      if (state.calendarAnchor) query.set("date", state.calendarAnchor);
+      path += `?${query}`;
+    }
+    let surfaceRequest;
+    if (active.startsWith("quest:")) {
+      surfaceRequest = api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest);
+    } else if (active === "notes") {
+      surfaceRequest = api(path).then(async (data) => {
+        if (state.notesQuery) {
+          const query = new URLSearchParams({ q: state.notesQuery });
+          if (state.notesSource !== "all") query.set("source", state.notesSource.split("|")[0]);
+          const result = await api(`/api/member/v1/notes/search?${query}`);
+          const originals = new Map((data.notes || []).map((note) => [note.knowledge_id, note]));
+          state.notesResults = result.items.map((note) => ({ ...(originals.get(note.knowledge_id) || {}), ...note }));
+        }
+        renderSurface(data);
+      });
+    } else if (active === "people") {
+      surfaceRequest = api(path).then(async (data) => {
+        if (state.peopleQuery) {
+          const result = await api(`/api/member/v1/people/search?q=${encodeURIComponent(state.peopleQuery)}`);
+          const originals = new Map((data.cockpit?.directory || []).map((person) => [person.party_id, person]));
+          state.peopleResults = result.results.map((person) => ({ ...(originals.get(person.party_id) || {}), ...person }));
+        }
+        renderSurface(data);
+      });
+    } else {
+      surfaceRequest = api(path).then(renderSurface);
+    }
     await Promise.all([surfaceRequest, loadChatHistory()]);
   } catch (error) { renderFailure(error); }
 }

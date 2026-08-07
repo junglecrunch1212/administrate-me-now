@@ -38,7 +38,6 @@ files = [
 
 [package.dependencies]
 idna = ">=2.8"
-typing_extensions = {version = ">=4.5", markers = "python_version < \"3.13\""}
 
 [package.extras]
 trio = ["trio (>=0.32.0)"]
@@ -54,23 +53,6 @@ files = [
     {file = "attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"},
     {file = "attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32"},
 ]
-
-[[package]]
-name = "backports-tarfile"
-version = "1.2.0"
-description = "Backport of CPython tarfile module"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-markers = "python_version == \"3.11\""
-files = [
-    {file = "backports.tarfile-1.2.0-py3-none-any.whl", hash = "sha256:77e284d754527b01fb1e6fa8a1afe577858ebe4e9dad8919e34c862cb399bc34"},
-    {file = "backports_tarfile-1.2.0.tar.gz", hash = "sha256:d75e02c268746e1b8144c278978b6e98e85de6ad16f8e4b0844a154557eca991"},
-]
-
-[package.extras]
-docs = ["furo", "jaraco.packaging (>=9.3)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
-testing = ["jaraco.test", "pytest (!=8.0.*)", "pytest (>=6,!=8.1.*)", "pytest-checkdocs (>=2.4)", "pytest-cov", "pytest-enabler (>=2.2)"]
 
 [[package]]
 name = "boolean-py"
@@ -587,7 +569,6 @@ license-expression = ">=30,<31"
 packageurl-python = ">=0.11,<2"
 py-serializable = ">=2.1.0,<3.0.0"
 sortedcontainers = ">=2.4.0,<3.0.0"
-typing_extensions = {version = ">=4.6,<5.0", markers = "python_version < \"3.13\""}
 
 [package.extras]
 json-validation = ["jsonschema[format-nongpl] (>=4.25,<5.0)", "referencing (>=0.28.4)"]
@@ -669,10 +650,7 @@ files = [
 [package.dependencies]
 google-auth = ">=2.14.1,<3.0.0"
 googleapis-common-protos = ">=1.63.2,<2.0.0"
-proto-plus = [
-    {version = ">=1.22.3,<2.0.0", markers = "python_version < \"3.13\""},
-    {version = ">=1.25.0,<2.0.0", markers = "python_version >= \"3.13\""},
-]
+proto-plus = {version = ">=1.25.0,<2.0.0", markers = "python_version >= \"3.13\""}
 protobuf = ">=4.25.8,<8.0.0"
 requests = ">=2.20.0,<3.0.0"
 
@@ -903,31 +881,6 @@ files = [
 all = ["mypy (>=1.11.2)", "pytest (>=8.3.2)", "ruff (>=0.6.2)"]
 
 [[package]]
-name = "importlib-metadata"
-version = "8.7.1"
-description = "Read metadata from Python packages"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-markers = "python_version == \"3.11\""
-files = [
-    {file = "importlib_metadata-8.7.1-py3-none-any.whl", hash = "sha256:5a1f80bf1daa489495071efbb095d75a634cf28a8bc299581244063b53176151"},
-    {file = "importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb"},
-]
-
-[package.dependencies]
-zipp = ">=3.20"
-
-[package.extras]
-check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\""]
-cover = ["pytest-cov"]
-doc = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
-enabler = ["pytest-enabler (>=3.4)"]
-perf = ["ipython"]
-test = ["flufl.flake8", "jaraco.test (>=5.4)", "packaging", "pyfakefs", "pytest (>=6,!=8.1.*)", "pytest-perf (>=0.9.2)"]
-type = ["mypy (<1.19) ; platform_python_implementation == \"PyPy\"", "pytest-mypy (>=1.0.1)"]
-
-[[package]]
 name = "iniconfig"
 version = "2.3.0"
 description = "brain-dead simple config-ini parsing"
@@ -969,9 +922,6 @@ files = [
     {file = "jaraco_context-6.1.2-py3-none-any.whl", hash = "sha256:bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535"},
     {file = "jaraco_context-6.1.2.tar.gz", hash = "sha256:f1a6c9d391e661cc5b8d39861ff077a7dc24dc23833ccee564b234b81c82dfe3"},
 ]
-
-[package.dependencies]
-"backports.tarfile" = {version = "*", markers = "python_version < \"3.12\""}
 
 [package.extras]
 check = ["pytest-checkdocs (>=2.14)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\""]
@@ -1071,7 +1021,6 @@ files = [
 ]
 
 [package.dependencies]
-importlib_metadata = {version = ">=4.11.4", markers = "python_version < \"3.12\""}
 "jaraco.classes" = "*"
 "jaraco.context" = "*"
 "jaraco.functools" = "*"
@@ -1389,10 +1338,7 @@ files = [
 librt = {version = ">=0.8.0", markers = "platform_python_implementation != \"PyPy\""}
 mypy_extensions = ">=1.0.0"
 pathspec = ">=1.0.0"
-typing_extensions = [
-    {version = ">=4.6.0", markers = "python_version < \"3.15\""},
-    {version = ">=4.14.0", markers = "python_version >= \"3.15\""},
-]
+typing_extensions = {version = ">=4.6.0", markers = "python_version < \"3.15\""}
 
 [package.extras]
 dmypy = ["psutil (>=4.0)"]
@@ -2056,7 +2002,6 @@ files = [
 
 [package.dependencies]
 pytest = ">=8.2,<10"
-typing-extensions = {version = ">=4.12", markers = "python_version < \"3.13\""}
 
 [package.extras]
 docs = ["sphinx (>=5.3)", "sphinx-rtd-theme (>=1)"]
@@ -2208,7 +2153,6 @@ files = [
 [package.dependencies]
 attrs = ">=22.2.0"
 rpds-py = ">=0.7.0"
-typing-extensions = {version = ">=4.4.0", markers = "python_version < \"3.13\""}
 
 [[package]]
 name = "requests"
@@ -2608,7 +2552,6 @@ files = [
 
 [package.dependencies]
 anyio = ">=3.6.2,<5"
-typing-extensions = {version = ">=4.10.0", markers = "python_version < \"3.13\""}
 
 [package.extras]
 full = ["httpx (>=0.27.0,<0.29.0)", "httpx2 (>=2.0.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
@@ -2910,28 +2853,7 @@ files = [
     {file = "websockets-15.0.1.tar.gz", hash = "sha256:82544de02076bafba038ce055ee6412d68da13ab47f0c60cab827346de828dee"},
 ]
 
-[[package]]
-name = "zipp"
-version = "3.23.1"
-description = "Backport of pathlib-compatible object wrapper for zip files"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-markers = "python_version == \"3.11\""
-files = [
-    {file = "zipp-3.23.1-py3-none-any.whl", hash = "sha256:0b3596c50a5c700c9cb40ba8d86d9f2cc4807e9bedb06bcdf7fac85633e444dc"},
-    {file = "zipp-3.23.1.tar.gz", hash = "sha256:32120e378d32cd9714ad503c1d024619063ec28aad2248dc6672ad13edfa5110"},
-]
-
-[package.extras]
-check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\""]
-cover = ["pytest-cov"]
-doc = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-lint"]
-enabler = ["pytest-enabler (>=2.2)"]
-test = ["big-O", "jaraco.functools", "jaraco.itertools", "jaraco.test", "more_itertools", "pytest (>=6,!=8.1.*)", "pytest-ignore-flaky"]
-type = ["pytest-mypy"]
-
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.11"
-content-hash = "0fd870aa8fd3614c259cce5984af2ed89f9cdba3b071cbfaed8bfddc8d3cb334"
+python-versions = ">=3.14,<3.15"
+content-hash = "1e4b43905134a13a17775e4e2fe65853868f9ea8c7486c8895c4a2110a7b5d1d"

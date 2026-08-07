@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS interactions (
     auto_handled       INTEGER NOT NULL DEFAULT 0,
     classification     TEXT,
     classification_confidence REAL,
+    semantic_features_json TEXT NOT NULL DEFAULT '{}',
+    semantic_confidence REAL,
+    semantic_skill_name TEXT,
+    semantic_skill_version TEXT,
     last_event_id      TEXT NOT NULL,
     PRIMARY KEY (tenant_id, interaction_id)
 );

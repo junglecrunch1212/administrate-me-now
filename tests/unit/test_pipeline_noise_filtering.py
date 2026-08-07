@@ -134,12 +134,20 @@ def _make_skill_result(
     classification: str = "transactional",
     confidence: float = 0.91,
     reasons: list[str] | None = None,
+    **features: Any,
 ) -> SkillResult:
     return SkillResult(
         output={
             "classification": classification,
             "confidence": confidence,
             "reasons": reasons or ["stubbed"],
+            "reply_signal": features.get("reply_signal", "unknown"),
+            "automated": features.get("automated", False),
+            "transactional_due": features.get("transactional_due", False),
+            "security_code": features.get("security_code", False),
+            "person_to_person": features.get("person_to_person", False),
+            "deadline": features.get("deadline"),
+            "candidates": features.get("candidates", []),
         },
         openclaw_invocation_id="stub-id",
         provider="stub",
@@ -189,13 +197,16 @@ async def test_skill_success_emits_classified() -> None:
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(_messaging_received_event(), ctx)
-    assert len(log.calls) == 1
+    assert [call.envelope.type for call in log.calls] == [
+        "messaging.classified",
+        "messaging.semantic_features_extracted",
+    ]
     envelope = log.calls[0].envelope
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "2.0.0"
+    assert envelope.payload["skill_version"] == "3.0.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -210,12 +221,13 @@ async def test_skill_failure_emits_defensive_default() -> None:
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(_messaging_received_event(), ctx)
-    assert len(log.calls) == 1
+    assert len(log.calls) == 2
     envelope = log.calls[0].envelope
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "2.0.0"
+    assert envelope.payload["skill_version"] == "3.0.0"
+    assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
 
 
 @pytest.mark.asyncio
@@ -228,7 +240,7 @@ async def test_skill_input_invalid_emits_defensive_default() -> None:
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(_messaging_received_event(), ctx)
-    assert len(log.calls) == 1
+    assert len(log.calls) == 2
     envelope = log.calls[0].envelope
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
@@ -251,5 +263,77 @@ async def test_telephony_sms_uses_body_field() -> None:
     assert captured["body_text"] == "STOP HEYBANK"
     assert captured["from_identifier"] == "+15551234567"
     assert captured["source_channel"] == "sms"
-    assert len(log.calls) == 1
+    assert len(log.calls) == 2
     assert log.calls[0].envelope.payload["classification"] == "noise"
+
+
+@pytest.mark.asyncio
+async def test_grounded_candidates_enter_triage_without_provider_route() -> None:
+    log = _FakeEventLog()
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            reply_signal="required",
+            person_to_person=True,
+            candidates=[
+                {
+                    "target_kind": "calendar_event",
+                    "title": "Review proposed appointment",
+                    "candidate": {
+                        "start": "2034-03-02T16:00:00-05:00",
+                        "end": "2034-03-02T17:00:00-05:00",
+                        "unreviewed_model_field": "must not enter the event log",
+                    },
+                    "confidence": 0.91,
+                    "reasons": ["Explicit date and time"],
+                }
+            ],
+        )
+
+    event = _messaging_received_event()
+    event["owner_scope"] = "private:member-fixture"
+    event["visibility_scope"] = "private:member-fixture"
+    event["payload"]["member_id"] = "member-fixture"
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assert [call.envelope.type for call in log.calls] == [
+        "messaging.classified",
+        "messaging.semantic_features_extracted",
+        "triage.item.proposed",
+    ]
+    proposal = log.calls[2].envelope.payload
+    assert proposal["target_kind"] == "calendar_event"
+    assert proposal["route"] == {"member_id": "member-fixture"}
+    assert proposal["source_event_id"] == "trigger-eid-001"
+    assert proposal["candidate"] == {
+        "start": "2034-03-02T16:00:00-05:00",
+        "end": "2034-03-02T17:00:00-05:00",
+    }
+
+
+@pytest.mark.asyncio
+async def test_candidates_require_an_exact_private_member_scope() -> None:
+    log = _FakeEventLog()
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "title": "Review this candidate",
+                    "candidate": {},
+                    "confidence": 0.9,
+                    "reasons": ["Fixture"],
+                }
+            ]
+        )
+
+    event = _messaging_received_event()
+    event["owner_scope"] = "household"
+    event["visibility_scope"] = "household"
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assert [call.envelope.type for call in log.calls] == [
+        "messaging.classified",
+        "messaging.semantic_features_extracted",
+    ]

@@ -203,7 +203,9 @@ def _expand_windows(
     return expanded
 
 
-def _merge(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+def _merge(
+    intervals: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
     result: list[tuple[datetime, datetime]] = []
     for start, end in sorted(intervals):
         if end <= start:
@@ -289,7 +291,8 @@ def compose_calendar_cockpit(
                 "availability": row.get("availability"),
                 "effect": effect,
                 "purpose": rule.get("purpose") or "unclassified",
-                "calendar_name": row.get("calendar_name") or source.get("calendar_name"),
+                "calendar_name": row.get("calendar_name")
+                or source.get("calendar_name"),
                 "provider": row.get("calendar_source"),
                 "external_event_id": row.get("external_uid"),
                 "provider_account_id": row.get("provider_account_id"),
@@ -301,7 +304,8 @@ def compose_calendar_cockpit(
                 "buffer_before_minutes": before,
                 "buffer_after_minutes": after,
                 "why": reasons,
-                "can_write": bool(source.get("write_events")) and bool(rule.get("write_target")),
+                "can_write": bool(source.get("write_events"))
+                and bool(rule.get("write_target")),
                 "last_event_id": row.get("last_event_id"),
                 "recorded_outcome": row.get("recorded_outcome"),
                 "outcome_event_id": row.get("outcome_event_id"),
@@ -340,7 +344,9 @@ def compose_calendar_cockpit(
         ]
         representative["duplicate_collapsed"] = len(copies) > 1
         effective.append(representative)
-    effective.sort(key=lambda item: (item["start_at"], item["end_at"], item["cluster_id"]))
+    effective.sort(
+        key=lambda item: (item["start_at"], item["end_at"], item["cluster_id"])
+    )
 
     conflicts: list[dict[str, Any]] = []
     timed = [
@@ -368,7 +374,9 @@ def compose_calendar_cockpit(
             hard = "hard_block" in {left["effect"], right["effect"]}
             conflicts.append(
                 {
-                    "kind": "conflict" if hard and left["effect"] == right["effect"] else "pressure",
+                    "kind": "conflict"
+                    if hard and left["effect"] == right["effect"]
+                    else "pressure",
                     "left_cluster_id": left["cluster_id"],
                     "right_cluster_id": right["cluster_id"],
                     "start_at": overlap_start.isoformat(),
@@ -469,7 +477,9 @@ def compose_calendar_cockpit(
         "write_destinations": [
             _rule_public(row)
             for row in rules
-            if row.get("enabled") and row.get("write_target") and row.get("write_events")
+            if row.get("enabled")
+            and row.get("write_target")
+            and row.get("write_events")
         ],
         "provider_truth": {
             "duplicates_are_grouped_not_deleted": True,
@@ -480,4 +490,122 @@ def compose_calendar_cockpit(
     }
 
 
-__all__ = ["compose_calendar_cockpit"]
+def preview_calendar_candidate(
+    *,
+    member_id: str,
+    timezone_name: str,
+    as_of: datetime,
+    item: dict[str, Any],
+    events: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    rules: list[dict[str, Any]],
+    schedule_policy: dict[str, Any] | None,
+    observation_active: bool,
+) -> dict[str, Any]:
+    """Preview a proposed calendar write without creating a provider fact."""
+
+    zone = ZoneInfo(timezone_name)
+    candidate = item.get("candidate") or {}
+    route = item.get("route") or {}
+    start = _parse(candidate.get("start") or candidate.get("start_at"), zone)
+    end = _parse(candidate.get("end") or candidate.get("end_at"), zone)
+    missing = [
+        name
+        for name, value in (
+            ("start", start),
+            ("end", end),
+            ("provider", route.get("provider")),
+            ("account", route.get("provider_account_id")),
+            ("destination", route.get("container_external_id")),
+        )
+        if not value
+    ]
+    if missing or start is None or end is None or end <= start:
+        return {
+            "contract": "calendar-candidate-preview-v1",
+            "state": "needs_details",
+            "missing": missing or ["valid_time_range"],
+            "model_decisions": False,
+        }
+    proposal_event_id = f"triage-preview:{item['proposal_id']}"
+    hypothetical = {
+        "calendar_event_id": proposal_event_id,
+        "calendar_source": route["provider"],
+        "provider_account_id": route["provider_account_id"],
+        "calendar_external_id": route["container_external_id"],
+        "external_uid": proposal_event_id,
+        "summary": item.get("title") or "Proposed calendar event",
+        "start_at": start.isoformat(),
+        "end_at": end.isoformat(),
+        "all_day": bool(candidate.get("all_day")),
+        "status": "confirmed",
+        "availability": "busy",
+        "event_type": candidate.get("event_type") or "default",
+        "location": candidate.get("location"),
+        "last_event_id": item.get("last_event_id"),
+    }
+    cockpit = compose_calendar_cockpit(
+        member_id=member_id,
+        timezone_name=timezone_name,
+        as_of=as_of,
+        range_start=start - timedelta(days=1),
+        range_end=end + timedelta(days=1),
+        events=[*events, hypothetical],
+        sources=sources,
+        rules=rules,
+        schedule_policy=schedule_policy,
+    )
+    preview = next(
+        (event for event in cockpit["events"] if event["id"] == proposal_event_id),
+        None,
+    )
+    if preview is None:
+        return {
+            "contract": "calendar-candidate-preview-v1",
+            "state": "invalid",
+            "missing": ["valid_time_range"],
+            "model_decisions": False,
+        }
+    conflicts = [
+        conflict
+        for conflict in cockpit["conflicts"]
+        if preview["cluster_id"]
+        in {conflict["left_cluster_id"], conflict["right_cluster_id"]}
+    ]
+    guardrails = []
+    for guardrail in cockpit["schedule_windows"]:
+        guard_start = _parse(guardrail.get("start_at"), zone)
+        guard_end = _parse(guardrail.get("end_at"), zone)
+        if guard_start and guard_end and start < guard_end and end > guard_start:
+            guardrails.append(guardrail)
+    destination = next(
+        (
+            value
+            for value in cockpit["write_destinations"]
+            if _route(value)
+            == (
+                str(route["provider"]),
+                str(route["provider_account_id"]),
+                str(route["container_external_id"]),
+            )
+        ),
+        None,
+    )
+    return {
+        "contract": "calendar-candidate-preview-v1",
+        "state": "ready" if destination else "unwritable_destination",
+        "event": preview,
+        "destination": destination,
+        "conflicts": conflicts,
+        "guardrails": guardrails,
+        "observation": {
+            "active": observation_active,
+            "effect": "would_record_without_provider_write"
+            if observation_active
+            else "would_enter_governed_provider_write",
+        },
+        "model_decisions": False,
+    }
+
+
+__all__ = ["compose_calendar_cockpit", "preview_calendar_candidate"]

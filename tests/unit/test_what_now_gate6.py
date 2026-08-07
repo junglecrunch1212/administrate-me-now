@@ -173,3 +173,54 @@ def test_ranker_preserves_list_and_recurrence_semantics() -> None:
         "evidence",
     ]
     assert by_kind["routine"]["current_step"]["step_id"] == "keys"
+
+
+def test_effective_google_item_can_complete_and_possible_copies_rank_once() -> None:
+    copy = {
+        "contract": "possible-reminder-copy-v1",
+        "group_id": "possible-copy:fixture",
+        "count": 2,
+        "provider_items_preserved": ["google:one", "google:two"],
+    }
+    ranked = rank_what_now(
+        [],
+        [],
+        member_id="member-a",
+        profile=None,
+        as_of=AS_OF,
+        list_items=[
+            {
+                "id": "google:one",
+                "list_external_id": "list-a",
+                "item_external_id": "one",
+                "title": "Submit form",
+                "provider": "google_tasks",
+                "provider_account_id": "google-a",
+                "can_complete": True,
+                "possible_copy": copy,
+            },
+            {
+                "id": "google:two",
+                "list_external_id": "list-b",
+                "item_external_id": "two",
+                "title": "Submit form",
+                "provider": "google_tasks",
+                "provider_account_id": "google-a",
+                "can_complete": True,
+                "possible_copy": copy,
+            },
+            {
+                "id": "google:single",
+                "list_external_id": "list-a",
+                "item_external_id": "single",
+                "title": "Single item",
+                "provider": "google_tasks",
+                "provider_account_id": "google-a",
+                "can_complete": True,
+            },
+        ],
+    )
+    assert [item["kind"] for item in ranked["ranked"]].count("reminder_group") == 1
+    assert len(ranked["ranked"]) == 2
+    single = next(item for item in ranked["ranked"] if item["id"] == "google:single")
+    assert single["actions"] == ["complete_external", "evidence"]

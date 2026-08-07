@@ -25,6 +25,6 @@ def test_pack_loads_cleanly() -> None:
         "telephony.sms_received",
     ]
     assert "identity.merge_suggested" in pack.events_emitted
-    assert "party.created" in pack.events_emitted
-    assert "identifier.added" in pack.events_emitted
+    assert "interaction.participant_resolved" in pack.events_emitted
+    assert "endpoint.observed" in pack.events_emitted
     assert isinstance(pack.instance, Pipeline)

@@ -30,6 +30,8 @@ export function registerDashboard(api: OpenClawPluginApi, runtime: PluginRuntime
     ["administrateme.dashboard.reminders", "/api/openclaw/v1/dashboard/reminders"],
     ["administrateme.dashboard.calendar", "/api/openclaw/v1/dashboard/calendar"],
     ["administrateme.dashboard.people", "/api/openclaw/v1/dashboard/people"],
+    ["administrateme.dashboard.notes", "/api/openclaw/v1/dashboard/notes"],
+    // Compatibility only. Notes is the canonical member and dashboard name.
     ["administrateme.dashboard.knowledge", "/api/openclaw/v1/dashboard/knowledge"],
     ["administrateme.dashboard.finance", "/api/openclaw/v1/dashboard/finance"],
     ["administrateme.dashboard.scoreboard", "/api/openclaw/v1/dashboard/scoreboard"],

@@ -28,7 +28,7 @@ AdministrateMe will not build a generic chat store, assistant memory engine, sch
 The deliverable is one package (provisional id `administrateme`) containing narrowly scoped registrations, not one plugin per channel:
 
 - `openclaw.plugin.json` with matching id, strict JSON Schema, static contracts, and no secrets.
-- `package.json` with TypeScript source entry and built JavaScript runtime entry, `openclaw.compat.pluginApi: "2026.7.2"`, exact `peerDependencies.openclaw: "2026.7.2"`, build metadata containing the selected commit, and the source snapshot's exact Node engine `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`; the macOS lab must still prove this pin before family deployment.
+- `package.json` with TypeScript source entry and built JavaScript runtime entry, `openclaw.compat.pluginApi: "2026.7.2"`, exact `peerDependencies.openclaw: "2026.7.2"`, build metadata containing the selected commit, and the reviewed AdministrateMe Node 24 engine `>=24.15.0 <25`; the macOS lab must still prove this pin before family deployment.
 - A default TypeScript entry using the SDK helper appropriate to the selected pinned host. Registration must be safe under non-full discovery modes.
 - Loopback client code with bounded timeouts, schema validation, correlation/causation, idempotency keys, and a least-privilege shared-secret reference. It never opens SQLCipher or receives the AdministrateMe master key.
 

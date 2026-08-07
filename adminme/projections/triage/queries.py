@@ -27,6 +27,12 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         if result["source_kind"] == "commitment_proposal"
         else ["enrich", "approve", "dismiss"]
     )
+    if result.get("resolution_reason") in {
+        "source_changed",
+        "source_deleted",
+        "source_privileged",
+    }:
+        result["state"] = "superseded"
     return result
 
 
@@ -61,4 +67,24 @@ def pending_for_member(
     return [_public(row) for row in filter_rows(session, [dict(row) for row in rows])]
 
 
-__all__ = ["get_item", "pending_for_member"]
+def recent_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return recently resolved proposals for reversible review history."""
+
+    rows = conn.execute(
+        """SELECT * FROM triage_items
+             WHERE tenant_id=? AND owner_member_id=?
+               AND state IN ('confirmed','dismissed')
+             ORDER BY resolved_at DESC, proposal_id
+             LIMIT ?""",
+        (session.tenant_id, member_id, limit),
+    ).fetchall()
+    return [_public(row) for row in filter_rows(session, [dict(row) for row in rows])]
+
+
+__all__ = ["get_item", "pending_for_member", "recent_for_member"]

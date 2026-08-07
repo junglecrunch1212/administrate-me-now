@@ -1,11 +1,11 @@
 pack:
   id: pipeline:member_knowledge_indexing
   name: Member knowledge domain indexing
-  version: 1.0.0
+  version: 2.0.0
   kind: pipeline
 runtime:
   language: python
-  python_version: ">=3.11"
+  python_version: ">=3.14,<3.15"
   entrypoint: handler.py
   class: MemberKnowledgeIndexingPipeline
 triggers:
@@ -13,11 +13,16 @@ triggers:
     - member_knowledge.note_added
     - member_knowledge.note_updated
     - member_knowledge.note_corrected
+    - member_knowledge.note_deleted
 depends_on:
-  skills: []
+  skills:
+    - skill:extract_note_semantics
   projections:
     - member_knowledge
     - vector_search
 events_emitted:
   - embedding.generated
+  - embedding.revoked
   - member_knowledge.index_skipped
+  - triage.item.proposed
+  - triage.item.superseded

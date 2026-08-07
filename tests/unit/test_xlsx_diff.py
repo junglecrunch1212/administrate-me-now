@@ -48,6 +48,10 @@ def test_descriptors_cover_expected_sheets() -> None:
         (OPS_WORKBOOK_NAME, "Commitments"),
         (OPS_WORKBOOK_NAME, "Recurrences"),
         (FINANCE_WORKBOOK_NAME, "Raw Data"),
+        (FINANCE_WORKBOOK_NAME, "Assumptions"),
+        (FINANCE_WORKBOOK_NAME, "Budget vs Actual"),
+        (FINANCE_WORKBOOK_NAME, "Scenarios"),
+        (FINANCE_WORKBOOK_NAME, "Goals"),
     }
 
 

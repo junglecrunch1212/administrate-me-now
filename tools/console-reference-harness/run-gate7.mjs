@@ -9,7 +9,9 @@ import { chromium } from "playwright-core";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
-const evidenceDir = join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
+const evidenceDir = process.env.ADMINME_GATE7_EVIDENCE_DIR
+  ? resolve(process.env.ADMINME_GATE7_EVIDENCE_DIR)
+  : join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
 const basePort = Number.parseInt(process.env.ADMINME_GATE7_VISUAL_PORT ?? "3347", 10);
 const identities = {
   principal: "visual-principal.ts.net",
@@ -153,6 +155,20 @@ async function seed(baseUrl) {
     "POST",
   );
   record("calendar fixture seeded", calendar.response.ok && calendar.value.seeded === 7, calendar.value);
+  const notes = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-notes",
+    identities.principal,
+    "POST",
+  );
+  record("Notes fixture seeded", notes.response.ok && notes.value.seeded === 4, notes.value);
+  const finance = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-finance",
+    identities.principal,
+    "POST",
+  );
+  record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 10, finance.value);
 }
 
 async function newContext(browser, identity, viewport, reducedMotion = "no-preference") {
@@ -274,7 +290,7 @@ async function run() {
 
     const principal = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
     const surfaceLabels = {
-      today: "Today", triage: "Triage", comms: "Comms", reminders: "Reminders", people: "People", knowledge: "Knowledge",
+      today: "Today", triage: "Triage", comms: "Comms", reminders: "Reminders", people: "People", notes: "Notes",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     for (const [surface, label] of Object.entries(surfaceLabels)) {
@@ -328,6 +344,52 @@ async function run() {
         await principal.page.getByRole("button", { name: "Calendar settings" }).click();
         await principal.page.locator(".calendar-policy-overview").waitFor();
         record("Calendar policy editing is progressively disclosed", await principal.page.locator(".calendar-rule-disclosure").getAttribute("open") === null && await principal.page.getByText("Protected morning", { exact: true }).count() === 1, await principal.page.locator("#surface").textContent());
+      } else if (surface === "notes") {
+        record("Notes identifies private authorized recall", await principal.page.locator("#mode-label").textContent() === "Private · authorized recall · deterministic Triage", await principal.page.locator("#mode-label").textContent());
+        record("Notes preserves provider sources and master list", await principal.page.locator(".notes-source-button").count() === 3 && await principal.page.locator(".notes-master-button").count() === 2, await principal.page.locator("#surface").textContent());
+        await principal.page.locator(".notes-master-button").filter({ hasText: "School planning call" }).click();
+        record("Notes detail retains exact source identity", (await principal.page.locator(".notes-detail").textContent()).includes("Meeting notes"), await principal.page.locator(".notes-detail").textContent());
+        record("Notes links candidates to Triage without inline approval", await principal.page.getByRole("link", { name: "Review 1 in Triage" }).count() === 1 && await principal.page.getByRole("button", { name: "Confirm and route" }).count() === 0, await principal.page.locator(".notes-detail").textContent());
+        record("Notes sharing is explicit and read-search only", await principal.page.locator(".notes-share-form select").count() === 1 && await principal.page.locator(".notes-share-form input").inputValue() === "Read and search" && await principal.page.getByRole("button", { name: "Share note" }).count() === 1, await principal.page.locator(".notes-sharing").textContent());
+        await principal.page.locator(".notes-search input").fill("autumn pickup");
+        await principal.page.getByRole("button", { name: "Search", exact: true }).click();
+        await principal.page.waitForFunction(() => document.querySelectorAll(".notes-master-button").length === 1 && document.querySelector(".notes-master")?.textContent?.includes("autumn pickup"));
+        record("Notes deterministic search is interactive", await principal.page.locator(".notes-master-button").count() === 1 && (await principal.page.locator(".notes-master").textContent()).includes("autumn pickup"), await principal.page.locator(".notes-master").textContent());
+        await principal.page.reload();
+        await principal.page.locator(".notes-master-button").waitFor();
+        record("Notes search state survives a URL reload", await principal.page.locator(".notes-master-button").count() === 1 && await principal.page.locator(".notes-search input").inputValue() === "autumn pickup", principal.page.url());
+        await principal.page.getByRole("button", { name: "Clear", exact: true }).click();
+        await principal.page.getByRole("button", { name: "Meetings", exact: true }).click();
+        record("Notes meeting lens is presentation-only", await principal.page.locator(".notes-master-button").count() === 1, await principal.page.locator(".notes-master").textContent());
+        await screenshot(principal.page, "surface-notes-meetings-desktop.png");
+      } else if (surface === "people") {
+        record("People identifies deterministic confirmed identity", await principal.page.locator("#mode-label").textContent() === "Private · confirmed identity · deterministic cues", await principal.page.locator("#mode-label").textContent());
+        await screenshot(principal.page, "surface-people-desktop.png");
+      } else if (surface === "finance") {
+        record("Finance identifies deterministic planning and no bank writes", await principal.page.locator("#mode-label").textContent() === "Private · deterministic planning · no bank writes", await principal.page.locator("#mode-label").textContent());
+        record("Finance leads with cash safety and one explained review", await principal.page.locator(".finance-hero-stats dd").count() === 4 && (await principal.page.locator(".finance-hero").textContent()).includes("Review Groceries"), await principal.page.locator(".finance-hero").textContent());
+        record("Finance compares explicit scenarios without changing baseline", await principal.page.locator(".finance-scenario-button").count() === 2 && await principal.page.locator(".finance-scenario-button").first().getAttribute("aria-pressed") === "true", await principal.page.locator(".finance-scenarios").textContent());
+        record("Finance shows goals as planning without moving money", (await principal.page.locator(".finance-goals").textContent()).includes("never move funds") && await principal.page.locator(".finance-goal-list li").count() === 1, await principal.page.locator(".finance-goals").textContent());
+        await screenshot(principal.page, "surface-finance-overview-desktop.png");
+        await principal.page.getByRole("button", { name: "Spending", exact: true }).click();
+        record("Finance Spending shows categorized provider movement", (await principal.page.locator(".finance-transactions").textContent()).includes("Neighborhood market") && (await principal.page.locator(".finance-budget").textContent()).includes("Review"), await principal.page.locator("#surface").textContent());
+        await principal.page.reload();
+        record("Finance view survives URL reload", await principal.page.getByRole("button", { name: "Spending", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
+        await principal.page.getByRole("button", { name: "Data health", exact: true }).click();
+        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
+        await screenshot(principal.page, "surface-finance-health-desktop.png");
+      } else if (surface === "settings") {
+        record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
+        record("Settings exposes all seven control areas", await principal.page.locator(".settings-nav button").count() === 7, await principal.page.locator(".settings-nav").textContent());
+        record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
+        await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
+        record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
+        await principal.page.reload();
+        await principal.page.locator(".settings-nav").waitFor();
+        record("Settings control area survives URL reload", await principal.page.getByRole("button", { name: "Connections", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
+        await principal.page.getByRole("button", { name: "CoS behavior", exact: true }).click();
+        record("Settings offers only adult support profiles", await principal.page.locator(".profile-choice").count() === 3, await principal.page.locator(".profile-grid").textContent());
+        await screenshot(principal.page, "surface-settings-behavior-desktop.png");
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);
@@ -344,6 +406,24 @@ async function run() {
     record("Comms phone retains focus explanation and reply approval", await commsPhone.page.locator(".focus-reason").count() === 1 && await commsPhone.page.getByLabel(/Approve the independent OpenClaw delivery gate/).count() === 1, await commsPhone.page.locator("#surface").textContent());
     await screenshot(commsPhone.page, "surface-comms-focus-narrow.png");
     await commsPhone.context.close();
+
+    const notesPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
+    await visit(notesPhone.page, server.baseUrl, "/member/notes", "Notes");
+    const notesPhoneOverflow = await notesPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    record("Notes reflows without phone overflow", notesPhoneOverflow === false, notesPhoneOverflow);
+    record("Notes phone retains sources, search, and source evidence", await notesPhone.page.locator(".notes-source-button").count() === 3 && await notesPhone.page.locator(".notes-search input").count() === 1 && await notesPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await notesPhone.page.locator("#surface").textContent());
+    await screenshot(notesPhone.page, "surface-notes-narrow.png");
+    await notesPhone.context.close();
+
+    const settingsPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
+    await visit(settingsPhone.page, server.baseUrl, "/member/settings", "Settings");
+    const settingsPhoneOverflow = await settingsPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    record("Settings reflows without phone overflow", settingsPhoneOverflow === false, settingsPhoneOverflow);
+    record("Settings phone retains all control areas", await settingsPhone.page.locator(".settings-nav button").count() === 7, await settingsPhone.page.locator(".settings-nav").textContent());
+    await settingsPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
+    record("Settings phone retains connection truth", (await settingsPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await settingsPhone.page.locator("#surface").textContent());
+    await screenshot(settingsPhone.page, "surface-settings-connections-narrow.png");
+    await settingsPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");

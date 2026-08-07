@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -38,7 +37,12 @@ _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
 )
 
 
-def validate_candidate(candidate: Path) -> dict[str, Any]:
+def validate_candidate(
+    candidate: Path,
+    *,
+    active_root: Path | None = None,
+    approve_runtime_migration: bool = False,
+) -> dict[str, Any]:
     """Fail before any service or active-release mutation on incompatibility."""
     candidate = candidate.resolve()
     required = (
@@ -50,7 +54,7 @@ def validate_candidate(candidate: Path) -> dict[str, Any]:
     missing = [path.name for path in required if not path.is_file()]
     if missing:
         raise UpgradeError(f"candidate is incomplete: {missing}")
-    active = load_versions()
+    active = load_versions(active_root)
     incoming = load_versions(candidate)
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
@@ -71,11 +75,25 @@ def validate_candidate(candidate: Path) -> dict[str, Any]:
         raise UpgradeError(
             "candidate plugin package contradicts its compatibility manifest"
         )
+    runtime_changes = {
+        component: {
+            "from": active[component]["compatible"],
+            "to": incoming[component]["compatible"],
+        }
+        for component in ("python", "node")
+        if incoming[component]["compatible"] != active[component]["compatible"]
+    }
+    if runtime_changes and not approve_runtime_migration:
+        raise UpgradeError(
+            "candidate changes the Python/Node runtime baseline; rerun only after "
+            "the clean migration rehearsal and explicit --approve-runtime-migration"
+        )
     return {
         "compatible": True,
         "openclaw_version": active_claw["version"],
         "openclaw_commit": active_claw["commit"],
         "lockfile": "poetry.lock",
+        "runtime_migration": runtime_changes or None,
     }
 
 
@@ -86,11 +104,29 @@ class UpgradeManager:
         *,
         root: Path,
         test_mode: bool = False,
+        approve_runtime_migration: bool = False,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
         self.test_mode = test_mode
+        self.approve_runtime_migration = approve_runtime_migration
         self.services = ServiceManager(paths, test_mode=test_mode)
+
+    def _active_release_root(self) -> Path:
+        pointer = self.paths.app_dir / "current-release.json"
+        if not pointer.is_file():
+            return self.root
+        try:
+            active = Path(json.loads(pointer.read_text("utf-8"))["path"])
+            return ensure_within(active, self.paths.app_dir / "releases")
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise UpgradeError("active-release pointer is invalid") from exc
 
     @staticmethod
     def _failed_check_names(result: dict[str, Any]) -> set[str]:
@@ -103,17 +139,12 @@ class UpgradeManager:
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
-        doctor = Doctor(
-            self.paths,
-            root=release,
-            test_mode=self.test_mode,
-        )
         attempts = 1 if self.test_mode else 6
         last: dict[str, Any] = {}
         for attempt in range(attempts):
-            last = doctor.run(include_synthetic_proof=False)
+            last = self._run_release_doctor(release, include_synthetic_proof=False)
             if last.get("status") == "healthy":
-                last = doctor.run()
+                last = self._run_release_doctor(release, include_synthetic_proof=True)
                 if last.get("status") == "healthy":
                     return last
             failed = self._failed_check_names(last)
@@ -123,8 +154,73 @@ class UpgradeManager:
                 time.sleep(2)
         return last
 
+    def _run_release_doctor(
+        self, release: Path, *, include_synthetic_proof: bool
+    ) -> dict[str, Any]:
+        """Run Doctor with one coherent release registry, packs, and projections."""
+
+        release_python = release / ".venv" / "bin" / "python"
+        if self.test_mode or not release_python.is_file():
+            return Doctor(
+                self.paths,
+                root=release,
+                test_mode=self.test_mode,
+            ).run(include_synthetic_proof=include_synthetic_proof)
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment.pop("VIRTUAL_ENV", None)
+        environment.update(
+            {
+                "ADMINME_INSTANCE_ROOT": str(self.paths.root),
+                "ADMINME_INSTANCE_DIR": str(self.paths.instance_dir),
+                "ADMINME_REPOSITORY_ROOT": str(release),
+                "OPENCLAW_STATE_DIR": str(
+                    self.paths.instance_dir / "openclaw" / "runtime"
+                ),
+                "OPENCLAW_CONFIG_PATH": str(
+                    self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+                ),
+                "PATH": (
+                    f"{self.paths.root}/bin:/opt/homebrew/bin:"
+                    "/opt/homebrew/opt/node@24/bin:/usr/local/bin:"
+                    "/usr/bin:/bin:/usr/sbin:/sbin"
+                ),
+            }
+        )
+        command = [
+            str(release_python),
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(self.paths.root),
+            "doctor",
+        ]
+        if not include_synthetic_proof:
+            command.append("--no-synthetic-proof")
+        completed = subprocess.run(
+            command,
+            cwd=release,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise UpgradeError(
+                "candidate Doctor did not return a valid diagnostic report"
+            ) from exc
+        if not isinstance(result, dict):
+            raise UpgradeError("candidate Doctor returned an invalid diagnostic report")
+        return result
+
     def activate(self, candidate: Path) -> dict[str, Any]:
-        evidence = validate_candidate(candidate)
+        evidence = validate_candidate(
+            candidate,
+            active_root=self._active_release_root(),
+            approve_runtime_migration=self.approve_runtime_migration,
+        )
         candidate = candidate.resolve()
         commit = self._candidate_commit(candidate)
         release = self.paths.app_dir / "releases" / commit
@@ -141,7 +237,11 @@ class UpgradeManager:
                     "*.log",
                 ),
             )
-        validate_candidate(release)
+        validate_candidate(
+            release,
+            active_root=self._active_release_root(),
+            approve_runtime_migration=self.approve_runtime_migration,
+        )
         self._prepare_release(release)
         backup = BackupManager(
             self.paths,
@@ -208,7 +308,11 @@ class UpgradeManager:
             raise UpgradeError("no prior release is recorded")
         release = Path(previous["path"]).resolve()
         ensure_within(release, self.paths.app_dir / "releases")
-        validate_candidate(release)
+        validate_candidate(
+            release,
+            active_root=self._active_release_root(),
+            approve_runtime_migration=True,
+        )
         stopped = self.services.status().status == "stopped"
         if not stopped:
             self.services.stop()
@@ -240,14 +344,24 @@ class UpgradeManager:
     def _prepare_release(self, release: Path) -> None:
         if self.test_mode:
             return
-        if sys.version_info[:2] != (3, 11):
-            raise UpgradeError("upgrade preparation requires the pinned Python 3.11")
+        versions = load_versions(release)
+        python_formula = str(versions["python"]["formula"])
+        python_minor = str(versions["python"]["preferred"]).rsplit(".", 1)[0]
+        python_executable = (
+            Path("/opt/homebrew/opt") / python_formula / "bin" / f"python{python_minor}"
+        )
+        if not python_executable.is_file():
+            raise UpgradeError(
+                f"candidate preparation requires side-by-side {python_formula}; "
+                "the active release was not changed"
+            )
         python = release / ".venv" / "bin" / "python"
-        poetry_venv = self.paths.app_dir / "tooling" / "poetry-2.2.1"
+        poetry_version = str(versions["package_managers"]["poetry"])
+        poetry_venv = self.paths.app_dir / "tooling" / f"poetry-{poetry_version}"
         poetry = poetry_venv / "bin" / "poetry"
         if not poetry.is_file():
             subprocess.run(
-                [sys.executable, "-m", "venv", str(poetry_venv)],
+                [str(python_executable), "-m", "venv", str(poetry_venv)],
                 check=True,
             )
             subprocess.run(
@@ -256,24 +370,30 @@ class UpgradeManager:
                     "-m",
                     "pip",
                     "install",
-                    "poetry==2.2.1",
+                    f"poetry=={poetry_version}",
                 ],
                 check=True,
             )
         if not python.is_file():
             subprocess.run(
-                [sys.executable, "-m", "venv", str(release / ".venv")],
+                [str(python_executable), "-m", "venv", str(release / ".venv")],
                 check=True,
             )
         poetry_environment = os.environ.copy()
         poetry_environment.pop("VIRTUAL_ENV", None)
+        node_bin = Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin"
+        if not (node_bin / "node").is_file():
+            raise UpgradeError(
+                f"candidate preparation requires side-by-side {versions['node']['formula']}; "
+                "the active release was not changed"
+            )
+        poetry_environment["PATH"] = f"{node_bin}:{poetry_environment.get('PATH', '')}"
         subprocess.run(
             [
                 str(poetry),
-                "install",
+                "sync",
                 "--only",
                 "main",
-                "--sync",
                 "--no-interaction",
             ],
             cwd=release,
@@ -281,9 +401,10 @@ class UpgradeManager:
             env=poetry_environment,
         )
         plugin = release / "openclaw" / "administrateme"
-        subprocess.run(["npm", "ci", "--ignore-scripts"], cwd=plugin, check=True)
-        subprocess.run(["npm", "run", "check"], cwd=plugin, check=True)
-        subprocess.run(["npm", "run", "build"], cwd=plugin, check=True)
+        npm = str(node_bin / "npm")
+        subprocess.run([npm, "ci", "--ignore-scripts"], cwd=plugin, check=True)
+        subprocess.run([npm, "run", "check"], cwd=plugin, check=True)
+        subprocess.run([npm, "run", "build"], cwd=plugin, check=True)
 
     def _candidate_commit(self, candidate: Path) -> str:
         completed = subprocess.run(

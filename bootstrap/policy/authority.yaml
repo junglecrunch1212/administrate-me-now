@@ -1,0 +1,51 @@
+# Reviewed tenant-neutral AdministrateMe caller policy.
+# Governance narrows these action families independently.
+
+agent_allowlist:
+  - agent_id: "system:internal"
+    actions: ["*"]
+  - agent_id: "system:bootstrap"
+    actions: ["*"]
+  - agent_id: "daemon:xlsx_reverse"
+    actions:
+      - "task.*"
+      - "commitment.*"
+      - "recurrence.*"
+      - "money_flow.*"
+      - "finance.*"
+  - agent_id: "daemon:xlsx_workbooks"
+    actions: ["xlsx.regenerated"]
+  - agent_id: "user:*"
+    actions:
+      - "commitment.*"
+      - "communication.*"
+      - "task.*"
+      - "triage.*"
+      - "calendar.*"
+      - "member_knowledge.*"
+      - "recurrence.*"
+      - "routine.*"
+      - "reminder.*"
+      - "identifier.*"
+      - "party.*"
+      - "relationship.*"
+      - "relationship_fact.*"
+      - "member_relationship.*"
+      - "household.action.*"
+      - "settings.*"
+      - "finance.*"
+      - "external_sync.*"
+  - agent_id: "openclaw:*"
+    actions:
+      - "household.action.*"
+      - "task.*"
+      - "commitment.*"
+      - "communication.*"
+      - "triage.*"
+      - "calendar.*"
+      - "member_knowledge.*"
+      - "recurrence.*"
+      - "routine.*"
+      - "external_sync.*"
+
+forbidden_outbound_parties: []

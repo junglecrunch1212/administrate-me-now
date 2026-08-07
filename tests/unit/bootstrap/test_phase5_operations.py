@@ -97,7 +97,11 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     common = (REPO_ROOT / "bootstrap" / "common.sh").read_text("utf-8")
     assert "current-release.json" in common
     assert "ACTIVE_RELEASE_ROOT/.venv/bin/python" in common
-    assert "brew --prefix node@22" in common
+    assert 'formula="$("$parser" -c' in common
+    assert 'brew --prefix "$formula"' in common
+    assert "configure_active_runtime_path" in common
+    assert '"${ADMINME_TEST_MODE:-0}" == "1"' in common
+    assert "the test Node runtime does not match" in common
     installer = (REPO_ROOT / "bootstrap" / "bootstrap-macos.sh").read_text("utf-8")
     assert "--expected-commit" in installer
     assert 'ADMINME_REVIEWED_COMMIT="$commit"' in installer
@@ -107,8 +111,8 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert "internal test-harness option" in installer
     assert "status --porcelain --untracked-files=all" in installer
     assert "npm install --global" not in installer
-    assert 'poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.2.1"' in installer
-    assert '"$poetry_venv/bin/poetry" install --only main --sync' in installer
+    assert 'poetry_venv="$INSTANCE_ROOT/app/tooling/poetry-2.4.1"' in installer
+    assert '"$poetry_venv/bin/poetry" sync --only main' in installer
     assert 'openclaw plugins install --link --force "$release_dir/' in installer
     assert "openclaw plugins uninstall administrateme --force --keep-files" in installer
     assert "openclaw config set gateway.mode local" in installer
@@ -116,6 +120,14 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert "outside >=6,<7" in installer
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
     assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
+    updater = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
+    assert "runtime migration requires a clean reviewed Git checkout" in updater
+    assert (
+        'controller="$ADMINME_INSTANCE_ROOT/app/tooling/upgrade-controller-' in updater
+    )
+    assert 'VIRTUAL_ENV="$controller"' in updater
+    assert 'ADMINME_REPOSITORY_ROOT="$candidate"' in updater
+    assert 'upgrade "$candidate" "$approve_flag"' in updater
     source_installer = (
         REPO_ROOT / "bootstrap" / "install-openclaw-source.sh"
     ).read_text("utf-8")
@@ -191,7 +203,7 @@ def test_interactive_answers_allow_deferred_child_tailscale_identity(
 ) -> None:
     answers = iter(
         [
-            "Esther",
+            "Guide",
             "y",
             "America/New_York",
             "2",
@@ -498,6 +510,16 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
         "coparent",
         "caregiver",
     }
+    for policy_name in ("governance.yaml", "authority.yaml"):
+        installed_policy = test_paths.instance_dir / "config" / policy_name
+        assert (
+            installed_policy.read_bytes()
+            == (REPO_ROOT / "bootstrap" / "policy" / policy_name).read_bytes()
+        )
+        assert (
+            str(installed_policy.relative_to(test_paths.root))
+            in state["sections"]["3"]["artifacts"]
+        )
     for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
         path = test_paths.launch_agent_dir / f"{label}.plist"
         definition = plistlib.loads(path.read_bytes())
@@ -803,6 +825,46 @@ def test_upgrade_incompatibility_is_detected_before_service_replacement(
     assert sentinel.read_text("utf-8") == "unchanged"
 
 
+def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / "active"
+    candidate = tmp_path / "candidate"
+    (active / "bootstrap").mkdir(parents=True)
+    (candidate / "bootstrap").mkdir(parents=True)
+    (candidate / "openclaw" / "administrateme").mkdir(parents=True)
+    for source in (
+        REPO_ROOT / "poetry.lock",
+        REPO_ROOT / "bootstrap" / "versions.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "package.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "openclaw.plugin.json",
+    ):
+        destination = candidate / source.relative_to(REPO_ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    active_versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )
+    active_versions["python"]["compatible"] = ">=3.11,<3.12"
+    active_versions["node"]["compatible"] = ">=22.22.3,<23"
+    (active / "bootstrap" / "versions.json").write_text(
+        json.dumps(active_versions), encoding="utf-8"
+    )
+
+    with pytest.raises(UpgradeError, match="approve-runtime-migration"):
+        validate_candidate(candidate, active_root=active)
+
+    result = validate_candidate(
+        candidate,
+        active_root=active,
+        approve_runtime_migration=True,
+    )
+    assert result["runtime_migration"] == {
+        "python": {"from": ">=3.11,<3.12", "to": ">=3.14,<3.15"},
+        "node": {"from": ">=22.22.3,<23", "to": ">=24.15,<25"},
+    }
+
+
 def test_upgrade_waits_only_for_known_post_switch_transients(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
@@ -862,3 +924,54 @@ def test_upgrade_does_not_retry_a_structural_doctor_failure(
     )._post_switch_doctor(REPO_ROOT)
     assert result == structural
     assert calls == 1
+
+
+def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
+    test_paths: DeploymentPaths,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = tmp_path / "release"
+    candidate_python = release / ".venv" / "bin" / "python"
+    candidate_python.parent.mkdir(parents=True)
+    candidate_python.write_text("fixture", encoding="utf-8")
+    monkeypatch.delenv("ADMINME_TEST_MODE", raising=False)
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "healthy", "checks": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr("bootstrap.upgrade.subprocess.run", fake_run)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    result = manager._run_release_doctor(release, include_synthetic_proof=False)
+
+    assert result["status"] == "healthy"
+    assert calls[0]["command"] == [
+        str(candidate_python),
+        "-m",
+        "bootstrap.cli",
+        "--instance-root",
+        str(test_paths.root),
+        "doctor",
+        "--no-synthetic-proof",
+    ]
+    assert calls[0]["cwd"] == release
+    environment = calls[0]["env"]
+    assert isinstance(environment, dict)
+    assert environment["ADMINME_INSTANCE_ROOT"] == str(test_paths.root)
+    assert environment["ADMINME_INSTANCE_DIR"] == str(test_paths.instance_dir)
+    assert environment["ADMINME_REPOSITORY_ROOT"] == str(release)
+    assert environment["OPENCLAW_STATE_DIR"] == str(
+        test_paths.instance_dir / "openclaw" / "runtime"
+    )
+    assert environment["OPENCLAW_CONFIG_PATH"] == str(
+        test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    )
+    assert str(test_paths.root / "bin") in environment["PATH"]
+    assert "/opt/homebrew/opt/node@24/bin" in environment["PATH"]
+    assert "PYTHONPATH" not in environment

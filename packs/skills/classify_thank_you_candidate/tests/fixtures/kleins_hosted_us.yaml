@@ -1,29 +1,29 @@
 name: kleins_hosted_dinner_thank_you
 description: |
-  The Klein family hosted the Stices for dinner Friday. The relationship's
+  The Klein family hosted the Morgan family for dinner Friday. The relationship's
   hosting balance already leans their way (4-to-1). Skill should propose
   a candidate with urgency this_week, medium handwritten_card.
 
 input:
-  principal_member_id: stice-james
+  principal_member_id: member-principal
   party_summary:
     party_id: p-klein
     name: Tom and Dana Klein
     tier: 3
     tags: ["friends", "neighbors"]
-    relationship_summary: "Morningside neighbors. Close enough to trade kid pickups occasionally. Host us more than we host them (4-to-1 lifetime)."
+    relationship_summary: "Nearby neighbors. Close enough to trade kid pickups occasionally. Host us more than we host them (4-to-1 lifetime)."
   interaction_context:
     recent_messages:
       - from_member_or_party: "Dana Klein"
         when: "2026-04-19T09:04:00-04:00"
-        text: "So great to see y'all last night! Let me know when charlie wants to come swim :)"
-      - from_member_or_party: "stice-laura"
+        text: "So great to see y'all last night! Let me know when your kid wants to come swim :)"
+      - from_member_or_party: "member-partner"
         when: "2026-04-19T11:22:00-04:00"
         text: "We had the best time. The lamb was incredible."
     recent_events:
       - kind: hosting_them
         when: "2026-04-18T19:00:00-04:00"
-        summary: "Stices for dinner at Kleins'. ~3 hrs, full dinner, included kids."
+        summary: "Morgan family for dinner at Kleins'. ~3 hrs, full dinner, included kids."
 
 expected_output:
   is_candidate: true

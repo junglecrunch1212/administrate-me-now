@@ -239,6 +239,78 @@ async def test_repeated_native_message_reconciles_without_crossing_accounts(
     assert rows[1]["provider_account_id"] == "account-b"
 
 
+async def test_semantic_features_attach_to_reconciled_provider_observation(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    base = {
+        "source_channel": "gmail",
+        "provider": "gmail",
+        "provider_account_id": "account-a",
+        "member_id": "member-a",
+        "native_message_id": "native-semantic-1",
+        "workspace": "personal",
+        "from_identifier": "sender@example.com",
+        "to_identifier": "member@example.com",
+        "received_at": "2026-04-10T10:00:00Z",
+    }
+    first = await log.append(
+        _envelope(
+            "messaging.received",
+            {**base, "body_text": "first observation"},
+            owner_scope="private:member-a",
+            schema_version=3,
+        )
+    )
+    await bus.notify(first)
+    await _wait_idle(bus, "projection:interactions")
+    second = await log.append(
+        _envelope(
+            "messaging.received",
+            {**base, "body_text": "Please reply today"},
+            owner_scope="private:member-a",
+            schema_version=3,
+        )
+    )
+    await bus.notify(second)
+    await _wait_idle(bus, "projection:interactions")
+    semantic = await log.append(
+        _envelope(
+            "messaging.semantic_features_extracted",
+            {
+                "source_event_id": second,
+                "reply_signal": "required",
+                "automated": False,
+                "transactional_due": False,
+                "security_code": False,
+                "person_to_person": True,
+                "deadline": "today",
+                "confidence": 0.96,
+                "reasons": ["Explicit request"],
+                "skill_name": "classify_message_nature",
+                "skill_version": "3.0.0",
+            },
+            owner_scope="private:member-a",
+        )
+    )
+    await bus.notify(semantic)
+    await _wait_idle(bus, "projection:interactions")
+
+    row = (
+        runner.connection("interactions")
+        .execute(
+            "SELECT interaction_id, semantic_features_json, semantic_skill_version "
+            "FROM interactions WHERE native_message_id='native-semantic-1'"
+        )
+        .fetchone()
+    )
+    assert row["interaction_id"] == f"ix_{first}"
+    assert '"reply_signal":"required"' in row["semantic_features_json"]
+    assert row["semantic_skill_version"] == "3.0.0"
+
+
 async def test_telephony_sms_received(rig: dict[str, Any]) -> None:
     log = rig["log"]
     bus = rig["bus"]

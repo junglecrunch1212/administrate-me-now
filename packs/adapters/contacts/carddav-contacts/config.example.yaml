@@ -1,0 +1,7 @@
+member_id: member-id
+provider_account_id: carddav-account
+account_label: CardDAV contacts
+credentials_ref: keychain://administrateme/carddav-member
+account_url: https://contacts.example.test/addressbooks/member/
+container_external_id: default-address-book
+poll_interval_s: 300

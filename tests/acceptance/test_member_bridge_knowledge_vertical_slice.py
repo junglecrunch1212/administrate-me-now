@@ -251,7 +251,8 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             event_ids[1],
         )
         assert [event["type"] for event in derived] == [
-            "member_knowledge.index_skipped"
+            "embedding.revoked",
+            "member_knowledge.index_skipped",
         ]
 
         # Cross-owner, child, ambient/device, view-as, and generic-memory paths
@@ -283,6 +284,10 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
         )
         assert not any(
             "memory" in str(getattr(route, "path", "")).casefold()
+            for route in app_a.routes
+        )
+        assert not any(
+            str(getattr(route, "path", "")) == "/api/member/v1/external-sync/commands"
             for route in app_a.routes
         )
 

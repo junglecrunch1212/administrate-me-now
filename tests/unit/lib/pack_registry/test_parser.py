@@ -56,7 +56,12 @@ def test_parse_existing_plaid_pack_yaml_yields_cat_c_capability() -> None:
     cap = manifest.capabilities[0]
     assert cap.kind == "Cat-C"
     assert cap.runtime == "central"
-    assert cap.event_families == ["money_flow.plaid_synced"]
+    assert cap.event_families == [
+        "money_flow.provider_observed",
+        "money_flow.provider_removed",
+        "financial.account_observed",
+        "money_flow.plaid_synced",
+    ]
     assert manifest.sensitivity_default == "privileged"
 
 

@@ -1,0 +1,6 @@
+member_id: member-id
+provider_account_id: apple-contacts
+account_label: Apple Contacts
+container_external_id: all-containers
+bridge_socket: /path/to/member-bridge.sock
+poll_interval_s: 300

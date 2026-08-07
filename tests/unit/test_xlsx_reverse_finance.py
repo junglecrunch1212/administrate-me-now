@@ -3,13 +3,14 @@ Unit tests for the xlsx reverse daemon's Raw Data (finance) pathway
 (07c-β-2).
 
 Coverage:
-- manual row ADD → ``money_flow.manually_added`` (id-prefix shape canary)
+- manual row ADD with protected identity cells blank →
+  ``money_flow.manually_added`` (id-prefix shape canary)
 - non-manual row ADD → drop with WARN
 - manual row DELETE after the undo window → ``money_flow.manually_deleted``
 - non-manual row DELETE → drop with WARN, no event
-- assigned_category edit on a Plaid row → INFO drop
-  (descriptor.updates_emit_event = None at v1)
-- amount edit on a manual row → INFO drop (same reason)
+- assigned_category edit on a Plaid row → typed classification event
+- amount edit on a manual row → typed manual-update event
+- invalid planning save preserves the accepted sidecar for corrected retry
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from adminme.projections.xlsx_workbooks import (
     XlsxWorkbooksProjection,
 )
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.projections.xlsx_workbooks.sidecar import read_sheet_state
 
 TEST_KEY = b"f" * 32
 
@@ -99,6 +101,11 @@ def _row_index_by_txn_id(ws: Any, txn_id: str) -> int | None:
         if row and row[0] == txn_id:
             return i
     return None
+
+
+def test_workbook_money_uses_decimal_half_up_rounding() -> None:
+    assert XlsxReverseDaemon._money_minor("10.005") == 1001
+    assert XlsxReverseDaemon._money_minor("-10.005") == -1001
 
 
 @pytest.fixture
@@ -240,7 +247,8 @@ async def test_manual_row_add_emits_money_flow_manually_added(
     ws.cell(row=new_row, column=6, value=12.50)
     ws.cell(row=new_row, column=9, value="snacks")
     ws.cell(row=new_row, column=10, value="manual snack run")
-    ws.cell(row=new_row, column=11, value=True)
+    # is_manual and txn_id are protected. A new row with both blank is the
+    # explicit manual-add affordance and must not require unlocking a cell.
     _save(wb, path)
 
     await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
@@ -328,7 +336,7 @@ async def test_plaid_row_delete_drops_warn(
     )
 
 
-async def test_assigned_category_edit_drops_info(
+async def test_assigned_category_edit_emits_classification(
     rig: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
     reverse = rig["reverse"]
@@ -347,19 +355,13 @@ async def test_assigned_category_edit_drops_info(
     caplog.set_level(logging.INFO, logger="adminme.daemons.xlsx_sync.reverse")
     await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
 
-    # No money_flow.* domain events landed.
-    for ev_type in (
-        "money_flow.manually_added",
-        "money_flow.manually_deleted",
-    ):
-        evs = await _events_of_type(log, ev_type, cursor)
-        assert evs == []
-    assert any(
-        "money_flow.recategorized not registered" in r.message for r in caplog.records
-    )
+    classified = await _events_of_type(log, "money_flow.classification_set", cursor)
+    assert len(classified) == 1
+    assert classified[0]["payload"]["flow_id"] == "fp1"
+    assert classified[0]["payload"]["category"] == "reclassified"
 
 
-async def test_amount_edit_on_manual_row_drops_info(
+async def test_amount_edit_on_manual_row_emits_update(
     rig: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
     reverse = rig["reverse"]
@@ -378,12 +380,50 @@ async def test_amount_edit_on_manual_row_drops_info(
     caplog.set_level(logging.INFO, logger="adminme.daemons.xlsx_sync.reverse")
     await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
 
-    for ev_type in (
-        "money_flow.manually_added",
-        "money_flow.manually_deleted",
-    ):
-        evs = await _events_of_type(log, ev_type, cursor)
-        assert evs == []
-    assert any(
-        "money_flow.recategorized not registered" in r.message for r in caplog.records
+    updated = await _events_of_type(log, "money_flow.manually_updated", cursor)
+    assert len(updated) == 1
+    assert updated[0]["payload"]["flow_id"] == "fm1"
+    assert updated[0]["payload"]["amount_minor"] == 9999
+
+
+async def test_invalid_planning_save_keeps_sidecar_for_corrected_retry(
+    rig: dict[str, Any],
+) -> None:
+    reverse = rig["reverse"]
+    log = rig["log"]
+    config = rig["config"]
+    cursor = rig["cursor"]
+    before = read_sheet_state(
+        config.xlsx_workbooks_dir, FINANCE_WORKBOOK_NAME, "Budget vs Actual"
     )
+
+    wb, path = _open_finance(config)
+    ws = wb["Budget vs Actual"]
+    ws.cell(row=5, column=1, value="")
+    ws.cell(row=5, column=2, value="Food")
+    ws.cell(row=5, column=3, value=-1)
+    ws.cell(row=5, column=8, value=True)
+    _save(wb, path)
+
+    await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
+
+    rejected = await _events_of_type(log, "finance.workbook_published", cursor)
+    assert rejected[-1]["payload"]["validation_state"] == "rejected"
+    assert await _events_of_type(log, "finance.budget_set", cursor) == []
+    assert (
+        read_sheet_state(
+            config.xlsx_workbooks_dir, FINANCE_WORKBOOK_NAME, "Budget vs Actual"
+        )
+        == before
+    )
+
+    wb, path = _open_finance(config)
+    ws = wb["Budget vs Actual"]
+    ws.cell(row=5, column=3, value=500)
+    _save(wb, path)
+    await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
+
+    budgets = await _events_of_type(log, "finance.budget_set", cursor)
+    assert len(budgets) == 1
+    assert budgets[0]["payload"]["category"] == "Food"
+    assert budgets[0]["payload"]["amount_minor"] == 50_000

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://administrateme/packs/adapters/financial/plaid/config.schema.json",
   "title": "Plaid adapter configuration",
-  "description": "Per-Item configuration consumed by packs/adapters/financial/plaid/adapter.py at start(). Secret references use the 1Password 'op://<vault>/<item>/<field>' pattern per ADMINISTRATEME_BUILD.md §L1; raw secrets are a constitutional violation. sensitivity_floor is a hardcoded const at the pack level per SYSTEM_INVARIANTS.md §6 invariant 10 — any config that tries to lower it to 'normal' is rejected by JSON-schema validation before the loader runs.",
+  "description": "Per-Item configuration consumed by packs/adapters/financial/plaid/adapter.py at start(). Secret references use reviewed 1Password op:// or macOS Keychain keychain:// references; raw secrets are a constitutional violation. sensitivity_floor is a hardcoded const at the pack level per SYSTEM_INVARIANTS.md §6 invariant 10 — any config that tries to lower it to 'normal' is rejected by JSON-schema validation before the loader runs.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,17 +17,17 @@
   "properties": {
     "item_access_token_ref": {
       "type": "string",
-      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
       "description": "1Password reference to the long-lived Plaid Item access token (POST /item/public_token/exchange result). NEVER the token value itself."
     },
     "plaid_client_id_ref": {
       "type": "string",
-      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
       "description": "1Password reference to the Plaid API client_id."
     },
     "plaid_secret_ref": {
       "type": "string",
-      "pattern": "^op://[^/]+/[^/]+/[^/]+$",
+      "pattern": "^(op://[^/]+/[^/]+/[^/]+|keychain://[^/]+/[^/]+)$",
       "description": "1Password reference to the Plaid API secret."
     },
     "webhook_route": {

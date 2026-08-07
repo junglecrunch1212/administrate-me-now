@@ -62,6 +62,96 @@ def _provenance() -> dict[str, object]:
     }
 
 
+def test_note_recurrence_candidate_remains_human_gated_and_type_distinct(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance-recurrence"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        proposed_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_000_000_000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=1,
+                occurred_at="2026-08-06T10:00:00Z",
+                source_adapter="pipeline:member_knowledge_indexing",
+                source_account_id="note-semantics",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="triage-note-recurrence-fixture",
+                payload={
+                    "proposal_id": "triage-note-recurrence",
+                    "target_kind": "recurrence",
+                    "owner_member_id": MEMBER,
+                    "title": "Return the school form every Friday",
+                    "candidate": {
+                        "rrule": "FREQ=WEEKLY;BYDAY=FR",
+                        "next_occurrence": "2026-08-07T17:00:00Z",
+                        "kind": "school_form",
+                        "trackable": True,
+                        "notes": "Exact fixture note evidence",
+                    },
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": "fixture-note-event",
+                    "confidence": 0.96,
+                    "reasons": ["Exact fixture note evidence"],
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", proposed_event_id)
+        [proposal] = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()[
+            "items"
+        ]
+        assert proposal["target_kind"] == "recurrence"
+        assert proposal["review_state"] == {
+            "contract": "triage-review-state-v1",
+            "state": "ready",
+            "missing": [],
+            "human_gate_required": True,
+            "approval_authorized": False,
+        }
+        assert (
+            runtime.projections.connection("recurrences")
+            .execute("SELECT COUNT(*) FROM recurrences")
+            .fetchone()[0]
+            == 0
+        )
+        approved = client.post(
+            "/api/member/v1/triage/triage-note-recurrence/approve",
+            headers=AUTH,
+            json={
+                "request_id": "triage-recurrence-approve",
+                "expected_last_event_id": proposal["last_event_id"],
+            },
+        )
+        assert approved.status_code == 200, approved.text
+        recurrence = (
+            runtime.projections.connection("recurrences")
+            .execute(
+                "SELECT linked_kind, linked_id, kind, rrule, trackable FROM recurrences"
+            )
+            .fetchone()
+        )
+        assert tuple(recurrence) == (
+            "party",
+            MEMBER,
+            "school_form",
+            "FREQ=WEEKLY;BYDAY=FR",
+            1,
+        )
+        assert (
+            runtime.projections.connection("tasks")
+            .execute("SELECT COUNT(*) FROM tasks")
+            .fetchone()[0]
+            == 0
+        )
+
+
 async def _events(runtime: object, *types: str) -> list[dict]:
     rows = []
     async for event in runtime.event_log.read_since(types=list(types) or None):
@@ -186,6 +276,64 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             f'["{events[-2]["event_id"]}"]',
         )
 
+        calendar_source_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_000_000_000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="calendar.source_observed",
+                schema_version=1,
+                occurred_at="2026-08-06T10:00:00Z",
+                source_adapter="triage-calendar-fixture",
+                source_account_id=MEMBER,
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                actor_identity=MEMBER,
+                payload={
+                    "member_id": MEMBER,
+                    "provider": "apple_calendar",
+                    "provider_account_id": MEMBER,
+                    "calendar_external_id": "calendar-primary",
+                    "calendar_name": "Fixture personal calendar",
+                    "access_role": "owner",
+                    "primary": True,
+                    "selected": True,
+                    "read_details": True,
+                    "read_free_busy": True,
+                    "write_events": True,
+                    "observed_at": "2026-08-06T10:00:00Z",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "calendars", calendar_source_id)
+        calendar_policy = client.post(
+            "/api/member/v1/calendar/onboarding",
+            headers=AUTH,
+            json={
+                "request_id": "triage-calendar-policy-0001",
+                "member_id": MEMBER,
+                "timezone": "Etc/UTC",
+                "rules": [
+                    {
+                        "source_member_id": MEMBER,
+                        "provider": "apple_calendar",
+                        "provider_account_id": MEMBER,
+                        "calendar_external_id": "calendar-primary",
+                        "purpose": "personal",
+                        "effect": "hard_block",
+                        "write_target": True,
+                        "destination_kind": "personal",
+                    }
+                ],
+                "windows": [],
+                "buffer_minutes": {},
+                "accepted_chores_required": True,
+                "one_confirm_write": True,
+            },
+        )
+        assert calendar_policy.status_code == 202, calendar_policy.text
+
         routed = client.post(
             "/api/openclaw/v1/tools/action",
             headers=OPENCLAW_AUTH,
@@ -235,6 +383,12 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         assert retried_enrichment.status_code == 200, retried_enrichment.text
         assert retried_enrichment.json()["duplicate"] is True
         assert retried_enrichment.json()["event_id"] == enriched.json()["event_id"]
+        triage_surface = client.get(
+            "/api/member/v1/surfaces/triage", headers=AUTH
+        ).json()
+        [reviewed_calendar_candidate] = triage_surface["items"]
+        assert reviewed_calendar_candidate["review_state"]["state"] == "ready"
+        assert reviewed_calendar_candidate["calendar_preview"]["state"] == "ready"
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []
         ), "enrichment alone cannot request a provider write"

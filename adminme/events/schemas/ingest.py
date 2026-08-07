@@ -324,6 +324,23 @@ class MessagingClassifiedV1(BaseModel):
     skill_version: str = Field(min_length=1)
 
 
+class MessagingSemanticFeaturesExtractedV1(BaseModel):
+    """Schema-bound NLP evidence used by deterministic Comms/Triage rules."""
+
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1)
+    reply_signal: Literal["required", "not_required", "unknown"] = "unknown"
+    automated: bool = False
+    transactional_due: bool = False
+    security_code: bool = False
+    person_to_person: bool = False
+    deadline: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasons: list[str] = Field(default_factory=list, max_length=20)
+    skill_name: str = Field(min_length=1)
+    skill_version: str = Field(min_length=1)
+
+
 registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.received", 2, MessagingReceivedV2)
 registry.register("messaging.received", 3, MessagingReceivedV3)
@@ -343,3 +360,8 @@ registry.register("calendar.event_deleted", 2, CalendarEventDeletedV2)
 registry.register("calendar.event_outcome_recorded", 1, CalendarEventOutcomeRecordedV1)
 registry.register("artifact.received", 1, ArtifactReceivedV1)
 registry.register("messaging.classified", 1, MessagingClassifiedV1)
+registry.register(
+    "messaging.semantic_features_extracted",
+    1,
+    MessagingSemanticFeaturesExtractedV1,
+)

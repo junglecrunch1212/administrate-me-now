@@ -1,0 +1,25 @@
+pack:
+  id: adapter:contacts-microsoft-graph-contacts
+  name: Microsoft Graph contacts
+  version: 2.0.0
+  kind: adapter
+  family: contacts
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+sensitivity_floor: normal
+runtime: {language: python, python_version: ">=3.14,<3.15", entrypoint: adapter.py, class: MicrosoftGraphContactsAdapter}
+triggers: {kind: external_poll, schedule: "*/5 * * * *"}
+depends_on:
+  event_types: [adapter.authenticated, contact.record.observed, contact.record.deleted, contact.group.observed]
+events_emitted: [adapter.authenticated, contact.record.observed, contact.record.deleted, contact.group.observed]
+config: {schema: config.schema.json, example: config.example.yaml}
+capabilities:
+  - kind: Cat-B
+    runtime: central
+    event_families: [contact.record.observed, contact.record.deleted, contact.group.observed]
+write_capabilities: [create_contact, update_contact, delete_contact]
+sensitivity_default: normal
+sharing_model_discriminator: member_id
+observation_mode_required: true
+dedup_strategy: {kind: external_id}

@@ -10,10 +10,19 @@ AdministrateMe is a private, household-scale Chief of Staff that turns distribut
 |---|---|---|
 | Household Chief of Staff | The family sees what matters, what is owed, and what happens next across time horizons. | Tasks, commitments, recurrences, calendars, lists, approvals, outcomes, contextual what-now. |
 | ADHD cognitive neuroprosthetic | Work is reduced to approachable next steps without guilt or infantilization. | Carousel, micro-script, energy/effort fit, endowed progress, variable rewards, paralysis support, concise digests, guilt filter. |
-| Household/professional CRM | Relationships have continuity across people, organizations, family roles, conversations, promises, and artifacts. | Parties, Identifiers, Memberships, Relationships, Interactions, Commitments, Artifacts. |
+| People and relationship memory | A member can recognize who someone is, why the relationship matters, what happened, what is owed, and what the member explicitly wanted to remember—without a sender database, guilt score, or model-owned social graph. | Endpoints, provider Contact Records, qualified Parties, scoped Identifier Links, Memberships, Relationships, member profiles, typed facts, Interactions, Commitments, and Artifacts. |
 | Unified communications | A member-isolated, account/workspace-aware cockpit carries working memory across person-to-person channels without duplicating assistant chat or letting a model decide priority. | Loss-aware interaction normalization, deterministic Focus/Waiting/Snoozed/Quieted rules, provider capability negotiation, Triage proposals, and governed requested/completed/failed delivery outcomes. |
-| Working memory/member knowledge | Each member’s knowledge remains theirs while supporting authorized recall and household coordination. | Cat-D member bridges, `member_knowledge`, privileged exclusion, scope-filtered `vector_search`, provenance/corrections. |
+| Working memory/Notes | Each member writes information once, recalls it across authorized sources, and may send exact evidence to the household human gate without remembering the source app. | Cat-D member bridges, provider-neutral `member_knowledge`, explicit per-note grants, privileged exclusion, deterministic FTS, revocable `vector_search`, provenance/corrections, bounded Notes-to-Triage extraction. |
 | Sensor/signal/action layer | Finance, home, calendar, lists, and other sources can be observed and acted on safely. | Cat-B/C/E adapters, typed facts, explicit verbs, observation, authorization, verification events. |
+
+Settings is the member-visible trust and configuration memory for all six
+functions. It tells a member which identity is active, which account or bridge
+belongs to whom, what is configured, what is actually running, what a provider
+permission permits, what AdministrateMe policy permits, and what observation
+will suppress. This externalizes the configuration working memory that an ADHD
+member should not have to reconstruct from several vendor consoles. Settings
+uses deterministic state and receipts; a model may explain a label but cannot
+choose a preference, grant permission, change authority, or infer health.
 
 The target household is multi-member, including principals, children, helpers, devices, and ambient entities. “Single hub” describes the source-of-truth deployment, not a single-user security model.
 
@@ -31,6 +40,36 @@ Every useful path must close this loop:
 8. **Recalculate next action:** affected projections update and contextual what-now changes deterministically.
 
 A test that stops at proposal, approval, API 202, or outbound request does not prove the loop.
+
+### Seven-lens member loop
+
+Today, Triage, Comms, Reminders, Calendar, People, and Notes are bounded lenses over that
+one loop, not seven sources of truth. Comms, Calendar, Reminders, and Notes expose
+authorized provider observations without collapsing their domains. A
+schema-bound OpenClaw skill may extract language features, but deterministic
+pipeline rules alone decide whether a candidate is eligible for Triage.
+Triage is the only cross-domain human proposal gate and resolves an exact
+member/provider/account/container from authorized directories. Calendar
+previews time effects; Reminders preserves provider capability; Comms preserves
+thread/account/workspace context. Notes preserves member/source/folder/revision
+identity, exact evidence, and independently authorized sharing. Today then recomposes verified projection
+identity, exact evidence, and independently authorized sharing. People composes
+qualified identity, explicit relationship context, interactions, promises, and
+source provenance without copying them or promoting unknown endpoints. Today
+then recomposes verified projection state and deep-links back to the exact source. Shared read contracts may reduce
+working-memory load, but they never rank by model, authorize a write, or become
+a universal work object.
+
+| Loop stage | Primary member lens | Cross-surface guarantee |
+|---|---|---|
+| Observe/recall | Comms, Reminders, Calendar, People, Notes | Provider/member/account/container, contact-record/revision, or note-source/folder/revision identity remains visible and authoritative. |
+| Understand | Source lens plus bounded semantic provenance | A model reports typed language features only; deterministic code owns attention and eligibility. |
+| Organize | Source lens and deterministic projections | Read filters cannot change truth, time capacity, or authority. |
+| Propose | Triage | Only evidence-backed derived candidates wait; raw messages, notes, provider facts, and already-official work do not. |
+| Authorize | Triage plus source-specific action review | Exact route, capability, observation effect, and immutable evidence precede confirmation. |
+| Act/project | Typed domain/API seam | Task, commitment, calendar event, reminder/list item, recurrence, and scheduler job remain distinct. |
+| Verify | Triage Recent and source reconciliation state | Requested, suppressed, confirmed, failed, and reconciled are not interchangeable. |
+| Recalculate | Today | Timed/context calendar facts, effective reminders, actionable Comms, and decisions recompute without copied truth. |
 
 ## Temporal model and contextual what-now
 
@@ -56,23 +95,30 @@ It produces explainable recommendations for six horizons: **now** (one concrete 
 | Projection | Deterministic, disposable read model. | Replay of event log from zero. | Other projections for read composition only where contract allows. | Write API or source of truth. |
 | Scheduler job | OpenClaw-owned trigger for a standing order. | Pinned OpenClaw config plus install/reconcile events. | Pipeline endpoint and idempotency key. | Recurrence domain object. |
 
-## CRM spine
+## People and relationship-memory spine
 
 - **Party:** stable person, organization, or household identity.
-- **Identifier:** normalized addressable identity (email, phone, channel peer, external id) with source/confidence.
+- **Endpoint:** observed addressable value that is not itself a person or authorization fact.
+- **Provider Contact Record:** exact provider/account/container/native record and revision; the provider remains authoritative.
+- **Identifier Link:** scoped, provenance-bearing, revocable association between an Endpoint and a Party.
 - **Membership:** a Party’s role in a household or organization, including `member_id` for authorization.
 - **Relationship:** typed connection between Parties with time/provenance.
+- **Member Relationship Profile:** one member's explicit cadence, favorite, suppression, tags, and cue policy for a Party.
+- **Relationship Fact:** typed, scoped, sensitivity-bearing fact with exact provenance and revocation.
 - **Interaction:** deduplicated communication or touchpoint.
 - **Commitment:** obligation linked to the Parties and Interaction that established it.
 - **Artifact:** document/form/record linked to Parties and operational work.
 
-All products use this spine through events and scope-filtered projections. No product privately forks CRM truth.
+All products use this spine through events and scope-filtered projections. No
+product privately forks People truth. An observed endpoint never creates a
+Party; an ambiguous exact identifier match fails closed; and provider-native
+sharing never becomes AdministrateMe authorization.
 
 ## Projection capability map
 
 | Capability | Purpose | Gate 1 state |
 |---|---|---|
-| `parties` | CRM identities, identifiers, memberships, relationships | Code/schema present; not in default runtime registry. |
+| `parties` | Scoped endpoints, provider contact records, qualified Parties, identifier links, memberships, relationships, member profiles, facts, grants, and authorized FTS | Default-registered; CO-003 v2 lifecycle, deterministic identity, isolation, replay, and People composition implemented. |
 | `interactions` | Deduplicated, member/account/workspace-bound communication facts and explicit local/provider state | Default-registered; D28 Comms composition, scope/replay, provider command and process acceptance implemented. |
 | `artifacts` | Documents/forms/records and links | Code/schema present; not in default runtime registry. |
 | `commitments` | Proposed, reviewed, active, completed obligations | Code/schema present; not in default runtime registry. |

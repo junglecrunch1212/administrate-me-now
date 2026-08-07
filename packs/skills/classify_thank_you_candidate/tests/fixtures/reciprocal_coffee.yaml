@@ -1,10 +1,10 @@
 name: reciprocal_coffee_with_close_friend_not_candidate
 description: |
-  Kate and James met for coffee. Tier 2 close friend. Reciprocal activity,
+  Kate and Morgan met for coffee. Tier 2 close friend. Reciprocal activity,
   not hosting. Skill should return is_candidate=false.
 
 input:
-  principal_member_id: stice-james
+  principal_member_id: member-principal
   party_summary:
     party_id: p-kate
     name: Kate Sullivan

@@ -251,7 +251,7 @@ async def test_nearest_returns_matching_first(rig: dict[str, Any]) -> None:
     bus = rig["bus"]
     runner = rig["runner"]
 
-    texts = ["alpha", "bravo", "charlie", "delta", "echo"]
+    texts = ["alpha", "bravo", "gamma", "delta", "echo"]
     for t in texts:
         await log.append(_envelope("embedding.generated", _embedding_payload(t)))
     last = await log.latest_event_id()
@@ -260,15 +260,15 @@ async def test_nearest_returns_matching_first(rig: dict[str, Any]) -> None:
     await _wait_for_checkpoint(bus, "projection:vector_search", last)
 
     conn = runner.connection("vector_search")
-    # Query with the "charlie" embedding — rank 1 must be emb-charlie.
+    # Query with the "gamma" embedding — rank 1 must be emb-gamma.
     rows = nearest(
         conn,
         _S("tenant-a"),
-        query_vector=_fake_embedding("charlie"),
+        query_vector=_fake_embedding("gamma"),
         k=5,
     )
     assert len(rows) == 5
-    assert rows[0]["embedding_id"] == "emb-charlie"
+    assert rows[0]["embedding_id"] == "emb-gamma"
 
 
 async def test_nearest_excludes_privileged(rig: dict[str, Any]) -> None:

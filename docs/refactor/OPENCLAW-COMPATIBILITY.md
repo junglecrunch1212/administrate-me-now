@@ -28,19 +28,21 @@ generic portal or member operator method was added.
 
 ## Evidence level
 
-- **Official-contract fixture: PASS on Windows.** The narrow TypeScript
+- **Official-contract fixture: PASS on macOS with Node 24.19.0.** The narrow TypeScript
   declaration fixture is copied from only the SDK surfaces used at the pinned
   commit. It validates compile-time and runtime registration contracts but is
   not a live Gateway.
 - **AdministrateMe process boundary: PASS.** FastAPI acceptance boots the real
   encrypted runtime, exercises the loopback routes, event log, projections,
   scope filters, restart hydration, and incompatible-host rejection.
-- **Live pinned OpenClaw: NOT RUN on this host.** The pinned source requires
-  Node `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`; this host has Node `24.14.1` and is Windows. The guarded
+- **Live pinned OpenClaw on the candidate baseline: NOT RUN on the family Mac.**
+  The candidate requires Node `>=24.15.0 <25`; the plugin contract, build, and
+  package gates pass with Node `24.19.0`. The active family release remains on
+  Node 22 until the separately approved ADR-0006 migration. The guarded
   `npm run test:live:mac` requires a disposable macOS lab, the exact source
   checkout, explicit `ADMINME_LIVE_GATE=1`, then performs link/install,
-  runtime inspect, Gateway restart, and deep RPC health. It must pass before
-  the family Mac is touched.
+  runtime inspect, Gateway restart, and deep RPC health. It must pass in a
+  disposable macOS lab before the candidate can replace the active release.
 
 ## Gate 5 host and installer matrix
 
@@ -48,8 +50,8 @@ generic portal or member operator method was added.
 |---|---|---|
 | macOS | majors 14, 15, 26; 26 preferred for a new Mac mini | mutation-free shell/Python preflight |
 | CPU | native Apple silicon `arm64` only | Rosetta/x86_64 fails before instance mutation |
-| Python | `>=3.11,<3.12`, resolved from `poetry.lock` | release-specific venv and Poetry `2.2.1` |
-| Node/npm | `>=22.22.3,<23`; npm `>=10.9,<11` | installer and plugin contract checks |
+| Python | `>=3.14,<3.15`, resolved from `poetry.lock` | release-specific venv and Poetry `2.4.1` |
+| Node/npm | `>=24.15,<25`; npm `>=11.6,<12` | installer and plugin contract checks |
 | SQLCipher | runtime `>=4.12,<5`; cross-platform `sqlcipher3==0.6.2` | Exact Poetry lock plus Doctor cipher/migration checks |
 | OpenClaw/plugin | exact existing version, commit, API, gateway, and plugin package pins | upgrade validation occurs before service replacement |
 | Bun | not required | declared false in `bootstrap/versions.json` |

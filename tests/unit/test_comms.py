@@ -25,6 +25,7 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
                             "provider_account_id": "personal-fixture",
                             "workspace": "personal",
                             "enable_writes": False,
+                            "oauth_credentials_ref": "keychain://fixture-personal",
                         },
                     },
                     {
@@ -35,6 +36,7 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
                             "provider_account_id": "work-fixture",
                             "workspace": "work",
                             "enable_writes": True,
+                            "oauth_credentials_ref": "keychain://fixture-work",
                         },
                     },
                     {
@@ -60,6 +62,19 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
             fixture_member_id=None,
         ),
         fixture_adapter=None,
+        adapters=SimpleNamespace(
+            inventory=lambda: {
+                "personal-mail": {
+                    "state": "running",
+                    "write_capabilities": [],
+                },
+                "work-mail": {
+                    "state": "running",
+                    "write_capabilities": ["send_message"],
+                },
+            }
+        ),
+        settings_control=SimpleNamespace(read=lambda: {"connections": {}}),
         _observation_active=True,
     )
 
@@ -99,6 +114,9 @@ def test_focus_rules_are_explained_stable_and_model_free() -> None:
             "occurred_at": "2026-08-06T12:00:00Z",
             "unread": 1,
             "important": 1,
+            "semantic_features_json": (
+                '{"reply_signal":"required","person_to_person":true}'
+            ),
         },
         {
             **base,
@@ -145,9 +163,73 @@ def test_focus_rules_are_explained_stable_and_model_free() -> None:
         "quieted",
     ]
     assert first["threads"][0]["why"] == [
-        "Provider marked important",
-        "Unread inbound message",
+        "A typed semantic signal says a reply is required",
+        "Provider-important person-to-person message",
     ]
+    assert first["attention_policy"]["unread_is_visual_state_only"] is True
+    assert first["threads"][0]["attention"]["decision_maker"] == "rules_not_model"
+
+
+def test_unread_alone_stays_later_and_transport_entities_are_normalized() -> None:
+    result = compose_comms_cockpit(
+        member_id="member-a",
+        rows=[
+            {
+                "interaction_id": "message-entity",
+                "member_id": "member-a",
+                "provider": "gmail",
+                "provider_account_id": "account-a",
+                "workspace": "personal",
+                "direction": "inbound",
+                "channel_specific": "gmail",
+                "body_text": "You&#x27;re all set\n--\nFixture signature",
+                "body_preview": "You&#x27;re all set\nOn Yesterday, Sender wrote:\nOld text",
+                "unread": 1,
+                "occurred_at": "2026-08-06T12:00:00Z",
+                "raw_event_ids": '["event-entity"]',
+                "last_event_id": "event-entity",
+            }
+        ],
+        participants={},
+        party_labels={},
+        accounts=[],
+        triage_items=[],
+        now=datetime(2026, 8, 6, 14, tzinfo=timezone.utc),
+    )
+    thread = result["threads"][0]
+    assert thread["bucket"] == "later"
+    assert thread["preview"] == "You're all set"
+    assert thread["messages"][0]["body"] == "You're all set"
+
+
+def test_temporary_security_code_expires_out_of_focus_after_fifteen_minutes() -> None:
+    result = compose_comms_cockpit(
+        member_id="member-a",
+        rows=[
+            {
+                "interaction_id": "expired-code",
+                "member_id": "member-a",
+                "provider": "gmail",
+                "provider_account_id": "account-a",
+                "direction": "inbound",
+                "channel_specific": "gmail",
+                "subject": "Temporary code",
+                "semantic_features_json": '{"security_code":true}',
+                "occurred_at": "2026-08-06T12:00:00Z",
+                "raw_event_ids": '["event-code"]',
+                "last_event_id": "event-code",
+            }
+        ],
+        participants={},
+        party_labels={},
+        accounts=[],
+        triage_items=[],
+        now=datetime(2026, 8, 6, 12, 16, tzinfo=timezone.utc),
+    )
+    thread = result["threads"][0]
+    assert thread["bucket"] == "later"
+    assert thread["attention"]["signals"]["security_code"] is True
+    assert thread["attention"]["signals"]["security_code_active"] is False
 
 
 def test_final_outbound_guard_rejects_header_injection_and_account_drift() -> None:

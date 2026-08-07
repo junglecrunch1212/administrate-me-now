@@ -52,8 +52,10 @@ def _calendar_event_id(payload: dict[str, Any], *, is_v2: bool) -> str:
     explicit = payload.get("calendar_event_id")
     if explicit:
         return str(explicit)
-    source = payload.get("provider") or payload.get("calendar_source") or payload.get(
-        "source"
+    source = (
+        payload.get("provider")
+        or payload.get("calendar_source")
+        or payload.get("source")
     )
     external_uid = payload.get("external_event_id") or payload.get("external_uid")
     if not is_v2:

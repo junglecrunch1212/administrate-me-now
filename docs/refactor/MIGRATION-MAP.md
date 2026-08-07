@@ -1,5 +1,56 @@
 # Migration map
 
+CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
+under ADR-0007. The existing money projection now separates private provider
+observations/accounts, household classifications/manual rows, editable
+planning assumptions/budgets/scenarios/goals, and workbook publication state.
+One deterministic Finance contract drives a six-view member cockpit and the
+twelve-sheet `adminme-finance.xlsx`. Plaid is detailed, read-only, removal-aware,
+and durable-cursor-backed. The workbook owns planning intent; Plaid owns
+provider facts; the encrypted event log owns history; the projection owns the
+current read model. No fifteenth projection, provider SDK outside a pack,
+second forecast engine, or bank write seam is added. Live Plaid Link/consent
+and provider evidence remain explicit post-merge work.
+
+CO-005 update (2026-08-07): production composition is **HARDENED** with
+reviewed fail-closed authority/governance policy, governed Settings changes,
+provider-source freshness, conservative legacy reminder copy presentation,
+and truthful unresolved-endpoint status. The generic external mutation route
+is **DELETE COMPLETE**; provider writes exist only behind typed product
+commands, and Notes remains Cat-D ingest/query-only. ADR-0006/D30 **MODERNIZE**
+the candidate baseline to Python 3.14/Node 24 with side-by-side tools and an
+explicit pre-switch migration flag. The healthy live 3.11/22 release is not
+changed by candidate preparation; stable wrappers resolve its own version
+manifest before choosing a Node formula. Finance, Scoreboard, and privileged-read
+audit depth are recorded as required incomplete work, not optional-provider
+deferrals. See `CHANGE-ORDER-005-CONSTITUTIONAL-AUDIT.md`.
+
+Settings update (2026-08-07): CO-004 **MODERNIZES COMPLETE IN CODE** the
+generic capability/workbook/chat cards into one deterministic member control
+plane. The member shell now names the authenticated identity and Tailscale
+boundary. Connection setup, live runtime, permission, and safety state are
+separate. A secret-free revisioned journal holds bounded preferences, pause
+state, and bridge requests; typed events audit accepted changes. Profile
+activation uses the existing validated extension lifecycle and adapter
+pause/resume reconciles the existing supervisor. CO-005 additionally routes
+accepted Settings mutations through production GuardedWrite policy before
+state changes. No secret editor, second
+runtime, provider SDK, OpenClaw operator console, model router, or fifteenth
+projection was added.
+
+People semantics update (2026-08-06): CO-003 **MODERNIZES LIVE IN OBSERVATION**
+the historical CRM projection and generic member cards into deterministic
+relationship memory. Parties v2 separates unresolved Endpoints, exact
+provider Contact Records, qualified Parties, scoped Identifier Links,
+Relationships, member profiles, facts, grants, and authorized FTS. Identity
+resolution retains ambiguous evidence and fails closed; only curated contacts,
+enrollment, explicit entry, or human-confirmed Triage candidates qualify a
+Party. Reviewed enrollment now crosses the same event boundary through
+idempotent Party/Membership/Relationship receipts, including non-member
+contacts without portal authority. Four contact-source packs expose truthful capability/revision contracts;
+live source enrollment remains per member and does not block the People
+function or AC-30 fixture proof.
+
 Today semantics update (2026-08-06): Today is **MODERNIZED COMPLETE IN CODE**
 from a raw What Now plus “Open lists” surface into one deterministic Daily
 Brief shared by the member portal and pinned OpenClaw dashboard. It composes
@@ -42,12 +93,14 @@ plugin trust, and pinned OpenClaw discovery registration. The production
 virtualenv remains synchronized, but no longer contains the Poetry executable
 performing that destructive sync.
 
-Primary-surface update (2026-08-05): central Google Calendar and per-member
-Apple Calendar, Reminders, and Notes are now **KEEP/HARDEN COMPLETE IN CODE**.
+Primary-surface update (2026-08-05, corrected by CO-005): central Google
+Calendar and per-member Apple Calendar and Reminders are **KEEP/HARDEN COMPLETE
+IN CODE**; Apple Notes is **KEEP/HARDEN COMPLETE FOR INGEST ONLY**.
 The release preserves provider-native schemas at the transport boundary,
 normalizes typed facts into the event log, reconciles external authority, and
-routes governed writes and terminal results through the central/bridge command
-paths. Production bootstrap now actually supplies `config/adapters.json` to
+routes supported Calendar/Reminder writes and terminal results through the
+central/bridge command paths. Notes exposes no provider command path.
+Production bootstrap now actually supplies `config/adapters.json` to
 the runtime supervisor. Real OAuth, macOS privacy consent, and device
 propagation remain live activation gates rather than simulated readiness.
 Central and bridge emits now require durable acknowledgement before cursor
@@ -79,6 +132,17 @@ hook after those columns exist, never by the pre-migration bootstrap script.
 The retained regression executes both phases against a legacy table and proves
 all native-message, member/occurred, and account/thread indexes are present.
 
+Five-surface loop update (2026-08-06): CO-001 **MODERNIZES COMPLETE IN CODE**
+the read compositions and browser workflows for Today, Triage, Comms,
+Reminders, and Calendar. Shared surface-link, attention, provider-action, and
+freshness DTOs remain disposable and non-authorizing. Daily Brief v2,
+Comms Focus v2, effective Reminders, structured Triage, and Calendar candidate
+preview supersede raw/remixed source rows, unread-as-priority, browser prompts,
+and context-as-next-event. Interaction v4 is additive and replayable. The
+existing skill/pipeline counts remain ten: `classify_message_nature` v3 reports
+bounded semantic features/candidates through pinned OpenClaw, while
+`noise_filtering` v2 owns fixed eligibility and private Triage proposal events.
+
 Gate 7 update (2026-08-04): the browser-experience deferral is closed. The
 deleted Node scaffold stays deleted; FastAPI serves a small static member
 portal and authorized JSON/streaming APIs. The exact-pinned OpenClaw plugin
@@ -89,12 +153,12 @@ projection, scheduler, workflow, or copied record store.
 
 | Gate 7 subsystem | Final class | Executable result |
 |---|---|---|
-| Principal experience | KEEP/HARDEN COMPLETE | Exact OpenClaw Control UI exposes Today, Triage, Comms, Reminders, Calendar, People, Knowledge, Finance, Scoreboard, Settings, health, governed review/lifecycle bindings, and the same deterministic Daily Brief/Comms/Reminders contracts as the portal. |
+| Principal experience | KEEP/HARDEN COMPLETE IN CO-002 CANDIDATE | Exact OpenClaw Control UI exposes Today, Triage, Comms, Reminders, Calendar, People, Notes, Finance, Scoreboard, Settings, health, governed review/lifecycle bindings, and the same deterministic Daily Brief/Comms/Reminders/Notes contracts as the portal; Knowledge remains a deprecated binding only. |
 | Member/child experience | REWRITE COMPLETE | Python-served portal has adult ten-surface, child two-surface, and shared-screen one-surface server allowlists plus responsive/accessibility evidence; Today supplies a Day Brief, explicit Carousel, and deterministic What Now, Comms supplies member-isolated deterministic message focus, and Reminders supplies deterministic provider-backed activation lenses. |
 | Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
 | Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
 | Browser runtime | KEEP DELETED NODE / ADD STATIC PYTHON SURFACE | No Node app server, service worker, local transcript/cache, provider SDK, model picker, admin console, plugin manager, or terminal. |
-| Live deployment | DEFER TRUTHFULLY | Supported-Mac real Gateway/providers/Tailscale/Apple grants remain Phase 8 evidence. |
+| Live deployment | KEEP/HARDEN ACTIVE IN OBSERVATION | Central Tailscale/Gateway/provider reads are live; member bridges and optional provider grants remain explicit per-member activation work. The 3.14/24 cutover requires a new rehearsal. |
 
 Gate 6 update (2026-08-03): the remaining retained domain code is converged on
 the Gate 2–5 runtime. All six products, thirteen domain projections, and the
@@ -108,8 +172,8 @@ paths. Rows below retain baseline history; this Gate 6 delta is current truth.
 |---|---|---|
 | Event runtime and projections | KEEP/HARDEN COMPLETE | One EventSink/log/bus root; exactly fourteen registered projections (thirteen domain truth plus Triage); replay, migration, scope, checkpoint, and encrypted reopen tests pass. |
 | Domain APIs | KEEP/REWRITE COMPLETE | Core, Comms, Capture, Automation, Bridge, and System are real namespaces; activity/capability status derives from runtime wiring and authorization. |
-| Knowledge/search | KEEP/HARDEN COMPLETE | Private explicit-source `member_knowledge`; scope-filtered domain `vector_search`; privileged embedding forbidden. |
-| Workbooks | KEEP/HARDEN COMPLETE | `adminme-ops.xlsx` and `adminme-finance.xlsx` retain forward/reverse/sidecar/lock/conflict/Plaid/rebuild behavior. |
+| Notes/authorized recall | KEEP/HARDEN/MODERNIZE COMPLETE IN CO-002 CANDIDATE | Private provider-neutral `member_knowledge`; deterministic owner/grant-filtered FTS; scope-filtered revocable `vector_search`; privileged indexing/model processing forbidden; exact-evidence semantics create Triage proposals only. |
+| Workbooks | KEEP/HARDEN COMPLETE IN CO-006 CANDIDATE | `adminme-ops.xlsx` retains its contract; Finance schema v2 adds validated assumptions, budgets, scenarios, goals, checks, protected provider fields, privacy-filtered rows, typed reverse events, and one shared deterministic calculation source. |
 | Adapters/bridge | KEEP/HARDEN COMPLETE | Cat-A–E contracts, deterministic fixtures, durable cursor state, real Cat-D filesystem watchers, central ingest, and fail-closed mirror configuration. |
 | Pipelines/OpenClaw | KEEP/CONVERGE COMPLETE | Six reactive packs stay in-process; five proactive programs are scheduled by OpenClaw; notification delivery belongs to OpenClaw and is confirmed only by a typed result. |
 | Profiles/personas/packs | KEEP/REWRITE COMPLETE | Five profiles and four personas are data/versioned extensions with stage/test/activate/rollback; all six pack kinds remain. |
@@ -132,17 +196,17 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Durable in-process bus | `adminme/events/bus.py` | durable offsets/retry/degrade exist; checkpoint test fails in baseline | HARDEN | Fix ordering/race in Phase 2; poison isolation, restart, drain; event-log append must notify only after commit. |
 | Central composition root | absent | no process instantiates log+bus+all runners/APIs | REWRITE | Create one lifecycle owner with truthful readiness and ordered shutdown. |
 | Projection protocol/runner | `adminme/projections/base.py`, `runner.py` | replay/registration mechanisms; default tuple only `lists` | HARDEN | Exact fourteen registry (thirteen domain plus Triage), shared bus ownership, per-capability replay/idempotency/status. |
-| Parties projection | `adminme/projections/parties/` | schema/handlers/queries/tests | KEEP | Register and prove live/replay/privacy in composition. |
-| Interactions projection | `adminme/projections/interactions/` | account/workspace/body/provider-state schema, handlers, scoped thread queries, command results, replay tests | HARDEN COMPLETE | Preserve every message observation in `raw_event_ids`; fold repeated native-message observations only within the same tenant/member/provider/account namespace, retain latest provider state, and preserve privacy. Deterministic Comms grouping remains read-time composition. |
+| Parties projection | `adminme/projections/parties/` | v2 schema/handlers/queries, `adminme/people.py`, identity pipeline, contact packs, AC-30 | KEEP/HARDEN LIVE IN CO-003 OBSERVATION | Registered and additive/replayable; separates endpoints/provider records/qualified Parties; scopes identifiers, relationships, profiles, facts, grants, and FTS; ambiguous/hidden resolution fails closed. |
+| Interactions projection | `adminme/projections/interactions/` | v4 account/workspace/body/provider-state plus additive semantic-feature/provenance columns, repeated-source lookup, scoped thread queries, command results, migration/replay tests | HARDEN COMPLETE | Preserve every message observation in `raw_event_ids`; attach schema-bound features only to the exact source interaction; fold repeated native observations only within tenant/member/provider/account; preserve privacy. Comms grouping and Focus remain deterministic read-time composition. |
 | Artifacts projection | `adminme/projections/artifacts/` | schema/handlers/queries/tests | KEEP | Register; scope/provenance/correction. |
 | Commitments projection | `adminme/projections/commitments/` | schema/handlers/queries/tests | KEEP | Register; full proposal-review-completion feedback. |
 | Tasks projection | `adminme/projections/tasks/` | schema/handlers/queries/tests | KEEP | Register; keep task semantics and what-now links. |
 | Recurrences projection | `adminme/projections/recurrences/` | schema/handlers/queries/tests | KEEP | Register; never conflate with cron. |
 | Calendars projection | `adminme/projections/calendars/` | schema/handlers/queries/tests | KEEP | Register; privacy redaction/link semantics. |
 | Places/assets/accounts projection | `adminme/projections/places_assets_accounts/` | schema/handlers/queries/tests | KEEP | Register; preserve distinct entity kinds within capability. |
-| Money projection | `adminme/projections/money/` | schema/handlers/queries/tests | KEEP | Register; privileged scope and Plaid provenance. |
+| Money projection | `adminme/projections/money/` | v2 schema/handlers/queries, Finance cockpit, replay/privacy tests, AC-32 | KEEP/HARDEN/MODERNIZE COMPLETE IN CO-006 CANDIDATE | Preserve privileged Plaid provenance while adding accounts, removals, classifications/manual corrections, assumptions, budgets, scenarios, goals, workbook state, and deterministic cash-flow/net-worth/scenario composition. |
 | Vector search projection | `adminme/projections/vector_search/` | schema/handlers/queries and privileged-exclusion tests | HARDEN | Register; scope at query/index; prove no privileged/cross-owner embeddings. |
-| XLSX projection/reverse daemon | `adminme/projections/xlsx_workbooks/`, `adminme/daemons/xlsx_sync/`, `xlsx_forward.py`, `xlsx_reverse.py` | substantial logic; direct POSIX `fcntl`; Windows collection/runtime failures | HARDEN | Keep macOS lock semantics; compose lifecycle; complete both workbooks, conflict and replay gates. |
+| XLSX projection/reverse daemon | `adminme/projections/xlsx_workbooks/`, `adminme/daemons/xlsx_sync/`, `xlsx_forward.py`, `xlsx_reverse.py` | Finance schema v2, structural/type/semantic validation, planning reverse events, protected facts, sidecar/lock/conflict/rebuild tests | HARDEN COMPLETE IN CO-006 CANDIDATE | Preserve macOS lock semantics; reject malformed planning saves before domain mutation; filter every sheet by workbook audience; regenerate derived sheets from the money projection. |
 | Member knowledge projection | absent; bridge schemas refer to future 11d | required capability missing | REWRITE | Implement owner-scoped schema/handlers/queries and vector handoff from typed Cat-D events. |
 | Lists projection | `adminme/projections/lists/` | implemented and default-registered | KEEP | Compose with other 12; external-authority reconciliation and task promotion links. |
 | Triage projection | `adminme/projections/triage/` | new D26 deterministic proposal read model | MODERNIZE COMPLETE | Aggregate proposal families, enforce scope, rebuild from the log, never become domain source-of-truth. |
@@ -153,25 +217,26 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Bridge package/runtime | `bridge/adminme_bridge/`, `adminme/products/bridge/`, `bootstrap/bridge_enrollment.py` | Central ingest and owner-scoped knowledge are retained; reviewed bootstrap adds encrypted export, identity/release/expiry validation, per-member launchd, real enrollment proof, finalization/revocation, and durable idempotent commands for Apple Calendar, Reminders, and Notes | HARDEN COMPLETE FOR ENROLLMENT AND PRIMARY APP COMMANDS | Live opt-in pack configuration, Apple grants, and iCloud propagation remain separate evidence. |
 | Gmail Cat-A | `packs/adapters/messaging/gmail/` | account-bound v3 inbound, v2 outbound, history sync, provider labels, reply headers, read/archive mutations, dynamic OAuth scopes and tests | HARDEN COMPLETE IN CODE | Live account remains read-only until fresh modify/send OAuth consent; Pub/Sub watch/fallback remains operational follow-up. |
 | Cat-B calendar/reminder/task packs | `packs/adapters/{calendaring,reminders,tasks}/` | Google/Apple Calendar and Apple Reminders now cover supported native fields, calendars/lists, recurrences, alarms/geofences, completions, change feedback, durable cursors, and central/bridge command paths | HARDEN COMPLETE IN CODE | Retain external authority, observation/governance, idempotent writes, and require live OAuth/EventKit propagation evidence. |
-| Plaid Cat-C | `packs/adapters/financial/plaid/` | inbound code/tests; vendored docs lint noise | KEEP | Compose sandbox-first; redact/privileged scope; authority and workbook proof. |
+| Plaid Cat-C | `packs/adapters/financial/plaid/` | detailed private account/transaction/removal events, terminal summary, sign normalization, secret references, durable per-member/item cursor, restart/supervisor tests | KEEP/HARDEN COMPLETE IN CO-006 CANDIDATE | Compose read-only; advance cursor only after accepted details and receipt; retain provider identity/revision/removal; require separate live Link/consent evidence. |
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
-| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests | KEEP | Register production set; close outcome feedback; remove hidden scheduler ownership. |
-| Ten skill packs | `packs/skills/` | schemas/prompts/tests present | HARDEN | Pin manifest/schema versions; tenant scan; current OpenClaw invocation contract. |
+| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v2 emits classified facts, bounded semantic features, and eligible private Triage proposals | KEEP/HARDEN COMPLETE FOR CO-001 | Deterministic code owns eligibility, confidence floor, scope/sensitivity exclusion, candidate allowlist, idempotency, and outcome feedback; no hidden scheduler or model decision ownership. |
+| Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` v3 returns classification, bounded semantic features, and typed candidates defensively | HARDEN COMPLETE FOR CO-001 | Stay on pinned OpenClaw `llm-task`; report language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
 | OpenClaw skill wrapper | `adminme/lib/skill_runner/` | Gate 4 makes exactly one pinned `llm-task` request and records actual returned provider/model provenance; no local provider iteration | REWRITE COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, and proposal semantics remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |
 | guardedWrite/rate limiter | `adminme/lib/governance.py` | correct three-layer local order; no full approval/outbound composition | HARDEN | Compose independent approvals, content/privacy/persona and observation gates; all terminal outcomes. |
 | Observation | `adminme/lib/observation.py` | on-by-default and suppression code/tests | HARDEN | Persist start/trust window/review prerequisites; complete payload; Cat-B explicit rule; final seam only. |
-| Product Core | `adminme/products/core/main.py` | docstring-only stub | REWRITE | Router namespace and real handlers for CoS/what-now/lifecycle. |
-| Product Comms | `adminme/products/comms/main.py`, `adminme/comms.py`, member Comms surface | Ninth adult surface, deterministic focus/thread contract, account capability negotiation, local focus commands and governed provider command spine | REWRITE COMPLETE FOR PRODUCT CORE | Triage remains the only proposal queue; Comms is not generic chat; missing Outlook/BlueBubbles/Twilio provider packs stay disabled and explicit. |
-| Product Reminders | `adminme/reminders.py`, Lists v3 projection, member Reminders surface and command/cue APIs | Tenth adult surface, deterministic activation lenses, exact account/list capability negotiation, governed provider command spine, typed context facts/cues, and Google Tasks full supported CRUD/move/complete mirror | MODERNIZE COMPLETE IN CODE | Provider remains authoritative; list items remain distinct from Tasks/Commitments/calendar events; EventKit/Google limitations stay explicit; live propagation remains acceptance evidence. |
-| Product Calendar | `adminme/calendar.py`, Calendars v3 projection, member Calendar/onboarding/Triage/Today surfaces, Google Calendar discovery | Deterministic per-member hard/soft/context/ignore semantics, route-scoped identity, duplicate grouping, tentative/caregiving load, buffers, household guardrails, conflict/pressure, anchored Day/Week/Month/Agenda/Find-time ranges, spatial grids, presentation-only source filters, exact provider capabilities, reviewed destinations, canonical-primary alias retirement, and restart-stable provider-revision idempotency | MODERNIZE COMPLETE IN CODE; LIVE READ/POLICY PROOF COMPLETE | SUPERSEDE naïve “every event is busy,” single-primary-calendar assumptions, and agenda-list-only Calendar UI; preserve provider authority, privacy redaction, typed event separation, governance, and require post-observation provider-write propagation evidence. |
-| Product Capture | `adminme/products/capture/main.py` | stale quick-capture docstring-only stub | REWRITE | Knowledge/CRM/Lists/read/search namespace; delete quick capture/voice/triage claims. |
-| Product Automation | `adminme/products/automation/main.py` | docstring-only stub | REWRITE | Finance/signal/action namespace with scoped reads and governed writes. |
+| Product Core / Today | `adminme/products/core/main.py`, `adminme/today.py`, member Today surface | Daily Brief v2 composes timed schedule, day context, effective reminders, typed executable work, Triage decisions, and the same explained Comms attention predicate with exact source links | REWRITE/MODERNIZE COMPLETE | Read composition only; preserve every item kind and source; contextual/all-day facts never become the next timed event; no model ranker. |
+| Product Comms | `adminme/products/comms/main.py`, `adminme/comms.py`, member Comms surface | `deterministic-comms-cockpit-v2`, Focus v2, safe entity normalization, exact account capability, attention explanations, local focus commands, Triage/source links, and governed provider command spine | REWRITE/MODERNIZE COMPLETE FOR PRODUCT CORE | Unread is visual only; Triage remains the only proposal queue; Comms is not generic chat; missing Outlook/BlueBubbles/Twilio provider packs stay disabled and explicit. |
+| Product Reminders | `adminme/reminders.py`, Lists v3 projection, member Reminders/Today surfaces and command/cue APIs | Shared effective-reminder composer, deterministic activation lenses, exact capabilities, transparent read-only possible-copy groups, structured dialogs, typed context facts/cues, and Google Tasks full supported CRUD/move/complete mirror | MODERNIZE COMPLETE IN CODE | Provider remains authoritative; every copy remains independently inspectable; list items remain distinct from Tasks/Commitments/calendar events; live propagation remains acceptance evidence. |
+| Product Calendar | `adminme/calendar.py`, Calendars v3 projection, member Calendar/onboarding/Triage/Today surfaces, Google Calendar discovery | Existing deterministic household reasoning plus Triage candidate preview through the same effective-event/conflict/buffer/guardrail code and reviewed write destinations; exact deep links and URL selection remain presentation-only | MODERNIZE COMPLETE IN CODE; LIVE READ/POLICY PROOF COMPLETE | SUPERSEDE naïve every-event-is-busy, single-primary-calendar, context-as-next-event, and agenda-only UI; preserve provider authority, privacy, typed event separation, governance, and post-observation write evidence. |
+| Product People | `adminme/people.py`, Parties v2, reviewed household-enrollment receipt, member People surface, identity pipeline, four contact packs | `deterministic-people-cockpit-v1`, idempotent enrolled Party/Membership/Relationship events, qualified directory, authorized audience-specific search, source/lens rail, master/detail context, explicit cues/settings, reversible lifecycle, Triage promotion, and pinned OpenClaw read binding | REWRITE/MODERNIZE LIVE IN CO-003 OBSERVATION | SUPERSEDE sender-as-person, bootstrap-file projection reads, generic CRM cards, tenant-wide identifier assumptions, implicit provider sharing, model closeness/ranking, and guilt cues; live contact enrollment/write remains per member and observation-gated. |
+| Product Capture compatibility | `adminme/products/capture/main.py` | stale quick-capture docstring-only stub | REWRITE/COMPATIBILITY | Notes owns the member recall experience; Capture retains legacy domain read/search APIs where required; quick capture/central voice claims stay deleted and Knowledge routes are deprecated aliases. |
+| Product Automation / Finance | `adminme/products/automation/main.py`, `adminme/projections/money/queries.py`, member Finance surface | `deterministic-finance-cockpit-v1` provides scoped cash-flow, budgets, scenarios, goals, net worth, data health, and fixed-priority review from one projection | REWRITE/MODERNIZE COMPLETE IN CO-006 CANDIDATE | Keep Finance read-only and deterministic; planning writes arrive through validated workbook events; future provider actions require an independent change order and full external-write contract. |
 | Bridge product | `adminme/products/bridge/` | only implemented FastAPI app; separate `:3337` | HARDEN | Move router into central root; preserve endpoint compatibility/auth; no separate central process. |
 | Console runtime | `console/server.js` | comment-only stub; npm test is placeholder echo | DELETE after replacement | Build real family frontend, then remove Node application server; Node remains build-only if used. |
-| Console/browser application | `console/` assets to be created | reference mock only | REWRITE | Implement UX contract, server authorization, sanitization, accessibility, browser tests; serve from Python runtime. |
+| Console/browser application | `adminme/products/member/assets/` served by the Python runtime | Ten-surface role-authorized portal; CO-006 adds six URL-backed Finance lenses, calm cash/runway hierarchy, deterministic focus and data-health states, and responsive budget/scenario/account views | REWRITE/MODERNIZE COMPLETE IN CO-006 CANDIDATE | Preserve server authorization, text-only safe DOM construction, WCAG/reduced-motion/reflow gates, cache coherence, and isolated browser evidence; never restore a Node application runtime or native prompt workflow. |
 | Reference HTML | `ADMINISTRATEME_CONSOLE_REFERENCE.html` | rich mock with stale flows and unsafe mock rendering; Gate 1 rendered evidence retained | KEEP as design evidence | Never ship as app; preserve valid vocabulary and retained captures, supersede retired flows. |
 | OpenClaw plugin placeholders | `adminme/openclaw_plugins/` | Deleted at Gate 4 after import scan and native contract/process tests; history remains in Git | DELETE COMPLETE | Replaced by one exact-pinned native package at `openclaw/administrateme/`. |
 | Standing-order prose/cron | `bootstrap/openclaw/programs/`, `cron.yaml`, `openclaw/administrateme/automations.json`, `bootstrap/openclaw_cron.py` | Five proactive jobs cross-checked, ownership-scoped, timezone-explicit, idempotently reconciled, post-verified, Doctor-visible, and rollback-tested; reward dispatch stays reactive | HARDEN COMPLETE | Retain disposable-Mac RPC proof and never add a Python scheduler. |

@@ -116,7 +116,7 @@ def run_preflight(
         "launchctl",
         "plutil",
         "brew",
-        "python3.11",
+        "python3.14",
         "node",
         "npm",
     )

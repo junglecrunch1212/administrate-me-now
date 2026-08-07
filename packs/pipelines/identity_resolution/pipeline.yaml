@@ -5,7 +5,7 @@ pack:
   kind: pipeline
 runtime:
   language: python
-  python_version: ">=3.11"
+  python_version: ">=3.14,<3.15"
   entrypoint: handler.py
   class: IdentityResolutionPipeline
 triggers:
@@ -19,5 +19,5 @@ depends_on:
     - parties
 events_emitted:
   - identity.merge_suggested
-  - party.created
-  - identifier.added
+  - interaction.participant_resolved
+  - endpoint.observed

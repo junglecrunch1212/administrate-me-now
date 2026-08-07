@@ -15,7 +15,7 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "2.0.0"
+    assert loaded.version == "3.0.0"
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
         "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]
@@ -38,6 +38,13 @@ def test_handler_passes_through_well_formed_output() -> None:
         "classification": "transactional",
         "confidence": 0.93,
         "reasons": ["unsubscribe footer + receipt language"],
+        "reply_signal": "not_required",
+        "automated": True,
+        "transactional_due": False,
+        "security_code": False,
+        "person_to_person": False,
+        "deadline": None,
+        "candidates": [],
     }
     out = loaded.handler_post_process(raw, {}, None)
     assert out == raw

@@ -14,7 +14,7 @@ The first supported central deployment contains exactly:
 
 `adminme-runtime` binds loopback `127.0.0.1:3330`; Tailscale Serve is the only network edge. It serves `/api/core`, `/api/comms`, `/api/capture`, `/api/automation`, `/api/bridge`, `/api/system`, browser assets, and the narrow member portal. Legacy `:3333–:3337` product ports are compatibility aliases only if tests prove they are required; they do not create more processes. The runtime rejects/strips untrusted identity headers and accepts identity only from the local proxy boundary.
 
-Node must satisfy the selected source engine (`>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`) and may compile plugin/frontend/profile assets during build/install. It is not a second central application server. OpenClaw listens on loopback `:18789`. Exact paths and ports are instance configuration, never string-literal instance paths in business code.
+Node must satisfy the reviewed AdministrateMe Node 24 baseline (`>=24.15.0 <25`) and may compile plugin/frontend/profile assets during build/install. It is not a second central application server. OpenClaw listens on loopback `:18789`. Exact paths and ports are instance configuration, never string-literal instance paths in business code.
 
 ### Member bridge
 
@@ -76,6 +76,20 @@ Each section has `not_started|in_progress|complete|failed|rolled_back`, versione
 10. **Bridge enrollment:** create one short-lived, member-bound package at a time; verify target Apple identity, Tailscale identity, permissions, allowed Cat-B/D adapters and kid restrictions; enroll centrally; revoke bootstrap material; verify owner-scoped ingest and bridge health.
 
 Bootstrap completes only when a secret-scanned report lists versions, checks, events, installed capabilities, skipped optionals, observation start/end-not-before, backup/restore proof, and rollback status. `bootstrap.completed` is not emitted if any required section is incomplete.
+
+## Post-bootstrap Settings reconciliation
+
+After bootstrap, the member portal may change only the operational state that
+ADR-0005 assigns to the Settings control plane. Bounded preferences and
+adapter pause state use an atomic secret-free desired-state journal and typed
+receipts. Pause/resume reconciles the existing supervisor; it does not create a
+new daemon or mutate provider data. Add Bridge may create a scoped enrollment
+request, but the reviewed bootstrap ceremony still owns short-lived package
+export, target-member acceptance, Tailscale and OS-permission verification,
+owner-scoped ingest proof, finalization, and bootstrap-material revocation.
+OAuth grants and scope expansion remain provider-specific secure activation
+steps. No password, token, or secure-reference path is returned to browser
+Settings.
 
 ## Observation trust period
 

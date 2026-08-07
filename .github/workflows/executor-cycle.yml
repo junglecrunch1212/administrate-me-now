@@ -82,7 +82,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24.19.0'
 
       - name: Install claude-code
         run: |
@@ -175,7 +175,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24.19.0'
 
       - name: Install claude-code
         run: npm install -g @anthropic-ai/claude-code
@@ -257,7 +257,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24.19.0'
 
       - name: Install claude-code
         run: npm install -g @anthropic-ai/claude-code
@@ -339,7 +339,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24.19.0'
 
       - name: Install claude-code
         run: npm install -g @anthropic-ai/claude-code

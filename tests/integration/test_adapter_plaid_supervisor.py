@@ -145,10 +145,35 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
     in the shared event log; supervisor status reports ``running``."""
     log = _RecordingEventLog()
     sync_response = {
-        "added": [{"transaction_id": "txn-1", "account_id": "acct-1", "amount": -10.0}],
+        "added": [
+            {
+                "transaction_id": "txn-1",
+                "account_id": "acct-1",
+                "amount": -10.005,
+                "date": "2026-05-16",
+                "merchant_name": "Fixture payroll",
+                "personal_finance_category": {
+                    "primary": "INCOME",
+                    "detailed": "INCOME_WAGES",
+                },
+            }
+        ],
         "modified": [],
         "removed": [],
-        "accounts": [{"account_id": "acct-1"}],
+        "accounts": [
+            {
+                "account_id": "acct-1",
+                "name": "Fixture checking",
+                "type": "depository",
+                "subtype": "checking",
+                "mask": "1234",
+                "balances": {
+                    "current": 1000.005,
+                    "available": 900.0,
+                    "iso_currency_code": "USD",
+                },
+            }
+        ],
         "item": {
             "institution_id": "ins_109508",
             "institution_name": "First Platypus Bank",
@@ -203,6 +228,13 @@ async def test_supervisor_plaid_webhook_sync_round_trip(tmp_path: Path) -> None:
     assert payload["transactions_added"] == 1
     assert payload["webhook_triggered"] is True
     assert payload["sync_cursor"] == "cursor-after-webhook-sync"
+    observed = [e for e in log.appended if e["type"] == "money_flow.provider_observed"]
+    assert len(observed) == 1
+    assert observed[0]["payload"]["amount_minor"] == 1001
+    assert observed[0]["payload"]["kind"] == "received"
+    accounts = [e for e in log.appended if e["type"] == "financial.account_observed"]
+    assert len(accounts) == 1
+    assert accounts[0]["payload"]["current_balance_minor"] == 100001
     # Auth event landed once during start().
     assert len([e for e in log.appended if e["type"] == "adapter.authenticated"]) == 1
 

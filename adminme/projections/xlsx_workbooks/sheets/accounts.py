@@ -12,6 +12,7 @@ import json
 
 from openpyxl.worksheet.worksheet import Worksheet
 
+from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets._common import (
@@ -43,16 +44,52 @@ def build(
 ) -> None:
     write_header_row(ws, HEADERS)
 
-    rows = ctx.places_assets_accounts_conn.execute(
-        """
-        SELECT account_id, display_name, organization, kind, status,
-               attributes_json
-          FROM accounts
-         WHERE tenant_id = ?
-         ORDER BY display_name ASC, account_id ASC
-        """,
-        (tenant_id,),
-    ).fetchall()
+    finance_rows = filter_rows(
+        session,
+        [
+            dict(row)
+            for row in ctx.money_conn.execute(
+                "SELECT * FROM financial_accounts WHERE tenant_id = ? "
+                "ORDER BY display_name ASC, account_id ASC",
+                (tenant_id,),
+            ).fetchall()
+        ],
+    )
+    if finance_rows:
+        for i, row in enumerate(finance_rows, start=2):
+            values = [
+                row["account_id"],
+                row["institution_name"],
+                row["display_name"],
+                row["account_type"],
+                row["last4"],
+                row["current_balance_minor"] / 100.0
+                if row["current_balance_minor"] is not None
+                else None,
+                row["available_balance_minor"] / 100.0
+                if row["available_balance_minor"] is not None
+                else None,
+                row["as_of"],
+                True,
+                bool(row["link_healthy"]),
+            ]
+            for col_idx, value in enumerate(values, start=1):
+                ws.cell(row=i, column=col_idx, value=value)
+            apply_row_protection(ws, i, HEADERS, locked_columns=[], lock_all=True)
+        apply_sheet_protection(ws, readonly=True)
+        return
+
+    rows = filter_rows(
+        session,
+        [
+            dict(row)
+            for row in ctx.places_assets_accounts_conn.execute(
+                "SELECT * FROM accounts WHERE tenant_id = ? "
+                "ORDER BY display_name ASC, account_id ASC",
+                (tenant_id,),
+            ).fetchall()
+        ],
+    )
 
     for i, row in enumerate(rows, start=2):
         attrs_raw = row["attributes_json"] or "{}"
