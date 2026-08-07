@@ -84,10 +84,14 @@ fallback only to read an older release pointer during migration or rollback;
 that fallback is not a future application-runtime target.
 
 Launch sequencing probes the lightweight `/api/system/live` endpoint before
-starting OpenClaw. Full `/api/system/ready` capability diagnostics remain the
-health/status contract and the post-switch Doctor remains authoritative. This
-prevents a busy provider refresh from being misclassified as a dead Python
-process without weakening any readiness or release gate.
+starting OpenClaw. The liveness wait is bounded at five minutes because the
+first start of a reviewed schema/projection release can perform cold migration
+and replay work; the prior 90-second bound rolled back a process that completed
+startup immediately afterward. Full `/api/system/ready` capability diagnostics
+remain the health/status contract and the post-switch Doctor remains
+authoritative. This prevents cold replay or a busy provider refresh from being
+misclassified as a dead Python process without weakening any readiness or
+release gate.
 
 ## Consequences
 
