@@ -9,6 +9,10 @@ diagnostics, and every failure remains before service or release mutation.
 Active-runtime selection accepts both the current exact preferred-version
 receipt and the strict legacy `python@major.minor` formula used by the reviewed
 D10 release; ambiguous metadata still fails closed.
+Fresh-process evidence also hardens C046/C050/C080/C086: aliased items use
+Apple's signed Keychain client over anonymous pipes, while rollback originals
+retain their reviewed interpreter-bound path. Adapter credential reads share
+the validated alias map; no secret, provider SDK, or second store is added.
 
 CO-005 constitutional audit amendment (2026-08-07): direct production and
 live-portal reconciliation found semantic drift that the aggregate gates did

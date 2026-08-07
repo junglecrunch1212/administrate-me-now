@@ -23,6 +23,8 @@ from typing import Any, Sequence
 
 import keyring
 
+from adminme.lib.macos_keychain import get_runtime_password, put_runtime_password
+
 
 ALIAS_FILENAME = "keychain-runtime-aliases.json"
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -237,8 +239,10 @@ def _child() -> int:
             raise KeychainRuntimeMigrationError("candidate secret entry is invalid")
         observed_names.add(name)
         try:
-            keyring.set_password(_service(account, name), account, value)
-            verified = keyring.get_password(_service(account, name), account)
+            put_runtime_password(_service(account, name), account, value)
+            # This read uses a separate, fresh Apple-signed process. Verifying
+            # only in the creating Python process misses launchd ACL failures.
+            verified = get_runtime_password(_service(account, name), account)
         except Exception as exc:
             raise KeychainRuntimeMigrationError(
                 "candidate interpreter could not access a copied Keychain item"
@@ -303,7 +307,11 @@ def migrate(
         )
         source_name = source_reference.removeprefix(prefix)
         try:
-            value = keyring.get_password(_service(account, source_name), account)
+            value = (
+                get_runtime_password(_service(account, source_name), account)
+                if source_reference != logical_reference
+                else keyring.get_password(_service(account, source_name), account)
+            )
         except Exception as exc:
             raise KeychainRuntimeMigrationError(
                 "active interpreter cannot access a configured Keychain item"

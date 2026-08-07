@@ -76,7 +76,8 @@ originals instead of prompting the rolled-back interpreter for a newer
 runtime's copies. A missing source, failed
 copy, invalid map, prompt, timeout, or failed candidate probe aborts before
 release preparation or service mutation. Secret values never cross command
-arguments, files, stdout, stderr, or diagnostic output.
+arguments, environment variables, files, logs, or diagnostic output;
+subprocess standard I/O remains captured in anonymous pipes.
 
 Runtime-tag comparison accepts the current receipt's exact
 `python.preferred` value and the older D10 receipt's strict
@@ -84,6 +85,17 @@ Runtime-tag comparison accepts the current receipt's exact
 runtime from an open-ended compatibility range or an ambiguous executable
 name. This preserves rollback from reviewed legacy releases without weakening
 the receipt boundary.
+
+An in-process candidate read-back is not launchd evidence for an ad-hoc-signed
+Homebrew interpreter. Runtime-bound alias items are therefore created, read,
+updated, deleted, and independently verified through Apple's signed
+`/usr/bin/security` client. Secret values use anonymous standard-I/O pipes only;
+`-w` is passed without a value, and stdout/stderr are captured and never
+included in diagnostics. Untouched rollback originals continue through their
+own interpreter's Python keyring path. Adapter credential reads resolve the
+same validated alias map before choosing the signed-client path. This is a
+narrow Keychain transport change, not an additional secret store or a runtime
+process.
 
 Rollback may cross the version boundary because it restores a previously
 reviewed immutable release and its own venv. Stable wrappers resolve the active

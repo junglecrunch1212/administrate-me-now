@@ -9,6 +9,11 @@ release ignores the map and retains exact rollback access. Copy, receipt, alias,
 and candidate-probe failures remain pre-mutation failures. The retry path reads
 the active runtime tag from either the current exact preferred-version receipt
 or the older reviewed `python@major.minor` formula and rejects any looser shape.
+Because Homebrew Python is ad-hoc signed, candidate verification now proves an
+independent fresh process through Apple's signed `security` client rather than
+trusting the creating Python process's read-back. Aliased runtime reads/writes
+and adapter credentials use that same anonymous-pipe seam; originals remain on
+the old keyring path for rollback.
 
 CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
 under ADR-0007. The existing money projection now separates private provider
