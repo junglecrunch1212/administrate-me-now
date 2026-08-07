@@ -10,6 +10,7 @@ explicit keyword.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from adminme.projections.money.queries import (
     flows_by_account,
     flows_by_category,
     flows_in_range,
+    finance_snapshot,
     get_money_flow,
     manual_flows,
 )
@@ -596,3 +598,293 @@ async def test_scope_canary_privileged_drops_for_non_owner(
         ("tenant-a", "f-priv"),
     ).fetchone()
     assert raw[0] == 1
+
+
+async def test_finance_cockpit_projects_provider_and_workbook_facts(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "financial.account_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-1",
+                "account_id": "account-1",
+                "institution_id": "institution-1",
+                "institution_name": "Fixture Bank",
+                "display_name": "Household checking",
+                "account_type": "depository",
+                "last4": "1234",
+                "current_balance_minor": 100_000,
+                "available_balance_minor": 90_000,
+                "currency": "USD",
+                "as_of": "2026-08-15T12:00:00Z",
+                "link_healthy": True,
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.provider_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-1",
+                "account_id": "account-1",
+                "transaction_id": "expense-1",
+                "amount_minor": 10_000,
+                "currency": "USD",
+                "occurred_at": "2026-08-05",
+                "kind": "paid",
+                "merchant_name": "Fixture Market",
+                "provider_category": "Groceries",
+                "pending": False,
+                "provider_revision": "cursor-1",
+                "observed_at": "2026-08-15T12:00:00Z",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "finance.assumption_set",
+            {
+                "assumption_id": "base_monthly_income",
+                "category": "cash_flow",
+                "label": "Base monthly income",
+                "value_decimal": "5000",
+                "unit": "USD/month",
+                "as_of": "2026-08-01",
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "finance.budget_set",
+            {
+                "budget_id": "budget-groceries",
+                "category": "Groceries",
+                "amount_minor": 8_000,
+                "currency": "USD",
+                "cadence": "monthly",
+                "active": True,
+                "as_of": "2026-08-01",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "finance.scenario_set",
+            {
+                "scenario_id": "baseline",
+                "name": "Current plan",
+                "is_baseline": True,
+                "horizon_months": 12,
+                "opening_cash_delta_minor": 5_000,
+                "monthly_income_delta_minor": 0,
+                "monthly_expense_delta_minor": 0,
+                "active": True,
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:money", last)
+
+    snapshot = finance_snapshot(
+        runner.connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["contract_version"] == "deterministic-finance-cockpit-v1"
+    assert snapshot["summary"]["cash_minor"] == 100_000
+    assert snapshot["summary"]["mtd_expenses_minor"] == 10_000
+    assert snapshot["summary"]["base_monthly_income_minor"] == 500_000
+    assert snapshot["scenarios"][0]["opening_cash_minor"] == 105_000
+    assert snapshot["budgets"][0]["state"] == "watch"
+    assert snapshot["focus"]["state"] == "budget_watch"
+
+
+async def test_finance_prior_period_never_spills_into_current_month(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "money_flow.recorded",
+            _recorded_payload(
+                flow_id="prior-month",
+                amount_minor=200,
+                occurred_at="2026-02-28T12:00:00Z",
+            ),
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.recorded",
+            _recorded_payload(
+                flow_id="current-month",
+                amount_minor=999,
+                occurred_at="2026-03-01T12:00:00Z",
+            ),
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:money", last)
+
+    snapshot = finance_snapshot(
+        runner.connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 3, 31, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["summary"]["prior_month_expenses_minor"] == 200
+    assert snapshot["summary"]["mtd_expenses_minor"] == 999
+
+
+async def test_finance_excludes_non_usd_rows_without_reviewed_fx_fact(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "financial.account_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-usd",
+                "account_id": "account-usd",
+                "institution_id": "institution-1",
+                "institution_name": "Fixture Bank",
+                "display_name": "USD checking",
+                "account_type": "depository",
+                "current_balance_minor": 100_000,
+                "currency": "USD",
+                "as_of": "2026-08-15T12:00:00Z",
+                "link_healthy": True,
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "financial.account_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-eur",
+                "account_id": "account-eur",
+                "institution_id": "institution-1",
+                "institution_name": "Fixture Bank",
+                "display_name": "EUR checking",
+                "account_type": "depository",
+                "current_balance_minor": 90_000,
+                "currency": "EUR",
+                "as_of": "2026-08-15T12:00:00Z",
+                "link_healthy": True,
+            },
+        )
+    )
+    await log.append(
+        _envelope(
+            "money_flow.provider_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-usd",
+                "account_id": "account-usd",
+                "transaction_id": "txn-usd",
+                "amount_minor": 100,
+                "currency": "USD",
+                "occurred_at": "2026-08-05",
+                "kind": "paid",
+                "pending": False,
+                "provider_revision": "cursor-1",
+                "observed_at": "2026-08-15T12:00:00Z",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.provider_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-eur",
+                "account_id": "account-eur",
+                "transaction_id": "txn-eur",
+                "amount_minor": 500,
+                "currency": "EUR",
+                "occurred_at": "2026-08-05",
+                "kind": "paid",
+                "pending": False,
+                "provider_revision": "cursor-1",
+                "observed_at": "2026-08-15T12:00:00Z",
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:money", last)
+
+    snapshot = finance_snapshot(
+        runner.connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["base_currency"] == "USD"
+    assert snapshot["summary"]["cash_minor"] == 100_000
+    assert snapshot["summary"]["mtd_expenses_minor"] == 100
+    assert [row["account_id"] for row in snapshot["accounts"]] == ["account-usd"]
+    assert [row["flow_id"] for row in snapshot["recent_flows"]] == ["plaid:txn-usd"]
+    assert snapshot["data_health"]["unsupported_currency_count"] == 2
+    assert snapshot["focus"]["state"] == "currency_attention"
+
+
+async def test_workbook_classification_preserves_provider_authority(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(
+        _envelope(
+            "money_flow.provider_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-1",
+                "account_id": "account-1",
+                "transaction_id": "txn-1",
+                "amount_minor": 2500,
+                "currency": "USD",
+                "occurred_at": "2026-08-05",
+                "kind": "paid",
+                "merchant_name": "Provider Merchant",
+                "provider_category": "Shops",
+                "pending": False,
+                "provider_revision": "cursor-1",
+                "observed_at": "2026-08-06T12:00:00Z",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "money_flow.classification_set",
+            {
+                "flow_id": "plaid:txn-1",
+                "category": "Household supplies",
+                "notes": "Reviewed in workbook",
+                "included": True,
+                "updated_at": "2026-08-06T13:00:00Z",
+                "updated_by_party_id": "member-a",
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:money", last)
+
+    row = get_money_flow(
+        runner.connection("money"), _S("tenant-a"), flow_id="plaid:txn-1"
+    )
+    assert row is not None
+    assert row["merchant_name"] == "Provider Merchant"
+    assert row["provider_category"] == "Shops"
+    assert row["category"] == "Household supplies"
+    assert row["notes"] == "Reviewed in workbook"

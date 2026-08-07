@@ -100,3 +100,6 @@ Icon?
 .DS_Store
 tmp/
 *.tmp
+
+# User-deliverable artifacts may contain tenant financial data.
+outputs/

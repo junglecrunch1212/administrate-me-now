@@ -321,7 +321,20 @@ async def test_xlsx_forward_end_to_end(rig: dict[str, Any]) -> None:
     assert wb_ops["Recurrences"].max_row == 4
 
     wb_fin = load_workbook(str(finance_path))
-    assert set(wb_fin.sheetnames) == {"Raw Data", "Accounts", "Metadata"}
+    assert set(wb_fin.sheetnames) == {
+        "Dashboard",
+        "Cash Flow Plan",
+        "Assumptions",
+        "Budget vs Actual",
+        "Scenarios",
+        "Goals",
+        "Balance Sheet",
+        "Raw Data",
+        "Accounts",
+        "Checks",
+        "Metadata",
+        "Instructions",
+    }
     assert wb_fin["Raw Data"].max_row == 6  # 5 flows + header
     assert wb_fin["Accounts"].max_row == 3
 

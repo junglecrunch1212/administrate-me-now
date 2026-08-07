@@ -48,7 +48,7 @@ from adminme.projections.lists.queries import (
     reminder_cues_for_member,
 )
 from adminme.projections.member_knowledge.queries import grants_for_note, list_visible
-from adminme.projections.money.queries import flows_in_range
+from adminme.projections.money.queries import finance_snapshot, flows_in_range
 from adminme.projections.parties.queries import (
     all_parties,
     contact_records_for_person,
@@ -1209,11 +1209,27 @@ def build_surface(
     elif surface == "finance":
         if session.auth_role == "child":
             raise HTTPException(404, "surface not found")
-        base["flows"] = flows_in_range(
-            runtime.projections.connection("money"),
-            session,
-            start_iso=(now - timedelta(days=90)).isoformat().replace("+00:00", "Z"),
-            end_iso=now.isoformat().replace("+00:00", "Z"),
+        cockpit = finance_snapshot(
+            runtime.projections.connection("money"), session, as_of=now
+        )
+        base["cockpit"] = cockpit
+        base["contract"] = {
+            "workbook_planning_inputs_authoritative": True,
+            "provider_observations_protected": True,
+            "provider_writeback": False,
+            "model_decides_financial_action": False,
+            "external_financial_writes": False,
+        }
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time([cockpit["data_health"]], "latest_source_at"),
+            stale_after_seconds=172800,
+            row_count=cockpit["data_health"]["transaction_count"],
+            configured=bool(
+                cockpit["data_health"]["transaction_count"]
+                or cockpit["data_health"]["account_count"]
+                or cockpit["workbook"]
+            ),
         )
     elif surface == "calendar":
         calendar_conn = runtime.projections.connection("calendars")

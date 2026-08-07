@@ -27,7 +27,9 @@ Per-cycle algorithm:
    exists, dispatch added/updated/deleted to per-sheet emit helpers.
    Cold-start sheets (no sidecar) emit nothing this cycle.
 5. For each read-only sheet: hash live rows; WARN if hash drifted.
-6. Rewrite all sidecar JSON to current state — even when nothing emitted.
+6. Rewrite sidecar JSON to current state. A Finance workbook that fails its
+   save gate retains the last accepted planning sidecars so a corrected save
+   is diffed against accepted truth rather than the rejected file.
 7. Release the lock.
 8. Emit ``xlsx.reverse_projected`` with ``events_emitted`` (envelope ids),
    ``sheets_affected`` (sheets that produced ≥1 event or had a non-empty
@@ -52,9 +54,11 @@ is enforced by an internal ``asyncio.Lock``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import secrets
 import time
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Literal
 
@@ -92,11 +96,25 @@ _log = logging.getLogger(__name__)
 
 _BIDIRECTIONAL_SHEETS: dict[str, tuple[str, ...]] = {
     OPS_WORKBOOK_NAME: ("Tasks", "Recurrences", "Commitments"),
-    FINANCE_WORKBOOK_NAME: ("Raw Data",),
+    FINANCE_WORKBOOK_NAME: (
+        "Assumptions",
+        "Budget vs Actual",
+        "Scenarios",
+        "Goals",
+        "Raw Data",
+    ),
 }
 _READONLY_SHEETS: dict[str, tuple[str, ...]] = {
     OPS_WORKBOOK_NAME: ("People", "Metadata"),
-    FINANCE_WORKBOOK_NAME: ("Accounts", "Metadata"),
+    FINANCE_WORKBOOK_NAME: (
+        "Dashboard",
+        "Cash Flow Plan",
+        "Balance Sheet",
+        "Accounts",
+        "Checks",
+        "Metadata",
+        "Instructions",
+    ),
 }
 
 _SensitivityLiteral = Literal["normal", "sensitive", "privileged"]
@@ -313,6 +331,8 @@ class XlsxReverseDaemon:
 
         def _under_lock() -> Any:
             diffs_for_post: list[tuple[str, DiffResult]] = []
+            validation_failures: list[str] = []
+            workbook_sha256: str | None = None
             try:
                 cm = acquire_workbook_lock(
                     lock_path, timeout_s=self._forward_lock_timeout_s
@@ -322,7 +342,10 @@ class XlsxReverseDaemon:
             try:
                 with cm:
                     if not path.exists():
-                        return diffs_for_post
+                        return diffs_for_post, validation_failures, workbook_sha256
+                    if workbook == FINANCE_WORKBOOK_NAME:
+                        validation_failures = self._validate_finance_workbook(path)
+                        workbook_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
                     wb = load_workbook(str(path), data_only=True)
                     try:
                         for sheet_name in _BIDIRECTIONAL_SHEETS.get(workbook, ()):
@@ -330,24 +353,27 @@ class XlsxReverseDaemon:
                                 continue
                             ws = wb[sheet_name]
                             rows = list(ws.iter_rows(values_only=True))
-                            if not rows:
+                            descriptor = descriptor_for(workbook, sheet_name)
+                            if descriptor is None:
+                                continue
+                            header_row = descriptor.header_row
+                            if len(rows) < header_row:
                                 current_rows: list[dict[str, Any]] = []
                             else:
                                 headers = [
-                                    str(h) if h is not None else "" for h in rows[0]
+                                    str(h) if h is not None else ""
+                                    for h in rows[header_row - 1]
                                 ]
                                 current_rows = [
                                     {headers[i]: raw[i] for i in range(len(headers))}
-                                    for raw in rows[1:]
+                                    for raw in rows[header_row:]
+                                    if any(value is not None for value in raw)
                                 ]
                             sidecar_rows = read_sheet_state(
                                 self._config.xlsx_workbooks_dir,
                                 workbook,
                                 sheet_name,
                             )
-                            descriptor = descriptor_for(workbook, sheet_name)
-                            if descriptor is None:
-                                continue
                             if sidecar_rows is None:
                                 diffs_for_post.append((sheet_name, DiffResult()))
                             else:
@@ -355,12 +381,13 @@ class XlsxReverseDaemon:
                                     current_rows, sidecar_rows, descriptor
                                 )
                                 diffs_for_post.append((sheet_name, result))
-                            write_sheet_state(
-                                self._config.xlsx_workbooks_dir,
-                                workbook,
-                                sheet_name,
-                                current_rows,
-                            )
+                            if not validation_failures:
+                                write_sheet_state(
+                                    self._config.xlsx_workbooks_dir,
+                                    workbook,
+                                    sheet_name,
+                                    current_rows,
+                                )
                         for sheet_name in _READONLY_SHEETS.get(workbook, ()):
                             if sheet_name not in wb.sheetnames:
                                 continue
@@ -390,13 +417,17 @@ class XlsxReverseDaemon:
                         wb.close()
             except TimeoutError:
                 return SKIP
-            return diffs_for_post
+            return diffs_for_post, validation_failures, workbook_sha256
 
         result_obj = await asyncio.to_thread(_under_lock)
         if result_obj is SKIP:
             await self._emit_skip(workbook, session)
             return
-        diffs: list[tuple[str, DiffResult]] = result_obj
+        diffs, finance_failures, finance_sha256 = result_obj
+        has_finance_changes = workbook == FINANCE_WORKBOOK_NAME and any(
+            diff_result.added or diff_result.updated or diff_result.deleted
+            for _sheet_name, diff_result in diffs
+        )
 
         # Cancel pending undo-window deletes whose row reappeared this cycle.
         for sheet_name, diff_result in diffs:
@@ -422,6 +453,9 @@ class XlsxReverseDaemon:
                 continue
             if not (diff_result.added or diff_result.updated or diff_result.deleted):
                 continue
+            if finance_failures:
+                sheets_affected.append(sheet_name)
+                continue
             sheet_event_ids = await self._emit_diff(
                 workbook, descriptor, diff_result, session
             )
@@ -433,6 +467,24 @@ class XlsxReverseDaemon:
                 or diff_result.deleted
             ):
                 sheets_affected.append(sheet_name)
+
+        if has_finance_changes and finance_sha256 is not None:
+            published = await self._append(
+                session=session,
+                event_type="finance.workbook_published",
+                payload={
+                    "workbook_name": FINANCE_WORKBOOK_NAME,
+                    "workbook_sha256": finance_sha256,
+                    "workbook_schema_version": 2,
+                    "published_at": EventEnvelope.now_utc_iso(),
+                    "published_by_party_id": session.auth_member_id,
+                    "validation_state": "rejected" if finance_failures else "valid",
+                    "validation_failures": finance_failures,
+                },
+                sensitivity="sensitive",
+            )
+            if published is not None:
+                events_emitted.append(published)
 
         # Step 8 (continued): emit xlsx.reverse_projected.
         # The terminal cycle event is system observability and stays
@@ -510,6 +562,14 @@ class XlsxReverseDaemon:
             emitted.extend(await self._emit_recurrences(result, session))
         elif sheet == "Raw Data":
             emitted.extend(await self._emit_raw_data(result, session))
+        elif sheet == "Assumptions":
+            emitted.extend(await self._emit_assumptions(result, session))
+        elif sheet == "Budget vs Actual":
+            emitted.extend(await self._emit_budgets(result, session))
+        elif sheet == "Scenarios":
+            emitted.extend(await self._emit_scenarios(result, session))
+        elif sheet == "Goals":
+            emitted.extend(await self._emit_goals(result, session))
         else:
             _log.info(
                 "[reverse] no emit pathway for sheet %s/%s; "
@@ -730,7 +790,17 @@ class XlsxReverseDaemon:
     async def _emit_raw_data(self, result: DiffResult, session: Session) -> list[str]:
         emitted: list[str] = []
         for row in result.added:
-            is_manual = bool(row.get("is_manual"))
+            raw_manual = row.get("is_manual")
+            if raw_manual in (None, "") and not row.get("txn_id"):
+                # A new protected workbook row cannot author is_manual or its
+                # backend ID. That exact shape is the manual-add affordance.
+                is_manual = True
+            else:
+                try:
+                    is_manual = self._bool_cell(raw_manual)
+                except ValueError:
+                    _log.warning("[reverse] invalid is_manual value; rejecting row")
+                    continue
             if not is_manual:
                 _log.warning(
                     "[reverse] non-manual row added via xlsx; rejecting per [§13.4]"
@@ -739,11 +809,8 @@ class XlsxReverseDaemon:
             flow_id = row.get("txn_id") or ""
             if flow_id == "" or flow_id is None:
                 flow_id = _mint_id("flow_")
-            amount = row.get("amount")
             try:
-                amount_minor = (
-                    int(round(float(amount) * 100)) if amount is not None else 0
-                )
+                amount_minor = self._money_minor(row.get("amount"))
             except (TypeError, ValueError):
                 _log.warning("[reverse] manual row amount unparseable; skipping")
                 continue
@@ -756,11 +823,12 @@ class XlsxReverseDaemon:
             payload: dict[str, Any] = {
                 "flow_id": flow_id,
                 "amount_minor": amount_minor,
-                "currency": "USD",
+                "currency": str(row.get("currency") or "USD").upper(),
                 "occurred_at": occurred_at,
-                "kind": "paid",
+                "kind": "paid" if amount_minor >= 0 else "received",
                 "added_by_party_id": session.auth_member_id,
             }
+            payload["amount_minor"] = abs(amount_minor)
             assigned = row.get("assigned_category")
             if assigned:
                 payload["category"] = assigned
@@ -771,20 +839,107 @@ class XlsxReverseDaemon:
                 session=session,
                 event_type="money_flow.manually_added",
                 payload=payload,
-                sensitivity="normal",
+                sensitivity="sensitive",
+            )
+            if event_id is not None:
+                emitted.append(event_id)
+                enrichment = {
+                    key: value
+                    for key, value in {
+                        "linked_account": row.get("account_id"),
+                        "merchant_name": row.get("merchant_name"),
+                        "merchant_category": row.get("merchant_category"),
+                        "memo": row.get("memo"),
+                        "included": row.get("included"),
+                    }.items()
+                    if value not in (None, "")
+                }
+                if enrichment:
+                    enrichment.update(
+                        {
+                            "flow_id": str(flow_id),
+                            "updated_at": EventEnvelope.now_utc_iso(),
+                            "updated_by_party_id": session.auth_member_id,
+                        }
+                    )
+                    enrichment_id = await self._append(
+                        session=session,
+                        event_type="money_flow.manually_updated",
+                        payload=enrichment,
+                        sensitivity="sensitive",
+                    )
+                    if enrichment_id is not None:
+                        emitted.append(enrichment_id)
+
+        for row, changes in result.updated:
+            flow_id = row.get("txn_id")
+            if not flow_id:
+                continue
+            try:
+                is_manual = self._bool_cell(row.get("is_manual"))
+            except ValueError:
+                _log.warning("[reverse] invalid is_manual value; rejecting update")
+                continue
+            if is_manual:
+                update_payload: dict[str, Any] = {
+                    "flow_id": str(flow_id),
+                    "updated_at": EventEnvelope.now_utc_iso(),
+                    "updated_by_party_id": session.auth_member_id,
+                }
+                changed = set(changes)
+                if "amount" in changed:
+                    try:
+                        amount_minor = self._money_minor(row.get("amount"))
+                    except (TypeError, ValueError):
+                        continue
+                    update_payload["amount_minor"] = abs(amount_minor)
+                    update_payload["kind"] = "paid" if amount_minor >= 0 else "received"
+                mappings = {
+                    "date": "occurred_at",
+                    "currency": "currency",
+                    "account_id": "linked_account",
+                    "merchant_name": "merchant_name",
+                    "merchant_category": "merchant_category",
+                    "assigned_category": "category",
+                    "memo": "memo",
+                    "notes": "notes",
+                    "included": "included",
+                }
+                for column, target in mappings.items():
+                    if column in changed and row.get(column) is not None:
+                        value = row[column]
+                        update_payload[target] = (
+                            self._stringify_date(value) if column == "date" else value
+                        )
+                event_type = "money_flow.manually_updated"
+            else:
+                update_payload = {
+                    "flow_id": str(flow_id),
+                    "updated_at": EventEnvelope.now_utc_iso(),
+                    "updated_by_party_id": session.auth_member_id,
+                }
+                for column in ("assigned_category", "memo", "notes", "included"):
+                    if column in changes and row.get(column) is not None:
+                        target = "category" if column == "assigned_category" else column
+                        update_payload[target] = row[column]
+                if len(update_payload) == 3:
+                    continue
+                event_type = "money_flow.classification_set"
+            event_id = await self._append(
+                session=session,
+                event_type=event_type,
+                payload=update_payload,
+                sensitivity="sensitive",
             )
             if event_id is not None:
                 emitted.append(event_id)
 
-        if result.updated:
-            _log.info(
-                "[reverse] money_flow.recategorized not registered yet; "
-                "dropping %d Raw Data updates (descriptor updates_emit_event=None)",
-                len(result.updated),
-            )
-
         for row in result.deleted:
-            is_manual = bool(row.get("is_manual"))
+            try:
+                is_manual = self._bool_cell(row.get("is_manual"))
+            except ValueError:
+                _log.warning("[reverse] invalid is_manual value; rejecting deletion")
+                continue
             if not is_manual:
                 _log.warning("[reverse] Plaid row deletion via xlsx ignored")
                 continue
@@ -798,6 +953,153 @@ class XlsxReverseDaemon:
                     fid, session
                 ),
             )
+        return emitted
+
+    async def _emit_assumptions(
+        self, result: DiffResult, session: Session
+    ) -> list[str]:
+        emitted: list[str] = []
+        for row in [*result.added, *(value for value, _changes in result.updated)]:
+            assumption_id = row.get("assumption_id") or _mint_id("assumption_")
+            if not row.get("category") or not row.get("label"):
+                _log.warning("[reverse] incomplete Assumptions row; skipping")
+                continue
+            value_cell = row.get("value")
+            try:
+                if value_cell is None:
+                    raise ValueError("missing value")
+                value = str(float(value_cell))
+            except (TypeError, ValueError):
+                _log.warning("[reverse] invalid Assumptions value; skipping")
+                continue
+            event_id = await self._append(
+                session=session,
+                event_type="finance.assumption_set",
+                payload={
+                    "assumption_id": str(assumption_id),
+                    "category": str(row["category"]),
+                    "label": str(row["label"]),
+                    "value_decimal": value,
+                    "unit": str(row.get("unit") or "USD/month"),
+                    "notes": str(row["notes"]) if row.get("notes") else None,
+                    "as_of": self._stringify_date(
+                        row.get("as_of") or EventEnvelope.now_utc_iso()
+                    ),
+                },
+                sensitivity="sensitive",
+            )
+            if event_id is not None:
+                emitted.append(event_id)
+        return emitted
+
+    async def _emit_budgets(self, result: DiffResult, session: Session) -> list[str]:
+        emitted: list[str] = []
+        for row in [*result.added, *(value for value, _changes in result.updated)]:
+            budget_id = row.get("budget_id") or _mint_id("budget_")
+            if not row.get("category"):
+                _log.warning("[reverse] Budget row missing category; skipping")
+                continue
+            try:
+                amount_minor = abs(self._money_minor(row.get("monthly_budget")))
+            except (TypeError, ValueError):
+                _log.warning("[reverse] invalid Budget amount; skipping")
+                continue
+            event_id = await self._append(
+                session=session,
+                event_type="finance.budget_set",
+                payload={
+                    "budget_id": str(budget_id),
+                    "category": str(row["category"]),
+                    "amount_minor": amount_minor,
+                    "currency": "USD",
+                    "cadence": "monthly",
+                    "active": self._bool_cell(row.get("active"), default=True),
+                    "notes": str(row["notes"]) if row.get("notes") else None,
+                    "as_of": EventEnvelope.now_utc_iso(),
+                },
+                sensitivity="sensitive",
+            )
+            if event_id is not None:
+                emitted.append(event_id)
+        return emitted
+
+    async def _emit_scenarios(self, result: DiffResult, session: Session) -> list[str]:
+        emitted: list[str] = []
+        for row in [*result.added, *(value for value, _changes in result.updated)]:
+            scenario_id = row.get("scenario_id") or _mint_id("scenario_")
+            if not row.get("name"):
+                _log.warning("[reverse] Scenario row missing name; skipping")
+                continue
+            try:
+                payload = {
+                    "scenario_id": str(scenario_id),
+                    "name": str(row["name"]),
+                    "is_baseline": self._bool_cell(row.get("is_baseline")),
+                    "horizon_months": int(row.get("horizon_months") or 60),
+                    "opening_cash_delta_minor": self._money_minor(
+                        row.get("opening_cash_delta")
+                    ),
+                    "monthly_income_delta_minor": self._money_minor(
+                        row.get("monthly_income_delta")
+                    ),
+                    "monthly_expense_delta_minor": self._money_minor(
+                        row.get("monthly_expense_delta")
+                    ),
+                    "one_time_month": int(row["one_time_month"])
+                    if row.get("one_time_month") is not None
+                    else None,
+                    "one_time_amount_minor": self._money_minor(
+                        row.get("one_time_amount")
+                    ),
+                    "notes": str(row["notes"]) if row.get("notes") else None,
+                    "active": self._bool_cell(row.get("active"), default=True),
+                }
+            except (TypeError, ValueError):
+                _log.warning("[reverse] Scenario numeric value invalid; skipping")
+                continue
+            event_id = await self._append(
+                session=session,
+                event_type="finance.scenario_set",
+                payload=payload,
+                sensitivity="sensitive",
+            )
+            if event_id is not None:
+                emitted.append(event_id)
+        return emitted
+
+    async def _emit_goals(self, result: DiffResult, session: Session) -> list[str]:
+        emitted: list[str] = []
+        for row in [*result.added, *(value for value, _changes in result.updated)]:
+            goal_id = row.get("goal_id") or _mint_id("goal_")
+            if not row.get("name"):
+                _log.warning("[reverse] Goal row missing name; skipping")
+                continue
+            try:
+                target_minor = abs(self._money_minor(row.get("target_amount")))
+                current_minor = abs(self._money_minor(row.get("current_amount")))
+                priority = int(row.get("priority") or 100)
+            except (TypeError, ValueError):
+                _log.warning("[reverse] Goal numeric value invalid; skipping")
+                continue
+            event_id = await self._append(
+                session=session,
+                event_type="finance.goal_set",
+                payload={
+                    "goal_id": str(goal_id),
+                    "name": str(row["name"]),
+                    "target_minor": target_minor,
+                    "current_minor": current_minor,
+                    "target_date": self._stringify_date(row["target_date"])
+                    if row.get("target_date")
+                    else None,
+                    "priority": priority,
+                    "status": str(row.get("status") or "active"),
+                    "notes": str(row["notes"]) if row.get("notes") else None,
+                },
+                sensitivity="sensitive",
+            )
+            if event_id is not None:
+                emitted.append(event_id)
         return emitted
 
     async def _emit_money_flow_deleted(self, flow_id: str, session: Session) -> None:
@@ -873,6 +1175,216 @@ class XlsxReverseDaemon:
         if isinstance(value, date):
             return value.isoformat()
         return str(value)
+
+    @staticmethod
+    def _money_minor(value: Any) -> int:
+        if value is None or value == "":
+            return 0
+        return int(
+            (XlsxReverseDaemon._decimal_cell(value) * Decimal(100)).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
+        )
+
+    @staticmethod
+    def _decimal_cell(value: Any) -> Decimal:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not a number")
+        if not isinstance(value, (int, float, Decimal, str)):
+            raise ValueError(f"not a numeric cell: {value!r}")
+        text = str(value).strip()
+        if not text:
+            raise ValueError(f"not a numeric cell: {value!r}")
+        try:
+            number = Decimal(text)
+        except InvalidOperation as exc:
+            raise ValueError(f"not a numeric cell: {value!r}") from exc
+        if not number.is_finite():
+            raise ValueError(f"not a finite numeric cell: {value!r}")
+        return number
+
+    @staticmethod
+    def _number_cell(value: Any) -> float:
+        """Return a workbook scalar as a number, rejecting formula objects."""
+
+        return float(XlsxReverseDaemon._decimal_cell(value))
+
+    @staticmethod
+    def _integer_cell(value: Any) -> int:
+        """Return an exact workbook integer without silently truncating."""
+
+        number = XlsxReverseDaemon._number_cell(value)
+        if not number.is_integer():
+            raise ValueError(f"not an integer cell: {value!r}")
+        return int(number)
+
+    @staticmethod
+    def _bool_cell(value: Any, *, default: bool = False) -> bool:
+        if value is None or value == "":
+            return default
+        if value is True or value == 1:
+            return True
+        if value is False or value == 0:
+            return False
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "y", "1"}:
+                return True
+            if lowered in {"false", "no", "n", "0"}:
+                return False
+        raise ValueError(f"not a boolean cell: {value!r}")
+
+    @staticmethod
+    def _validate_finance_workbook(path: Path) -> list[str]:
+        """Fail closed before reverse-projecting malformed planning rows."""
+
+        wb = load_workbook(str(path), data_only=True, read_only=True)
+        failures: list[str] = []
+        try:
+            required: dict[str, tuple[str, ...]] = {
+                "Assumptions": ("category", "label", "value", "unit", "as_of"),
+                "Budget vs Actual": ("category", "monthly_budget", "active"),
+                "Scenarios": ("name", "horizon_months", "active"),
+                "Goals": ("name", "target_amount", "current_amount", "status"),
+            }
+            for sheet_name, fields in required.items():
+                if sheet_name not in wb.sheetnames:
+                    failures.append(f"missing required sheet: {sheet_name}")
+                    continue
+                ws = wb[sheet_name]
+                headers = [cell.value for cell in ws[4]]
+                index = {str(value): position for position, value in enumerate(headers)}
+                for field in (str(headers[0]) if headers else "", *fields):
+                    if field and field not in index:
+                        failures.append(f"{sheet_name}: missing column {field}")
+                id_field = str(headers[0]) if headers else ""
+                seen: set[str] = set()
+                for row_number, raw in enumerate(
+                    ws.iter_rows(min_row=5, values_only=True), start=5
+                ):
+                    if not any(value is not None for value in raw):
+                        continue
+                    row_id = raw[index[id_field]] if id_field in index else None
+                    if row_id:
+                        if str(row_id) in seen:
+                            failures.append(
+                                f"{sheet_name} row {row_number}: duplicate {id_field}"
+                            )
+                        seen.add(str(row_id))
+                    for field in fields:
+                        position = index.get(field)
+                        if position is None or raw[position] in (None, ""):
+                            failures.append(
+                                f"{sheet_name} row {row_number}: {field} is required"
+                            )
+                    try:
+                        if sheet_name == "Assumptions":
+                            XlsxReverseDaemon._number_cell(raw[index["value"]])
+                            if str(raw[index["unit"]]) not in {
+                                "USD",
+                                "USD/month",
+                                "USD/year",
+                                "ratio",
+                                "months",
+                                "count",
+                            }:
+                                raise ValueError("unsupported unit")
+                        elif sheet_name == "Budget vs Actual":
+                            if (
+                                XlsxReverseDaemon._number_cell(
+                                    raw[index["monthly_budget"]]
+                                )
+                                < 0
+                            ):
+                                raise ValueError("budget must be non-negative")
+                            XlsxReverseDaemon._bool_cell(raw[index["active"]])
+                        elif sheet_name == "Scenarios":
+                            horizon = XlsxReverseDaemon._integer_cell(
+                                raw[index["horizon_months"]]
+                            )
+                            if not 1 <= horizon <= 600:
+                                raise ValueError("horizon must be 1–600 months")
+                            for field in (
+                                "opening_cash_delta",
+                                "monthly_income_delta",
+                                "monthly_expense_delta",
+                                "one_time_amount",
+                            ):
+                                position = index.get(field)
+                                if position is not None:
+                                    XlsxReverseDaemon._number_cell(raw[position] or 0)
+                            month_position = index.get("one_time_month")
+                            if month_position is not None and raw[
+                                month_position
+                            ] not in (
+                                None,
+                                "",
+                            ):
+                                one_time_month = XlsxReverseDaemon._integer_cell(
+                                    raw[month_position]
+                                )
+                                if not 1 <= one_time_month <= 600:
+                                    raise ValueError("one-time month must be 1–600")
+                            XlsxReverseDaemon._bool_cell(raw[index["is_baseline"]])
+                            XlsxReverseDaemon._bool_cell(raw[index["active"]])
+                        elif sheet_name == "Goals":
+                            if (
+                                XlsxReverseDaemon._number_cell(
+                                    raw[index["target_amount"]]
+                                )
+                                < 0
+                                or XlsxReverseDaemon._number_cell(
+                                    raw[index["current_amount"]]
+                                )
+                                < 0
+                            ):
+                                raise ValueError("goal amounts must be non-negative")
+                            priority_position = index.get("priority")
+                            if priority_position is not None:
+                                priority = XlsxReverseDaemon._integer_cell(
+                                    raw[priority_position] or 100
+                                )
+                                if not 0 <= priority <= 1000:
+                                    raise ValueError("priority must be 0–1000")
+                            if str(raw[index["status"]]) not in {
+                                "active",
+                                "paused",
+                                "complete",
+                            }:
+                                raise ValueError("unsupported status")
+                    except (KeyError, TypeError, ValueError) as exc:
+                        failures.append(
+                            f"{sheet_name} row {row_number}: invalid value ({exc})"
+                        )
+                if sheet_name == "Scenarios":
+                    baseline_index = index.get("is_baseline")
+                    active_index = index.get("active")
+                    if baseline_index is not None and active_index is not None:
+                        try:
+                            active_rows = [
+                                row
+                                for row in ws.iter_rows(min_row=5, values_only=True)
+                                if any(value is not None for value in row)
+                                and XlsxReverseDaemon._bool_cell(
+                                    row[active_index], default=True
+                                )
+                            ]
+                            baseline_count = sum(
+                                1
+                                for row in active_rows
+                                if XlsxReverseDaemon._bool_cell(row[baseline_index])
+                            )
+                            if active_rows and baseline_count != 1:
+                                failures.append(
+                                    "Scenarios: exactly one active baseline is required"
+                                )
+                        except ValueError:
+                            # The row-specific validation above already records
+                            # the malformed boolean; do not crash the save gate.
+                            pass
+        finally:
+            wb.close()
+        return failures[:100]
 
     def _lookup_sensitivity(
         self,

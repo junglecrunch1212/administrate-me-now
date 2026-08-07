@@ -35,7 +35,11 @@ def build(
     rows: list[tuple[str, str]] = [
         ("workbook_name", "adminme-finance.xlsx"),
         ("projection", "xlsx_workbooks"),
-        ("projection_version", "1"),
+        ("projection_version", "2"),
+        ("workbook_schema_version", "2"),
+        ("planning_authority", "xlsx_reviewed_inputs"),
+        ("provider_authority", "plaid_observations_read_only"),
+        ("provider_writeback", "disabled"),
         ("generated_at", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
         ("last_event_id_consumed", last_event_id or ""),
         ("tenant_id", tenant_id),

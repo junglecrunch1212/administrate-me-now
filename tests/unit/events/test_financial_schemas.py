@@ -15,7 +15,19 @@ import pytest
 from pydantic import ValidationError
 
 from adminme.events.registry import ensure_autoloaded, registry
-from adminme.events.schemas.financial import MoneyFlowPlaidSyncedV1
+from adminme.events.schemas.financial import (
+    FinanceAssumptionSetV1,
+    FinanceBudgetSetV1,
+    FinanceGoalSetV1,
+    FinanceScenarioSetV1,
+    FinanceWorkbookPublishedV1,
+    FinancialAccountObservedV1,
+    MoneyFlowClassificationSetV1,
+    MoneyFlowManuallyUpdatedV1,
+    MoneyFlowPlaidSyncedV1,
+    MoneyFlowProviderObservedV1,
+    MoneyFlowProviderRemovedV1,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -131,4 +143,45 @@ def test_money_flow_plaid_synced_rejects_empty_required_strings() -> None:
             accounts_modified_count=0,
             synced_at="2026-05-16T12:00:00Z",
             webhook_triggered=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("event_type", "model"),
+    [
+        ("money_flow.provider_observed", MoneyFlowProviderObservedV1),
+        ("money_flow.provider_removed", MoneyFlowProviderRemovedV1),
+        ("financial.account_observed", FinancialAccountObservedV1),
+        ("money_flow.classification_set", MoneyFlowClassificationSetV1),
+        ("money_flow.manually_updated", MoneyFlowManuallyUpdatedV1),
+        ("finance.assumption_set", FinanceAssumptionSetV1),
+        ("finance.budget_set", FinanceBudgetSetV1),
+        ("finance.scenario_set", FinanceScenarioSetV1),
+        ("finance.goal_set", FinanceGoalSetV1),
+        ("finance.workbook_published", FinanceWorkbookPublishedV1),
+    ],
+)
+def test_finance_detail_and_workbook_schemas_are_registered(
+    event_type: str, model: type
+) -> None:
+    ensure_autoloaded()
+    assert registry.get(event_type, 1) is model
+    assert registry.latest_version(event_type) == 1
+
+
+def test_classification_requires_an_actual_override() -> None:
+    with pytest.raises(ValidationError):
+        MoneyFlowClassificationSetV1(
+            flow_id="plaid:transaction-1",
+            updated_at="2026-08-07T12:00:00Z",
+            updated_by_party_id="member-001",
+        )
+
+
+def test_finance_scenario_rejects_unbounded_horizon() -> None:
+    with pytest.raises(ValidationError):
+        FinanceScenarioSetV1(
+            scenario_id="unsafe",
+            name="Unsafe horizon",
+            horizon_months=601,
         )

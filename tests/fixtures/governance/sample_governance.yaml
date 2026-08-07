@@ -20,6 +20,9 @@ action_gates:
   recurrence.updated: allow
   money_flow.manually_added: allow
   money_flow.manually_deleted: allow
+  money_flow.manually_updated: allow
+  money_flow.classification_set: allow
+  finance.*: allow
   outbound.send: review
   plaid.go_live: review
   observation.off: review

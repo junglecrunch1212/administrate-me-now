@@ -18,11 +18,11 @@ regeneration per workbook.
 
 Sheets built in this prompt:
 - adminme-ops.xlsx: Tasks, Recurrences, Commitments, People, Metadata.
-- adminme-finance.xlsx: Raw Data, Accounts, Metadata (prompt 07b-3).
+- adminme-finance.xlsx: the CO-006 planning/model contract plus protected
+  provider observations and provenance.
 
-The retained Gate 6 workbook contract is these two files and seven sheets.
-Additional finance dashboards are not advertised product surfaces. Trigger
-subscriptions below cover the registered facts used by the retained sheets.
+CO-006 supersedes the thin three-sheet Finance artifact with an auditable
+planning workbook while preserving the two-file topology and event round trip.
 
 Construction is different from other projections because xlsx reads
 across seven projection databases. The runner's register() still works
@@ -62,11 +62,25 @@ FINANCE_WORKBOOK_NAME = "adminme-finance.xlsx"
 # list and the per-cycle sidecar writer.
 _BIDIRECTIONAL_SHEETS: dict[str, list[str]] = {
     OPS_WORKBOOK_NAME: ["Tasks", "Recurrences", "Commitments"],
-    FINANCE_WORKBOOK_NAME: ["Raw Data"],
+    FINANCE_WORKBOOK_NAME: [
+        "Assumptions",
+        "Budget vs Actual",
+        "Scenarios",
+        "Goals",
+        "Raw Data",
+    ],
 }
 _READONLY_SHEETS: dict[str, list[str]] = {
     OPS_WORKBOOK_NAME: ["People", "Metadata"],
-    FINANCE_WORKBOOK_NAME: ["Accounts", "Metadata"],
+    FINANCE_WORKBOOK_NAME: [
+        "Dashboard",
+        "Cash Flow Plan",
+        "Balance Sheet",
+        "Accounts",
+        "Checks",
+        "Metadata",
+        "Instructions",
+    ],
 }
 
 # adminme-ops.xlsx trigger event types (currently registered only).
@@ -105,6 +119,17 @@ _FINANCE_TRIGGERS: tuple[str, ...] = (
     "money_flow.recorded",
     "money_flow.manually_added",
     "money_flow.manually_deleted",
+    "money_flow.manually_updated",
+    "money_flow.classification_set",
+    "money_flow.provider_observed",
+    "money_flow.provider_removed",
+    "financial.account_observed",
+    "finance.assumption_set",
+    "finance.budget_set",
+    "finance.scenario_set",
+    "finance.goal_set",
+    "finance.workbook_published",
+    "money_flow.plaid_synced",
     "account.added",
     "account.updated",
     "place.added",
@@ -128,7 +153,7 @@ class XlsxWorkbooksProjection(Projection):
     """
 
     name = "xlsx_workbooks"
-    version = 1
+    version = 2
     subscribes_to: list[str] | str = [
         str(event_type) for event_type in (*_OPS_TRIGGERS, *_FINANCE_TRIGGERS)
     ]
@@ -307,6 +332,7 @@ class XlsxWorkbooksProjection(Projection):
         not a state baseline).
         """
         from openpyxl import load_workbook
+        from adminme.daemons.xlsx_sync.sheet_schemas import descriptor_for
 
         workbooks_dir = self._config.xlsx_workbooks_dir
         wb = load_workbook(str(xlsx_path), data_only=True, read_only=False)
@@ -314,12 +340,18 @@ class XlsxWorkbooksProjection(Projection):
             for sheet_name in _BIDIRECTIONAL_SHEETS.get(workbook, []):
                 ws = wb[sheet_name]
                 rows = list(ws.iter_rows(values_only=True))
-                if not rows:
+                descriptor = descriptor_for(workbook, sheet_name)
+                header_row = descriptor.header_row if descriptor is not None else 1
+                if len(rows) < header_row:
                     write_sheet_state(workbooks_dir, workbook, sheet_name, [])
                     continue
-                headers = [str(h) if h is not None else "" for h in rows[0]]
+                headers = [
+                    str(h) if h is not None else "" for h in rows[header_row - 1]
+                ]
                 row_dicts: list[dict[str, Any]] = []
-                for raw in rows[1:]:
+                for raw in rows[header_row:]:
+                    if not any(value is not None for value in raw):
+                        continue
                     row_dicts.append({headers[i]: raw[i] for i in range(len(headers))})
                 write_sheet_state(workbooks_dir, workbook, sheet_name, row_dicts)
             for sheet_name in _READONLY_SHEETS.get(workbook, []):

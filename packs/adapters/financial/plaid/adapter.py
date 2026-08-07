@@ -15,7 +15,8 @@ from the messaging-family pattern:
 
 - Auth model is two-stage: an operator-mediated Link flow (prompt 16
   wizard) yields a long-lived Item access token; the adapter consumes
-  the access token at ``start()`` via the ``op://`` 1Password reference
+  the access token at ``start()`` via an ``op://`` or macOS
+  ``keychain://`` secret reference
   shape and instantiates the Plaid client. ``adapter.authenticated`` is
   emitted once per startup-auth success carrying the reference (NEVER
   the secret value) per ``AdapterAuthenticatedV1``.
@@ -26,12 +27,11 @@ from the messaging-family pattern:
   drops (the backstop poll loop body ships in commit 4).
   ``_sync_transactions`` paginates the Plaid response while ``has_more``
   is true, accumulates ``added`` + ``modified`` + ``removed`` across
-  pages, persists the post-pagination cursor at the
-  ``(member_id, plaid_item_id)`` granularity per the BUILD.md PLAID
-  DETAILED SPEC §"Sync cursor" deliverable, then emits one
-  ``money_flow.plaid_synced`` SUMMARY event per cycle (NEVER per
-  transaction — that would be the anti-vision "stream of everything"
-  pattern per VISION §"Quiet by default").
+  pages, emits typed private account/transaction/removal observations plus one
+  ``money_flow.plaid_synced`` summary, and persists the post-pagination cursor
+  at ``(member_id, plaid_item_id)`` granularity only after every event is
+  accepted. Quiet-by-default is a presentation contract, not permission to
+  discard transaction facts needed by the deterministic projection.
 
 - ``adapter.cursor_advanced`` emission is milestone-only per
   ``[§L1 cursor discipline]``: every 100 accumulated transactions OR
@@ -69,6 +69,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, ClassVar, Literal
 
 from adminme.adapters.base import (
@@ -98,7 +99,7 @@ webhook-verification protocol. Configured production activation supplies a
 verifier that fetches Plaid's ``/webhook_verification_key/get`` JWKs."""
 
 
-_OP_REF_PATTERN_PREFIX = "op://"
+_SECRET_REF_PREFIXES = ("op://", "keychain://")
 
 # [§L1 cursor discipline]: cursor_advanced fires at 100 accumulated
 # transactions OR 5 minutes since the prior advance — milestone-only,
@@ -233,13 +234,18 @@ class PlaidAdapter(InboundDataAdapter):
     # [memo 05 §3.2, PM-35]: class-level mirror of the manifest's
     # ``capabilities`` block for runtime introspection without re-parsing
     # ``pack.yaml``. Plaid emits one event family today
-    # (``money_flow.plaid_synced``); the manifest's capabilities block in
+    # (provider facts plus the quiet cycle summary); the manifest's capabilities block in
     # ``pack.yaml`` is the source of truth and this ClassVar mirrors it.
     capabilities: ClassVar[list[Any]] = [
         {
             "kind": "Cat-C",
             "runtime": "central",
-            "event_families": ["money_flow.plaid_synced"],
+            "event_families": [
+                "money_flow.provider_observed",
+                "money_flow.provider_removed",
+                "financial.account_observed",
+                "money_flow.plaid_synced",
+            ],
         }
     ]
 
@@ -256,11 +262,9 @@ class PlaidAdapter(InboundDataAdapter):
         self._plaid_client: Any | None = None
         self._webhook_verifier: Callable[[dict[str, Any]], bool] | None = None
         self._ctx: AdapterContext | None = None
-        # Cursor persistence — keyed by (member_id, plaid_item_id) per
-        # BUILD.md PLAID DETAILED SPEC §"Sync cursor". In-memory in
-        # Phase A; commit 4 (institution health) does not migrate this
-        # to disk either — durable cursor storage lands when the
-        # ``money_flow`` projection consumes these events.
+        # Memory is a same-process cache only. The production context injects
+        # AdapterCursorStore, keyed by member + Item, so restarts resume from
+        # the committed provider watermark.
         self._cursors: dict[tuple[str, str], str] = {}
         # Milestone state for adapter.cursor_advanced emission.
         self._events_since_last_cursor_advance: int = 0
@@ -293,9 +297,9 @@ class PlaidAdapter(InboundDataAdapter):
                 f"got {configured_floor!r}. [§6 invariant 10, D11]"
             )
 
-        item_access_token_ref = _require_op_ref(config, "item_access_token_ref")
-        client_id_ref = _require_op_ref(config, "plaid_client_id_ref")
-        secret_ref = _require_op_ref(config, "plaid_secret_ref")
+        item_access_token_ref = _require_secret_ref(config, "item_access_token_ref")
+        client_id_ref = _require_secret_ref(config, "plaid_client_id_ref")
+        secret_ref = _require_secret_ref(config, "plaid_secret_ref")
         webhook_route = _require_webhook_route(config)
 
         self._plaid_client = self._plaid_client_factory(
@@ -438,13 +442,20 @@ class PlaidAdapter(InboundDataAdapter):
         plaid_item_id = item_id or str(ctx.config.get("plaid_item_id", ""))
         institution_id = str(ctx.config.get("institution_id", ""))
         cursor_key = (member_id, plaid_item_id)
-        cursor = self._cursors.get(cursor_key, "")
+        cursor_adapter_id = f"{self.name}:{member_id}:{plaid_item_id}"
+        cursor_store = ctx.cursor_store
+        cursor = (
+            cursor_store.get(cursor_adapter_id).provider_watermark or ""
+            if cursor_store is not None
+            else self._cursors.get(cursor_key, "")
+        )
         access_token_ref = str(ctx.config.get("item_access_token_ref", ""))
 
         added: list[Any] = []
         modified: list[Any] = []
         removed: list[Any] = []
         accounts_seen: set[str] = set()
+        accounts_by_id: dict[str, dict[str, Any]] = {}
         institution_name = ""
         next_cursor = cursor
 
@@ -462,6 +473,7 @@ class PlaidAdapter(InboundDataAdapter):
                     acct_id = acct.get("account_id") if isinstance(acct, dict) else None
                     if acct_id:
                         accounts_seen.add(str(acct_id))
+                        accounts_by_id[str(acct_id)] = acct
                 item = page.get("item")
                 if isinstance(item, dict):
                     institution_name = str(
@@ -482,12 +494,46 @@ class PlaidAdapter(InboundDataAdapter):
             )
             return
 
-        self._cursors[cursor_key] = next_cursor
+        observed_at = _format_iso(ctx.now_factory())
+        emissions_ok = True
+        for account in accounts_by_id.values():
+            emissions_ok = (
+                await self._emit_financial_account_observed(
+                    account,
+                    member_id=member_id,
+                    plaid_item_id=plaid_item_id,
+                    institution_id=institution_id,
+                    institution_name=institution_name or institution_id,
+                    observed_at=observed_at,
+                )
+                and emissions_ok
+            )
+        for transaction in [*added, *modified]:
+            emissions_ok = (
+                await self._emit_provider_transaction(
+                    transaction,
+                    member_id=member_id,
+                    plaid_item_id=plaid_item_id,
+                    provider_revision=next_cursor,
+                    observed_at=observed_at,
+                )
+                and emissions_ok
+            )
+        for transaction in removed:
+            emissions_ok = (
+                await self._emit_removed_transaction(
+                    transaction,
+                    member_id=member_id,
+                    plaid_item_id=plaid_item_id,
+                    removed_at=observed_at,
+                )
+                and emissions_ok
+            )
 
         total_events = len(added) + len(modified) + len(removed)
         self._events_since_last_cursor_advance += total_events
 
-        await self._emit_money_flow_plaid_synced(
+        summary_ok = await self._emit_money_flow_plaid_synced(
             member_id=member_id,
             plaid_item_id=plaid_item_id,
             institution_id=institution_id,
@@ -499,6 +545,31 @@ class PlaidAdapter(InboundDataAdapter):
             accounts_modified_count=len(accounts_seen),
             webhook_triggered=webhook_triggered,
         )
+
+        if not emissions_ok or not summary_ok:
+            await self._emit_adapter_error(
+                severity="transient",
+                error_kind="unknown",
+                message="Plaid sync facts were not fully committed; cursor retained",
+                retry_after_s=None,
+            )
+            return
+
+        try:
+            if cursor_store is not None:
+                cursor_store.record_success(
+                    cursor_adapter_id, provider_watermark=next_cursor
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("plaid adapter failed to persist sync cursor")
+            await self._emit_adapter_error(
+                severity="transient",
+                error_kind="unknown",
+                message="Plaid sync cursor could not be persisted",
+                retry_after_s=None,
+            )
+            return
+        self._cursors[cursor_key] = next_cursor
 
         await self._maybe_emit_cursor_advanced(next_cursor)
 
@@ -629,10 +700,10 @@ class PlaidAdapter(InboundDataAdapter):
         transactions_removed: int,
         accounts_modified_count: int,
         webhook_triggered: bool,
-    ) -> None:
+    ) -> bool:
         ctx = self._ctx
         if ctx is None:
-            return
+            return False
         payload = {
             "member_id": member_id,
             "plaid_item_id": plaid_item_id,
@@ -646,7 +717,188 @@ class PlaidAdapter(InboundDataAdapter):
             "synced_at": _format_iso(ctx.now_factory()),
             "webhook_triggered": webhook_triggered,
         }
-        await self._append(ctx, "money_flow.plaid_synced", payload)
+        return (
+            await self._append(
+                ctx,
+                "money_flow.plaid_synced",
+                payload,
+                idempotency_key=f"plaid-sync:{plaid_item_id}:{sync_cursor}",
+            )
+            is not None
+        )
+
+    async def _emit_provider_transaction(
+        self,
+        transaction: Any,
+        *,
+        member_id: str,
+        plaid_item_id: str,
+        provider_revision: str,
+        observed_at: str,
+    ) -> bool:
+        ctx = self._ctx
+        if ctx is None or not isinstance(transaction, dict):
+            return False
+        transaction_id = transaction.get("transaction_id")
+        account_id = transaction.get("account_id")
+        occurred_at = transaction.get("datetime") or transaction.get("date")
+        if not transaction_id or not account_id or not occurred_at:
+            logger.warning(
+                "plaid adapter: transaction observation missing id/account/date; skipping"
+            )
+            return False
+        try:
+            plaid_amount_minor = _minor_units(transaction.get("amount") or 0)
+        except ValueError:
+            logger.warning("plaid adapter: transaction amount is not numeric; skipping")
+            return False
+        personal = transaction.get("personal_finance_category")
+        provider_category = None
+        merchant_category = None
+        if isinstance(personal, dict):
+            provider_category = personal.get("primary")
+            merchant_category = personal.get("detailed")
+        category = transaction.get("category")
+        if provider_category is None and isinstance(category, list) and category:
+            provider_category = str(category[0])
+            merchant_category = str(category[-1])
+        payload = {
+            "member_id": member_id,
+            "plaid_item_id": plaid_item_id,
+            "account_id": str(account_id),
+            "transaction_id": str(transaction_id),
+            "amount_minor": abs(plaid_amount_minor),
+            "currency": str(
+                transaction.get("iso_currency_code")
+                or transaction.get("unofficial_currency_code")
+                or "USD"
+            ).upper(),
+            "occurred_at": str(occurred_at),
+            "authorized_at": str(transaction["authorized_datetime"])
+            if transaction.get("authorized_datetime")
+            else str(transaction["authorized_date"])
+            if transaction.get("authorized_date")
+            else None,
+            "kind": "paid" if plaid_amount_minor >= 0 else "received",
+            "merchant_name": transaction.get("merchant_name")
+            or transaction.get("name"),
+            "merchant_category": merchant_category,
+            "original_description": transaction.get("original_description")
+            or transaction.get("name"),
+            "provider_category": provider_category,
+            "pending": bool(transaction.get("pending")),
+            "provider_revision": provider_revision or "initial",
+            "observed_at": observed_at,
+        }
+        return (
+            await self._append(
+                ctx,
+                "money_flow.provider_observed",
+                payload,
+                idempotency_key=(
+                    f"plaid-observed:{plaid_item_id}:{transaction_id}:"
+                    f"{provider_revision or 'initial'}"
+                ),
+            )
+            is not None
+        )
+
+    async def _emit_removed_transaction(
+        self,
+        transaction: Any,
+        *,
+        member_id: str,
+        plaid_item_id: str,
+        removed_at: str,
+    ) -> bool:
+        ctx = self._ctx
+        if ctx is None:
+            return False
+        transaction_id = (
+            transaction.get("transaction_id") if isinstance(transaction, dict) else None
+        )
+        if not transaction_id:
+            return False
+        return (
+            await self._append(
+                ctx,
+                "money_flow.provider_removed",
+                {
+                    "member_id": member_id,
+                    "plaid_item_id": plaid_item_id,
+                    "transaction_id": str(transaction_id),
+                    "removed_at": removed_at,
+                },
+                idempotency_key=f"plaid-removed:{plaid_item_id}:{transaction_id}",
+            )
+            is not None
+        )
+
+    async def _emit_financial_account_observed(
+        self,
+        account: dict[str, Any],
+        *,
+        member_id: str,
+        plaid_item_id: str,
+        institution_id: str,
+        institution_name: str,
+        observed_at: str,
+    ) -> bool:
+        ctx = self._ctx
+        if ctx is None or not account.get("account_id"):
+            return False
+        balances = account.get("balances")
+        balances = balances if isinstance(balances, dict) else {}
+        account_type = str(account.get("type") or "other").lower()
+        if account_type not in {"depository", "credit", "loan", "investment"}:
+            account_type = "other"
+
+        def minor(key: str) -> int | None:
+            value = balances.get(key)
+            if value is None:
+                return None
+            try:
+                return _minor_units(value)
+            except ValueError:
+                return None
+
+        return (
+            await self._append(
+                ctx,
+                "financial.account_observed",
+                {
+                    "member_id": member_id,
+                    "plaid_item_id": plaid_item_id,
+                    "account_id": str(account["account_id"]),
+                    "institution_id": institution_id,
+                    "institution_name": institution_name,
+                    "display_name": str(
+                        account.get("official_name") or account.get("name") or "Account"
+                    ),
+                    "account_type": account_type,
+                    "account_subtype": str(account["subtype"])
+                    if account.get("subtype")
+                    else None,
+                    "last4": str(account["mask"])
+                    if account.get("mask") and len(str(account["mask"])) == 4
+                    else None,
+                    "current_balance_minor": minor("current"),
+                    "available_balance_minor": minor("available"),
+                    "limit_minor": minor("limit"),
+                    "currency": str(
+                        balances.get("iso_currency_code")
+                        or balances.get("unofficial_currency_code")
+                        or "USD"
+                    ).upper(),
+                    "as_of": observed_at,
+                    "link_healthy": True,
+                },
+                idempotency_key=(
+                    f"plaid-account:{plaid_item_id}:{account['account_id']}:{observed_at}"
+                ),
+            )
+            is not None
+        )
 
     async def _maybe_emit_cursor_advanced(self, cursor_value: str) -> None:
         """Emit ``adapter.cursor_advanced`` if the event threshold or
@@ -681,24 +933,31 @@ class PlaidAdapter(InboundDataAdapter):
         self._status.last_cursor_advance_at = now
 
     async def _append(
-        self, ctx: AdapterContext, event_type: str, payload: dict[str, Any]
-    ) -> None:
+        self,
+        ctx: AdapterContext,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> str | None:
         """Best-effort write through the typed event-sink contract.
 
         A failed emit must not crash the adapter; the structured adapter log
         remains the diagnostic path when the event store itself is down.
         """
         try:
-            await write_adapter_event(
+            return await write_adapter_event(
                 ctx,
                 adapter_name=self.name,
                 sensitivity_floor=self.sensitivity_floor,
                 config=ctx.config,
                 event_type=event_type,
                 payload=payload,
+                idempotency_key=idempotency_key,
             )
         except Exception:  # noqa: BLE001
             logger.exception("plaid adapter failed to emit %s", event_type)
+            return None
 
 
 class PlaidAdapterError(RuntimeError):
@@ -708,11 +967,26 @@ class PlaidAdapterError(RuntimeError):
     adapter exception (see ``_run_adapter``)."""
 
 
-def _require_op_ref(config: dict[str, Any], key: str) -> str:
+def _minor_units(value: Any) -> int:
+    """Convert a provider decimal to exact minor units with half-up rounding."""
+
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"invalid provider amount: {value!r}") from exc
+    if not decimal_value.is_finite():
+        raise ValueError(f"invalid provider amount: {value!r}")
+    return int(
+        (decimal_value * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+
+
+def _require_secret_ref(config: dict[str, Any], key: str) -> str:
     value = config.get(key)
-    if not isinstance(value, str) or not value.startswith(_OP_REF_PATTERN_PREFIX):
+    if not isinstance(value, str) or not value.startswith(_SECRET_REF_PREFIXES):
         raise PlaidAdapterError(
-            f"config field {key!r} must be a 1Password 'op://...' reference; "
+            f"config field {key!r} must be an 'op://...' or macOS "
+            f"'keychain://...' reference; "
             f"got {value!r}. [§L1 token-storage discipline]"
         )
     return value

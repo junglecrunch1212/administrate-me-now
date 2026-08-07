@@ -18,17 +18,20 @@ session-construction site in one place per workbook.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
 
 from adminme.lib.session import build_internal_session
+from adminme.projections.money.queries import finance_snapshot
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.projections.xlsx_workbooks.sheets import (
     accounts as accounts_sheet,
     commitments as commitments_sheet,
     metadata_finance,
     metadata_ops,
+    finance_model,
     people as people_sheet,
     raw_data as raw_data_sheet,
     recurrences as recurrences_sheet,
@@ -96,22 +99,88 @@ def build_finance_workbook(
 ) -> None:
     """Regenerate adminme-finance.xlsx atomically at ``path``.
 
-    Sheets built: Raw Data, Accounts, Metadata. These are the retained Gate 6
-    finance surfaces. Transaction rows are bidirectional; account and computed
-    metadata fields remain protected and Plaid-authoritative.
+    CO-006 workbook contract: Dashboard, Cash Flow Plan, Assumptions, Budget
+    vs Actual, Scenarios, Goals, Balance Sheet, Raw Data, Accounts, Checks,
+    Metadata, and Instructions. Planning/input sheets are bidirectional;
+    provider facts and derived outputs remain protected.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    session = build_internal_session("xlsx_workbooks", "device", tenant_id)
+    # A household workbook may read household-shared sensitive planning rows,
+    # but never another adult's private privileged provider rows. The synthetic
+    # principal has only shared scopes and therefore enforces that boundary.
+    session = build_internal_session("xlsx_workbooks", "principal", tenant_id)
+    # Capture the projection boundary time once. Every derived sheet in this
+    # workbook must reflect the same month/day cut rather than independently
+    # consulting the wall clock while the file is assembled.
+    model = finance_snapshot(ctx.money_conn, session, as_of=datetime.now(timezone.utc))
     wb = Workbook()
     default = wb.active
     if default is not None:
         wb.remove(default)
+
+    dashboard_ws = wb.create_sheet("Dashboard")
+    finance_model.build_dashboard(
+        dashboard_ws,
+        ctx,
+        tenant_id=tenant_id,
+        session=session,
+        model=model,
+    )
+
+    cash_flow_ws = wb.create_sheet("Cash Flow Plan")
+    finance_model.build_cash_flow_plan(
+        cash_flow_ws,
+        ctx,
+        tenant_id=tenant_id,
+        session=session,
+        model=model,
+    )
+
+    assumptions_ws = wb.create_sheet("Assumptions")
+    finance_model.build_assumptions(
+        assumptions_ws, ctx, tenant_id=tenant_id, session=session
+    )
+
+    budgets_ws = wb.create_sheet("Budget vs Actual")
+    finance_model.build_budget_vs_actual(
+        budgets_ws,
+        ctx,
+        tenant_id=tenant_id,
+        session=session,
+        model=model,
+    )
+
+    scenarios_ws = wb.create_sheet("Scenarios")
+    finance_model.build_scenarios(
+        scenarios_ws, ctx, tenant_id=tenant_id, session=session
+    )
+
+    goals_ws = wb.create_sheet("Goals")
+    finance_model.build_goals(goals_ws, ctx, tenant_id=tenant_id, session=session)
+
+    balance_ws = wb.create_sheet("Balance Sheet")
+    finance_model.build_balance_sheet(
+        balance_ws,
+        ctx,
+        tenant_id=tenant_id,
+        session=session,
+        model=model,
+    )
 
     raw_ws = wb.create_sheet("Raw Data")
     raw_data_sheet.build(raw_ws, ctx, tenant_id=tenant_id, session=session)
 
     accounts_ws = wb.create_sheet("Accounts")
     accounts_sheet.build(accounts_ws, ctx, tenant_id=tenant_id, session=session)
+
+    checks_ws = wb.create_sheet("Checks")
+    finance_model.build_checks(
+        checks_ws,
+        ctx,
+        tenant_id=tenant_id,
+        session=session,
+        model=model,
+    )
 
     metadata_ws = wb.create_sheet("Metadata")
     metadata_finance.build(
@@ -120,6 +189,11 @@ def build_finance_workbook(
         tenant_id=tenant_id,
         last_event_id=last_event_id,
         session=session,
+    )
+
+    instructions_ws = wb.create_sheet("Instructions")
+    finance_model.build_instructions(
+        instructions_ws, ctx, tenant_id=tenant_id, session=session
     )
 
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")

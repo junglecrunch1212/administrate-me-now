@@ -12,11 +12,13 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from adminme import temporary_surfaces as temporary_surface_clock
 from adminme.events.envelope import EventEnvelope
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
+from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -247,6 +249,126 @@ async def _seed_today_truth(runtime: Any) -> dict[str, str]:
         "routine": routine_event_id,
         "calendar": calendar_event_id,
     }
+
+
+async def _seed_finance_truth(runtime: Any) -> None:
+    now = datetime.now(timezone.utc)
+    private = {
+        "event_at_ms": int(now.timestamp() * 1000),
+        "tenant_id": runtime.settings.instance.tenant_id,
+        "occurred_at": now.isoformat(),
+        "source_adapter": "gate7-finance-fixture",
+        "source_account_id": "credential-free",
+        "owner_scope": f"private:{PRINCIPAL}",
+        "visibility_scope": f"private:{PRINCIPAL}",
+        "sensitivity": "privileged",
+        "actor_identity": PRINCIPAL,
+    }
+    shared = {
+        **private,
+        "owner_scope": "shared:household",
+        "visibility_scope": "shared:household",
+        "sensitivity": "sensitive",
+    }
+    await runtime.events.write(
+        EventEnvelope(
+            type="financial.account_observed",
+            schema_version=1,
+            payload={
+                "member_id": PRINCIPAL,
+                "plaid_item_id": "fixture-item",
+                "account_id": "fixture-account",
+                "institution_id": "fixture-institution",
+                "institution_name": "Fixture institution",
+                "display_name": "Fixture checking",
+                "account_type": "depository",
+                "last4": "1234",
+                "current_balance_minor": 500_000,
+                "available_balance_minor": 450_000,
+                "currency": "USD",
+                "as_of": now.isoformat(),
+                "link_healthy": True,
+            },
+            **private,
+        )
+    )
+    await runtime.events.write(
+        EventEnvelope(
+            type="money_flow.provider_observed",
+            schema_version=1,
+            payload={
+                "member_id": PRINCIPAL,
+                "plaid_item_id": "fixture-item",
+                "account_id": "fixture-account",
+                "transaction_id": "fixture-transaction",
+                "amount_minor": 12_000,
+                "currency": "USD",
+                "occurred_at": now.date().isoformat(),
+                "kind": "paid",
+                "merchant_name": "Fixture merchant",
+                "provider_category": "Groceries",
+                "pending": False,
+                "provider_revision": "fixture-cursor",
+                "observed_at": now.isoformat(),
+            },
+            **private,
+        )
+    )
+    for event_type, payload in (
+        (
+            "finance.assumption_set",
+            {
+                "assumption_id": "base_monthly_income",
+                "category": "cash_flow",
+                "label": "Base monthly income",
+                "value_decimal": "6000",
+                "unit": "USD/month",
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.assumption_set",
+            {
+                "assumption_id": "base_monthly_expenses",
+                "category": "cash_flow",
+                "label": "Base monthly expenses",
+                "value_decimal": "4000",
+                "unit": "USD/month",
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.budget_set",
+            {
+                "budget_id": "fixture-budget",
+                "category": "Groceries",
+                "amount_minor": 10_000,
+                "currency": "USD",
+                "cadence": "monthly",
+                "active": True,
+                "as_of": now.date().isoformat(),
+            },
+        ),
+        (
+            "finance.scenario_set",
+            {
+                "scenario_id": "fixture-base",
+                "name": "Current plan",
+                "is_baseline": True,
+                "horizon_months": 24,
+                "active": True,
+            },
+        ),
+    ):
+        last = await runtime.events.write(
+            EventEnvelope(
+                type=event_type,
+                schema_version=1,
+                payload=payload,
+                **shared,
+            )
+        )
+    await runtime.wait_for_projection("money", last)
 
 
 def _portal_provenance(
@@ -539,6 +661,129 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             ).status_code
             == 404
         )
+
+
+def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
+    tmp_path: Path,
+) -> None:
+    """CO-006 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        client.portal.call(_seed_finance_truth, runtime)
+        response = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        )
+        assert response.status_code == 200
+        data = response.json()
+        cockpit = data["cockpit"]
+        assert cockpit["contract_version"] == "deterministic-finance-cockpit-v1"
+        assert cockpit["summary"]["cash_minor"] == 500_000
+        assert cockpit["summary"]["base_monthly_income_minor"] == 600_000
+        assert cockpit["summary"]["base_monthly_expenses_minor"] == 400_000
+        assert cockpit["budgets"][0]["state"] == "watch"
+        assert cockpit["focus"]["state"] == "budget_watch"
+        assert data["contract"] == {
+            "workbook_planning_inputs_authoritative": True,
+            "provider_observations_protected": True,
+            "provider_writeback": False,
+            "model_decides_financial_action": False,
+            "external_financial_writes": False,
+        }
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/finance", headers=HEADERS[CHILD]
+            ).status_code
+            == 404
+        )
+        other_adult = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[ADULT]
+        ).json()["cockpit"]
+        assert other_adult["data_health"]["account_count"] == 0
+        assert other_adult["summary"]["cash_minor"] == 0
+
+        assert runtime.xlsx_projection is not None
+        assert runtime.xlsx_reverse is not None
+        client.portal.call(
+            runtime.xlsx_projection.regenerate_now, FINANCE_WORKBOOK_NAME
+        )
+        workbook_path = (
+            runtime.settings.instance.xlsx_workbooks_dir / FINANCE_WORKBOOK_NAME
+        )
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        assert budget_sheet.cell(5, 2).value == "Groceries"
+        budget_sheet.cell(5, 3, value=150)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        client.portal.call(
+            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+        )
+        after_valid_save = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_valid_save["budgets"][0]["planned_minor"] == 15_000
+        assert after_valid_save["workbook"]["validation_state"] == "valid"
+
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        budget_sheet.cell(5, 3, value=-25)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        published_events = client.portal.call(
+            _events, runtime, "finance.workbook_published"
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "money", published_events[-1]["event_id"]
+        )
+        after_rejected_save = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_rejected_save["budgets"][0]["planned_minor"] == 15_000
+        assert after_rejected_save["workbook"]["validation_state"] == "rejected"
+
+        # The rejected save did not consume the accepted sidecar. Correcting
+        # the same cell therefore emits the intended planning change.
+        workbook = load_workbook(workbook_path)
+        budget_sheet = workbook["Budget vs Actual"]
+        budget_sheet.cell(5, 3, value=200)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        budget_events = client.portal.call(_events, runtime, "finance.budget_set")
+        client.portal.call(
+            runtime.wait_for_projection, "money", budget_events[-1]["event_id"]
+        )
+        after_correction = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert after_correction["budgets"][0]["planned_minor"] == 20_000
+        assert after_correction["workbook"]["validation_state"] == "valid"
+
+        before = cockpit["summary"]
+        client.portal.call(runtime.projections.rebuild, "money")
+        after = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]["summary"]
+        assert after == before
+
+        js = client.get("/member-assets/member.js").text
+        css = client.get("/member-assets/member.css").text
+        for copy in (
+            "Cash flow plan",
+            "Scenario lab",
+            "Goals and capital plans",
+            "Net worth inputs",
+            "Source and model health",
+        ):
+            assert copy in js
+        assert ".finance-kpi-grid" in css
 
 
 def test_ac29_notes_authorized_recall_and_explicit_grant_round_trip(

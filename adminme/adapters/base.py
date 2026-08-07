@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from adminme.adapters.cursor_store import AdapterCursorStore
     from adminme.events.writer import EventSink
     from adminme.lib.observation import ObservationManager
     from adminme.lib.session import Session
@@ -61,6 +62,7 @@ class AdapterContext:
     observation_session: "Session | None" = None
     observation_manager: "ObservationManager | None" = None
     observation_event_sink: "EventSink | None" = None
+    cursor_store: "AdapterCursorStore | None" = None
 
 
 @dataclass

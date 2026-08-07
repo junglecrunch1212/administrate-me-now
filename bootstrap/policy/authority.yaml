@@ -12,6 +12,7 @@ agent_allowlist:
       - "commitment.*"
       - "recurrence.*"
       - "money_flow.*"
+      - "finance.*"
   - agent_id: "daemon:xlsx_workbooks"
     actions: ["xlsx.regenerated"]
   - agent_id: "user:*"
@@ -32,6 +33,7 @@ agent_allowlist:
       - "member_relationship.*"
       - "household.action.*"
       - "settings.*"
+      - "finance.*"
       - "external_sync.*"
   - agent_id: "openclaw:*"
     actions:

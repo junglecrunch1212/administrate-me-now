@@ -73,6 +73,22 @@ def build_app():
     )
     app = create_application(settings)
 
+    @app.middleware("http")
+    async def local_fixture_identity(request, call_next):
+        """Let an ordinary localhost browser exercise the fixture safely.
+
+        The production application still requires the Tailscale identity
+        header. This helper exists only in this credential-free visual server,
+        binds to loopback, and never overrides an explicitly supplied fixture
+        identity used by the role/isolation harness.
+        """
+
+        if not request.headers.get("Tailscale-User-Login"):
+            request.scope["headers"].append(
+                (b"tailscale-user-login", b"visual-principal.ts.net")
+            )
+        return await call_next(request)
+
     @app.post("/__gate7/seed-calendar")
     async def seed_calendar():
         """Seed synthetic scoped facts for rendered Calendar evidence only."""
@@ -379,6 +395,197 @@ def build_app():
         )
         await runtime.wait_for_projection("triage", proposal_id)
         return {"seeded": 4, "last_event_id": proposal_id}
+
+    @app.post("/__gate7/seed-finance")
+    async def seed_finance():
+        """Seed synthetic Finance facts and planning inputs for browser QA."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        private = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-finance-fixture",
+            "source_account_id": "credential-free",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "privileged",
+            "actor_identity": PRINCIPAL,
+        }
+        shared = {
+            **private,
+            "owner_scope": "shared:household",
+            "visibility_scope": "shared:household",
+            "sensitivity": "sensitive",
+        }
+        events = [
+            EventEnvelope(
+                **private,
+                type="financial.account_observed",
+                schema_version=1,
+                idempotency_key="gate7:visual:finance:account",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "plaid_item_id": "visual-item",
+                    "account_id": "visual-checking",
+                    "institution_id": "visual-institution",
+                    "institution_name": "Fixture institution",
+                    "display_name": "Household checking",
+                    "account_type": "depository",
+                    "last4": "4242",
+                    "current_balance_minor": 2_400_000,
+                    "available_balance_minor": 2_350_000,
+                    "currency": "USD",
+                    "as_of": now.isoformat(),
+                    "link_healthy": True,
+                },
+            ),
+            EventEnvelope(
+                **private,
+                type="money_flow.provider_observed",
+                schema_version=1,
+                idempotency_key="gate7:visual:finance:income",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "plaid_item_id": "visual-item",
+                    "account_id": "visual-checking",
+                    "transaction_id": "visual-income",
+                    "amount_minor": 700_000,
+                    "currency": "USD",
+                    "occurred_at": now.date().isoformat(),
+                    "kind": "received",
+                    "merchant_name": "Income deposit",
+                    "provider_category": "Income",
+                    "pending": False,
+                    "provider_revision": "visual-cursor",
+                    "observed_at": now.isoformat(),
+                },
+            ),
+            EventEnvelope(
+                **private,
+                type="money_flow.provider_observed",
+                schema_version=1,
+                idempotency_key="gate7:visual:finance:expense",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "plaid_item_id": "visual-item",
+                    "account_id": "visual-checking",
+                    "transaction_id": "visual-grocery",
+                    "amount_minor": 36_000,
+                    "currency": "USD",
+                    "occurred_at": now.date().isoformat(),
+                    "kind": "paid",
+                    "merchant_name": "Neighborhood market",
+                    "provider_category": "Groceries",
+                    "pending": False,
+                    "provider_revision": "visual-cursor",
+                    "observed_at": now.isoformat(),
+                },
+            ),
+        ]
+        planning = [
+            (
+                "finance.assumption_set",
+                "assumption-income",
+                {
+                    "assumption_id": "base_monthly_income",
+                    "category": "cash_flow",
+                    "label": "Base monthly income",
+                    "value_decimal": "7000",
+                    "unit": "USD/month",
+                    "as_of": now.date().isoformat(),
+                },
+            ),
+            (
+                "finance.assumption_set",
+                "assumption-expenses",
+                {
+                    "assumption_id": "base_monthly_expenses",
+                    "category": "cash_flow",
+                    "label": "Base monthly expenses",
+                    "value_decimal": "5200",
+                    "unit": "USD/month",
+                    "as_of": now.date().isoformat(),
+                },
+            ),
+            (
+                "finance.assumption_set",
+                "assumption-reserve",
+                {
+                    "assumption_id": "minimum_cash_floor",
+                    "category": "safety",
+                    "label": "Minimum cash reserve",
+                    "value_decimal": "15000",
+                    "unit": "USD",
+                    "as_of": now.date().isoformat(),
+                },
+            ),
+            (
+                "finance.budget_set",
+                "budget",
+                {
+                    "budget_id": "visual-groceries",
+                    "category": "Groceries",
+                    "amount_minor": 30_000,
+                    "currency": "USD",
+                    "cadence": "monthly",
+                    "active": True,
+                    "as_of": now.date().isoformat(),
+                },
+            ),
+            (
+                "finance.scenario_set",
+                "baseline",
+                {
+                    "scenario_id": "visual-current-plan",
+                    "name": "Current plan",
+                    "is_baseline": True,
+                    "horizon_months": 36,
+                    "active": True,
+                },
+            ),
+            (
+                "finance.scenario_set",
+                "spending",
+                {
+                    "scenario_id": "visual-reduce-burn",
+                    "name": "Reduce monthly burn",
+                    "is_baseline": False,
+                    "horizon_months": 36,
+                    "monthly_expense_delta_minor": -50_000,
+                    "active": True,
+                },
+            ),
+            (
+                "finance.goal_set",
+                "goal",
+                {
+                    "goal_id": "visual-reserve-goal",
+                    "name": "Emergency reserve",
+                    "target_minor": 3_000_000,
+                    "current_minor": 2_400_000,
+                    "priority": 10,
+                    "status": "active",
+                    "notes": "Planning target only; no funds are moved.",
+                },
+            ),
+        ]
+        events.extend(
+            EventEnvelope(
+                **shared,
+                type=event_type,
+                schema_version=1,
+                idempotency_key=f"gate7:visual:finance:{suffix}",
+                payload=payload,
+            )
+            for event_type, suffix, payload in planning
+        )
+        last_event_id = 0
+        for event in events:
+            last_event_id = await runtime.events.write(event)
+        await runtime.wait_for_projection("money", last_event_id)
+        return {"seeded": len(events), "last_event_id": last_event_id}
 
     return app
 

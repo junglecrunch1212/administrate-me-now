@@ -15,7 +15,11 @@ This module is the financial-family peer of ``adminme/events/schemas/adapters.py
 event types still register via the ``hearth.event_types`` entry point
 per §D9; this module covers first-party L1 financial adapters only.
 
-One event type registers here at v1:
+CO-006 extends the adapter summary with the provider observations and workbook
+planning inputs required to make the finance workbook and member projection
+truthful.  Quiet-by-default is a presentation rule: transaction observations
+remain typed, privileged facts in the append-only log and are not individually
+pushed at the member.
 
 - ``money_flow.plaid_synced`` — emitted once per ``/transactions/sync``
   cycle per Plaid Item (NOT per transaction — that would be the
@@ -36,7 +40,9 @@ event for the cursor advance).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 
@@ -57,4 +63,170 @@ class MoneyFlowPlaidSyncedV1(BaseModel):
     webhook_triggered: bool
 
 
+class MoneyFlowProviderObservedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    plaid_item_id: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    amount_minor: int = Field(ge=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    occurred_at: str = Field(min_length=1)
+    authorized_at: str | None = None
+    kind: Literal["paid", "received"]
+    merchant_name: str | None = None
+    merchant_category: str | None = None
+    original_description: str | None = None
+    provider_category: str | None = None
+    pending: bool = False
+    provider_revision: str = Field(min_length=1)
+    observed_at: str = Field(min_length=1)
+
+
+class MoneyFlowProviderRemovedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    plaid_item_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    removed_at: str = Field(min_length=1)
+
+
+class FinancialAccountObservedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    plaid_item_id: str = Field(min_length=1)
+    account_id: str = Field(min_length=1)
+    institution_id: str = Field(min_length=1)
+    institution_name: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    account_type: Literal["depository", "credit", "loan", "investment", "other"]
+    account_subtype: str | None = None
+    last4: str | None = Field(default=None, pattern=r"^[0-9]{4}$")
+    current_balance_minor: int | None = None
+    available_balance_minor: int | None = None
+    limit_minor: int | None = None
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    as_of: str = Field(min_length=1)
+    link_healthy: bool = True
+
+
+class MoneyFlowClassificationSetV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    flow_id: str = Field(min_length=1)
+    category: str | None = None
+    memo: str | None = None
+    notes: str | None = None
+    included: bool | None = None
+    updated_at: str = Field(min_length=1)
+    updated_by_party_id: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def at_least_one_change(self) -> "MoneyFlowClassificationSetV1":
+        if all(
+            value is None
+            for value in (self.category, self.memo, self.notes, self.included)
+        ):
+            raise ValueError("at least one classification field is required")
+        return self
+
+
+class MoneyFlowManuallyUpdatedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    flow_id: str = Field(min_length=1)
+    amount_minor: int | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    occurred_at: str | None = None
+    kind: Literal["paid", "received", "owed", "reimbursable"] | None = None
+    linked_account: str | None = None
+    merchant_name: str | None = None
+    merchant_category: str | None = None
+    category: str | None = None
+    memo: str | None = None
+    notes: str | None = None
+    included: bool | None = None
+    updated_at: str = Field(min_length=1)
+    updated_by_party_id: str = Field(min_length=1)
+
+
+class FinanceAssumptionSetV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    assumption_id: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    value_decimal: str = Field(pattern=r"^-?[0-9]+(?:\.[0-9]+)?$")
+    unit: Literal["USD", "USD/month", "USD/year", "ratio", "months", "count"]
+    notes: str | None = None
+    as_of: str = Field(min_length=1)
+
+
+class FinanceBudgetSetV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    budget_id: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    amount_minor: int = Field(ge=0)
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    cadence: Literal["monthly"] = "monthly"
+    active: bool = True
+    notes: str | None = None
+    as_of: str = Field(min_length=1)
+
+
+class FinanceScenarioSetV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    scenario_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    is_baseline: bool = False
+    horizon_months: int = Field(ge=1, le=600)
+    opening_cash_delta_minor: int = 0
+    monthly_income_delta_minor: int = 0
+    monthly_expense_delta_minor: int = 0
+    one_time_month: int | None = Field(default=None, ge=1, le=600)
+    one_time_amount_minor: int = 0
+    notes: str | None = None
+    active: bool = True
+
+
+class FinanceGoalSetV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    goal_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    target_minor: int = Field(ge=0)
+    current_minor: int = Field(default=0, ge=0)
+    target_date: str | None = None
+    priority: int = Field(default=100, ge=0, le=1000)
+    status: Literal["active", "paused", "complete"] = "active"
+    notes: str | None = None
+
+
+class FinanceWorkbookPublishedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    workbook_name: str = Field(min_length=1)
+    workbook_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workbook_schema_version: int = Field(ge=1)
+    published_at: str = Field(min_length=1)
+    published_by_party_id: str = Field(min_length=1)
+    validation_state: Literal["valid", "rejected"]
+    validation_failures: list[str] = Field(default_factory=list, max_length=100)
+
+
 registry.register("money_flow.plaid_synced", 1, MoneyFlowPlaidSyncedV1)
+registry.register("money_flow.provider_observed", 1, MoneyFlowProviderObservedV1)
+registry.register("money_flow.provider_removed", 1, MoneyFlowProviderRemovedV1)
+registry.register("financial.account_observed", 1, FinancialAccountObservedV1)
+registry.register("money_flow.classification_set", 1, MoneyFlowClassificationSetV1)
+registry.register("money_flow.manually_updated", 1, MoneyFlowManuallyUpdatedV1)
+registry.register("finance.assumption_set", 1, FinanceAssumptionSetV1)
+registry.register("finance.budget_set", 1, FinanceBudgetSetV1)
+registry.register("finance.scenario_set", 1, FinanceScenarioSetV1)
+registry.register("finance.goal_set", 1, FinanceGoalSetV1)
+registry.register("finance.workbook_published", 1, FinanceWorkbookPublishedV1)

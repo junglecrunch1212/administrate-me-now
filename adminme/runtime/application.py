@@ -21,9 +21,11 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.adapters.fixture_messaging import FixtureMessagingAdapter
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
+from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog, new_correlation_id
@@ -403,8 +405,10 @@ class AdministrateMeRuntime:
         self.events: EventWriter | None = None
         self.projections: ProjectionRunner | None = None
         self.xlsx_projection: XlsxWorkbooksProjection | None = None
+        self.xlsx_reverse: XlsxReverseDaemon | None = None
         self.pipelines: PipelineRunner | None = None
         self.adapters: AdapterSupervisor | None = None
+        self.adapter_cursor_store: AdapterCursorStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
@@ -556,6 +560,9 @@ class AdministrateMeRuntime:
             self._inventory_optional_adapters()
             self._inventory_data_extensions()
 
+            self.adapter_cursor_store = AdapterCursorStore(
+                self.settings.instance.adapter_cursor_path
+            )
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
                 config_data=self.settings_control.effective_adapter_config(
@@ -576,6 +583,7 @@ class AdministrateMeRuntime:
                     ),
                     observation_manager=self.observation,
                     observation_event_sink=self._require_events(),
+                    cursor_store=self.adapter_cursor_store,
                 ),
             )
             self.adapters.prepare()
@@ -591,6 +599,17 @@ class AdministrateMeRuntime:
             await self.adapters.start()
             await asyncio.sleep(0)
             await self.bus.start()
+            # The workbook reverse path is part of the same production
+            # composition, not a prose-only or separately managed central
+            # process. It starts only after projection connections and the bus
+            # are ready, and shares the reviewed GuardedWrite policy.
+            self.xlsx_reverse = XlsxReverseDaemon(
+                self.settings.instance,
+                self._xlsx_query_context(),
+                event_sink=self.events,
+                guarded_write=self.guarded_write,
+            )
+            await self.xlsx_reverse.start()
             await self._reconcile_household_enrollment()
             await self._refresh_capability_registry()
             self.started = True
@@ -626,8 +645,14 @@ class AdministrateMeRuntime:
             return
         self.stopping = True
         try:
+            if self.xlsx_reverse is not None:
+                await self.xlsx_reverse.stop()
+                self.xlsx_reverse = None
             if self.adapters is not None:
                 await self.adapters.stop()
+            if self.adapter_cursor_store is not None:
+                self.adapter_cursor_store.close()
+                self.adapter_cursor_store = None
             if self.events is not None:
                 self.events.stop_accepting()
             if self.pipelines is not None:

@@ -3,19 +3,61 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO005_CANDIDATE_VALIDATION_LIVE_RUNTIME_UNCHANGED
+gate_result: CO006_CANDIDATE_VALIDATION_LIVE_RUNTIME_UNCHANGED
 verified_local_date: 2026-08-07
 verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
 candidate_commit_resolution: current_reviewed_commit_after_final_validation
-pull_request_url: pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co005_review_then_explicit_runtime_migration_decision
+next_phase: co006_review_then_explicit_runtime_migration_decision
 ---
 
 # Release handoff
+
+## 2026-08-07 CO-006 Finance workbook and cash-flow candidate
+
+CO-006 is implemented in the candidate under ADR-0007. It **PRESERVES** the
+encrypted append-only log, private provider authority, member isolation,
+deterministic projections, workbook round-trip, observation, and exact
+OpenClaw boundary. It **MODERNIZES** the existing money projection into one
+cash-flow/scenario engine shared by the Finance portal and Finance workbook. It
+**SUPERSEDES** the thin three-sheet workbook, summary-only Plaid receipts,
+hidden spreadsheet constants, brittle zero-result formulas, and static Finance
+card.
+
+The canonical workbook now has twelve sheets with protected provider/derived
+facts and editable assumptions, budgets, scenarios, goals, classifications,
+and manual transactions. Validation fails closed before planning changes.
+Plaid emits detailed private account/transaction/removal observations and a
+terminal receipt, and its durable member/item cursor advances only after all
+events are accepted. The portal exposes Overview, Cash flow, Spending,
+Scenarios, Net worth, and Data health from
+`deterministic-finance-cockpit-v1`; fixed code, not a model, chooses the one
+next review.
+
+The supplied private household planner was repaired and visually/formula
+validated as an ignored local output. No household financial values entered
+tracked code, docs, fixtures, or tests. Real Plaid Link/consent, explicit
+cross-member account sharing, and provider propagation remain post-merge live
+activation evidence. No bank write seam was added.
+
+Final candidate validation passed the complete release command under Python
+3.14.6 and Node 24.19.0: 32/32 strict acceptance tests, 1,580/1,580 root,
+code, and pack tests, 60/60 bridge tests, the 14/14 pinned OpenClaw plugin
+tests, both Python type checkers, lint/format/shell checks, dependency audits,
+performance budgets, clean install, tenant isolation, encrypted backup/restore,
+architecture negatives, and package builds. The Chrome-backed Gate 7 harness
+passed 136/136 checks, including all six Finance views, URL restoration, and
+deterministic scenario changes; direct desktop/mobile browser simulation found
+no overflow, console, page, or request failures.
+
+CO-006 does not authorize a deployment, service restart, observation change,
+provider enrollment, or the staged Python 3.14/Node 24 runtime migration. The
+current family release remains unchanged pending review and an explicit
+runtime migration decision.
 
 ## 2026-08-07 CO-005 constitutional audit candidate
 

@@ -9,7 +9,9 @@ import { chromium } from "playwright-core";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
-const evidenceDir = join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
+const evidenceDir = process.env.ADMINME_GATE7_EVIDENCE_DIR
+  ? resolve(process.env.ADMINME_GATE7_EVIDENCE_DIR)
+  : join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
 const basePort = Number.parseInt(process.env.ADMINME_GATE7_VISUAL_PORT ?? "3347", 10);
 const identities = {
   principal: "visual-principal.ts.net",
@@ -160,6 +162,13 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Notes fixture seeded", notes.response.ok && notes.value.seeded === 4, notes.value);
+  const finance = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-finance",
+    identities.principal,
+    "POST",
+  );
+  record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 10, finance.value);
 }
 
 async function newContext(browser, identity, viewport, reducedMotion = "no-preference") {
@@ -356,6 +365,19 @@ async function run() {
       } else if (surface === "people") {
         record("People identifies deterministic confirmed identity", await principal.page.locator("#mode-label").textContent() === "Private · confirmed identity · deterministic cues", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, "surface-people-desktop.png");
+      } else if (surface === "finance") {
+        record("Finance identifies deterministic planning and no bank writes", await principal.page.locator("#mode-label").textContent() === "Private · deterministic planning · no bank writes", await principal.page.locator("#mode-label").textContent());
+        record("Finance leads with cash safety and one explained review", await principal.page.locator(".finance-hero-stats dd").count() === 4 && (await principal.page.locator(".finance-hero").textContent()).includes("Review Groceries"), await principal.page.locator(".finance-hero").textContent());
+        record("Finance compares explicit scenarios without changing baseline", await principal.page.locator(".finance-scenario-button").count() === 2 && await principal.page.locator(".finance-scenario-button").first().getAttribute("aria-pressed") === "true", await principal.page.locator(".finance-scenarios").textContent());
+        record("Finance shows goals as planning without moving money", (await principal.page.locator(".finance-goals").textContent()).includes("never move funds") && await principal.page.locator(".finance-goal-list li").count() === 1, await principal.page.locator(".finance-goals").textContent());
+        await screenshot(principal.page, "surface-finance-overview-desktop.png");
+        await principal.page.getByRole("button", { name: "Spending", exact: true }).click();
+        record("Finance Spending shows categorized provider movement", (await principal.page.locator(".finance-transactions").textContent()).includes("Neighborhood market") && (await principal.page.locator(".finance-budget").textContent()).includes("Review"), await principal.page.locator("#surface").textContent());
+        await principal.page.reload();
+        record("Finance view survives URL reload", await principal.page.getByRole("button", { name: "Spending", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
+        await principal.page.getByRole("button", { name: "Data health", exact: true }).click();
+        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
+        await screenshot(principal.page, "surface-finance-health-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
         record("Settings exposes all seven control areas", await principal.page.locator(".settings-nav button").count() === 7, await principal.page.locator(".settings-nav").textContent());
