@@ -6,6 +6,9 @@ interpreter-bound Keychain items remain untouched for rollback; candidate-bound
 copies are verified before an atomic, instance-scoped logical-reference alias
 map is published. Secret values cross neither arguments, files, logs, nor
 diagnostics, and every failure remains before service or release mutation.
+Active-runtime selection accepts both the current exact preferred-version
+receipt and the strict legacy `python@major.minor` formula used by the reviewed
+D10 release; ambiguous metadata still fails closed.
 
 CO-005 constitutional audit amendment (2026-08-07): direct production and
 live-portal reconciliation found semantic drift that the aggregate gates did

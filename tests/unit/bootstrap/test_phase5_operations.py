@@ -1007,6 +1007,44 @@ def test_runtime_keychain_migration_reads_active_release_runtime_receipt(
         _active_runtime_tag(test_paths.root)
 
 
+def test_runtime_keychain_migration_reads_legacy_formula_runtime_receipt(
+    test_paths: DeploymentPaths,
+) -> None:
+    release = test_paths.app_dir / "releases" / "legacy-reviewed"
+    (release / "bootstrap").mkdir(parents=True)
+    (release / "bootstrap" / "versions.json").write_text(
+        json.dumps(
+            {
+                "python": {
+                    "compatible": ">=3.11,<3.12",
+                    "formula": "python@3.11",
+                    "lockfile": "poetry.lock",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"path": str(release)}), encoding="utf-8")
+
+    assert _active_runtime_tag(test_paths.root) == "py311"
+
+
+def test_runtime_keychain_migration_rejects_ambiguous_legacy_runtime_receipt(
+    test_paths: DeploymentPaths,
+) -> None:
+    release = test_paths.app_dir / "releases" / "legacy-invalid"
+    (release / "bootstrap").mkdir(parents=True)
+    (release / "bootstrap" / "versions.json").write_text(
+        json.dumps({"python": {"formula": "python3"}}), encoding="utf-8"
+    )
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"path": str(release)}), encoding="utf-8")
+
+    with pytest.raises(KeychainRuntimeMigrationError, match="runtime receipt"):
+        _active_runtime_tag(test_paths.root)
+
+
 def test_runtime_keychain_migration_does_not_publish_alias_on_child_failure(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,

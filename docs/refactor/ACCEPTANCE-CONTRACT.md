@@ -11,6 +11,8 @@ Python-boundary migration copies configured logical secrets only through an
 anonymous pipe, verifies them under the candidate interpreter, atomically
 publishes an instance-scoped alias map, preserves old items for rollback, and
 fails before release mutation on copy, receipt, map, or bounded-probe failure.
+Focused AC-21 unit evidence covers current and legacy reviewed runtime-receipt
+shapes plus ambiguous-receipt rejection.
 
 CO-006 amendment (2026-08-07): AC-32 proves Finance through the production
 composition without adding a projection or provider write seam. The Finance

@@ -6,7 +6,9 @@ with candidate-bound copies plus an atomic, non-secret logical-reference alias
 map. Values remain in memory and an anonymous pipe; no password, value file,
 provider SDK, second secret store, or allow-all ACL is introduced. The older
 release ignores the map and retains exact rollback access. Copy, receipt, alias,
-and candidate-probe failures remain pre-mutation failures.
+and candidate-probe failures remain pre-mutation failures. The retry path reads
+the active runtime tag from either the current exact preferred-version receipt
+or the older reviewed `python@major.minor` formula and rejects any looser shape.
 
 CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
 under ADR-0007. The existing money projection now separates private provider

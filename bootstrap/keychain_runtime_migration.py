@@ -29,6 +29,10 @@ _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _RUNTIME_TAG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 _ACCOUNT_PATTERN = re.compile(r"^instance-[0-9a-f]{16}$")
 _ITEM_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,180}$")
+_PYTHON_VERSION_PATTERN = re.compile(
+    r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:\.[0-9]+)?$"
+)
+_PYTHON_FORMULA_PATTERN = re.compile(r"^python@(?P<major>[0-9]+)\.(?P<minor>[0-9]+)$")
 _MAX_PIPE_BYTES = 16 * 1024 * 1024
 
 
@@ -138,14 +142,30 @@ def _active_runtime_tag(root: Path) -> str | None:
         versions = json.loads(
             (release / "bootstrap" / "versions.json").read_text("utf-8")
         )
-        parts = str(versions["python"]["preferred"]).split(".")
+        python_receipt = versions["python"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise KeychainRuntimeMigrationError(
             "active release runtime receipt is invalid"
         ) from exc
-    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
+
+    if not isinstance(python_receipt, dict):
         raise KeychainRuntimeMigrationError("active release runtime receipt is invalid")
-    return f"py{parts[0]}{parts[1]}"
+    preferred = python_receipt.get("preferred")
+    formula = python_receipt.get("formula")
+    match = (
+        _PYTHON_VERSION_PATTERN.fullmatch(preferred)
+        if isinstance(preferred, str)
+        else None
+    )
+    if match is None:
+        match = (
+            _PYTHON_FORMULA_PATTERN.fullmatch(formula)
+            if isinstance(formula, str)
+            else None
+        )
+    if match is None:
+        raise KeychainRuntimeMigrationError("active release runtime receipt is invalid")
+    return f"py{match.group('major')}{match.group('minor')}"
 
 
 def _resolve_reference(reference: str, aliases: dict[str, str], prefix: str) -> str:
