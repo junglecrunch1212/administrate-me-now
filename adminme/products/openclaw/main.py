@@ -1113,13 +1113,30 @@ async def dashboard_health(body: ContextRequest, request: Request) -> dict[str, 
     return result
 
 
+@router.post("/dashboard/knowledge", deprecated=True)
+async def dashboard_knowledge(body: ContextRequest, request: Request) -> dict[str, Any]:
+    """Deprecated compatibility alias for the pre-CO-002 Notes binding."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    result = build_surface(_runtime(request), session, "notes")
+    await _record_tool_call(
+        request, session, body.provenance, operation="dashboard.notes"
+    )
+    return {
+        **result,
+        "deprecated_alias": "knowledge",
+        "canonical_path": "/api/openclaw/v1/dashboard/notes",
+    }
+
+
 @router.post("/dashboard/{surface}")
 async def dashboard_surface(
     surface: Literal[
         "comms",
         "reminders",
         "people",
-        "knowledge",
+        "notes",
         "finance",
         "calendar",
         "scoreboard",

@@ -184,6 +184,26 @@ class EmbeddingGeneratedV1(BaseModel):
     source_text_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
 
 
+class EmbeddingRevokedV1(BaseModel):
+    """Replayable removal of a derived search row.
+
+    Revocation is required when source content is deleted, superseded into a
+    privileged sensitivity class, or otherwise becomes ineligible for search.
+    """
+
+    model_config = {"extra": "forbid"}
+    embedding_id: str = Field(min_length=1)
+    linked_kind: Literal["interaction", "artifact", "party_notes", "member_knowledge"]
+    linked_id: str = Field(min_length=1)
+    reason: Literal[
+        "source_deleted",
+        "privileged_content",
+        "content_replaced",
+        "access_revoked",
+    ]
+    source_event_id: str = Field(min_length=1)
+
+
 registry.register("place.added", 1, PlaceAddedV1)
 registry.register("place.updated", 1, PlaceUpdatedV1)
 registry.register("asset.added", 1, AssetAddedV1)
@@ -194,3 +214,4 @@ registry.register("money_flow.recorded", 1, MoneyFlowRecordedV1)
 registry.register("money_flow.manually_added", 1, MoneyFlowManuallyAddedV1)
 registry.register("money_flow.manually_deleted", 1, MoneyFlowManuallyDeletedV1)
 registry.register("embedding.generated", 1, EmbeddingGeneratedV1)
+registry.register("embedding.revoked", 1, EmbeddingRevokedV1)

@@ -24,8 +24,8 @@ from adminme.projections.vector_search import handlers
 
 class VectorSearchProjection(Projection):
     name = "vector_search"
-    version = 2
-    subscribes_to = ["embedding.generated"]
+    version = 3
+    subscribes_to = ["embedding.generated", "embedding.revoked"]
     schema_path = Path(__file__).parent / "schema.sql"
 
     def on_connection_opened(self, conn: Any) -> None:

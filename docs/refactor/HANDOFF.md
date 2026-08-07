@@ -12,10 +12,54 @@ pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/2
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co001_main_review_then_remaining_member_surfaces
+next_phase: co002_release_gates_and_live_notes_verification
 ---
 
 # Release handoff
+
+## 2026-08-06 CO-002 Notes and authorized family recall
+
+The principal approved CO-002 on 2026-08-06. ADR-0003 and
+`CHANGE-ORDER-002-NOTES-AND-FAMILY-RECALL.md` now govern the former Knowledge
+surface. The adult navigation and pinned OpenClaw binding use **Notes**;
+Knowledge remains a deprecated compatibility alias only. This change
+**PRESERVES** encrypted event-log authority, Cat-D source ownership, private
+scope, domain-type separation, human gating, and the pinned OpenClaw
+`llm-task` seam. It **MODERNIZES** provider-neutral note normalization,
+authorized recall/search, source capability truth, and explicit adult sharing.
+It **SUPERSEDES** a Notion/Obsidian second authority, provider-share inference,
+autonomous whole-corpus mining, and direct note-to-domain/provider writes.
+
+The release candidate adds additive member-note v3 fields, explicit
+grant/revoke events and projection rows, deterministic FTS, derived-vector
+revocation, and a bounded `extract_note_semantics` skill. Exact-evidence,
+allowlisted, confidence-qualified results become private Triage proposals only.
+Source correction, deletion, or privileged reclassification supersedes pending
+candidates and removes ineligible derived search state. Recurrence remains
+separate from tasks, calendar events, reminders, lists, list items, and
+OpenClaw scheduler jobs.
+
+The built-in skill inventory is now eleven: CO-002 adds one Notes-only
+extraction pack without removing or weakening any of the prior ten. Model
+routing, fallback, credentials, and generic conversation state remain wholly
+OpenClaw-owned.
+
+The member Notes workspace supplies source rail, authorized search, All,
+Recent, Shared, Meetings, and Needs Triage lenses, master/detail reading,
+provenance, capability warnings, explicit per-note adult grant/revoke, safe
+text rendering, and exact Triage/source-evidence links. Principal view-as,
+children, devices, ambient sessions, generic OpenClaw memory, and operator
+scope do not grant note access. AC-29 is the governing process gate. The exact
+release-candidate suite passed 29/29 acceptance tests, 1,544/1,544 Python
+code-and-pack tests, 60/60 standalone bridge tests, and 14/14 pinned OpenClaw
+plugin tests. Ruff format/lint (480 files), mypy (213 source files), pyright,
+architecture negatives, invariant/identity/path scans, dependency audits,
+Python/bridge/OpenClaw builds, clean install, tenant isolation, authenticated
+backup/restore, and performance budgets passed. The rendered Gate 7 portal run
+passed 119/119 checks across desktop, tablet, and phone with zero failed checks,
+including search restoration from a URL reload.
+Exact commit, deployment, Doctor, and live-browser evidence remain pending until
+the reviewed candidate is switched into observation.
 
 ## 2026-08-06 CO-001 five-surface executive loop
 
@@ -70,7 +114,8 @@ for the two unpublished local packages, cache-deserialization warnings, and an
 available newer pyright release.
 
 Observation remains active. This change does not activate optional providers,
-perform a real provider mutation, or change People, Knowledge, Finance,
+perform a real provider mutation, or change People, the then-Knowledge surface
+(now Notes under CO-002), Finance,
 Scoreboard, or Settings. Rollback is the existing authenticated immutable
 release-pointer rollback after service quiescence; the event migration is
 additive, so prior events are not rewritten or deleted.

@@ -43,7 +43,7 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 | Four docstring-only product `main.py` service stubs | They advertise separate processes and stale routes without behavior. | Router namespaces exist with route compatibility tests; ownership remains. |
 | `adminme/daemons/pipeline_supervisor.py` prose stub | **DELETED at Gate 6.** A separate supervisor duplicated composition ownership and contained no code. | Composition root owns reactive runner lifecycle; OpenClaw owns proactive schedules. |
 | AdministrateMe-side provider-fallback loop in `adminme/lib/skill_runner/wrapper.py` | **DELETED at Gate 4.** OpenClaw owns model routing/fallback. | Wrapper posts once, supplies no provider/model override, validates output, and records actual returned provenance. |
-| Quick-capture prefix, direct voice-ingest, and triage route/UI claims | Superseded by member-owned tools and Cat-D bridge ingestion. | Knowledge/CRM/Lists surfaces and member bridge slice pass AC-04/18. |
+| Quick-capture prefix, direct central voice-ingest, and Capture-owned triage route/UI claims | Superseded by member-owned tools, Cat-D bridge ingestion, Notes authorized recall, and the separate Triage gate. | Notes/member bridge/exact-evidence proposal slices pass AC-04/18/24/29. |
 | Product-scheduling references to APScheduler or AdministrateMe cron | Duplicate OpenClaw responsibility. | Gate 4 derives five OpenClaw automation declarations and a typed standing-order trigger; AdministrateMe does not schedule them. Internal debounce/retry timers remain explicitly exempt. |
 | Legacy central `:3333–:3337` process topology | More failure domains and duplicated lifecycle without semantic value. | One root on `:3330`; compatibility aliases tested/removed deliberately; AC-19. |
 | Placeholder console test that only echoes success | Falsely signals coverage. | Real unit/browser suites exist and AC-18 runs them. |
@@ -63,11 +63,12 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 | Optional item | Deferral | Non-negotiable substitute/boundary |
 |---|---|---|
 | CalDAV provider | DEFER to community/v2 provider work. | Apple Calendar and Google Calendar capabilities remain; calendar projection cannot defer. |
-| Google Drive document source | DEFER. | Apple Notes/Voice/optional Obsidian member knowledge path and artifacts remain; knowledge function cannot defer. |
+| Google Drive document source | DEFER. | Apple Notes/Voice/optional Obsidian member Notes path, provider-neutral schemas, and artifacts remain; the Notes function cannot defer. |
 | Telegram and Discord channel enablement | DEFER per deployment if not selected. | The scoped channel-bridge seam and at least one credential-free channel contract remain. |
 | Twilio/SMS fallback, ElevenLabs, Deepgram, Privacy.com, Lob | DEFER when not configured. | Relevant action/signal interfaces remain explicit, disabled states honest, no required product function disappears. |
 | Home Assistant, optional search provider, optional secondary LLM provider | DEFER per household selection. | Cat-E contract, OpenClaw-only model seam, and sensor/action product capability remain tested with fakes. |
-| Obsidian member source | DEFER per member; prohibited for kid bridges by default. | Cat-D bridge and member_knowledge capability remain. |
+| Obsidian member source | DEFER per member; prohibited for kid bridges by default. | Cat-D bridge, provider-neutral Notes contract, and `member_knowledge` capability remain. |
+| Evernote, Otter, Fathom, Zoom, and Notion live adapters | DEFER until each provider contract, privacy review, credential-free fixture, and process proof lands. | CO-002 schema/UX remains loss-aware and truthfully not configured; Apple Notes and existing Cat-D sources continue to prove the required Notes function. |
 | Physical legacy-port aliases | DEFER only while a documented migration client needs them. | Product route namespaces and one-process topology remain. |
 
 DEFER is prohibited for privacy/authorization/governance, observation, bootstrap safety, backup/restore, workbook round trip, clean install, the core OpenClaw plugin/four seams, or any required capability listed above.

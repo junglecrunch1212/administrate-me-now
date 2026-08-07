@@ -404,6 +404,8 @@ class AdministrateMeRuntime:
                                 "task.*",
                                 "triage.*",
                                 "calendar.event_outcome_recorded",
+                                "member_knowledge.*",
+                                "recurrence.added",
                                 "recurrence.completed",
                                 "routine.*",
                                 "identifier.added",

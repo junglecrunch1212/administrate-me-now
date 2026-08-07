@@ -258,6 +258,128 @@ def build_app():
         await runtime.wait_for_projection("calendars", last_event_id)
         return {"seeded": len(events), "last_event_id": last_event_id}
 
+    @app.post("/__gate7/seed-notes")
+    async def seed_notes():
+        """Seed synthetic owner-private Notes and one Triage link."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-notes-fixture",
+            "source_account_id": "credential-free",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        adult_party_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="party.created",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-notes-fixture",
+                source_account_id="credential-free",
+                owner_scope="shared:household",
+                visibility_scope="shared:household",
+                sensitivity="normal",
+                actor_identity=PRINCIPAL,
+                idempotency_key="gate7:visual:notes:adult-party",
+                payload={
+                    "party_id": ADULT,
+                    "kind": "person",
+                    "display_name": "Fixture household adult",
+                    "sort_name": "Adult, Fixture Household",
+                    "attributes": {},
+                },
+            )
+        )
+        await runtime.wait_for_projection("parties", adult_party_id)
+        note_events = [
+            EventEnvelope(
+                **common,
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="gate7:visual:notes:meeting",
+                payload={
+                    "knowledge_id": "gate7-visual-meeting-note",
+                    "member_id": PRINCIPAL,
+                    "title": "School planning call",
+                    "body": (
+                        "The school planning call covered the autumn pickup "
+                        "routine and the form due Friday."
+                    ),
+                    "body_format": "transcript",
+                    "source_kind": "fathom",
+                    "source_type": "meeting_note",
+                    "source_external_id": "visual-meeting-note",
+                    "source_url": "https://example.invalid/visual-meeting-note",
+                    "account_external_id": "visual-fathom",
+                    "account_name": "Meeting notes",
+                    "folder_path": "Calls/School",
+                    "content_sha256": "a" * 64,
+                    "captured_at": now.isoformat(),
+                    "provider_modified_at": now.isoformat(),
+                    "provider_revision": "visual-revision-1",
+                    "tags": ["school", "planning"],
+                    "capability_warnings": ["speaker_identity_unverified"],
+                },
+            ),
+            EventEnvelope(
+                **common,
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="gate7:visual:notes:household",
+                payload={
+                    "knowledge_id": "gate7-visual-household-note",
+                    "member_id": PRINCIPAL,
+                    "title": "Household landing list",
+                    "body": "Put bags by the door and check tomorrow's calendar.",
+                    "body_format": "plain",
+                    "source_kind": "apple_notes",
+                    "source_type": "note",
+                    "source_external_id": "visual-household-note",
+                    "account_external_id": "visual-icloud",
+                    "account_name": "Personal iCloud",
+                    "folder_path": "Shared household",
+                    "content_sha256": "b" * 64,
+                    "captured_at": now.isoformat(),
+                    "provider_modified_at": now.isoformat(),
+                    "provider_revision": "visual-revision-2",
+                },
+            ),
+        ]
+        note_ids = []
+        for event in note_events:
+            note_ids.append(await runtime.events.write(event))
+        await runtime.wait_for_projection("member_knowledge", note_ids[-1])
+        proposal_id = await runtime.events.write(
+            EventEnvelope(
+                **common,
+                type="triage.item.proposed",
+                schema_version=1,
+                idempotency_key="gate7:visual:notes:triage",
+                causation_id=note_ids[0],
+                payload={
+                    "proposal_id": "gate7-visual-note-candidate",
+                    "target_kind": "task",
+                    "owner_member_id": PRINCIPAL,
+                    "title": "Return the school form",
+                    "candidate": {"due": now.date().isoformat()},
+                    "route": {"member_id": PRINCIPAL},
+                    "source_event_id": note_ids[0],
+                    "confidence": 0.96,
+                    "reasons": ["note evidence: form due Friday"],
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", proposal_id)
+        return {"seeded": 4, "last_event_id": proposal_id}
+
     return app
 
 

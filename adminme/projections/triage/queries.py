@@ -27,6 +27,12 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         if result["source_kind"] == "commitment_proposal"
         else ["enrich", "approve", "dismiss"]
     )
+    if result.get("resolution_reason") in {
+        "source_changed",
+        "source_deleted",
+        "source_privileged",
+    }:
+        result["state"] = "superseded"
     return result
 
 

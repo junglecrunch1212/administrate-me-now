@@ -14,6 +14,7 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 
 - PASS: canonical fixture seeded
 - PASS: calendar fixture seeded
+- PASS: Notes fixture seeded
 - PASS: /member/today HTTP
 - PASS: /member/today title
 - PASS: Today defaults to Day Brief
@@ -38,9 +39,16 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: /member/people HTTP
 - PASS: /member/people title
 - PASS: people member context
-- PASS: /member/knowledge HTTP
-- PASS: /member/knowledge title
-- PASS: knowledge member context
+- PASS: /member/notes HTTP
+- PASS: /member/notes title
+- PASS: Notes identifies private authorized recall
+- PASS: Notes preserves provider sources and master list
+- PASS: Notes detail retains exact source identity
+- PASS: Notes links candidates to Triage without inline approval
+- PASS: Notes sharing is explicit and read-search only
+- PASS: Notes deterministic search is interactive
+- PASS: Notes search state survives a URL reload
+- PASS: Notes meeting lens is presentation-only
 - PASS: /member/finance HTTP
 - PASS: /member/finance title
 - PASS: finance member context
@@ -73,6 +81,10 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: /member/comms title
 - PASS: Comms reflows without phone overflow
 - PASS: Comms phone retains focus explanation and reply approval
+- PASS: /member/notes HTTP
+- PASS: /member/notes title
+- PASS: Notes reflows without phone overflow
+- PASS: Notes phone retains sources, search, and source evidence
 - PASS: /member/today HTTP
 - PASS: /member/today title
 - PASS: tablet Day Brief default
@@ -87,12 +99,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: tablet reduced-motion keyboard focus indicator
 - PASS: reduced motion honored
 - PASS: private quest created
-- PASS: /member/quests/view_d7e1a5794a4d49bd HTTP
-- PASS: /member/quests/view_d7e1a5794a4d49bd title
+- PASS: /member/quests/view_2046d83566284f0a HTTP
+- PASS: /member/quests/view_2046d83566284f0a title
 - PASS: private quest undiscoverable
 - PASS: quest promoted by explicit review
-- PASS: /member/quests/view_d7e1a5794a4d49bd HTTP
-- PASS: /member/quests/view_d7e1a5794a4d49bd title
+- PASS: /member/quests/view_2046d83566284f0a HTTP
+- PASS: /member/quests/view_2046d83566284f0a title
 - PASS: archived quest has no navigation entry
 - PASS: expiring quest created
 - PASS: expired quest has no navigation entry
@@ -122,26 +134,27 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 
 ## Screenshots
 
-- `surface-today-day-brief-desktop.png` — 214236 bytes, SHA-256 `6b635466464849c425cf3c2285a098706fb4430e98b812031e4c87c625efb63e`
-- `surface-today-carousel-desktop.png` — 133202 bytes, SHA-256 `4ec90cdcda39f3bfa7aed08945c223b0837df687831a30fc265ab3851874bb14`
-- `surface-triage-desktop.png` — 140243 bytes, SHA-256 `9139dc4631c1645f779dedfd448128f884878c1cdfdd057a96d5773adadf4e7d`
-- `surface-comms-focus-desktop.png` — 236780 bytes, SHA-256 `872d68fe125853de22b5dee0cf5a363227923cfd92cc8ae00a114d42f2e75b11`
-- `surface-reminders-desktop.png` — 199170 bytes, SHA-256 `5a24126228f4c8a47c3275b1f1ca2b77effbcfa385f612d15cd4f025c4ed5aef`
-- `surface-people-desktop.png` — 112271 bytes, SHA-256 `f9aad39be7ebd9906881c5a4e468a705100d243e6d6f883e222f71781e7889a8`
-- `surface-knowledge-desktop.png` — 114145 bytes, SHA-256 `e4f9aeb9bbe7ad60f6cdc4b62606cc561a40a85f7bc72f54b12f35b58e664021`
-- `surface-finance-desktop.png` — 96877 bytes, SHA-256 `8c299b3520a16646b963a6af408e3597a03b105e662f97e10ae617e398027f4b`
-- `surface-calendar-week-desktop.png` — 314096 bytes, SHA-256 `a51d1052c98d3282c57fd68b201d0056a4bd2255e96280ff4e224f6209e6d8f4`
-- `surface-calendar-month-desktop.png` — 197610 bytes, SHA-256 `41bb4c26d73e5b6bcc3dc52b00ee5b4a8c0b2b8ff18c5e81c4f5fd2720219f44`
-- `surface-scoreboard-desktop.png` — 110285 bytes, SHA-256 `65cc77fdee481d7ea2075a9e9dc8f828a5cbfcd0bac0d9ced93c363e7c9632aa`
-- `surface-settings-desktop.png` — 233675 bytes, SHA-256 `561ac57435d86e9a627a1814ba99a91bc8ab00c282f33f1f1ab3a7534f279c07`
-- `surface-comms-focus-narrow.png` — 150304 bytes, SHA-256 `7013073ca06eeac6382856fc832f06902a13081f0942f1f5f12b75e5c960b198`
-- `mode-compressed-observation-tablet.png` — 126432 bytes, SHA-256 `2c6272f58b5a0cb9e9c2aeb0c3d13473c1320e9b60b10709b9af08862acb432f`
-- `adult-chat-streamed-tablet.png` — 109493 bytes, SHA-256 `68fae741f19e68ec6f355402390e2f6307f1f1c22ad2c7f17129334faf561e82`
-- `quest-private-compressed.png` — 186221 bytes, SHA-256 `a3cffc285744dd3cd256e7c11683a8c645388e7ad927662bf9a67681529d7455`
-- `quest-promoted-carousel.png` — 200154 bytes, SHA-256 `498bd5847ba02db6dabda12994dbc36d65b04d20882003e59c7b72950537ab38`
-- `quest-archived-bookmark.png` — 105943 bytes, SHA-256 `369ef0fb43cfa507d26d3c0e09235087bcd892d7f777f11e3042411c465cef27`
-- `quest-expired-bookmark.png` — 105943 bytes, SHA-256 `369ef0fb43cfa507d26d3c0e09235087bcd892d7f777f11e3042411c465cef27`
-- `mode-child-today-narrow.png` — 92591 bytes, SHA-256 `5c895a8b463d4a23600d7b3a12983d3b017fbec55cef81015446beab083cc432`
-- `mode-child-scoreboard-narrow.png` — 49989 bytes, SHA-256 `c6c297a4ce74f87aa31a01a8321242b14db7bef29375e5df9b936062b9ca47d1`
-- `shared-screen-scoreboard.png` — 82792 bytes, SHA-256 `b48fc482ce8b80b622735ad38a1329c5527794ee9ea5490302d984e0f4c189fa`
-- `adult-chat-degraded-domain-healthy.png` — 168026 bytes, SHA-256 `373f57c749f492eef9a06ea5b1f97388fb63a56c15dd32af39baebe678eef7ec`
+- `surface-today-day-brief-desktop.png` — 268222 bytes, SHA-256 `8e4273166f113c5fe9eb07ad5eea78070a4ee4e8cee701fe345a68fc6a757ab7`
+- `surface-today-carousel-desktop.png` — 151205 bytes, SHA-256 `c27f28b96edadd3ce4012c45ed50577556b8f240564d5002751950b87ded41ee`
+- `surface-triage-desktop.png` — 261889 bytes, SHA-256 `0c571a96d29ef2ccf75bbbc7786ed1577819843b70f2c4a5f23427bbcd15555c`
+- `surface-comms-focus-desktop.png` — 289856 bytes, SHA-256 `cfca22415a93d4427a3b5564c35c63a05844be2616ba6a11c83995c5983b9cc6`
+- `surface-reminders-desktop.png` — 215997 bytes, SHA-256 `46677873be139c8bf5d2b25a03bef6c2baee99ed9c6a37361dbb8a386d54ff7e`
+- `surface-people-desktop.png` — 128732 bytes, SHA-256 `4266c2e9da0492aaa567e41ca573809c9539ed76add057ec04600ac983a20f1c`
+- `surface-notes-meetings-desktop.png` — 265243 bytes, SHA-256 `2db9883f0049e04c42740bdebe7f0f35cc1a6680cda8aeb611acae56da62ae12`
+- `surface-finance-desktop.png` — 106764 bytes, SHA-256 `0bd0e8ede0647ce267ec59e5b53ddd450b1ea8b3f135f37c456afa6c2cd05fb3`
+- `surface-calendar-week-desktop.png` — 345916 bytes, SHA-256 `962cd9542d21330529f2e5deaa56b3212d41ca9eb01fc90f75ec1c6323a1ccfe`
+- `surface-calendar-month-desktop.png` — 221181 bytes, SHA-256 `37a91ad4e9c741a885c08cc859e21ff2e613ee9eec60537c37ebc18a7b281ef8`
+- `surface-scoreboard-desktop.png` — 120849 bytes, SHA-256 `fd7c0f792915917a2eb55fc58c53abbb4da850546ec724670c9d8a103d6c54ea`
+- `surface-settings-desktop.png` — 276653 bytes, SHA-256 `7b72f6a036c22aa477683c54dc18f44b21d5ba96ea7d59e1a4c44914f24de724`
+- `surface-comms-focus-narrow.png` — 177622 bytes, SHA-256 `90feeea27b5af90c3d19084bfa4f90e8732022cd656a8dcccc5e50f2711cae6f`
+- `surface-notes-narrow.png` — 195957 bytes, SHA-256 `dba333b6a3c968dc0825549678f478f4150389d5c380cba7fc5d5e4b6b834ca5`
+- `mode-compressed-observation-tablet.png` — 150297 bytes, SHA-256 `56b907bf4fc158ae4c587fdeece3b9e3a49d0fa9ea5e327ee1cb68ba62a927ab`
+- `adult-chat-streamed-tablet.png` — 123377 bytes, SHA-256 `230490d6902078eb7133b7cd20b3859a63b47d37dc0bdf98036314cc4745147a`
+- `quest-private-compressed.png` — 198236 bytes, SHA-256 `5475df1642430e01ffb517ac861dc93157696a09b8e1b454cfdfd4981d8cf5cb`
+- `quest-promoted-carousel.png` — 213343 bytes, SHA-256 `e6bec3d8f76e4926906d21b6a84c2f44006698ae6e37a149716d09593493303c`
+- `quest-archived-bookmark.png` — 106849 bytes, SHA-256 `0744a8393312b2807cca36b4e92e2957cf76daab22c68a08035061b24d8718e3`
+- `quest-expired-bookmark.png` — 106849 bytes, SHA-256 `0744a8393312b2807cca36b4e92e2957cf76daab22c68a08035061b24d8718e3`
+- `mode-child-today-narrow.png` — 107430 bytes, SHA-256 `34212b2d001e5571bb762e3198202e5291fe106af3c2ed4797ac73d774c1e593`
+- `mode-child-scoreboard-narrow.png` — 60322 bytes, SHA-256 `575b425065a77f7590bf05b6efd14327c8f4514d0ea8c987d1344a4bc205995e`
+- `shared-screen-scoreboard.png` — 92830 bytes, SHA-256 `b915c7580f0171f6cd648ecae4ed63aa6dd15a2d874d641d3d79da8372900b2e`
+- `adult-chat-degraded-domain-healthy.png` — 176694 bytes, SHA-256 `bf5b0be063115bc88bb3752a70e795f13d46952c6477acae658d9e56b54c9df9`

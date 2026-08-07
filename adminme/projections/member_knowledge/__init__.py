@@ -11,7 +11,7 @@ from adminme.projections.member_knowledge.handlers import EVENT_TYPES, apply_eve
 
 class MemberKnowledgeProjection(Projection):
     name = "member_knowledge"
-    version = 2
+    version = 3
     subscribes_to = sorted(EVENT_TYPES)
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -24,6 +24,8 @@ class MemberKnowledgeProjection(Projection):
         }
         additions = {
             "body_format": "TEXT NOT NULL DEFAULT 'plain'",
+            "source_type": "TEXT NOT NULL DEFAULT 'note'",
+            "source_url": "TEXT",
             "account_external_id": "TEXT",
             "account_name": "TEXT",
             "folder_external_id": "TEXT",
@@ -36,6 +38,7 @@ class MemberKnowledgeProjection(Projection):
             "pinned": "INTEGER",
             "tags_json": "TEXT",
             "attachments_json": "TEXT NOT NULL DEFAULT '[]'",
+            "interaction_id": "TEXT",
             "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
             "capability_warnings_json": "TEXT NOT NULL DEFAULT '[]'",
         }

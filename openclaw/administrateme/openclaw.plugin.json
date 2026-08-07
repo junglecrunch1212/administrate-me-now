@@ -76,9 +76,9 @@
         "description": "Scope-filtered CRM people and interaction context."
       },
       {
-        "id": "capture.knowledge",
-        "method": "administrateme.dashboard.knowledge",
-        "description": "Authorized knowledge, artifact, and list read surface."
+        "id": "notes.recall",
+        "method": "administrateme.dashboard.notes",
+        "description": "Member-private authorized Notes recall, provenance, source capability, sharing, and Triage status."
       },
       {
         "id": "finance.recent",

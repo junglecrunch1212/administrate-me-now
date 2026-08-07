@@ -7,6 +7,7 @@ state (§2 invariant 4). Keyed by ``(tenant_id, embedding_id)``.
 
 Subscribed event types:
 - ``embedding.generated`` → INSERT/REPLACE into vec0 + sidecar meta
+- ``embedding.revoked`` → remove the exact derived vector and sidecar row
 
 [§13.8] privileged content is filtered at write time. Either envelope-
 or payload-level ``sensitivity == 'privileged'`` drops the event with an
@@ -32,9 +33,39 @@ _log = logging.getLogger(__name__)
 
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     event_type = envelope["type"]
-    if event_type != "embedding.generated":
+    if event_type == "embedding.generated":
+        apply_embedding_generated(envelope, conn)
+    elif event_type == "embedding.revoked":
+        apply_embedding_revoked(envelope, conn)
+
+
+def apply_embedding_revoked(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    p = envelope["payload"]
+    existing = conn.execute(
+        """
+        SELECT 1 FROM embeddings_meta
+         WHERE tenant_id=? AND embedding_id=?
+           AND linked_kind=? AND linked_id=?
+        """,
+        (
+            envelope["tenant_id"],
+            p["embedding_id"],
+            p["linked_kind"],
+            p["linked_id"],
+        ),
+    ).fetchone()
+    if existing is None:
         return
-    apply_embedding_generated(envelope, conn)
+    conn.execute(
+        "DELETE FROM vector_index WHERE embedding_id=?",
+        (p["embedding_id"],),
+    )
+    conn.execute(
+        "DELETE FROM embeddings_meta WHERE tenant_id=? AND embedding_id=?",
+        (envelope["tenant_id"], p["embedding_id"]),
+    )
 
 
 def apply_embedding_generated(

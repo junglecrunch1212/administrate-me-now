@@ -73,7 +73,7 @@ unchanged.
 
 ## Routes and experience modes
 
-- Adults: Today, Triage, Comms, Reminders, Calendar, People, Knowledge, Finance,
+- Adults: Today, Triage, Comms, Reminders, Calendar, People, Notes, Finance,
   Scoreboard, Settings.
 - Children: Today and Scoreboard.
 - Shared screens/devices: Scoreboard.
@@ -82,7 +82,13 @@ unchanged.
 - Compressed: minimalist/dense queue, restrained animation, strict proactive
   cap.
 - Child: warm language/rewards, no Comms/adult communications, Reminders, CRM, finance,
-  knowledge, settings, or operator control.
+  Notes, settings, or operator control.
+
+Notes is a private source/search/master-detail workspace with All, Recent,
+Shared, Meetings, and Needs Triage lenses. Provider sharing is explanatory
+evidence only; one explicit AdministrateMe grant controls each shared
+reference. Notes renders untrusted content as text, exposes provenance and
+source limits, and links candidates to Triage without an inline approval path.
 
 Calendar is the deterministic time-capacity cockpit, not a raw provider list.
 Calendar-list observations record capabilities; principal-approved per-member

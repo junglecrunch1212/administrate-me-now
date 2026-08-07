@@ -1,0 +1,13 @@
+pack:
+  id: skill:extract_note_semantics
+  name: Extract note semantics
+  version: 1.0.0
+  kind: skill
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+
+model:
+  preferred: anthropic/claude-haiku-4-5
+  fallback: anthropic/claude-opus-4-7
+  deterministic_mode: false

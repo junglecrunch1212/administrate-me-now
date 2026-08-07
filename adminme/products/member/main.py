@@ -25,6 +25,7 @@ from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
+from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
     ContextKind,
     ContextSource,
@@ -66,6 +67,12 @@ from adminme.projections.calendars.queries import (
 from adminme.projections.recurrences.queries import (
     get_recurrence,
     get_routine_occurrence,
+)
+from adminme.projections.member_knowledge.queries import (
+    get_visible as get_visible_note,
+    grants_for_note,
+    list_visible as list_visible_notes,
+    search_visible as search_visible_notes,
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
 from adminme.projections.lists.queries import (
@@ -312,6 +319,21 @@ class TriageDecisionRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1)
     reason: str | None = Field(default=None, max_length=500)
+
+
+class KnowledgeGrantRequest(BaseModel):
+    """One explicit owner decision to expose one note to one adult member."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    grantee_member_id: str = Field(min_length=1, max_length=240)
+    permissions: list[KnowledgeGrantPermission] = Field(min_length=1, max_length=3)
+    expires_at: datetime | None = None
+
+
+class KnowledgeGrantRevokeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
 
 
 def _runtime(request: Request) -> Any:
@@ -760,6 +782,38 @@ def _materialization_envelopes(
                     "energy": candidate.get("energy"),
                     "effort_min": candidate.get("effort_min"),
                     "source_commitment_id": candidate.get("source_commitment_id"),
+                },
+            )
+        ]
+    if target_kind == "recurrence":
+        rrule = str(candidate.get("rrule") or "").strip()
+        next_occurrence = str(candidate.get("next_occurrence") or "").strip()
+        if not rrule or not next_occurrence:
+            raise HTTPException(
+                422, "a recurrence requires an RRULE and next occurrence"
+            )
+        linked_kind = str(candidate.get("linked_kind") or "party")
+        linked_id = str(candidate.get("linked_id") or target_member)
+        if linked_kind not in {"party", "asset", "account", "household"}:
+            raise HTTPException(422, "unsupported recurrence relationship")
+        return [
+            EventEnvelope(
+                **common,
+                type="recurrence.added",
+                schema_version=1,
+                idempotency_key=(
+                    f"triage:materialize:{item['proposal_id']}:recurrence"
+                ),
+                payload={
+                    "recurrence_id": f"triage_recurrence_{item['proposal_id']}",
+                    "linked_kind": linked_kind,
+                    "linked_id": linked_id,
+                    "kind": str(candidate.get("kind") or "household_rhythm"),
+                    "rrule": rrule,
+                    "next_occurrence": next_occurrence,
+                    "lead_time_days": int(candidate.get("lead_time_days") or 0),
+                    "trackable": bool(candidate.get("trackable", False)),
+                    "notes": candidate.get("notes") or title,
                 },
             )
         ]
@@ -2201,6 +2255,9 @@ async def member_page(
     if surface == "inbox":
         authorize_surface(session, "triage")
         return RedirectResponse(url="/member/triage", status_code=308)
+    if surface == "knowledge":
+        authorize_surface(session, "notes")
+        return RedirectResponse(url="/member/notes", status_code=308)
     authorize_surface(session, surface)
     return _member_index_response()
 
@@ -2282,6 +2339,12 @@ async def surface(
             "deprecated_alias": "inbox",
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
+    if surface == "knowledge":
+        return {
+            **build_surface(_runtime(request), session, "notes"),
+            "deprecated_alias": "knowledge",
+            "canonical_path": "/api/member/v1/surfaces/notes",
+        }
     return build_surface(
         _runtime(request),
         session,
@@ -2289,6 +2352,307 @@ async def surface(
         calendar_anchor=calendar_date,
         calendar_view=view,
     )
+
+
+def _require_private_notes(session: Session) -> None:
+    if session.auth_role in {"ambient", "device", "child"}:
+        raise HTTPException(403, "Notes is private to an authenticated adult member")
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Notes is unavailable while viewing another member")
+
+
+def _notes_access_fingerprint(
+    action: str,
+    *,
+    knowledge_id: str,
+    grant_id: str | None,
+    values: dict[str, Any],
+) -> str:
+    canonical = json.dumps(
+        {
+            "action": action,
+            "knowledge_id": knowledge_id,
+            "grant_id": grant_id,
+            "values": values,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _prior_notes_access_command(
+    runtime: Any,
+    session: Session,
+    *,
+    action: str,
+    request_id: str,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    key = f"notes:{action}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior["raw_ref"] != f"request-sha256:{fingerprint}":
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        )
+    return prior
+
+
+@router.get("/api/member/v1/notes")
+async def notes_list(request: Request, session: SessionDep) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    return {
+        "member_id": session.auth_member_id,
+        "items": list_visible_notes(
+            runtime.projections.connection("member_knowledge"), session
+        ),
+    }
+
+
+@router.get("/api/member/v1/notes/search")
+async def notes_search(
+    request: Request,
+    session: SessionDep,
+    q: Annotated[str, Query(min_length=1, max_length=500)],
+    source: Annotated[str | None, Query(max_length=100)] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 25,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    items = search_visible_notes(
+        runtime.projections.connection("member_knowledge"),
+        session,
+        query=q,
+        limit=limit,
+        source_kind=source,
+    )
+    return {
+        "member_id": session.auth_member_id,
+        "query": q,
+        "source": source,
+        "items": items,
+        "contract": "deterministic-authorized-full-text-v1",
+    }
+
+
+@router.get("/api/member/v1/notes/{knowledge_id}")
+async def notes_detail(
+    knowledge_id: str, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "Notes projection unavailable")
+    conn = runtime.projections.connection("member_knowledge")
+    note = get_visible_note(conn, session, knowledge_id=knowledge_id)
+    if note is None:
+        raise HTTPException(404, "note not found")
+    note["grants"] = (
+        grants_for_note(conn, session, knowledge_id=knowledge_id)
+        if note.get("access_mode") == "owner"
+        else []
+    )
+    return note
+
+
+@router.post("/api/member/v1/notes/{knowledge_id}/grants", status_code=202)
+async def grant_note_access(
+    knowledge_id: str,
+    body: KnowledgeGrantRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    permissions = set(body.permissions)
+    if "search" in permissions:
+        permissions.add("read")
+    expires_at = body.expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+            raise HTTPException(422, "note grant expiry requires a timezone")
+        expires_at = expires_at.astimezone(timezone.utc)
+    fingerprint = _notes_access_fingerprint(
+        "grant",
+        knowledge_id=knowledge_id,
+        grant_id=None,
+        values={
+            "grantee_member_id": body.grantee_member_id,
+            "permissions": sorted(permissions),
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+    prior = await _prior_notes_access_command(
+        runtime,
+        session,
+        action="grant",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "grant_id": prior["payload"]["grant_id"],
+            "event_id": prior["event_id"],
+        }
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(422, "note grant expiry must be in the future")
+    conn = runtime.projections.connection("member_knowledge")
+    note = get_visible_note(conn, session, knowledge_id=knowledge_id)
+    if note is None or note.get("access_mode") != "owner":
+        raise HTTPException(404, "owned note not found")
+    if note.get("sensitivity") == "privileged":
+        raise HTTPException(403, "privileged notes cannot be shared")
+    role = runtime.settings.member_roles.get(body.grantee_member_id)
+    if role in {None, "device", "child"}:
+        raise HTTPException(
+            422, "Notes may only be shared with an enrolled adult member"
+        )
+    if body.grantee_member_id == session.auth_member_id:
+        raise HTTPException(422, "a note is already visible to its owner")
+    grant_id = (
+        "note_grant_"
+        + hashlib.sha256(
+            f"{session.tenant_id}:{knowledge_id}:{body.grantee_member_id}".encode()
+        ).hexdigest()[:24]
+    )
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "grant_id": grant_id,
+        "knowledge_id": knowledge_id,
+        "owner_member_id": session.auth_member_id,
+        "grantee_member_id": body.grantee_member_id,
+        "permissions": sorted(permissions),
+        "granted_at": now,
+        "expires_at": expires_at,
+    }
+    await _guard_member_write(
+        runtime, session, "member_knowledge.access_granted", payload
+    )
+    envelope = EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type="member_knowledge.access_granted",
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity="normal",
+        actor_identity=session.auth_member_id,
+        correlation_id=session.correlation_id,
+        idempotency_key=f"notes:grant:{session.auth_member_id}:{body.request_id}",
+        raw_ref=f"request-sha256:{fingerprint}",
+        payload=payload,
+    )
+    try:
+        event_id = await runtime.events.write(envelope)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        ) from exc
+    await runtime.wait_for_projection("member_knowledge", event_id)
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "grant_id": grant_id,
+        "event_id": event_id,
+    }
+
+
+@router.post(
+    "/api/member/v1/notes/{knowledge_id}/grants/{grant_id}/revoke",
+    status_code=202,
+)
+async def revoke_note_access(
+    knowledge_id: str,
+    grant_id: str,
+    body: KnowledgeGrantRevokeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_private_notes(session)
+    runtime = _runtime(request)
+    if runtime.projections is None or runtime.event_log is None:
+        raise HTTPException(503, "Notes authorization storage unavailable")
+    fingerprint = _notes_access_fingerprint(
+        "revoke",
+        knowledge_id=knowledge_id,
+        grant_id=grant_id,
+        values={},
+    )
+    prior = await _prior_notes_access_command(
+        runtime,
+        session,
+        action="revoke",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "grant_id": prior["payload"]["grant_id"],
+            "event_id": prior["event_id"],
+        }
+    conn = runtime.projections.connection("member_knowledge")
+    grants = grants_for_note(conn, session, knowledge_id=knowledge_id)
+    grant = next((row for row in grants if row["grant_id"] == grant_id), None)
+    if grant is None:
+        raise HTTPException(404, "note grant not found")
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "grant_id": grant_id,
+        "owner_member_id": session.auth_member_id,
+        "revoked_by_member_id": session.auth_member_id,
+        "revoked_at": now,
+    }
+    await _guard_member_write(
+        runtime, session, "member_knowledge.access_revoked", payload
+    )
+    envelope = EventEnvelope(
+        event_at_ms=int(time.time() * 1000),
+        tenant_id=session.tenant_id,
+        type="member_knowledge.access_revoked",
+        schema_version=1,
+        occurred_at=now,
+        source_adapter="member-portal",
+        source_account_id=session.auth_member_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        sensitivity="normal",
+        actor_identity=session.auth_member_id,
+        correlation_id=session.correlation_id,
+        idempotency_key=f"notes:revoke:{session.auth_member_id}:{body.request_id}",
+        raw_ref=f"request-sha256:{fingerprint}",
+        payload=payload,
+    )
+    try:
+        event_id = await runtime.events.write(envelope)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior Notes authorization body"
+        ) from exc
+    await runtime.wait_for_projection("member_knowledge", event_id)
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "grant_id": grant_id,
+        "event_id": event_id,
+    }
 
 
 @router.post("/api/member/v1/calendar/onboarding", status_code=202)

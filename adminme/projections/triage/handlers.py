@@ -191,11 +191,12 @@ def _resolve(
     resolved_at: str,
     resolved_by: str,
     materialized_event_ids: list[str] | None = None,
+    resolution_reason: str | None = None,
 ) -> None:
     conn.execute(
         """UPDATE triage_items
               SET state=?, resolved_at=?, resolved_by=?,
-                  materialized_event_ids_json=?, last_event_id=?
+                  materialized_event_ids_json=?, resolution_reason=?, last_event_id=?
             WHERE tenant_id=? AND proposal_id=? AND state='pending_review'
               AND last_event_id < ?""",
         (
@@ -203,6 +204,7 @@ def _resolve(
             resolved_at,
             resolved_by,
             _json(materialized_event_ids or []),
+            resolution_reason,
             envelope["event_id"],
             envelope["tenant_id"],
             proposal_id,
@@ -268,6 +270,17 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             proposal_id=payload["proposal_id"],
             resolved_at=payload["dismissed_at"],
             resolved_by=payload["dismissed_by_member_id"],
+            resolution_reason=payload.get("reason"),
+        )
+    elif event_type == "triage.item.superseded":
+        _resolve(
+            envelope,
+            conn,
+            state="dismissed",
+            proposal_id=payload["proposal_id"],
+            resolved_at=payload["superseded_at"],
+            resolved_by="system:source_changed",
+            resolution_reason=payload["reason"],
         )
     elif event_type == "commitment.dismissed":
         _resolve(

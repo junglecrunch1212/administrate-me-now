@@ -31,8 +31,9 @@ flowchart LR
 |---|---|---|
 | Household truth and history | AdministrateMe event log | Append first; preserve owner, visibility, sensitivity, source, correlation, and causation. |
 | Replay and reads | Thirteen domain projections plus derived Triage | Deterministic apply, checkpoint resume, scoped queries, rebuild from event zero. |
-| Member knowledge | `member_knowledge` plus Cat-D bridge | Explicit Apple Notes, Voice Memos, and optional adult Obsidian sources only; never generic conversation memory. |
-| Semantic search | `vector_search` | Domain records only; privileged material is never embedded and owner scope is enforced. |
+| Member Notes | `member_knowledge` plus Cat-D bridge | Provider-neutral, loss-aware Apple Notes, Voice Memos, Obsidian/Markdown, Evernote, Otter, Fathom, Zoom, and optional Notion source contracts; schema support is not a live-adapter claim; never generic conversation memory. |
+| Authorized recall/search | `member_knowledge` FTS plus `vector_search` | Query-time owner or explicit adult grant; privileged material is never indexed/model-processed; source deletion or sensitivity change revokes derivatives. |
+| Notes semantics | `skill:extract_note_semantics` plus deterministic pipeline | One authorized non-privileged note may yield exact-evidence Triage candidates only; code owns threshold, allowlists, scope, type, and route. |
 | Scheduling | OpenClaw automations | AdministrateMe stores program contracts and trigger evidence but runs no product cron. |
 | Delivery | OpenClaw plugin | AdministrateMe emits signal/decision; only a delivery-result callback may assert an outcome. |
 | Model/provider routing | OpenClaw | AdministrateMe makes one pinned skill request and records returned provenance. |

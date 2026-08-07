@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ from adminme.projections.lists.queries import (
     open_items_for_member,
     reminder_cues_for_member,
 )
-from adminme.projections.member_knowledge.queries import list_visible
+from adminme.projections.member_knowledge.queries import grants_for_note, list_visible
 from adminme.projections.money.queries import flows_in_range
 from adminme.projections.parties.queries import (
     all_parties,
@@ -69,7 +70,7 @@ ADULT_SURFACES = (
     "reminders",
     "calendar",
     "people",
-    "knowledge",
+    "notes",
     "finance",
     "scoreboard",
     "settings",
@@ -83,7 +84,7 @@ SURFACE_LABELS = {
     "comms": "Comms",
     "reminders": "Reminders",
     "people": "People",
-    "knowledge": "Knowledge",
+    "notes": "Notes",
     "finance": "Finance",
     "calendar": "Calendar",
     "scoreboard": "Scoreboard",
@@ -485,6 +486,11 @@ def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
             missing.append("start")
         if not candidate.get("end"):
             missing.append("end")
+    if target == "recurrence":
+        if not candidate.get("rrule"):
+            missing.append("rrule")
+        if not candidate.get("next_occurrence"):
+            missing.append("next_occurrence")
     if target == "party_identifier":
         for field in (
             "surviving_party_id",
@@ -901,15 +907,119 @@ def build_surface(
         base["recent_interactions"] = recent(
             runtime.projections.connection("interactions"), session, limit=20
         )
-    elif surface == "knowledge":
-        base["knowledge"] = list_visible(
-            runtime.projections.connection("member_knowledge"), session
+    elif surface == "notes":
+        knowledge_conn = runtime.projections.connection("member_knowledge")
+        notes = list_visible(knowledge_conn, session)
+        triage_items = pending_triage(
+            runtime.projections.connection("triage"), session, member_id=member
         )
-        base["artifacts"] = list_recent(
+        triage_by_source: dict[str, list[dict[str, Any]]] = {}
+        for item in triage_items:
+            triage_by_source.setdefault(
+                str(item.get("source_event_id") or ""), []
+            ).append(item)
+        for note in notes:
+            note_candidates = triage_by_source.get(
+                str(note.get("last_event_id") or ""), []
+            )
+            note["triage_count"] = len(note_candidates)
+            note["triage_href"] = (
+                f"/member/triage?item={note_candidates[0]['proposal_id']}"
+                if note_candidates
+                else None
+            )
+            note["grants"] = (
+                grants_for_note(
+                    knowledge_conn, session, knowledge_id=str(note["knowledge_id"])
+                )
+                if note.get("access_mode") == "owner"
+                else []
+            )
+        source_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        for note in notes:
+            key = (
+                str(note.get("source_kind") or "unknown"),
+                str(
+                    note.get("account_external_id")
+                    or note.get("source_account_id")
+                    or ""
+                ),
+            )
+            source = source_rows.setdefault(
+                key,
+                {
+                    "source_kind": key[0],
+                    "account_external_id": key[1],
+                    "account_name": note.get("account_name"),
+                    "count": 0,
+                    "latest_at": None,
+                    "state": "ready",
+                    "warnings": [],
+                },
+            )
+            source["count"] += 1
+            captured = note.get("provider_modified_at") or note.get("captured_at")
+            if captured and (
+                source["latest_at"] is None or str(captured) > source["latest_at"]
+            ):
+                source["latest_at"] = str(captured)
+            raw_warnings = note.get("capability_warnings_json") or "[]"
+            try:
+                warnings = (
+                    json.loads(raw_warnings)
+                    if isinstance(raw_warnings, str)
+                    else raw_warnings
+                )
+            except json.JSONDecodeError:
+                warnings = ["provider_capability_unknown"]
+            if warnings:
+                source["state"] = "limited"
+                source["warnings"] = sorted(
+                    set([*source["warnings"], *[str(value) for value in warnings]])
+                )
+        base["notes"] = notes
+        base["meeting_artifacts"] = list_recent(
             runtime.projections.connection("artifacts"), session, limit=30
         )
-        base["lists"] = open_items_for_member(
-            runtime.projections.connection("lists"), session, member_id=member
+        base["sources"] = sorted(
+            source_rows.values(),
+            key=lambda row: (str(row["source_kind"]), str(row["account_external_id"])),
+        )
+        parties = all_parties(runtime.projections.connection("parties"), session)
+        base["sharing_members"] = [
+            {
+                "member_id": party["party_id"],
+                "label": party.get("display_name") or "Household member",
+                "role": runtime.settings.member_roles.get(party["party_id"]),
+            }
+            for party in parties
+            if party["party_id"] != session.auth_member_id
+            and runtime.settings.member_roles.get(party["party_id"])
+            not in {None, "device", "child"}
+        ]
+        base["counts"] = {
+            "notes": len(notes),
+            "shared_with_me": sum(
+                1 for note in notes if note.get("access_mode") == "shared_reference"
+            ),
+            "meeting_notes": sum(
+                1 for note in notes if note.get("source_type") == "meeting_note"
+            ),
+            "triage": sum(int(note.get("triage_count") or 0) for note in notes),
+        }
+        base["contract"] = {
+            "source_apps_authoritative": True,
+            "provider_sharing_is_not_authorization": True,
+            "triage_is_only_promotion_gate": True,
+            "model_decides_scope_or_route": False,
+            "privileged_model_processing": False,
+        }
+        base["freshness"] = surface_freshness(
+            generated_at=now,
+            latest_source_at=_latest_time(notes, "provider_modified_at", "captured_at"),
+            stale_after_seconds=604800,
+            row_count=len(notes),
+            configured=bool(source_rows),
         )
     elif surface == "finance":
         if session.auth_role == "child":

@@ -115,8 +115,12 @@ operator selects that integration:
 - Calendar: permits that member bridge to read/write the selected calendars.
 - Reminders: permits only the selected member's reminders and shared lists.
 - Contacts: permits contact synchronization selected during enrollment.
-- Notes: Apple has no general server API; the bridge uses the documented local
-  mechanism and member ownership rules.
+- Notes: Apple has no general server API; the member bridge uses the documented
+  local mechanism, retains exact account/folder/revision provenance, and must
+  never infer AdministrateMe access from an Apple-native share. The Notes
+  surface is self-only unless the owner records one explicit non-privileged
+  adult grant. Evernote, Obsidian, Otter, Fathom, Zoom, and Notion are disabled
+  until their own reviewed adapter and member consent are configured.
 - Microphone/Voice Memos: required only for the optional Voice Memos bridge.
 
 OAuth opens the provider's own page. Confirm the expected provider and least

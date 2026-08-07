@@ -24,6 +24,11 @@ const state = {
   calendarHiddenSources: [],
   calendarSelectedEvent: null,
   calendarDuration: 60,
+  notesLens: "all",
+  notesSource: "all",
+  notesSelected: null,
+  notesQuery: "",
+  notesResults: null,
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -123,6 +128,9 @@ async function reloadActiveSurface() {
     if (state.calendarAnchor) params.set("date", state.calendarAnchor);
     path += `?${params}`;
   }
+  if (active === "notes") {
+    state.notesResults = null; state.notesQuery = ""; replaceQuery({ q: null });
+  }
   renderSurface(await api(path));
 }
 
@@ -179,7 +187,7 @@ async function saveTriageForm(item, form) {
   const values = new FormData(form);
   const targetKind = String(values.get("target_kind") || item.target_kind);
   const candidateUpdates = {};
-  for (const key of ["due", "start", "end", "owed_to_party_id"]) {
+  for (const key of ["due", "start", "end", "owed_to_party_id", "rrule", "next_occurrence", "recurrence_text", "notes"]) {
     const value = String(values.get(key) || "").trim();
     if (value) candidateUpdates[key] = value;
   }
@@ -235,7 +243,7 @@ function triageDetail(item, data, readOnly = false) {
   const grid = document.createElement("div"); grid.className = "field-grid";
   const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
   grid.append(field("Review title", title, "field-span"));
-  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "party_identifier"].map((value) => ({ value, label: titleCase(value) }));
+  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier"].map((value) => ({ value, label: titleCase(value) }));
   const target = selectControl(targetOptions, item.target_kind, ""); target.name = "target_kind"; target.disabled = item.source_kind === "commitment_proposal";
   grid.append(field("Creates", target));
   const members = (data.destinations?.members || []).map((value) => ({ value: value.member_id, label: `${value.label} · ${value.role || "member"}` }));
@@ -251,6 +259,12 @@ function triageDetail(item, data, readOnly = false) {
     const start = document.createElement("input"); start.name = "start"; start.value = candidate.start || candidate.due || ""; start.placeholder = "ISO 8601 with time zone";
     const end = document.createElement("input"); end.name = "end"; end.value = candidate.end || ""; end.placeholder = "ISO 8601 with time zone";
     grid.append(field("Starts", start), field("Ends", end));
+  } else if (item.target_kind === "recurrence") {
+    const rrule = document.createElement("input"); rrule.name = "rrule"; rrule.value = candidate.rrule || ""; rrule.placeholder = "For example: FREQ=WEEKLY;BYDAY=FR";
+    const next = document.createElement("input"); next.name = "next_occurrence"; next.value = candidate.next_occurrence || ""; next.placeholder = "ISO 8601 with time zone";
+    const recurrenceText = document.createElement("input"); recurrenceText.name = "recurrence_text"; recurrenceText.value = candidate.recurrence_text || ""; recurrenceText.placeholder = "Source wording, if useful";
+    const notes = document.createElement("input"); notes.name = "notes"; notes.value = candidate.notes || ""; notes.placeholder = "Optional context";
+    grid.append(field("Recurrence rule", rrule), field("Next occurrence", next), field("Source wording", recurrenceText), field("Notes", notes));
   } else if (["task", "commitment", "reminder", "list_item"].includes(item.target_kind)) {
     const due = document.createElement("input"); due.name = "due"; due.value = candidate.due || candidate.due_at || ""; due.placeholder = "Optional ISO 8601 date/time";
     grid.append(field("Due", due));
@@ -441,6 +455,10 @@ function setBanner(message) {
   const banner = $("#state-banner");
   banner.hidden = false;
   banner.textContent = message;
+}
+
+function clearBanner() {
+  const banner = $("#state-banner"); banner.hidden = true; banner.textContent = "";
 }
 
 async function executeTodayAction(item, action, container) {
@@ -1508,6 +1526,232 @@ function renderReminders(data) {
   workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
 }
 
+function parseJsonList(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function noteSourceLabel(note) {
+  return note.account_name || titleCase(note.source_kind || "note source");
+}
+
+function noteTimestamp(note) {
+  const value = note.provider_modified_at || note.captured_at;
+  if (!value) return "Time unavailable";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Time unavailable";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(parsed);
+}
+
+function notePlainBody(note) {
+  const body = String(note.body || "");
+  if (note.body_format !== "html") return body;
+  return new DOMParser().parseFromString(body, "text/html").body.textContent || "";
+}
+
+function noteSourceKey(note) {
+  return `${note.source_kind || "unknown"}|${note.account_external_id || note.source_account_id || ""}`;
+}
+
+function noteMatchesLens(note) {
+  if (state.notesSource !== "all" && noteSourceKey(note) !== state.notesSource) return false;
+  if (state.notesLens === "recent") {
+    const value = new Date(note.provider_modified_at || note.captured_at || 0).getTime();
+    return value >= Date.now() - (30 * 24 * 60 * 60 * 1000);
+  }
+  if (state.notesLens === "shared") {
+    return note.access_mode === "shared_reference" || (note.grants || []).some((grant) => !grant.revoked_at);
+  }
+  if (state.notesLens === "meetings") return note.source_type === "meeting_note";
+  if (state.notesLens === "triage") return Number(note.triage_count || 0) > 0;
+  return true;
+}
+
+function notesHero(data) {
+  const counts = data.counts || {};
+  const section = document.createElement("section"); section.className = "hero-card notes-hero";
+  section.append(
+    text("p", "PRIVATE RECALL", "eyebrow"),
+    text("h2", "Write it down once. Find it when it matters.", "action-title"),
+    text("p", "Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here."),
+  );
+  const stats = document.createElement("dl"); stats.className = "brief-stats notes-stats";
+  for (const [label, value] of [["Visible notes", counts.notes || 0], ["Shared with me", counts.shared_with_me || 0], ["Meeting notes", counts.meeting_notes || 0], ["Needs Triage", counts.triage || 0]]) {
+    const item = document.createElement("div"); item.className = "stat";
+    item.append(text("dt", label), text("dd", value)); stats.append(item);
+  }
+  section.append(stats);
+  return section;
+}
+
+function notesControls(data) {
+  const section = document.createElement("section"); section.className = "card notes-controls";
+  const search = document.createElement("form"); search.className = "notes-search";
+  const input = document.createElement("input"); input.type = "search"; input.value = state.notesQuery; input.placeholder = "Search titles, notes, folders, and tags"; input.setAttribute("aria-label", "Search your authorized notes");
+  const submit = text("button", "Search", "button button-primary"); submit.type = "submit";
+  const clear = text("button", "Clear", "button button-quiet"); clear.type = "button"; clear.hidden = !state.notesQuery;
+  search.append(input, submit, clear);
+  search.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+    submit.disabled = true;
+    setBanner("Searching only notes you are authorized to search…");
+    try {
+      const params = new URLSearchParams({ q: query });
+      if (state.notesSource !== "all") params.set("source", state.notesSource.split("|")[0]);
+      const result = await api(`/api/member/v1/notes/search?${params}`);
+      const originals = new Map((data.notes || []).map((note) => [note.knowledge_id, note]));
+      state.notesQuery = query;
+      state.notesResults = result.items.map((note) => ({ ...(originals.get(note.knowledge_id) || {}), ...note }));
+      state.notesSelected = state.notesResults[0]?.knowledge_id || null;
+      replaceQuery({ q: query, note: state.notesSelected });
+      renderNotes(data);
+      setBanner(`${state.notesResults.length} authorized search result${state.notesResults.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setBanner(`${error.message} No note content was changed.`);
+      submit.disabled = false;
+    }
+  });
+  clear.addEventListener("click", () => {
+    state.notesQuery = ""; state.notesResults = null; state.notesSelected = null;
+    clearBanner(); replaceQuery({ q: null, note: null }); renderNotes(data);
+  });
+  const lenses = document.createElement("div"); lenses.className = "comms-filter-row"; lenses.setAttribute("role", "group"); lenses.setAttribute("aria-label", "Note lenses");
+  for (const [key, label] of [["all", "All"], ["recent", "Recent"], ["shared", "Shared"], ["meetings", "Meetings"], ["triage", "Needs Triage"]]) {
+    const button = text("button", label, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.notesLens === key));
+    button.addEventListener("click", () => { state.notesLens = key; state.notesSelected = null; clearBanner(); replaceQuery({ view: key, note: null }); renderNotes(data); }); lenses.append(button);
+  }
+  section.append(search, lenses);
+  return section;
+}
+
+function notesSources(data) {
+  const section = document.createElement("section"); section.className = "card notes-sources";
+  section.append(text("h2", "Sources"), text("p", "Provider access and AdministrateMe sharing stay separate.", "state-note"));
+  const list = document.createElement("div"); list.className = "notes-source-list";
+  const all = text("button", `All sources · ${(data.notes || []).length}`, "notes-source-button"); all.type = "button"; all.setAttribute("aria-current", String(state.notesSource === "all"));
+  all.addEventListener("click", () => { state.notesSource = "all"; state.notesSelected = null; state.notesResults = null; state.notesQuery = ""; clearBanner(); replaceQuery({ source: null, note: null, q: null }); renderNotes(data); }); list.append(all);
+  for (const source of data.sources || []) {
+    const key = `${source.source_kind || "unknown"}|${source.account_external_id || ""}`;
+    const button = document.createElement("button"); button.type = "button"; button.className = "notes-source-button"; button.setAttribute("aria-current", String(state.notesSource === key));
+    const name = source.account_name || titleCase(source.source_kind);
+    button.append(text("strong", name), text("small", `${source.count} note${source.count === 1 ? "" : "s"} · ${source.state === "limited" ? "Limited" : "Ready"}`));
+    if ((source.warnings || []).length) button.title = source.warnings.map(titleCase).join(" · ");
+    button.addEventListener("click", () => { state.notesSource = key; state.notesSelected = null; state.notesResults = null; state.notesQuery = ""; clearBanner(); replaceQuery({ source: key, note: null, q: null }); renderNotes(data); }); list.append(button);
+  }
+  section.append(list);
+  const settings = text("a", "Connect or review sources", "button button-quiet"); settings.href = "/member/settings"; section.append(settings);
+  return section;
+}
+
+function noteMasterList(notes, data) {
+  const section = document.createElement("section"); section.className = "card notes-master";
+  section.append(text("h2", state.notesQuery ? `Results for “${state.notesQuery}”` : titleCase(state.notesLens)));
+  if (!notes.length) {
+    section.append(text("p", state.notesQuery ? "No authorized notes match this search." : "No notes appear in this lens. Connect a member-owned source in Settings, or choose another lens.", "empty"));
+    return section;
+  }
+  const list = document.createElement("ol"); list.className = "notes-master-list";
+  for (const note of notes) {
+    const item = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "notes-master-button"; button.setAttribute("aria-current", String(note.knowledge_id === state.notesSelected));
+    const title = note.title || "Untitled note";
+    const preview = notePlainBody(note).replace(/\s+/g, " ").trim().slice(0, 130);
+    button.append(text("strong", title), text("span", preview || "No note text", "notes-preview"), text("small", `${noteSourceLabel(note)} · ${noteTimestamp(note)}`));
+    if (note.access_mode === "shared_reference") button.append(text("span", "Shared with me", "pill pill-lavender"));
+    if (note.triage_count) button.append(text("span", `${note.triage_count} in Triage`, "pill pill-blush"));
+    button.addEventListener("click", () => { state.notesSelected = note.knowledge_id; replaceQuery({ note: note.knowledge_id }); renderNotes(data); });
+    item.append(button); list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
+function noteSharing(note, data) {
+  const section = document.createElement("section"); section.className = "notes-sharing";
+  section.append(text("h3", "AdministrateMe access"), text("p", "A provider share never grants access here. Share one note explicitly and revoke it independently.", "state-note"));
+  const activeGrants = (note.grants || []).filter((grant) => !grant.revoked_at);
+  for (const grant of activeGrants) {
+    const member = (data.sharing_members || []).find((value) => value.member_id === grant.grantee_member_id);
+    const row = document.createElement("div"); row.className = "notes-grant-row";
+    const body = document.createElement("div"); body.append(text("strong", member?.label || "Enrolled household adult"), text("small", (grant.permissions || []).map(titleCase).join(" · ")));
+    const revoke = text("button", "Revoke", "link-button"); revoke.type = "button";
+    revoke.addEventListener("click", async () => {
+      revoke.disabled = true; setBanner("Revoking this AdministrateMe note grant…");
+      try {
+        await api(`/api/member/v1/notes/${encodeURIComponent(note.knowledge_id)}/grants/${encodeURIComponent(grant.grant_id)}/revoke`, {
+          method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID() }),
+        });
+        setBanner("Access revoked. Provider sharing, if any, was not changed."); await reloadActiveSurface();
+      } catch (error) { setBanner(`${error.message} Access was not changed.`); revoke.disabled = false; }
+    });
+    row.append(body, revoke); section.append(row);
+  }
+  if (!(data.sharing_members || []).length) {
+    section.append(text("p", "No other enrolled adult member is eligible for an AdministrateMe grant.", "empty"));
+    return section;
+  }
+  const form = document.createElement("form"); form.className = "notes-share-form";
+  const member = selectControl((data.sharing_members || []).map((value) => ({ value: value.member_id, label: value.label })), "", "Choose household adult…"); member.name = "member"; member.required = true;
+  const submit = text("button", "Share note", "button button-quiet"); submit.type = "submit";
+  const permission = document.createElement("input"); permission.value = "Read and search"; permission.disabled = true;
+  form.append(field("Member", member), field("Permission", permission), submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true; setBanner("Recording one explicit note grant…");
+    try {
+      await api(`/api/member/v1/notes/${encodeURIComponent(note.knowledge_id)}/grants`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({ request_id: crypto.randomUUID(), grantee_member_id: member.value, permissions: ["read", "search"] }),
+      });
+      setBanner("Note access recorded. No provider permission was changed."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} Access was not changed.`); submit.disabled = false; }
+  });
+  section.append(form);
+  return section;
+}
+
+function noteDetail(note, data) {
+  const section = document.createElement("section"); section.className = "card notes-detail";
+  if (!note) {
+    section.append(text("h2", "Choose a note"), text("p", "Select one note to read its authorized copy, provenance, sharing state, and evidence-backed Triage candidates.", "empty"));
+    return section;
+  }
+  section.append(text("p", titleCase(note.source_type || "note"), "eyebrow"), text("h2", note.title || "Untitled note"), text("p", `${noteSourceLabel(note)} · ${noteTimestamp(note)}`, "meta"));
+  const tags = parseJsonList(note.tags_json);
+  if (tags.length) { const row = document.createElement("div"); row.className = "notes-tag-row"; for (const tag of tags) row.append(text("span", tag, "pill pill-lavender")); section.append(row); }
+  const body = text("pre", notePlainBody(note) || "This provider record has no readable note text.", "notes-body"); section.append(body);
+  const actions = document.createElement("div"); actions.className = "button-row";
+  if (note.source_url && /^https?:\/\//i.test(note.source_url)) { const open = text("a", "Open in source", "button button-quiet"); open.href = note.source_url; open.target = "_blank"; open.rel = "noopener noreferrer"; actions.append(open); }
+  if (note.triage_href) { const triage = text("a", `Review ${note.triage_count} in Triage`, "button button-primary"); triage.href = note.triage_href; actions.append(triage); }
+  if (note.last_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(note.last_event_id)); actions.append(evidence); }
+  section.append(actions);
+  const facts = document.createElement("dl"); facts.className = "notes-facts";
+  for (const [label, value] of [["Folder", note.folder_path || "Provider root"], ["Access", note.access_mode === "shared_reference" ? "Explicit shared reference" : "Owner"], ["Format", titleCase(note.body_format || "plain")], ["Revision", note.provider_revision || "Unreported"]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  const warnings = parseJsonList(note.capability_warnings_json);
+  if (warnings.length) section.append(text("p", `Provider limits: ${warnings.map(titleCase).join(" · ")}.`, "possible-copy"));
+  if (note.access_mode === "owner" && note.sensitivity !== "privileged") section.append(noteSharing(note, data));
+  else if (note.sensitivity === "privileged") section.append(text("p", "Privileged notes stay owner-only and are excluded from model processing and search indexes.", "review-state"));
+  return section;
+}
+
+function renderNotes(data) {
+  const root = $("#surface"); root.replaceChildren();
+  $("#mode-label").textContent = "Private · authorized recall · deterministic Triage";
+  const notes = (state.notesResults || data.notes || []).filter(noteMatchesLens);
+  if (!state.notesSelected || !notes.some((note) => note.knowledge_id === state.notesSelected)) state.notesSelected = notes[0]?.knowledge_id || null;
+  const selected = notes.find((note) => note.knowledge_id === state.notesSelected) || null;
+  const workspace = document.createElement("div"); workspace.className = "notes-workspace";
+  workspace.append(notesSources(data), noteMasterList(notes, data), noteDetail(selected, data));
+  root.append(freshnessStrip(data), notesHero(data), notesControls(data), workspace);
+}
+
 function freshnessStrip(data) {
   const value = data.freshness;
   const strip = document.createElement("div"); strip.className = "freshness-strip";
@@ -1539,8 +1783,8 @@ function renderSurface(data) {
     renderReminders(data);
   } else if (data.surface === "people") {
     root.append(card("People", data.people, "No people are visible in this scope."), card("Recent contact", data.recent_interactions));
-  } else if (data.surface === "knowledge") {
-    root.append(card("Private knowledge", data.knowledge), card("Capture evidence", data.artifacts), card("Lists", data.lists));
+  } else if (data.surface === "notes") {
+    renderNotes(data);
   } else if (data.surface === "finance") {
     root.append(card("Recent money movement", data.flows, "Finance is connected, with no visible movement in this period."));
   } else if (data.surface === "calendar") {
@@ -1698,15 +1942,35 @@ async function initialize() {
       state.calendarAnchor = params.get("date");
       state.calendarSelectedEvent = params.get("event");
     }
+    if (active === "notes") {
+      if (["all", "recent", "shared", "meetings", "triage"].includes(requestedView)) state.notesLens = requestedView;
+      state.notesSource = params.get("source") || "all";
+      state.notesSelected = params.get("note");
+      state.notesQuery = params.get("q") || "";
+    }
     let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
     if (active === "calendar") {
       const query = new URLSearchParams({ view: state.calendarView });
       if (state.calendarAnchor) query.set("date", state.calendarAnchor);
       path += `?${query}`;
     }
-    const surfaceRequest = active.startsWith("quest:")
-      ? api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest)
-      : api(path).then(renderSurface);
+    let surfaceRequest;
+    if (active.startsWith("quest:")) {
+      surfaceRequest = api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest);
+    } else if (active === "notes") {
+      surfaceRequest = api(path).then(async (data) => {
+        if (state.notesQuery) {
+          const query = new URLSearchParams({ q: state.notesQuery });
+          if (state.notesSource !== "all") query.set("source", state.notesSource.split("|")[0]);
+          const result = await api(`/api/member/v1/notes/search?${query}`);
+          const originals = new Map((data.notes || []).map((note) => [note.knowledge_id, note]));
+          state.notesResults = result.items.map((note) => ({ ...(originals.get(note.knowledge_id) || {}), ...note }));
+        }
+        renderSurface(data);
+      });
+    } else {
+      surfaceRequest = api(path).then(renderSurface);
+    }
     await Promise.all([surfaceRequest, loadChatHistory()]);
   } catch (error) { renderFailure(error); }
 }

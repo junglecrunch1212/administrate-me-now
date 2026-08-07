@@ -12,7 +12,7 @@ AdministrateMe is a private, household-scale Chief of Staff that turns distribut
 | ADHD cognitive neuroprosthetic | Work is reduced to approachable next steps without guilt or infantilization. | Carousel, micro-script, energy/effort fit, endowed progress, variable rewards, paralysis support, concise digests, guilt filter. |
 | Household/professional CRM | Relationships have continuity across people, organizations, family roles, conversations, promises, and artifacts. | Parties, Identifiers, Memberships, Relationships, Interactions, Commitments, Artifacts. |
 | Unified communications | A member-isolated, account/workspace-aware cockpit carries working memory across person-to-person channels without duplicating assistant chat or letting a model decide priority. | Loss-aware interaction normalization, deterministic Focus/Waiting/Snoozed/Quieted rules, provider capability negotiation, Triage proposals, and governed requested/completed/failed delivery outcomes. |
-| Working memory/member knowledge | Each member’s knowledge remains theirs while supporting authorized recall and household coordination. | Cat-D member bridges, `member_knowledge`, privileged exclusion, scope-filtered `vector_search`, provenance/corrections. |
+| Working memory/Notes | Each member writes information once, recalls it across authorized sources, and may send exact evidence to the household human gate without remembering the source app. | Cat-D member bridges, provider-neutral `member_knowledge`, explicit per-note grants, privileged exclusion, deterministic FTS, revocable `vector_search`, provenance/corrections, bounded Notes-to-Triage extraction. |
 | Sensor/signal/action layer | Finance, home, calendar, lists, and other sources can be observed and acted on safely. | Cat-B/C/E adapters, typed facts, explicit verbs, observation, authorization, verification events. |
 
 The target household is multi-member, including principals, children, helpers, devices, and ambient entities. “Single hub” describes the source-of-truth deployment, not a single-user security model.
@@ -32,27 +32,28 @@ Every useful path must close this loop:
 
 A test that stops at proposal, approval, API 202, or outbound request does not prove the loop.
 
-### Five-surface member loop
+### Six-lens member loop
 
-Today, Triage, Comms, Reminders, and Calendar are five bounded lenses over that
-one loop, not five sources of truth. Comms, Calendar, and Reminders expose
+Today, Triage, Comms, Reminders, Calendar, and Notes are bounded lenses over that
+one loop, not six sources of truth. Comms, Calendar, Reminders, and Notes expose
 authorized provider observations without collapsing their domains. A
 schema-bound OpenClaw skill may extract language features, but deterministic
 pipeline rules alone decide whether a candidate is eligible for Triage.
 Triage is the only cross-domain human proposal gate and resolves an exact
 member/provider/account/container from authorized directories. Calendar
 previews time effects; Reminders preserves provider capability; Comms preserves
-thread/account/workspace context. Today then recomposes verified projection
+thread/account/workspace context. Notes preserves member/source/folder/revision
+identity, exact evidence, and independently authorized sharing. Today then recomposes verified projection
 state and deep-links back to the exact source. Shared read contracts may reduce
 working-memory load, but they never rank by model, authorize a write, or become
 a universal work object.
 
 | Loop stage | Primary member lens | Cross-surface guarantee |
 |---|---|---|
-| Observe | Comms, Reminders, Calendar | Provider/member/account/container identity remains visible and authoritative. |
+| Observe/recall | Comms, Reminders, Calendar, Notes | Provider/member/account/container or note-source/folder/revision identity remains visible and authoritative. |
 | Understand | Source lens plus bounded semantic provenance | A model reports typed language features only; deterministic code owns attention and eligibility. |
 | Organize | Source lens and deterministic projections | Read filters cannot change truth, time capacity, or authority. |
-| Propose | Triage | Only derived candidates wait; raw facts and already-official work do not. |
+| Propose | Triage | Only evidence-backed derived candidates wait; raw messages, notes, provider facts, and already-official work do not. |
 | Authorize | Triage plus source-specific action review | Exact route, capability, observation effect, and immutable evidence precede confirmation. |
 | Act/project | Typed domain/API seam | Task, commitment, calendar event, reminder/list item, recurrence, and scheduler job remain distinct. |
 | Verify | Triage Recent and source reconciliation state | Requested, suppressed, confirmed, failed, and reconciled are not interchangeable. |

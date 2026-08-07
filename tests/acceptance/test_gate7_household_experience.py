@@ -421,7 +421,7 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             "reminders",
             "calendar",
             "people",
-            "knowledge",
+            "notes",
             "finance",
             "scoreboard",
             "settings",
@@ -454,6 +454,7 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
             "comms",
             "reminders",
             "people",
+            "notes",
             "knowledge",
             "finance",
             "calendar",
@@ -470,6 +471,20 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
                 == 404
             )
 
+        legacy_notes = client.get(
+            "/member/knowledge", headers=HEADERS[ADULT], follow_redirects=False
+        )
+        assert legacy_notes.status_code == 308
+        assert legacy_notes.headers["location"] == "/member/notes"
+        legacy_notes_api = client.get(
+            "/api/member/v1/surfaces/knowledge", headers=HEADERS[ADULT]
+        )
+        assert legacy_notes_api.status_code == 200
+        assert legacy_notes_api.json()["deprecated_alias"] == "knowledge"
+        assert legacy_notes_api.json()["canonical_path"] == (
+            "/api/member/v1/surfaces/notes"
+        )
+
         screen = client.get("/api/member/v1/bootstrap", headers=HEADERS[DEVICE]).json()
         assert [item["id"] for item in screen["navigation"]] == ["scoreboard"]
         assert screen["chat"]["state"] == "unauthorized"
@@ -478,6 +493,291 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
                 "/api/member/v1/surfaces/today", headers=HEADERS[DEVICE]
             ).status_code
             == 404
+        )
+
+
+def test_ac29_notes_authorized_recall_and_explicit_grant_round_trip(
+    tmp_path: Path,
+) -> None:
+    """CO-002 process proof through the production composition root."""
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "ac29-fixture-notes",
+            "source_account_id": "fixture-notes-account",
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "actor_identity": PRINCIPAL,
+        }
+        note_payload = {
+            "knowledge_id": "ac29-meeting-note",
+            "member_id": PRINCIPAL,
+            "title": "School planning call",
+            "body": "The school planning call covered the autumn pickup routine.",
+            "body_format": "transcript",
+            "source_kind": "fathom",
+            "source_type": "meeting_note",
+            "source_external_id": "meeting-fixture-29",
+            "source_url": "https://example.invalid/meeting-fixture-29",
+            "account_external_id": "fathom-fixture-account",
+            "account_name": "Meeting notes",
+            "folder_path": "Calls/School",
+            "content_sha256": "a" * 64,
+            "captured_at": now.isoformat(),
+            "provider_modified_at": now.isoformat(),
+            "provider_revision": "fixture-revision-1",
+            "tags": ["school", "planning"],
+            "capability_warnings": ["speaker_identity_unverified"],
+        }
+        note_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="normal",
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="ac29:note",
+                payload=note_payload,
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "member_knowledge", note_id)
+        privileged_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="privileged",
+                type="member_knowledge.note_added",
+                schema_version=3,
+                idempotency_key="ac29:privileged-note",
+                payload={
+                    "knowledge_id": "ac29-privileged-note",
+                    "member_id": PRINCIPAL,
+                    "title": "Privileged fixture",
+                    "body": "privileged-corpus-canary",
+                    "source_kind": "apple_notes",
+                    "source_external_id": "privileged-fixture-29",
+                    "content_sha256": "b" * 64,
+                    "captured_at": now.isoformat(),
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "member_knowledge", privileged_id
+        )
+
+        surface = client.get(
+            "/api/member/v1/surfaces/notes", headers=HEADERS[PRINCIPAL]
+        )
+        assert surface.status_code == 200, surface.text
+        payload = surface.json()
+        assert payload["label"] == "Notes"
+        assert payload["counts"]["notes"] == 2
+        note = next(
+            row
+            for row in payload["notes"]
+            if row["knowledge_id"] == "ac29-meeting-note"
+        )
+        assert note["source_type"] == "meeting_note"
+        assert note["capability_warnings_json"] == '["speaker_identity_unverified"]'
+        assert payload["contract"] == {
+            "source_apps_authoritative": True,
+            "provider_sharing_is_not_authorization": True,
+            "triage_is_only_promotion_gate": True,
+            "model_decides_scope_or_route": False,
+            "privileged_model_processing": False,
+        }
+
+        search = client.get(
+            "/api/member/v1/notes/search?q=autumn%20pickup",
+            headers=HEADERS[PRINCIPAL],
+        )
+        assert search.status_code == 200, search.text
+        assert [row["knowledge_id"] for row in search.json()["items"]] == [
+            "ac29-meeting-note"
+        ]
+        assert (
+            client.get(
+                "/api/member/v1/notes/search?q=privileged-corpus-canary",
+                headers=HEADERS[PRINCIPAL],
+            ).json()["items"]
+            == []
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get("/api/member/v1/notes", headers=HEADERS[CHILD]).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes",
+                headers={
+                    **HEADERS[PRINCIPAL],
+                    "X-AdminMe-View-Member": ADULT,
+                },
+            ).status_code
+            == 403
+        )
+
+        expired_grant = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-expired-grant",
+                "grantee_member_id": ADULT,
+                "permissions": ["read"],
+                "expires_at": "2020-01-01T00:00:00Z",
+            },
+        )
+        assert expired_grant.status_code == 422, expired_grant.text
+        grant = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["search"],
+            },
+        )
+        assert grant.status_code == 202, grant.text
+        grant_id = grant.json()["grant_id"]
+        assert grant.json()["duplicate"] is False
+        grant_retry = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["search"],
+            },
+        )
+        assert grant_retry.status_code == 202, grant_retry.text
+        assert grant_retry.json() == {**grant.json(), "duplicate": True}
+        grant_conflict = client.post(
+            "/api/member/v1/notes/ac29-meeting-note/grants",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac29-grant-request",
+                "grantee_member_id": ADULT,
+                "permissions": ["read"],
+            },
+        )
+        assert grant_conflict.status_code == 409, grant_conflict.text
+        shared = client.get(
+            "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+        )
+        assert shared.status_code == 200, shared.text
+        assert shared.json()["access_mode"] == "shared_reference"
+        assert shared.json()["grant_permissions"] == ["read", "search"]
+        shared_search = client.get(
+            "/api/member/v1/notes/search?q=autumn%20pickup", headers=HEADERS[ADULT]
+        )
+        assert [row["knowledge_id"] for row in shared_search.json()["items"]] == [
+            "ac29-meeting-note"
+        ]
+        privileged_correction_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="privileged",
+                type="member_knowledge.note_corrected",
+                schema_version=3,
+                idempotency_key="ac29:note-privileged",
+                payload={
+                    **note_payload,
+                    "content_sha256": "c" * 64,
+                    "provider_revision": "fixture-revision-2",
+                    "supersedes_event_id": note_id,
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection,
+            "member_knowledge",
+            privileged_correction_id,
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        normal_correction_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                **common,
+                sensitivity="normal",
+                type="member_knowledge.note_corrected",
+                schema_version=3,
+                idempotency_key="ac29:note-normal-again",
+                payload={
+                    **note_payload,
+                    "content_sha256": "d" * 64,
+                    "provider_revision": "fixture-revision-3",
+                    "supersedes_event_id": privileged_correction_id,
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection, "member_knowledge", normal_correction_id
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        ), "a privileged reclassification must not silently reactivate an old grant"
+        assert (
+            client.post(
+                "/api/member/v1/notes/ac29-privileged-note/grants",
+                headers=HEADERS[PRINCIPAL],
+                json={
+                    "request_id": "ac29-privileged-grant",
+                    "grantee_member_id": ADULT,
+                    "permissions": ["read"],
+                },
+            ).status_code
+            == 403
+        )
+
+        revoked = client.post(
+            f"/api/member/v1/notes/ac29-meeting-note/grants/{grant_id}/revoke",
+            headers=HEADERS[PRINCIPAL],
+            json={"request_id": "ac29-revoke-request"},
+        )
+        assert revoked.status_code == 202, revoked.text
+        assert revoked.json()["duplicate"] is False
+        revoke_retry = client.post(
+            f"/api/member/v1/notes/ac29-meeting-note/grants/{grant_id}/revoke",
+            headers=HEADERS[PRINCIPAL],
+            json={"request_id": "ac29-revoke-request"},
+        )
+        assert revoke_retry.status_code == 202, revoke_retry.text
+        assert revoke_retry.json() == {**revoked.json(), "duplicate": True}
+        assert (
+            client.get(
+                "/api/member/v1/notes/ac29-meeting-note", headers=HEADERS[ADULT]
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                "/api/member/v1/notes/search?q=autumn%20pickup",
+                headers=HEADERS[ADULT],
+            ).json()["items"]
+            == []
         )
 
 
