@@ -3,19 +3,92 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO003_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
-verified_local_date: 2026-08-06
-verified_github_date: 2026-08-06
+gate_result: CO004_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
+verified_local_date: 2026-08-07
+verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: 40d85aab141ac74032579cf8953ecc1c5f53f311
+candidate_commit_resolution: b9f340a82d2430171fca38a8fc0f529577b35813
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co003_observation_review_and_contact_source_enrollment
+next_phase: co004_observation_review_and_member_bridge_provider_enrollment
 ---
 
 # Release handoff
+
+## 2026-08-07 CO-004 Settings control plane live observation release
+
+The principal approved CO-004 on 2026-08-07. ADR-0005 and
+`CHANGE-ORDER-004-SETTINGS-IDENTITY-AND-CONNECTION-CONTROL.md` now govern
+Settings. The change **PRESERVES** Tailscale trusted ingress,
+`authMember`/`viewMember`, provider authority, secret references, the encrypted
+append-only audit log, observation, exactly fourteen projections, one central
+Python runtime, the pinned OpenClaw boundary, and separate per-member bridges.
+It **MODERNIZES** Settings into a deterministic member control plane. It
+**SUPERSEDES** the opaque initial avatar, configuration-as-health, overloaded
+status, truncated capability dump, static workbook/chat rows, model-decided
+preferences, broad operator controls, and unreviewed provider buttons.
+
+The shell now identifies the authenticated member, role, trusted Tailscale
+ingress, read member, and action member. View-as is conspicuous and read-only.
+Seven URL-backed areas cover Overview, My account, CoS behavior, Connections,
+Bridges & devices, Household & privacy, and Safety & system. Adult Settings
+offers only adult support profiles. Bounded member preferences feed the
+existing deterministic member-experience composer; they cannot change
+authority, privacy, or model routing.
+
+Each connection keeps setup, runtime, reviewed capability, and safety as
+separate evidence. A stored credential reference is reported only as stored;
+connected requires a live adapter handshake. The supervisor now returns a
+secret-free per-instance inventory and atomically reconciles a completely
+constructed candidate set for pause/resume. The secret-free revisioned
+`settings-control.json` journal stores only operational desired state. All
+journal mutations share one lock, reject stale revisions, and emit typed
+private receipts. If a receipt fails, profile, preference, bridge-request, or
+adapter desired/runtime state rolls back so an unaudited terminal change
+cannot remain active.
+
+Add Bridge records a scoped, resumable request only. Adult private-device
+enrollment remains self-owned; a principal may request a child bridge but not
+another adult's bridge. Target consent, Tailscale identity, OS permissions,
+reviewed capability acceptance, owner-scoped ingest proof, and bootstrap
+material revocation remain the existing secure enrollment ceremony. OAuth and
+OS consent for accounts not already enrolled, and optional adapter families
+without reviewed implementations, remain truthful provider-specific activation
+work rather than simulated Connect controls.
+
+AC-31 passed through the production composition root. The aggregate release
+candidate passed 31/31 strict acceptance tests, 1,553/1,553 Python
+code-and-pack tests, 60/60 standalone bridge tests, Ruff lint/format, mypy,
+Pyright, dependency audits, performance budgets, Python and bridge builds,
+architecture negatives, clean install, tenant isolation, authenticated
+backup/restore, shell validation, exact OpenClaw 2026.7.2 contract validation,
+and 14/14 pinned plugin tests. The retained Gate 7 browser run passed 129/129
+checks across desktop, tablet, and phone, including Settings identity/action
+separation, seven areas, URL restoration, connection-truth explanation,
+adult-only profiles, keyboard/accessibility checks, and phone reflow without
+horizontal overflow.
+
+Live observation activation completed on immutable revision
+`b9f340a82d2430171fca38a8fc0f529577b35813`. The final guarded switch created
+encrypted backup `administrateme-20260807T124248Z.ambackup`; the prior release
+remains pointer-addressable for rollback. Stable-wrapper status and the full
+post-switch Doctor are healthy: the Python runtime remains observation-only,
+OpenClaw runs the exact reviewed 2026.7.2 source and discovered plugin contract,
+fourteen of fourteen projection checkpoints are healthy, five of five managed
+jobs reconcile, four secure references resolve, and the canonical synthetic
+round trip passes with zero external side effects.
+
+The live portal was refreshed against the final revision and verified without
+mutating any connection. It shows the authenticated principal, zero settings
+items needing intervention, three live central connections with independent
+setup/runtime/credential/safety axes, and external writes suppressed by
+observation. The read-only mail connection now explicitly says it has no
+reviewed provider write capability; the calendar and task connections show
+their reviewed write ceilings without claiming writes execute. Every Settings
+area opened successfully, the selected area survived its URL, and the current
+production viewport had no horizontal overflow.
 
 ## 2026-08-06 CO-003 People and relationship memory live observation release
 
