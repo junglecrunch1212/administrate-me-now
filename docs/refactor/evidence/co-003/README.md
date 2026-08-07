@@ -77,13 +77,29 @@ creates canonical household/member/contact Parties, Memberships, and explicit
 Relationships exactly once across restart, then supports authorized search
 without claiming a configured provider.
 
-## Live activation boundary
+## Live observation activation
+
+- immutable release:
+  `40d85aab141ac74032579cf8953ecc1c5f53f311`;
+- encrypted pre-switch backup:
+  `administrateme-20260807T031528Z.ambackup`, SHA-256
+  `3a4e90f9c5ececcddc137483622b22b04addf88eea3e90a0e726ccc7c8ce569b`;
+- deployment status: `healthy`, runtime `observation_only`, OpenClaw `running`;
+- Doctor: `healthy`, `safe_to_attach: true`, fourteen of fourteen projections
+  healthy, five of five managed OpenClaw jobs reconciled, exact OpenClaw
+  version/commit/plugin contract discovered, and zero live provider claims;
+- Tailscale-served member route:
+  `https://coss-mac-mini.tailabab12.ts.net/member/people`;
+- live browser: canonical ten-surface navigation, People active after Calendar
+  and before Notes, five scoped reviewed identities, perspective-relative
+  relationship labels, honest no-source/no-interaction states, URL-backed
+  search and Household lens/detail selection, and no horizontal overflow at
+  the 1284-pixel production viewport;
+- responsive/keyboard/safe-rendering/URL-state behavior at the remaining
+  contract viewports: passed through AC-30.
 
 The live family instance remains in observation. Apple Contacts requires a
 member bridge plus that member's macOS consent. Google People, Microsoft Graph,
 and CardDAV require exact per-member account enrollment. Microsoft/CardDAV and
 any unselected source remain Not Configured. No live contact provider write is
 authorized by this evidence.
-
-Immutable commit, pre-switch backup, Doctor, Tailscale route, and desktop/
-mobile browser findings are appended after deployment.

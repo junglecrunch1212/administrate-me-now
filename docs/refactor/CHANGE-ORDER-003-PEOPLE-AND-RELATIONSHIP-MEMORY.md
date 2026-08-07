@@ -1,6 +1,6 @@
 # Change Order 003 — People and relationship memory
 
-Status: **APPROVED — IMPLEMENTED; AC-30 PASS; OBSERVATION DEPLOYMENT PENDING**
+Status: **APPROVED — IMPLEMENTED; AC-30 PASS; LIVE OBSERVATION ACTIVE**
 
 Proposed: 2026-08-06
 
@@ -441,6 +441,20 @@ Release remains in observation mode. Real Apple/Google enrollment and a
 read-only reconciliation window precede any live contact mutation. Provider
 write activation is per member, account, source, and operation; read success
 never silently enables writes.
+
+The reviewed release is live at immutable commit
+`40d85aab141ac74032579cf8953ecc1c5f53f311`. The guarded updater created the
+encrypted pre-switch backup
+`administrateme-20260807T031528Z.ambackup`, switched atomically, and passed the
+complete Doctor. The deployed runtime is healthy in observation-only mode,
+all fourteen projections and all five managed OpenClaw jobs are healthy, and
+the exact reviewed OpenClaw contract remains installed. Live browser review
+proved the canonical People route, navigation order, five scoped reviewed
+identities, authenticated-member-relative relationship labels, URL-backed
+search and Household lens state, evidence-honest empty detail, and no page
+overflow at the production desktop viewport. Responsive behavior at every
+contract viewport is also covered by AC-30. No contact source or provider
+write was enabled by activation.
 
 ## Explicit non-goals
 

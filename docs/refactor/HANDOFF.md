@@ -3,21 +3,21 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO002_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
+gate_result: CO003_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
 verified_local_date: 2026-08-06
 verified_github_date: 2026-08-06
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: 7e7cff75cbc0d04fedd79cb8e5ef85743ebe5553
+candidate_commit_resolution: 40d85aab141ac74032579cf8953ecc1c5f53f311
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co002_observation_review_and_personal_knowledge_bridge_enrollment
+next_phase: co003_observation_review_and_contact_source_enrollment
 ---
 
 # Release handoff
 
-## 2026-08-06 CO-003 People and relationship memory candidate
+## 2026-08-06 CO-003 People and relationship memory live observation release
 
 The principal approved CO-003 on 2026-08-06. ADR-0004 and
 `CHANGE-ORDER-003-PEOPLE-AND-RELATIONSHIP-MEMORY.md` now govern People. The
@@ -71,10 +71,24 @@ code-and-pack tests, 60/60 standalone bridge tests, Ruff format/lint across 489
 files, mypy across 216 source files, Pyright, dependency audits, performance
 budgets, both package builds, architecture negatives, clean install, tenant
 isolation, authenticated backup/restore, shell validation, exact OpenClaw
-2026.7.2 contract validation, and 14/14 pinned plugin tests. Provider clients,
-live provider mutations, and live browser evidence are deliberately outside
-this credential-free candidate claim. The immutable commit, backup, Doctor,
-and browser evidence are recorded after the observation-mode release switch.
+2026.7.2 contract validation, and 14/14 pinned plugin tests. Provider clients
+and live provider mutations are deliberately outside this credential-free
+candidate claim.
+
+Live observation activation completed on immutable revision
+`40d85aab141ac74032579cf8953ecc1c5f53f311`. The guarded updater created
+encrypted backup `administrateme-20260807T031528Z.ambackup` before switching.
+Status and Doctor are healthy: the Python runtime is observation-only,
+OpenClaw is running on its exact reviewed contract, fourteen of fourteen
+projections are healthy, five of five managed cron jobs reconcile, the
+canonical synthetic round trip passes, and there are no live provider claims.
+The live People route shows the five reviewed scoped identities with
+member-relative relationship labels, honest no-source/no-interaction states,
+working URL-backed search and Household lens/detail selection, the canonical
+ten-surface navigation, and no horizontal overflow at the production desktop
+viewport. AC-30 covers the remaining responsive contract viewports. Contact
+source enrollment and any provider mutation remain separate per-member,
+per-account, observation-governed evidence boundaries.
 
 The first guarded switch of implementation commit `5f5f58d` was refused when
 the live pre-v2 identifiers table exposed a schema-ordering defect: the
