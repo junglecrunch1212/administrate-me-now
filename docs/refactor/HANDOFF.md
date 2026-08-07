@@ -57,7 +57,7 @@ permission are actually enrolled. All contact provider writes remain disabled
 by observation and require the existing guarded external-sync path.
 
 AC-30 passes through the production composition root. The complete release
-candidate command passed 30/30 strict acceptance tests, 1,550/1,550 Python
+candidate command passed 30/30 strict acceptance tests, 1,551/1,551 Python
 code-and-pack tests, 60/60 standalone bridge tests, Ruff format/lint across 489
 files, mypy across 216 source files, Pyright, dependency audits, performance
 budgets, both package builds, architecture negatives, clean install, tenant
@@ -66,6 +66,15 @@ isolation, authenticated backup/restore, shell validation, exact OpenClaw
 live provider mutations, and live browser evidence are deliberately outside
 this credential-free candidate claim. The immutable commit, backup, Doctor,
 and browser evidence are recorded after the observation-mode release switch.
+
+The first guarded switch of implementation commit `5f5f58d` was refused when
+the live pre-v2 identifiers table exposed a schema-ordering defect: the
+bootstrap schema attempted to create the new scope index before the additive
+scope columns existed. The updater automatically restored the prior immutable
+release and Doctor returned healthy. The correction moves the index to
+`PartiesProjection.migrate_schema()` and adds a regression that executes the
+real schema-then-migration ordering against a legacy identifiers table. The
+complete release candidate command then passed again with the count above.
 
 ## 2026-08-06 CO-002 Notes and authorized family recall
 

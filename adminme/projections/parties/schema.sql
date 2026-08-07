@@ -72,8 +72,8 @@ CREATE INDEX IF NOT EXISTS idx_identifiers_tenant_kind_value
     ON identifiers(tenant_id, kind, value_normalized);
 CREATE INDEX IF NOT EXISTS idx_identifiers_tenant_party
     ON identifiers(tenant_id, party_id);
-CREATE INDEX IF NOT EXISTS idx_identifiers_scope
-    ON identifiers(tenant_id, owner_scope, revoked_at);
+-- Scope/revocation columns are additive on a v1 database. Their index is
+-- created by PartiesProjection.migrate_schema() after those columns exist.
 
 CREATE TABLE IF NOT EXISTS memberships (
     membership_id     TEXT NOT NULL,

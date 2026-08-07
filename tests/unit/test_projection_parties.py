@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlcipher3
 
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -40,6 +41,31 @@ def _S(tenant_id: str = "tenant-a") -> Session:
     only. 08a + scope filtering use principal role so allowed_read accepts
     shared:household + private:<self> rows."""
     return build_internal_session("test_actor", "principal", tenant_id)
+
+
+def test_existing_identifiers_schema_adds_scope_columns_before_index() -> None:
+    conn = sqlcipher3.connect(":memory:")
+    try:
+        conn.execute(
+            "CREATE TABLE identifiers ("
+            "identifier_id TEXT NOT NULL, tenant_id TEXT NOT NULL, "
+            "party_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, "
+            "value_normalized TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, "
+            "primary_for_kind INTEGER NOT NULL DEFAULT 0, "
+            "last_event_id TEXT NOT NULL, PRIMARY KEY (tenant_id, identifier_id))"
+        )
+        projection = PartiesProjection()
+        schema = Path(projection.schema_path).read_text(encoding="utf-8")
+        conn.executescript(schema)
+        projection.migrate_schema(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(identifiers)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(identifiers)")}
+        assert {"owner_scope", "visibility_scope", "sensitivity", "revoked_at"} <= (
+            columns
+        )
+        assert "idx_identifiers_scope" in indexes
+    finally:
+        conn.close()
 
 
 @pytest.fixture

@@ -30,7 +30,7 @@ bash scripts/acceptance/release-candidate.sh
 Result: **PASS**
 
 - strict acceptance: 30 passed, including AC-30;
-- root Python and pack suites: 1,550 passed;
+- root Python and pack suites: 1,551 passed;
 - standalone bridge: 60 passed;
 - Ruff lint and format: pass, 489 files formatted;
 - mypy: pass, 216 source files;
@@ -48,6 +48,14 @@ Result: **PASS**
 
 The only repeated test warning is the already-known FastAPI TestClient
 Starlette/httpx deprecation. It is non-failing and unrelated to CO-003.
+
+The first observation switch of implementation commit `5f5f58d` failed closed
+before OpenClaw startup because the existing v1 identifiers table did not yet
+contain `owner_scope` when `schema.sql` tried to create its v2 scope index. The
+transactional updater restored the prior release, and status/Doctor remained
+healthy. The fix creates the index only after additive columns and retains a
+legacy-table regression matching the production startup ordering. The full
+release suite result above is from the corrected candidate.
 
 ## AC-30 behaviors
 
