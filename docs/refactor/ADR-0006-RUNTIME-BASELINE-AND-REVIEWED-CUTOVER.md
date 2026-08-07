@@ -70,7 +70,10 @@ bounded candidate-interpreter child. The child creates and reads back a new,
 runtime-bound item. After every item verifies, the coordinator atomically
 publishes a non-secret logical-reference alias map. The candidate store resolves
 logical references through that map; an older rollback release ignores the map
-and continues using its untouched original items. A missing source, failed
+and continues using its untouched original items. A later retry compares the
+alias runtime tag with the active release receipt, so it also reads those
+originals instead of prompting the rolled-back interpreter for a newer
+runtime's copies. A missing source, failed
 copy, invalid map, prompt, timeout, or failed candidate probe aborts before
 release preparation or service mutation. Secret values never cross command
 arguments, files, stdout, stderr, or diagnostic output.

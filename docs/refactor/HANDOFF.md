@@ -90,6 +90,15 @@ still probes only `/api/system/live`, and still requires full post-switch Doctor
 before retaining the candidate. Unit evidence covers both retry success and
 deadline failure.
 
+The next retry exposed rollback idempotency before backup or service mutation:
+the old release ignored the retained candidate alias map as designed, but the
+coordinator initially followed it and asked Python 3.11 to read Python 3.14
+items. Retry source selection now compares the alias runtime tag with the
+active release's reviewed version receipt. A mismatch uses the untouched
+logical originals; a matching active runtime continues through its effective
+aliases. The regression test preserves the stale map while proving the
+rolled-back interpreter reads the original service name.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

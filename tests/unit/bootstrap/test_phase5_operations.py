@@ -22,6 +22,7 @@ from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.keychain_runtime_migration import (
     ALIAS_FILENAME,
     KeychainRuntimeMigrationError,
+    _active_runtime_tag,
     configured_logical_references,
     migrate as migrate_keychain_runtime,
 )
@@ -958,6 +959,10 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
     monkeypatch.setattr(
         "bootstrap.keychain_runtime_migration.keyring.get_password", get_password
     )
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration._active_runtime_tag",
+        lambda _root: "py314",
+    )
     monkeypatch.setattr("bootstrap.keychain_runtime_migration.subprocess.run", run)
     commit = "b" * 40
 
@@ -981,6 +986,27 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
     assert (config / ALIAS_FILENAME).stat().st_mode & 0o777 == 0o600
 
 
+def test_runtime_keychain_migration_reads_active_release_runtime_receipt(
+    test_paths: DeploymentPaths,
+) -> None:
+    release = test_paths.app_dir / "releases" / "reviewed"
+    (release / "bootstrap").mkdir(parents=True)
+    (release / "bootstrap" / "versions.json").write_text(
+        json.dumps({"python": {"preferred": "3.11.15"}}), encoding="utf-8"
+    )
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"path": str(release)}), encoding="utf-8")
+
+    assert _active_runtime_tag(test_paths.root) == "py311"
+
+    pointer.write_text(
+        json.dumps({"path": str(test_paths.root.parent / "outside")}),
+        encoding="utf-8",
+    )
+    with pytest.raises(KeychainRuntimeMigrationError, match="escapes"):
+        _active_runtime_tag(test_paths.root)
+
+
 def test_runtime_keychain_migration_does_not_publish_alias_on_child_failure(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
@@ -992,12 +1018,33 @@ def test_runtime_keychain_migration_does_not_publish_alias_on_child_failure(
     (config / "secret-references.json").write_text(
         json.dumps({"event_log": logical}), encoding="utf-8"
     )
+    stale_physical = f"keychain://{account}/event-log-runtime-py314-stalecommit"
+    (config / ALIAS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "target_commit": "a" * 40,
+                "runtime_tag": "py314",
+                "aliases": {logical: stale_physical},
+            }
+        ),
+        encoding="utf-8",
+    )
     candidate_python = test_paths.root / "candidate-python"
     candidate_python.write_text("#!/bin/sh\n", encoding="utf-8")
     candidate_python.chmod(0o700)
+    requested_services: list[str] = []
+
+    def get_password(service: str, _account_name: str) -> str:
+        requested_services.append(service)
+        return "encoded-secret"
+
     monkeypatch.setattr(
-        "bootstrap.keychain_runtime_migration.keyring.get_password",
-        lambda *_args: "encoded-secret",
+        "bootstrap.keychain_runtime_migration.keyring.get_password", get_password
+    )
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration._active_runtime_tag",
+        lambda _root: "py311",
     )
     monkeypatch.setattr(
         "bootstrap.keychain_runtime_migration.subprocess.run",
@@ -1013,7 +1060,11 @@ def test_runtime_keychain_migration_does_not_publish_alias_on_child_failure(
             candidate_commit="c" * 40,
             runtime_tag="py314",
         )
-    assert not (config / ALIAS_FILENAME).exists()
+    assert requested_services[0].endswith(".event-log")
+    assert not requested_services[0].endswith(".event-log-runtime-py314-stalecommit")
+    assert json.loads((config / ALIAS_FILENAME).read_text("utf-8"))["aliases"] == {
+        logical: stale_physical
+    }
     assert configured_logical_references(config, account) == (logical,)
 
 
