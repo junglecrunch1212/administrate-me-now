@@ -40,5 +40,11 @@ rate_limits:
   settings.connection_lifecycle_changed:
     window_s: 60
     max_n: 10
+  "daemon:xlsx_reverse:money_flow.manually_added":
+    window_s: 60
+    max_n: 10000
+  "daemon:xlsx_reverse:money_flow.manually_updated":
+    window_s: 60
+    max_n: 10000
 
 forbidden_outbound_parties: []

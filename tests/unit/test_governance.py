@@ -51,6 +51,9 @@ def _sink(log: EventLog) -> EventWriter:
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 GOVERNANCE_FIXTURE = FIXTURES / "governance" / "sample_governance.yaml"
 AUTHORITY_FIXTURE = FIXTURES / "authority" / "sample_authority.yaml"
+PRODUCTION_GOVERNANCE = (
+    Path(__file__).resolve().parents[2] / "bootstrap" / "policy" / "governance.yaml"
+)
 
 
 def _principal_session(tenant_id: str = "tenant-a") -> Session:
@@ -242,6 +245,31 @@ def test_governance_config_per_action_rate_limit(config: ActionGateConfig) -> No
     rl = config.rate_limit_for("outbound.send")
     assert rl.window_s == 60
     assert rl.max_n == 20
+
+
+def test_governance_config_scopes_bulk_workbook_budget_to_daemon(
+    config: ActionGateConfig,
+) -> None:
+    daemon = config.rate_limit_for(
+        "money_flow.manually_added", agent_id="daemon:xlsx_reverse"
+    )
+    principal = config.rate_limit_for(
+        "money_flow.manually_added", agent_id="user:member-principal"
+    )
+    assert (daemon.window_s, daemon.max_n) == (60, 10000)
+    assert (principal.window_s, principal.max_n) == (60, 60)
+
+
+def test_production_policy_preserves_scoped_workbook_budget() -> None:
+    config = load_governance_config(PRODUCTION_GOVERNANCE)
+    daemon = config.rate_limit_for(
+        "money_flow.manually_updated", agent_id="daemon:xlsx_reverse"
+    )
+    principal = config.rate_limit_for(
+        "money_flow.manually_updated", agent_id="user:member-principal"
+    )
+    assert (daemon.window_s, daemon.max_n) == (60, 10000)
+    assert (principal.window_s, principal.max_n) == (60, 60)
 
 
 def test_governance_config_carries_forbidden_parties(

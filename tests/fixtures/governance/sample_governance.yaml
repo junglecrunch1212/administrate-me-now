@@ -47,6 +47,12 @@ rate_limits:
   burst.action:
     window_s: 1
     max_n: 2
+  "daemon:xlsx_reverse:money_flow.manually_added":
+    window_s: 60
+    max_n: 10000
+  "daemon:xlsx_reverse:money_flow.manually_updated":
+    window_s: 60
+    max_n: 10000
 
 forbidden_outbound_parties:
   - send_to: opposing_counsel

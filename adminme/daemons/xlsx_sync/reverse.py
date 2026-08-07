@@ -94,6 +94,8 @@ from adminme.projections.xlsx_workbooks.sidecar import (
 
 _log = logging.getLogger(__name__)
 
+MAX_FINANCE_RAW_DATA_ROWS = 5_000
+
 _BIDIRECTIONAL_SHEETS: dict[str, tuple[str, ...]] = {
     OPS_WORKBOOK_NAME: ("Tasks", "Recurrences", "Commitments"),
     FINANCE_WORKBOOK_NAME: (
@@ -1241,6 +1243,17 @@ class XlsxReverseDaemon:
         wb = load_workbook(str(path), data_only=True, read_only=True)
         failures: list[str] = []
         try:
+            if "Raw Data" in wb.sheetnames:
+                populated_raw_rows = sum(
+                    1
+                    for row in wb["Raw Data"].iter_rows(min_row=2, values_only=True)
+                    if any(value is not None for value in row)
+                )
+                if populated_raw_rows > MAX_FINANCE_RAW_DATA_ROWS:
+                    failures.append(
+                        "Raw Data: row count exceeds the reviewed household "
+                        f"limit of {MAX_FINANCE_RAW_DATA_ROWS}"
+                    )
             required: dict[str, tuple[str, ...]] = {
                 "Assumptions": ("category", "label", "value", "unit", "as_of"),
                 "Budget vs Actual": ("category", "monthly_budget", "active"),
@@ -1459,4 +1472,4 @@ class XlsxReverseDaemon:
         return await self._events.write(envelope)
 
 
-__all__ = ["XlsxReverseDaemon"]
+__all__ = ["MAX_FINANCE_RAW_DATA_ROWS", "XlsxReverseDaemon"]

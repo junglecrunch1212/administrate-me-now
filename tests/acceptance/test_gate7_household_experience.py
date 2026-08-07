@@ -730,6 +730,58 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert after_valid_save["budgets"][0]["planned_minor"] == 15_000
         assert after_valid_save["workbook"]["validation_state"] == "valid"
 
+        # A reviewed workbook import is one principal action surface, but its
+        # rows remain distinct typed facts.  Prove the xlsx daemon's scoped
+        # budget admits more than the ordinary 60/min principal limit without
+        # weakening that limit for other callers or silently consuming rows.
+        before_manual_adds = client.portal.call(
+            _events, runtime, "money_flow.manually_added"
+        )
+        before_manual_updates = client.portal.call(
+            _events, runtime, "money_flow.manually_updated"
+        )
+        workbook = load_workbook(workbook_path)
+        raw_sheet = workbook["Raw Data"]
+        raw_headers = {
+            str(cell.value): index
+            for index, cell in enumerate(raw_sheet[1], start=1)
+            if cell.value is not None
+        }
+        for offset in range(61):
+            row_number = raw_sheet.max_row + 1
+            raw_sheet.cell(row_number, raw_headers["date"], "2026-08-01")
+            raw_sheet.cell(
+                row_number,
+                raw_headers["merchant_name"],
+                f"Reviewed import row {offset + 1}",
+            )
+            raw_sheet.cell(row_number, raw_headers["amount"], 1.00)
+            raw_sheet.cell(row_number, raw_headers["assigned_category"], "Acceptance")
+            raw_sheet.cell(row_number, raw_headers["currency"], "USD")
+            raw_sheet.cell(row_number, raw_headers["included"], True)
+        workbook.save(workbook_path)
+        workbook.close()
+        client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        after_manual_adds = client.portal.call(
+            _events, runtime, "money_flow.manually_added"
+        )
+        after_manual_updates = client.portal.call(
+            _events, runtime, "money_flow.manually_updated"
+        )
+        assert len(after_manual_adds) - len(before_manual_adds) == 61
+        assert len(after_manual_updates) - len(before_manual_updates) == 61
+        client.portal.call(
+            runtime.wait_for_projection, "money", after_manual_updates[-1]["event_id"]
+        )
+        rate_denials = [
+            event
+            for event in client.portal.call(_events, runtime, "write.denied")
+            if event["payload"].get("layer_failed") == "rate_limit"
+            and event["payload"].get("action")
+            in {"money_flow.manually_added", "money_flow.manually_updated"}
+        ]
+        assert rate_denials == []
+
         workbook = load_workbook(workbook_path)
         budget_sheet = workbook["Budget vs Actual"]
         budget_sheet.cell(5, 3, value=-25)
@@ -766,7 +818,9 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert after_correction["budgets"][0]["planned_minor"] == 20_000
         assert after_correction["workbook"]["validation_state"] == "valid"
 
-        before = cockpit["summary"]
+        before = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]["summary"]
         client.portal.call(runtime.projections.rebuild, "money")
         after = client.get(
             "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]

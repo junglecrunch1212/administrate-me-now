@@ -95,9 +95,18 @@ class ActionGateConfig:
                 return value
         return self.action_gates.get("__default__", "deny")
 
-    def rate_limit_for(self, action: str) -> RateLimit:
-        """Return the RateLimit for ``action`` or the configured default
-        (60/60s if neither is set)."""
+    def rate_limit_for(self, action: str, *, agent_id: str | None = None) -> RateLimit:
+        """Return the narrowest reviewed rate limit for a caller/action.
+
+        A quoted ``<agent_id>:<action>`` key may raise or lower one reviewed
+        internal caller's budget without weakening the same action for a
+        principal, OpenClaw, or another daemon.  Unscoped action rules and the
+        explicit default retain their existing precedence afterward.
+        """
+        if agent_id is not None:
+            scoped = self.rate_limits.get(f"{agent_id}:{action}")
+            if scoped is not None:
+                return scoped
         if action in self.rate_limits:
             return self.rate_limits[action]
         if "__default__" in self.rate_limits:
@@ -463,7 +472,7 @@ class GuardedWrite:
             )
 
         # ---- Layer 3: rate limit ----
-        rl = self._config.rate_limit_for(action)
+        rl = self._config.rate_limit_for(action, agent_id=agent_id)
         # Key follows CONSOLE_PATTERNS.md §3: "${tenantId}:${scope}:${action}".
         # ``scope`` is the auth_member_id — per-principal budgets so one
         # principal's runaway loop cannot exhaust another principal's quota.
