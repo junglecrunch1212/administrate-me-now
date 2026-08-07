@@ -175,7 +175,9 @@ def compose_people_cockpit(
             "display_name": _name(row),
             "sort_name": row.get("sort_name") or _name(row),
             "nickname": row.get("nickname"),
-            "relationship_label": _relationship_label(row),
+            "relationship_label": (
+                "You" if str(row["party_id"]) == member_id else _relationship_label(row)
+            ),
             "organization": attributes.get("organization_name"),
             "job_title": attributes.get("job_title"),
             "favorite": bool(profile.get("favorite")),

@@ -142,6 +142,14 @@ memberships, relationships, member profiles, typed facts, grants, provider
 groups, deterministic authorized FTS, interaction measures, and cue state.
 Structural rows no longer acquire implicit `shared:household` visibility.
 
+The reviewed bootstrap household mapping emits an idempotent, one-way event
+receipt for the household Party, enrolled member Parties, Memberships, and
+explicit Relationships before the runtime reports ready. The projection never
+reads mutable bootstrap files. Optional reviewed non-member Parties can be
+included without granting portal membership, helper authority, a private
+provider record, or an identifier. Restart reuses the exact event identities;
+mapping changes append new evidence instead of rewriting prior truth.
+
 Every query must apply scope in SQL before identifier resolution, search,
 counts, cue computation, or timeline aggregation. Hidden records must not leak
 through duplicate suggestions, counts, search results, source health, birthday
@@ -398,9 +406,11 @@ composition root that:
 
 1. provider-neutral contact snapshots create/update/delete exact source records
    without losing provider/account/container/revision identity;
-2. an eligible curated contact produces a qualified Party, while marketing,
-   automated, Google Other Contact, directory-only, and unknown message
-   endpoints do not enter the primary People directory;
+2. reviewed household enrollment produces idempotent canonical Party,
+   Membership, and Relationship receipts; an eligible curated contact produces
+   a qualified Party; marketing, automated, Google Other Contact,
+   directory-only, and unknown message endpoints do not enter the primary
+   People directory;
 3. exact authorized identifiers resolve Interactions, ambiguous/hidden matches
    fail closed, and repeated genuine contact can only create a Triage candidate;
 4. Triage approval can promote/link/correct, and merge/split/revoke/archive/

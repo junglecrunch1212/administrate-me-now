@@ -48,6 +48,15 @@ and view-as mutations fail closed. Search indexing is audience-specific;
 granted fact/identifier searches re-check the active grant at query time so
 expiry or revocation cannot leave a searchable side channel.
 
+The reviewed household enrollment now crosses the event boundary before
+runtime readiness. It records the household Party, member Parties,
+Memberships, explicit Relationships, and optional reviewed external contacts
+idempotently; it does not grant an external contact membership, helper status,
+portal identity, provider data, or hidden identifiers. A restart/replay process
+test proves no duplicate enrollment events and the People surface labels the
+authenticated member as “You.” Contact freshness no longer borrows an
+unrelated message watermark when no contact provider is configured.
+
 Four reviewed contact-source packs establish provider-neutral, loss-aware
 contracts for Apple Contacts, Google People, Microsoft Graph Contacts, and
 CardDAV. They preserve exact member/provider/account/container/native id/
@@ -57,7 +66,7 @@ permission are actually enrolled. All contact provider writes remain disabled
 by observation and require the existing guarded external-sync path.
 
 AC-30 passes through the production composition root. The complete release
-candidate command passed 30/30 strict acceptance tests, 1,551/1,551 Python
+candidate command passed 30/30 strict acceptance tests, 1,552/1,552 Python
 code-and-pack tests, 60/60 standalone bridge tests, Ruff format/lint across 489
 files, mypy across 216 source files, Pyright, dependency audits, performance
 budgets, both package builds, architecture negatives, clean install, tenant

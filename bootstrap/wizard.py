@@ -1023,6 +1023,11 @@ class BootstrapWizard:
             encryption_key=self.store.get(state["secret_references"]["event_log"]),
             repository_root=self.root,
             member_identities={"fixture-principal.ts.net": principal},
+            household_mapping=json.loads(
+                (self.paths.instance_dir / "config" / "member-mapping.json").read_text(
+                    "utf-8"
+                )
+            ),
             member_roles=roles,
             deterministic_openclaw_fixture=True,
             fixture_member_id=principal,

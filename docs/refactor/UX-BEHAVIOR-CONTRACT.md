@@ -191,8 +191,10 @@ sender-as-person shortcut with the `deterministic-people-cockpit-v1`
 relationship-memory contract. The source/lens rail, authorized search,
 qualified-Party list, master/detail context, explicit cues, provenance, and
 member-private settings are read composition over Parties v2 and linked domain
-projections. Unknown endpoints remain outside the directory; an ambiguous or
-hidden exact identifier fails closed. All untrusted values use safe DOM text,
+projections. Reviewed enrollment becomes idempotent canonical Party,
+Membership, and Relationship evidence before readiness; it never makes an
+external contact a household member. Unknown endpoints remain outside the
+directory; an ambiguous or hidden exact identifier fails closed. All untrusted values use safe DOM text,
 children and view-as receive no payload, chat becomes a drawer below 1600 px,
 and the 390 px layout becomes one column without page overflow. AC-30 owns the
 production, replay, privacy, adapter, and browser proof.

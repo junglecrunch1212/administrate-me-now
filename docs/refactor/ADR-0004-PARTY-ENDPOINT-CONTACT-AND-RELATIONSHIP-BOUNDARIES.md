@@ -71,6 +71,13 @@ and agent orchestration. The one pinned Gateway uses member-bound sessions and
 exact provider-account routes. AdministrateMe does not create an agent per
 contact, inbox, or source and does not copy People truth into generic memory.
 
+Reviewed bootstrap enrollment crosses this boundary through idempotent domain
+events before readiness. The mapping file remains an authentication/enrollment
+input, never a projection query source. Its receipt creates household/member
+Parties, Memberships, and explicit Relationships; an optional reviewed
+external Party does not thereby gain membership, helper authority, portal
+identity, or provider fields.
+
 ## Consequences
 
 - The primary People directory includes only authorized, qualified person,

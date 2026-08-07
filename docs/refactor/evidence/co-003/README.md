@@ -15,6 +15,9 @@ Provider latency, member consent, and live contact writes are excluded.
   revalidates the live grant.
 - Unknown senders remain Endpoints. Curated provider records or human Triage
   decisions can qualify a Party. Ambiguous exact matches fail closed.
+- Reviewed household enrollment emits idempotent Party, Membership, and
+  Relationship events before readiness. A non-member contact stays distinct
+  from membership and portal authority.
 - Relationship cues require explicit member cadence and use deterministic
   templates. A model cannot infer identity, access, closeness, priority,
   outreach, merge, or provider action.
@@ -30,7 +33,7 @@ bash scripts/acceptance/release-candidate.sh
 Result: **PASS**
 
 - strict acceptance: 30 passed, including AC-30;
-- root Python and pack suites: 1,551 passed;
+- root Python and pack suites: 1,552 passed;
 - standalone bridge: 60 passed;
 - Ruff lint and format: pass, 489 files formatted;
 - mypy: pass, 216 source files;
@@ -69,7 +72,10 @@ search terms cannot influence another adult's results, and an allocated Party
 merge can be split without losing identifier evidence. Contact adapter tests
 prove private loss-aware record/group/deletion events, cursor state, normalized
 endpoints, capability gating, provider revision conflict, and observation-safe
-write behavior.
+write behavior. The production-root runtime test proves reviewed enrollment
+creates canonical household/member/contact Parties, Memberships, and explicit
+Relationships exactly once across restart, then supports authorized search
+without claiming a configured provider.
 
 ## Live activation boundary
 

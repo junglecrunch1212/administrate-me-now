@@ -149,6 +149,116 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
         assert ingest.json()["owner_scope"] == "private:member-a"
 
 
+def test_reviewed_household_enrollment_becomes_idempotent_people_truth(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    mapping = {
+        "schema_version": 2,
+        "household_label": "Fixture household",
+        "members": [
+            {"member_id": "member-a", "label": "Member A", "role": "principal"},
+            {"member_id": "member-b", "label": "Member B", "role": "principal"},
+        ],
+        "parties": [
+            {
+                "party_id": "party-contact",
+                "label": "Outside Contact",
+                "kind": "person",
+                "visibility_scope": "shared:household",
+            }
+        ],
+        "memberships": [
+            {
+                "membership_id": "membership-a",
+                "party_id": "member-a",
+                "role": "principal",
+            },
+            {
+                "membership_id": "membership-b",
+                "party_id": "member-b",
+                "role": "principal",
+            },
+        ],
+        "relationships": [
+            {
+                "relationship_id": "relationship-partners",
+                "from_party_id": "member-a",
+                "to_party_id": "member-b",
+                "kind": "spouse",
+                "direction": "mutual",
+            },
+            {
+                "relationship_id": "relationship-contact",
+                "from_party_id": "member-b",
+                "to_party_id": "party-contact",
+                "kind": "coparent",
+                "direction": "mutual",
+            },
+        ],
+    }
+    settings = RuntimeSettings.credential_free(
+        instance_dir,
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={"member-a.ts.net": "member-a"},
+        member_roles={"member-a": "principal", "member-b": "principal"},
+        household_mapping=mapping,
+    )
+
+    enrollment_event_ids: list[str] = []
+    for run in range(2):
+        app = create_application(settings)
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/member/v1/surfaces/people",
+                headers={"Tailscale-User-Login": "member-a.ts.net"},
+            )
+            assert response.status_code == 200, response.text
+            cockpit = response.json()["cockpit"]
+            assert cockpit["contract"] == "deterministic-people-cockpit-v1"
+            assert {person["party_id"] for person in cockpit["directory"]} == {
+                "member-a",
+                "member-b",
+                "party-contact",
+            }
+            assert cockpit["lens_counts"]["household"] == 3
+            assert (
+                next(
+                    person
+                    for person in cockpit["directory"]
+                    if person["party_id"] == "member-a"
+                )["relationship_label"]
+                == "You"
+            )
+            assert cockpit["sources"] == []
+
+            search = client.get(
+                "/api/member/v1/people/search?q=Outside",
+                headers={"Tailscale-User-Login": "member-a.ts.net"},
+            )
+            assert search.status_code == 200
+            assert [item["party_id"] for item in search.json()["results"]] == [
+                "party-contact"
+            ]
+
+            async def enrollment_ids() -> list[str]:
+                assert app.state.runtime.event_log is not None
+                return [
+                    event["event_id"]
+                    async for event in app.state.runtime.event_log.read_since()
+                    if event["source_adapter"] == "bootstrap-household-enrollment"
+                ]
+
+            current_ids = client.portal.call(enrollment_ids)
+            if run == 0:
+                enrollment_event_ids = current_ids
+                assert len(current_ids) == 8
+            else:
+                assert current_ids == enrollment_event_ids
+
+
 async def test_repeated_shutdown_is_safe_and_log_reopens(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     runtime = AdministrateMeRuntime(settings)

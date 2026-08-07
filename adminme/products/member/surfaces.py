@@ -1002,17 +1002,18 @@ def build_surface(
                 (session.tenant_id, member),
             ).fetchone()[0]
         )
+        people_sources = people_source_summary(parties_conn, session)
         base["cockpit"] = compose_people_cockpit(
             member_id=member,
             people=people,
-            sources=people_source_summary(parties_conn, session),
+            sources=people_sources,
             configured_sources=people_accounts(runtime, member),
             unconfirmed_endpoint_count=unconfirmed_count,
             now=now,
         )
         base["freshness"] = surface_freshness(
             generated_at=now,
-            latest_source_at=_latest_time(interactions, "occurred_at"),
+            latest_source_at=_latest_time(people_sources, "latest_at"),
             stale_after_seconds=604800,
             row_count=len(people),
             configured=bool(base["cockpit"]["sources"]),
