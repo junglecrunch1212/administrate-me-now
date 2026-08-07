@@ -75,19 +75,27 @@ def configured_logical_references(config_dir: Path, account: str) -> tuple[str, 
     return tuple(sorted(ref for ref in references if ref.startswith(prefix)))
 
 
-def _read_existing_aliases(path: Path, prefix: str) -> dict[str, str]:
+def _read_existing_aliases(
+    path: Path, prefix: str
+) -> tuple[dict[str, str], str | None]:
     if not path.exists():
-        return {}
+        return {}, None
     if path.is_symlink():
         raise KeychainRuntimeMigrationError("refusing a symlinked Keychain alias map")
     try:
         document = json.loads(path.read_text("utf-8"))
         raw = document["aliases"]
+        source_runtime_tag = document["runtime_tag"]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise KeychainRuntimeMigrationError(
             "existing Keychain alias map is invalid"
         ) from exc
-    if document.get("schema_version") != 1 or not isinstance(raw, dict):
+    if (
+        document.get("schema_version") != 1
+        or not isinstance(raw, dict)
+        or not isinstance(source_runtime_tag, str)
+        or not _RUNTIME_TAG_PATTERN.fullmatch(source_runtime_tag)
+    ):
         raise KeychainRuntimeMigrationError("existing Keychain alias map is invalid")
     aliases: dict[str, str] = {}
     for source, target in raw.items():
@@ -106,7 +114,38 @@ def _read_existing_aliases(path: Path, prefix: str) -> dict[str, str]:
         aliases[source] = target
     for reference in aliases:
         _resolve_reference(reference, aliases, prefix)
-    return aliases
+    return aliases, source_runtime_tag
+
+
+def _active_runtime_tag(root: Path) -> str | None:
+    """Return the runtime family that can actually read current physical items."""
+
+    pointer = root / "app" / "current-release.json"
+    if not pointer.exists():
+        return None
+    if pointer.is_symlink():
+        raise KeychainRuntimeMigrationError(
+            "refusing a symlinked active-release pointer"
+        )
+    try:
+        document = json.loads(pointer.read_text("utf-8"))
+        release = Path(document["path"]).resolve()
+        release_parent = (root / "app" / "releases").resolve()
+        if release_parent not in release.parents:
+            raise KeychainRuntimeMigrationError(
+                "active-release pointer escapes the deployment"
+            )
+        versions = json.loads(
+            (release / "bootstrap" / "versions.json").read_text("utf-8")
+        )
+        parts = str(versions["python"]["preferred"]).split(".")
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise KeychainRuntimeMigrationError(
+            "active release runtime receipt is invalid"
+        ) from exc
+    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
+        raise KeychainRuntimeMigrationError("active release runtime receipt is invalid")
+    return f"py{parts[0]}{parts[1]}"
 
 
 def _resolve_reference(reference: str, aliases: dict[str, str], prefix: str) -> str:
@@ -225,7 +264,11 @@ def migrate(
         raise KeychainRuntimeMigrationError(
             "runtime migration found no configured macOS Keychain references"
         )
-    existing_aliases = _read_existing_aliases(alias_path, prefix)
+    existing_aliases, alias_runtime_tag = _read_existing_aliases(alias_path, prefix)
+    if alias_runtime_tag != _active_runtime_tag(root):
+        # A rolled-back older release ignores a newer alias map and still owns
+        # the original items. Retry from what that active interpreter can read.
+        existing_aliases = {}
     entries: list[dict[str, str]] = []
     aliases: dict[str, str] = {}
     suffix = f"runtime-{runtime_tag}-{candidate_commit[:12]}"
