@@ -148,6 +148,17 @@ proof also caught Python resolving `bootstrap/secrets.py` in place of the
 standard-library module; generation now uses `os.urandom` directly, and a
 script-path-shadow regression test preserves child importability.
 
+After all five envelopes verified and the alias map published, the candidate
+preflight exposed a generated-config classification defect before backup or
+service mutation. `configured_keychain_references()` scanned the alias map as
+if it were operator configuration, so Python 3.14 was asked to open both five
+logical references through the production alias seam and five physical names
+through the rollback-only keyring seam. The probe now excludes the generated
+alias map and validates only configured logical references; alias resolution
+then proves the candidate physical envelopes through the same production store
+used after cutover. Regression evidence retains a physical alias in the map
+while requiring it never to become an independent probe target.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

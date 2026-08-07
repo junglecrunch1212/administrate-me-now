@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from bootstrap.contracts import DeploymentPaths
-from bootstrap.secrets import secret_store
+from bootstrap.secrets import KEYCHAIN_ALIAS_FILENAME, secret_store
 
 
 def _walk_references(value: Any) -> set[str]:
@@ -35,6 +35,8 @@ def configured_keychain_references(paths: DeploymentPaths) -> tuple[str, ...]:
     if not config_dir.is_dir():
         return ()
     for path in sorted(config_dir.glob("*.json")):
+        if path.name == KEYCHAIN_ALIAS_FILENAME:
+            continue
         try:
             document = json.loads(path.read_text("utf-8"))
         except (OSError, json.JSONDecodeError):

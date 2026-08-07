@@ -79,6 +79,11 @@ release preparation or service mutation. Secret values never cross command
 arguments, environment variables, files, logs, or diagnostic output;
 subprocess standard I/O remains captured in anonymous pipes.
 
+Candidate preflight enumerates configured logical references only. The
+generated alias map is resolution metadata, not another source of configured
+credentials, so physical targets are verified through logical resolution in
+the production store and are never probed as rollback-keyring originals.
+
 Runtime-tag comparison accepts the current receipt's exact
 `python.preferred` value and the older D10 receipt's strict
 `python@major.minor` formula when `preferred` is absent. It does not infer a

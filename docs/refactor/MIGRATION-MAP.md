@@ -17,6 +17,9 @@ the old keyring path for rollback. Because Apple's prompt reader truncates long
 input, runtime copies now use bounded Base64 fragments plus a versioned,
 checksummed root manifest committed last. This **HARDENS** the existing
 Keychain transport without creating another credential store.
+The pre-cutover candidate probe enumerates only configured logical references;
+the generated alias map participates in resolution but is not itself scanned as
+credential configuration.
 
 CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
 under ADR-0007. The existing money projection now separates private provider
