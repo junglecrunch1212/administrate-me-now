@@ -64,6 +64,19 @@ PY
     cd "$candidate"
     PATH="$node_bin_dir:$PATH" VIRTUAL_ENV="$controller" \
       "$poetry_venv/bin/poetry" sync --only main --no-interaction
+  )
+  resolve_active_release
+  active_python="$ACTIVE_RELEASE_ROOT/.venv/bin/python"
+  [[ -x "$active_python" ]] \
+    || fail "runtime migration requires the active release interpreter"
+  runtime_tag="py${python_minor//./}"
+  "$active_python" "$candidate/bootstrap/keychain_runtime_migration.py" \
+    --instance-root "$ADMINME_INSTANCE_ROOT" \
+    --candidate-python "$controller/bin/python" \
+    --candidate-commit "$candidate_commit" \
+    --runtime-tag "$runtime_tag"
+  (
+    cd "$candidate"
     PATH="$node_bin_dir:$PATH" \
       ADMINME_REPOSITORY_ROOT="$candidate" \
       "$controller/bin/python" -m bootstrap.cli \

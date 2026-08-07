@@ -261,17 +261,16 @@ class UpgradeManager:
                     sorted(value.rsplit("/", 1)[-1] for value in references)
                 )
                 raise UpgradeError(
-                    "candidate Python is waiting on macOS Keychain access before "
-                    "cutover. In Keychain Access > login, keep 'Confirm before "
-                    "allowing access' and add the reviewed Python 3.14 application "
-                    f"to these AdministrateMe items: {item_names}. Never select "
-                    "'Allow all applications'. The active release was not changed."
+                    "candidate Python is waiting on its runtime-bound macOS "
+                    f"Keychain copies before cutover: {item_names}. Do not reset "
+                    "the login Keychain or select 'Allow all applications'. The "
+                    "active release and its original items were not changed."
                 ) from exc
             if completed.returncode:
                 raise UpgradeError(
-                    "candidate Python cannot resolve every configured macOS Keychain "
-                    "reference; repair the item ACL or restore the missing item before "
-                    "migration. The active release was not changed."
+                    "candidate Python cannot resolve every configured logical and "
+                    "runtime-bound macOS Keychain reference. The active release and "
+                    "its original items were not changed."
                 )
 
     def activate(self, candidate: Path) -> dict[str, Any]:

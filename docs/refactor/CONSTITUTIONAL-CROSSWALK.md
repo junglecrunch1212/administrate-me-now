@@ -1,10 +1,17 @@
 # Constitutional crosswalk
 
+Runtime-Keychain amendment (2026-08-07): C046/C050/C080/C086 are
+**PRESERVED/HARDENED** across the authorized Python boundary. Original
+interpreter-bound Keychain items remain untouched for rollback; candidate-bound
+copies are verified before an atomic, instance-scoped logical-reference alias
+map is published. Secret values cross neither arguments, files, logs, nor
+diagnostics, and every failure remains before service or release mutation.
+
 CO-005 constitutional audit amendment (2026-08-07): direct production and
 live-portal reconciliation found semantic drift that the aggregate gates did
 not detect. ADR-0006/D30 **MODERNIZE** the future baseline to Python 3.14 and
-Node 24 while **PRESERVING** the running 3.11/22 release until an explicit
-migration gate. C062–C067 are **HARDENED** by reviewed fail-closed production
+Node 24 while **PRESERVING** the running 3.11/22 release through its explicit
+migration gate and rollback window. C062–C067 are **HARDENED** by reviewed fail-closed production
 policy, Settings governance, and removal of the generic provider mutation
 route. C077 is **PRESERVED/HARDENED** because Notes is rejected by the
 external-write schema. C076 freshness uses source watermarks, never future
@@ -188,7 +195,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C083 | Static tenant-identity and instance-path scans | BUILD security/final tree; EXAMPLES tenant warning | Invariant script and executable canary scan platform, bootstrap, bridge, built-ins, packs, and tests without a fixture bypass; instance-path test remains active | PRESERVE/HARDEN COMPLETE | AC-16 |
 | C084 | Two-instance isolation canary | BUILD multi-tenant rules; v2 contract | Two production-composition instances accept identical ids without cross-tenant leakage; release script retains the process canary | PRESERVE/HARDEN COMPLETE | AC-16 |
 | C085 | Optional provider deferral only | BUILD integrations/options; SEQ roadmap | several providers unbuilt | DEFER only CalDAV/Drive/optional channels/providers | AC-22 |
-| C086 | Clean macOS lab rehearsal before family install | FIELD phases; BUILD bootstrap; v2 contract; ADR-0006 | Prior clean macOS/bootstrap and current live activation evidence are retained; the new 3.14/24 candidate requires its own clean rehearsal before cutover | PRESERVE; RUNTIME-MIGRATION REHEARSAL REQUIRED | AC-21 |
+| C086 | Clean macOS lab rehearsal before family install | FIELD phases; BUILD bootstrap; v2 contract; ADR-0006 | Prior clean macOS/bootstrap and current live activation evidence are retained; the 3.14/24 candidate passed its clean rehearsal, and the authorized live retry preserves interpreter-bound Keychain originals while atomically aliasing verified candidate-bound copies | PRESERVE; RUNTIME-MIGRATION REHEARSED AND FAIL-CLOSED | AC-21 |
 | C087 | Prompt sequence is historical ordering, not current truth | SEQ entire roadmap versus merged baseline and v2 ADRs | Production runtime and current ADR/change-order chain supersede prompt ordering; historical files remain evidence only | SUPERSEDE execution order; preserve dependency evidence | AC-02 |
 | C088 | Reference examples preserve typed pack shape, tests, version/provenance, not stale APIs or tenant data | EXAMPLES preamble and §§1–7 | Six pack kinds are validated; CO-005 sanitizes household-specific built-in/test fixtures and expands the tenant canary | MODERNIZE/HARDEN COMPLETE | AC-16, AC-17 |
 | C089 | Field manual workflows remain operable through v2 UX | FIELD daily/weekly/admin/recovery workflows | Running trusted portal exposes all ten surfaces plus member chat, Settings control plane, Doctor, backup/restore, and recovery operations; Finance/Scoreboard depth remains required incomplete | PRESERVE/HARDEN | AC-03, AC-06, AC-18, AC-20 |

@@ -19,8 +19,14 @@ from bootstrap.cli import _bootstrap_diagnostic_status
 from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
 from bootstrap.keychain_probe import configured_keychain_references
+from bootstrap.keychain_runtime_migration import (
+    ALIAS_FILENAME,
+    KeychainRuntimeMigrationError,
+    configured_logical_references,
+    migrate as migrate_keychain_runtime,
+)
 from bootstrap.preflight import PreflightFailure, run_preflight
-from bootstrap.secrets import secret_store
+from bootstrap.secrets import MacOSKeychainStore, secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.state import EncryptedStateStore
 from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
@@ -128,6 +134,10 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     )
     assert 'VIRTUAL_ENV="$controller"' in updater
     assert 'ADMINME_REPOSITORY_ROOT="$candidate"' in updater
+    assert (
+        '"$active_python" "$candidate/bootstrap/keychain_runtime_migration.py"'
+        in updater
+    )
     assert 'upgrade "$candidate" "$approve_flag"' in updater
     source_installer = (
         REPO_ROOT / "bootstrap" / "install-openclaw-source.sh"
@@ -785,6 +795,189 @@ def test_keychain_probe_discovers_nested_instance_references(
     assert configured_keychain_references(test_paths) == (first, second)
 
 
+def test_keychain_store_resolves_runtime_aliases_without_changing_logical_refs(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = test_paths.instance_dir / "config"
+    config.mkdir(parents=True)
+    account = test_paths.keychain_account()
+    logical = f"keychain://{account}/event-log"
+    physical = f"keychain://{account}/event-log-runtime-py314-deadbeefcafe"
+    (config / ALIAS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "target_commit": "d" * 40,
+                "runtime_tag": "py314",
+                "aliases": {logical: physical},
+            }
+        ),
+        encoding="utf-8",
+    )
+    encoded = base64.urlsafe_b64encode(b"event-key").decode("ascii")
+    observed: dict[str, str] = {}
+
+    def get_password(service: str, account_name: str) -> str:
+        observed.update(service=service, account=account_name)
+        return encoded
+
+    monkeypatch.setattr("bootstrap.secrets.keyring.get_password", get_password)
+    monkeypatch.setattr(
+        "bootstrap.secrets.keyring.set_password",
+        lambda service, account_name, value: observed.update(
+            service=service, account=account_name, value=value
+        ),
+    )
+    store = MacOSKeychainStore(test_paths)
+
+    assert store.get(logical) == b"event-key"
+    assert observed["service"].endswith(".event-log-runtime-py314-deadbeefcafe")
+    assert store.put("event-log", b"replacement") == logical
+    assert observed["service"].endswith(".event-log-runtime-py314-deadbeefcafe")
+    assert observed["value"] == base64.urlsafe_b64encode(b"replacement").decode("ascii")
+
+
+def test_keychain_store_rejects_cyclic_or_cross_instance_aliases(
+    test_paths: DeploymentPaths,
+) -> None:
+    config = test_paths.instance_dir / "config"
+    config.mkdir(parents=True)
+    account = test_paths.keychain_account()
+    first = f"keychain://{account}/first"
+    second = f"keychain://{account}/second"
+    alias_path = config / ALIAS_FILENAME
+    alias_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": {first: second, second: first},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="cycle"):
+        MacOSKeychainStore(test_paths)
+
+    alias_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": {first: "keychain://another-instance/first"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="instance boundary"):
+        MacOSKeychainStore(test_paths)
+
+
+def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliases(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = test_paths.instance_dir / "config"
+    config.mkdir(parents=True)
+    account = test_paths.keychain_account()
+    logical = f"keychain://{account}/event-log"
+    previous_physical = f"keychain://{account}/event-log-runtime-py314-oldcommit000"
+    (config / "secret-references.json").write_text(
+        json.dumps({"event_log": logical}), encoding="utf-8"
+    )
+    (config / ALIAS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "target_commit": "a" * 40,
+                "runtime_tag": "py314",
+                "aliases": {logical: previous_physical},
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate_python = test_paths.root / "candidate-python"
+    candidate_python.parent.mkdir(parents=True, exist_ok=True)
+    candidate_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    candidate_python.chmod(0o700)
+    encoded_secret = base64.urlsafe_b64encode(b"never-log-this").decode("ascii")
+    requested_services: list[str] = []
+
+    def get_password(service: str, account_name: str) -> str:
+        assert account_name == account
+        requested_services.append(service)
+        return encoded_secret
+
+    transferred: dict[str, object] = {}
+
+    def run(command, **kwargs):
+        transferred.update(command=command, **kwargs)
+        payload = json.loads(kwargs["input"])
+        assert payload["entries"][0]["value"] == encoded_secret
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "verified", "count": 1}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration.keyring.get_password", get_password
+    )
+    monkeypatch.setattr("bootstrap.keychain_runtime_migration.subprocess.run", run)
+    commit = "b" * 40
+
+    result = migrate_keychain_runtime(
+        instance_root=test_paths.root,
+        candidate_python=candidate_python,
+        candidate_commit=commit,
+        runtime_tag="py315",
+    )
+
+    assert result["count"] == 1
+    assert requested_services[0].endswith(".event-log-runtime-py314-oldcommit000")
+    assert encoded_secret not in " ".join(transferred["command"])
+    document = json.loads((config / ALIAS_FILENAME).read_text("utf-8"))
+    assert document["aliases"][logical].endswith(
+        "/event-log-runtime-py315-bbbbbbbbbbbb"
+    )
+    assert (config / ALIAS_FILENAME).stat().st_mode & 0o777 == 0o600
+
+
+def test_runtime_keychain_migration_does_not_publish_alias_on_child_failure(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = test_paths.instance_dir / "config"
+    config.mkdir(parents=True)
+    account = test_paths.keychain_account()
+    logical = f"keychain://{account}/event-log"
+    (config / "secret-references.json").write_text(
+        json.dumps({"event_log": logical}), encoding="utf-8"
+    )
+    candidate_python = test_paths.root / "candidate-python"
+    candidate_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    candidate_python.chmod(0o700)
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration.keyring.get_password",
+        lambda *_args: "encoded-secret",
+    )
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="redacted"
+        ),
+    )
+
+    with pytest.raises(KeychainRuntimeMigrationError, match="could not create"):
+        migrate_keychain_runtime(
+            instance_root=test_paths.root,
+            candidate_python=candidate_python,
+            candidate_commit="c" * 40,
+            runtime_tag="py314",
+        )
+    assert not (config / ALIAS_FILENAME).exists()
+    assert configured_logical_references(config, account) == (logical,)
+
+
 def test_runtime_migration_keychain_prompt_fails_before_release_preparation(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
@@ -804,7 +997,7 @@ def test_runtime_migration_keychain_prompt_fails_before_release_preparation(
         raise subprocess.TimeoutExpired(["python"], 8)
 
     monkeypatch.setattr("bootstrap.upgrade.subprocess.run", blocked)
-    with pytest.raises(UpgradeError, match="Never select 'Allow all applications'"):
+    with pytest.raises(UpgradeError, match="Do not reset the login Keychain"):
         manager._preflight_keychain_access(REPO_ROOT)
     assert not (test_paths.app_dir / "current-release.json").exists()
 

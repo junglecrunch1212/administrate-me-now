@@ -59,6 +59,23 @@ provider enrollment, or the staged Python 3.14/Node 24 runtime migration. The
 current family release remains unchanged pending review and an explicit
 runtime migration decision.
 
+## 2026-08-07 runtime-Keychain reconciliation
+
+The household principal subsequently authorized the reviewed runtime migration.
+The first live attempt failed closed before backup, service stop, or pointer
+mutation because Python 3.14 could not cross the login-Keychain application
+partition. The login Keychain remained unlocked and all configured items were
+present; resetting it would have stranded encryption and OAuth material.
+
+ADR-0006 now **PRESERVES** the original interpreter-bound items for rollback and
+**MODERNIZES** Python-boundary secret continuity with candidate-bound copies and
+an atomic, non-secret logical-reference alias map. Values travel only in memory
+and through an anonymous parent/child pipe. The new runtime validates alias
+scope and cycles, and migration still fails before active-service mutation if
+any source, copy, receipt, map, or bounded candidate probe is invalid. This is
+an operational repair, not a new credential store or a weakening of Keychain
+policy.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and
