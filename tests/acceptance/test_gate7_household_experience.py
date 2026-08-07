@@ -145,6 +145,10 @@ async def _wait_for_command_result(runtime: Any, command_id: str) -> dict[str, A
             types=["external_sync.write_completed", "external_sync.write_failed"]
         ):
             if event["payload"].get("command_id") == command_id:
+                # A terminal event is durable before its deterministic read model
+                # necessarily catches up.  Wait on the production projection
+                # checkpoint so this process-level observer never races the bus.
+                await runtime.wait_for_projection("interactions", event["event_id"])
                 return event
         await asyncio.sleep(0.01)
     raise AssertionError(f"no terminal result for {command_id}")
