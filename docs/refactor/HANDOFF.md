@@ -108,6 +108,23 @@ Focused evidence covers both formats and the installed receipt resolves to
 `py311`. The failed attempt did not create a backup, stop a service, replace a
 pointer, publish a new alias map, or expose a secret.
 
+The next guarded cutover proved that an in-process read-back was not sufficient
+macOS ACL evidence. The candidate child created and read its five copies, but a
+fresh launchd Python process blocked in `SecItemCopyMatching`; the five-minute
+liveness guard restored the old release. A process sample and ACL-only Keychain
+inspection showed that Homebrew Python is ad-hoc signed and that the creating
+process's default access did not carry into the daemon lifecycle.
+
+ADR-0006 now **PRESERVES** Python-keyring access only for untouched rollback
+originals and **MODERNIZES** runtime-bound aliases through Apple's signed
+`/usr/bin/security` client. Values enter `security` only through anonymous
+standard-input pipes and return only through captured standard output; no value
+enters argv, environment, files, or logs. Candidate creation and verification
+use separate fresh Apple-signed processes, the production store uses the same
+path for aliased get/put/delete, and adapter credential resolution follows the
+validated instance alias map. A disposable cross-process proof passed under
+the actual candidate Python and the exact probe item was deleted afterward.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

@@ -8,6 +8,12 @@ import shutil
 import subprocess
 from typing import Any
 
+from adminme.lib.macos_keychain import (
+    configured_alias_path,
+    get_runtime_password,
+    resolve_runtime_alias,
+)
+
 
 def resolve_json_credentials(reference: str) -> dict[str, Any]:
     """Resolve JSON from a supported secret-provider reference.
@@ -33,12 +39,21 @@ def resolve_json_credentials(reference: str) -> dict[str, Any]:
     elif reference.startswith("keychain://"):
         import keyring
 
-        remainder = reference.removeprefix("keychain://")
+        alias_path = configured_alias_path()
+        physical_reference = (
+            resolve_runtime_alias(reference, alias_path)
+            if alias_path is not None
+            else reference
+        )
+        remainder = physical_reference.removeprefix("keychain://")
         account, separator, name = remainder.partition("/")
         if not separator or not account or not name or "/" in name:
             raise ValueError("invalid Keychain credential reference")
-        encoded = keyring.get_password(
-            f"com.administrateme.{account}.{name}", account
+        service = f"com.administrateme.{account}.{name}"
+        encoded = (
+            get_runtime_password(service, account)
+            if physical_reference != reference
+            else keyring.get_password(service, account)
         )
         if encoded is None:
             raise RuntimeError("required Keychain credential is unavailable")

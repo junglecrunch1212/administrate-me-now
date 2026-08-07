@@ -852,17 +852,15 @@ def test_keychain_store_resolves_runtime_aliases_without_changing_logical_refs(
     encoded = base64.urlsafe_b64encode(b"event-key").decode("ascii")
     observed: dict[str, str] = {}
 
-    def get_password(service: str, account_name: str) -> str:
+    def get_runtime_password(service: str, account_name: str) -> str:
         observed.update(service=service, account=account_name)
         return encoded
 
-    monkeypatch.setattr("bootstrap.secrets.keyring.get_password", get_password)
-    monkeypatch.setattr(
-        "bootstrap.secrets.keyring.set_password",
-        lambda service, account_name, value: observed.update(
-            service=service, account=account_name, value=value
-        ),
-    )
+    def put_runtime_password(service: str, account_name: str, value: str) -> None:
+        observed.update(service=service, account=account_name, value=value)
+
+    monkeypatch.setattr("bootstrap.secrets.get_runtime_password", get_runtime_password)
+    monkeypatch.setattr("bootstrap.secrets.put_runtime_password", put_runtime_password)
     store = MacOSKeychainStore(test_paths)
 
     assert store.get(logical) == b"event-key"
@@ -870,6 +868,29 @@ def test_keychain_store_resolves_runtime_aliases_without_changing_logical_refs(
     assert store.put("event-log", b"replacement") == logical
     assert observed["service"].endswith(".event-log-runtime-py314-deadbeefcafe")
     assert observed["value"] == base64.urlsafe_b64encode(b"replacement").decode("ascii")
+
+
+def test_keychain_store_preserves_keyring_for_unaliased_rollback_items(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account = test_paths.keychain_account()
+    logical = f"keychain://{account}/event-log"
+    encoded = base64.urlsafe_b64encode(b"rollback-key").decode("ascii")
+    calls: list[tuple[str, str]] = []
+
+    def get_password(service: str, account_name: str) -> str:
+        calls.append((service, account_name))
+        return encoded
+
+    monkeypatch.setattr("bootstrap.secrets.keyring.get_password", get_password)
+    monkeypatch.setattr(
+        "bootstrap.secrets.get_runtime_password",
+        lambda *_args: pytest.fail("runtime CLI must not read rollback originals"),
+    )
+
+    assert MacOSKeychainStore(test_paths).get(logical) == b"rollback-key"
+    assert calls == [(f"com.administrateme.{account}.event-log", account)]
 
 
 def test_keychain_store_rejects_cyclic_or_cross_instance_aliases(
@@ -939,7 +960,7 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
     encoded_secret = base64.urlsafe_b64encode(b"never-log-this").decode("ascii")
     requested_services: list[str] = []
 
-    def get_password(service: str, account_name: str) -> str:
+    def get_runtime_password(service: str, account_name: str) -> str:
         assert account_name == account
         requested_services.append(service)
         return encoded_secret
@@ -957,7 +978,8 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
         )
 
     monkeypatch.setattr(
-        "bootstrap.keychain_runtime_migration.keyring.get_password", get_password
+        "bootstrap.keychain_runtime_migration.get_runtime_password",
+        get_runtime_password,
     )
     monkeypatch.setattr(
         "bootstrap.keychain_runtime_migration._active_runtime_tag",

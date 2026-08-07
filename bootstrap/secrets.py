@@ -10,6 +10,11 @@ from typing import Protocol
 import keyring
 from keyring.errors import PasswordDeleteError
 
+from adminme.lib.macos_keychain import (
+    delete_runtime_password,
+    get_runtime_password,
+    put_runtime_password,
+)
 from bootstrap.contracts import DeploymentPaths, atomic_write
 
 KEYCHAIN_ALIAS_FILENAME = "keychain-runtime-aliases.json"
@@ -97,13 +102,20 @@ class MacOSKeychainStore:
         physical_reference = self._resolve_reference(logical_reference)
         physical_name = physical_reference.removeprefix(self._prefix)
         encoded = base64.urlsafe_b64encode(value).decode("ascii")
-        keyring.set_password(self._service(physical_name), self.account, encoded)
+        if physical_reference != logical_reference:
+            put_runtime_password(self._service(physical_name), self.account, encoded)
+        else:
+            keyring.set_password(self._service(physical_name), self.account, encoded)
         return logical_reference
 
     def get(self, reference: str) -> bytes:
         physical_reference = self._resolve_reference(reference)
         name = physical_reference.removeprefix(self._prefix)
-        encoded = keyring.get_password(self._service(name), self.account)
+        encoded: str | None
+        if physical_reference != reference:
+            encoded = get_runtime_password(self._service(name), self.account)
+        else:
+            encoded = keyring.get_password(self._service(name), self.account)
         if encoded is None:
             raise RuntimeError("required Keychain item is unavailable")
         return base64.urlsafe_b64decode(encoded.encode("ascii"))
@@ -118,6 +130,9 @@ class MacOSKeychainStore:
     def delete(self, reference: str) -> None:
         physical_reference = self._resolve_reference(reference)
         name = physical_reference.removeprefix(self._prefix)
+        if physical_reference != reference:
+            delete_runtime_password(self._service(name), self.account)
+            return
         try:
             keyring.delete_password(self._service(name), self.account)
         except PasswordDeleteError:
