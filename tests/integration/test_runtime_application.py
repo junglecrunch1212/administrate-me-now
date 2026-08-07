@@ -232,6 +232,14 @@ def test_reviewed_household_enrollment_becomes_idempotent_people_truth(
                 )["relationship_label"]
                 == "You"
             )
+            assert (
+                next(
+                    person
+                    for person in cockpit["directory"]
+                    if person["party_id"] == "member-b"
+                )["relationship_label"]
+                == "Spouse"
+            )
             assert cockpit["sources"] == []
 
             search = client.get(

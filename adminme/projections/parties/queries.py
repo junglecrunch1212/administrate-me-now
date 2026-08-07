@@ -129,6 +129,42 @@ def relationships_of(
     return filter_rows(session, [dict(r) for r in rows])
 
 
+_INVERSE_RELATIONSHIP_LABELS = {
+    "caregiver": "dependent",
+    "guardian": "dependent",
+    "parent": "child",
+    "stepparent": "stepchild",
+}
+
+
+def _member_relative_relationship_labels(
+    relationships: list[dict[str, Any]],
+    *,
+    member_id: str,
+    party_id: str,
+) -> list[str]:
+    """Describe only the direct Party↔member edge from the Party's side."""
+
+    labels: set[str] = set()
+    for relationship in relationships:
+        party_a = str(relationship.get("party_a") or "")
+        party_b = str(relationship.get("party_b") or "")
+        if {party_a, party_b} != {member_id, party_id}:
+            continue
+        label = str(relationship.get("label") or "relationship")
+        direction = str(relationship.get("direction") or "mutual")
+        if direction == "mutual":
+            labels.add(label)
+            continue
+        label_holder = party_a if direction == "a_to_b" else party_b
+        labels.add(
+            label
+            if party_id == label_holder
+            else _INVERSE_RELATIONSHIP_LABELS.get(label, f"{label}_relation")
+        )
+    return sorted(labels)
+
+
 def identifiers_of(
     conn: sqlcipher3.Connection,
     session: Session,
@@ -334,6 +370,11 @@ def list_visible_people(
         active_relationships = relationships_of(conn, session, party_id=party_id)
         party["relationship_labels"] = sorted(
             {str(item["label"]) for item in active_relationships}
+        )
+        party["member_relationship_labels"] = _member_relative_relationship_labels(
+            active_relationships,
+            member_id=session.auth_member_id,
+            party_id=party_id,
         )
         profile_value = party.get("profile") or {}
         if lens == "household" and not (

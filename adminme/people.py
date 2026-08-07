@@ -72,10 +72,17 @@ def _relationship_label(row: dict[str, Any]) -> str:
     profile = row.get("profile") if isinstance(row.get("profile"), dict) else {}
     circle = profile.get("circle") if profile else None
     labels = [str(value) for value in row.get("relationship_labels") or []]
+    member_labels = [
+        str(value) for value in row.get("member_relationship_labels") or []
+    ]
     if circle:
         return str(circle)
+    if member_labels:
+        return " · ".join(
+            label.replace("_", " ").title() for label in member_labels[:2]
+        )
     if labels:
-        return " · ".join(labels[:2])
+        return " · ".join(label.replace("_", " ").title() for label in labels[:2])
     if row.get("kind") == "organization":
         return "Organization"
     return "Contact"
