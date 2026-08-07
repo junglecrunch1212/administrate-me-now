@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-07T00:03:26.468Z",
+  "generated_at": "2026-08-07T12:32:27.483Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -34,7 +34,7 @@
       "status": "PASS",
       "detail": {
         "seeded": 7,
-        "last_event_id": "ev_01KZCRFPG90006"
+        "last_event_id": "ev_01KZE3B50P0006"
       }
     },
     {
@@ -42,7 +42,7 @@
       "status": "PASS",
       "detail": {
         "seeded": 4,
-        "last_event_id": "ev_01KZCRFPH50003"
+        "last_event_id": "ev_01KZE3B51K0003"
       }
     },
     {
@@ -58,7 +58,7 @@
     {
       "name": "Today defaults to Day Brief",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 5 visible recordsDay BriefCarouselWhat Now?morning briefingHere is the shape of your day.1 timed event, 1 day-context item, 2 decisions, 1 message to notice.NEXT ON THE CLOCKReviewed appointment1:00 PM–2:00 PMTimed1Day context1Moves0Decisions2Time guardrailsProtected morning · Protected until 6:00 AMNext opening: Fri 6:00 AM–8:30 AM.On the clock1Reviewed appointment1:00 PM–2:00 PM · Provider location · UpcomingGet only what you need for this event ready.Why this is hereMoves for today0No planned moves are due today.Day context1Household context dayAll day · Household context · In ProgressGet only what you need for this event ready.AttendedMissedWhy this is hereNeeds a decision2Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereReturn the school formtask · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice1Message to reviewfixture-cat-a · Needs ReviewOpen it and decide whether to reply.Open conversationWhy this is here"
+      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 5 visible recordsDay BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.1 timed event, 1 day-context item, 2 decisions, 1 message to notice.NEXT ON THE CLOCKReviewed appointment1:00 PM–2:00 PMTimed1Day context1Moves0Decisions2Time guardrailsWork window · Context until 1:00 PMContext only — it does not block your time.Next opening: Fri 10:15 AM–8:00 PM.On the clock1Reviewed appointment1:00 PM–2:00 PM · Provider location · UpcomingGet only what you need for this event ready.Why this is hereMoves for today0No planned moves are due today.Day context1Household context dayAll day · Household context · In ProgressGet only what you need for this event ready.AttendedMissedWhy this is hereNeeds a decision2Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereReturn the school formtask · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice1Message to reviewfixture-cat-a · Needs ReviewOpen it and decide whether to reply.Open conversationWhy this is here"
     },
     {
       "name": "Today offers Carousel and What Now",
@@ -161,9 +161,9 @@
       "detail": "People"
     },
     {
-      "name": "people member context",
+      "name": "People identifies deterministic confirmed identity",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "Private · confirmed identity · deterministic cues"
     },
     {
       "name": "/member/notes HTTP",
@@ -183,17 +183,17 @@
     {
       "name": "Notes preserves provider sources and master list",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 6, 2026, 8:03 PM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 6, 2026, 8:03 PMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 6, 2026, 8:03 PM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 6, 2026, 8:03 PMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "FreshLatest source Aug 7, 2026, 8:32 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 7, 2026, 8:32 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 7, 2026, 8:32 AMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes detail retains exact source identity",
       "status": "PASS",
-      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 6, 2026, 8:03 PMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 7, 2026, 8:32 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes links candidates to Triage without inline approval",
       "status": "PASS",
-      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 6, 2026, 8:03 PMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 7, 2026, 8:32 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes sharing is explicit and read-search only",
@@ -203,7 +203,7 @@
     {
       "name": "Notes deterministic search is interactive",
       "status": "PASS",
-      "detail": "Results for “autumn pickup”School planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 6, 2026, 8:03 PM1 in Triage"
+      "detail": "Results for “autumn pickup”School planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in Triage"
     },
     {
       "name": "Notes search state survives a URL reload",
@@ -213,7 +213,7 @@
     {
       "name": "Notes meeting lens is presentation-only",
       "status": "PASS",
-      "detail": "MeetingsSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 6, 2026, 8:03 PM1 in Triage"
+      "detail": "MeetingsSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in Triage"
     },
     {
       "name": "/member/finance HTTP",
@@ -283,7 +283,7 @@
     {
       "name": "Find time offers explicit duration",
       "status": "PASS",
-      "detail": "Find a workable windowHard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.30 min60 min90 min120 minEarliest fit · Fri, Aug 710:00 AM–11:00 AMClearFri, Aug 72:15 PM–3:15 PMClearMon, Aug 1010:00 AM–11:00 AMClearTue, Aug 1110:00 AM–11:00 AMClearWed, Aug 1210:00 AM–11:00 AMClearThu, Aug 1310:00 AM–11:00 AMClearFri, Aug 1410:00 AM–11:00 AMClearMon, Aug 1710:00 AM–11:00 AMClearTue, Aug 1810:00 AM–11:00 AMClearWed, Aug 1910:00 AM–11:00 AMClearThu, Aug 2010:00 AM–11:00 AMClear"
+      "detail": "Find a workable windowHard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.30 min60 min90 min120 minEarliest fit · Fri, Aug 72:15 PM–3:15 PMClearMon, Aug 1010:00 AM–11:00 AMClearTue, Aug 1110:00 AM–11:00 AMClearWed, Aug 1210:00 AM–11:00 AMClearThu, Aug 1310:00 AM–11:00 AMClearFri, Aug 1410:00 AM–11:00 AMClearMon, Aug 1710:00 AM–11:00 AMClearTue, Aug 1810:00 AM–11:00 AMClearWed, Aug 1910:00 AM–11:00 AMClearThu, Aug 2010:00 AM–11:00 AMClear"
     },
     {
       "name": "Calendar policy editing is progressively disclosed",
@@ -316,9 +316,34 @@
       "detail": "Settings"
     },
     {
-      "name": "settings member context",
+      "name": "Settings identifies the deterministic control plane",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "Private · deterministic control plane"
+    },
+    {
+      "name": "Settings exposes all seven control areas",
+      "status": "PASS",
+      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & system"
+    },
+    {
+      "name": "Settings separates read identity from action identity",
+      "status": "PASS",
+      "detail": "SIGNED-IN IDENTITYHousehold memberIdentity boundRolePrincipalAuthenticated throughTailscaleReading asHousehold memberActions execute asHousehold member"
+    },
+    {
+      "name": "Settings connection truth explains independent axes",
+      "status": "PASS",
+      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
+    },
+    {
+      "name": "Settings control area survives URL reload",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:3347/member/settings?section=connections"
+    },
+    {
+      "name": "Settings offers only adult support profiles",
+      "status": "PASS",
+      "detail": "ADHD executive supportFog Aware · 15 minute default stepsMinimal parent viewMinimal · 20 minute default stepsPower userDense · 45 minute default steps"
     },
     {
       "name": "ten principal navigation items",
@@ -332,7 +357,7 @@
         "unnamed": 0,
         "overflow": false,
         "headings": 1,
-        "motion": false,
+        "motion": true,
         "landmarks": true,
         "minContrast": 5.121965522471414
       }
@@ -344,7 +369,7 @@
         "unnamed": 0,
         "overflow": false,
         "headings": 1,
-        "motion": false,
+        "motion": true,
         "landmarks": true,
         "minContrast": 5.121965522471414
       }
@@ -356,7 +381,7 @@
         "unnamed": 0,
         "overflow": false,
         "headings": 1,
-        "motion": false,
+        "motion": true,
         "landmarks": true,
         "minContrast": 5.121965522471414
       }
@@ -368,7 +393,7 @@
         "unnamed": 0,
         "overflow": false,
         "headings": 1,
-        "motion": false,
+        "motion": true,
         "landmarks": true,
         "minContrast": 5.121965522471414
       }
@@ -382,7 +407,7 @@
       "name": "desktop keyboard focus indicator",
       "status": "PASS",
       "detail": {
-        "tag": "a",
+        "tag": "button",
         "visible": true,
         "outline": 3
       }
@@ -425,7 +450,32 @@
     {
       "name": "Notes phone retains sources, search, and source evidence",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 6, 2026, 8:03 PM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 6, 2026, 8:03 PMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 6, 2026, 8:03 PM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 6, 2026, 8:03 PMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "FreshLatest source Aug 7, 2026, 8:32 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 7, 2026, 8:32 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 7, 2026, 8:32 AMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+    },
+    {
+      "name": "/member/settings HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/settings title",
+      "status": "PASS",
+      "detail": "Settings"
+    },
+    {
+      "name": "Settings reflows without phone overflow",
+      "status": "PASS",
+      "detail": false
+    },
+    {
+      "name": "Settings phone retains all control areas",
+      "status": "PASS",
+      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & system"
+    },
+    {
+      "name": "Settings phone retains connection truth",
+      "status": "PASS",
+      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
     },
     {
       "name": "/member/today HTTP",
@@ -440,7 +490,7 @@
     {
       "name": "tablet Day Brief default",
       "status": "PASS",
-      "detail": "Healthy EmptyNo source watermark yet · 0 visible recordsDay BriefCarouselWhat Now?morning briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Timed0Day context0Moves0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Healthy EmptyNo source watermark yet · 0 visible recordsDay BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Timed0Day context0Moves0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "observation mode visible",
@@ -548,12 +598,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_2046d83566284f0a HTTP",
+      "name": "/member/quests/view_859056f1f388472c HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_2046d83566284f0a title",
+      "name": "/member/quests/view_859056f1f388472c title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -568,12 +618,12 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_2046d83566284f0a HTTP",
+      "name": "/member/quests/view_859056f1f388472c HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_2046d83566284f0a title",
+      "name": "/member/quests/view_859056f1f388472c title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -717,7 +767,7 @@
     {
       "name": "domain view remains usable during model loss",
       "status": "PASS",
-      "detail": "Healthy EmptyNo source watermark yet · 0 visible recordsDay BriefCarouselWhat Now?morning briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Timed0Day context0Moves0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
+      "detail": "Healthy EmptyNo source watermark yet · 0 visible recordsDay BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.Your day is open. Use What Now when you want one small move.Timed0Day context0Moves0Decisions0Time guardrailsOpen now until 8:00 PM.On the clock0No timed events are on the calendar today.Moves for today0No planned moves are due today."
     },
     {
       "name": "no browser console errors",
@@ -742,100 +792,104 @@
   ],
   "screenshots": {
     "surface-today-day-brief-desktop.png": {
-      "bytes": 268222,
-      "sha256": "8e4273166f113c5fe9eb07ad5eea78070a4ee4e8cee701fe345a68fc6a757ab7"
+      "bytes": 344573,
+      "sha256": "2d6ea1bce9b8ea88aab34158a60fde9f7e72a5502d585201c18ce9818dd7f11e"
     },
     "surface-today-carousel-desktop.png": {
-      "bytes": 151205,
-      "sha256": "c27f28b96edadd3ce4012c45ed50577556b8f240564d5002751950b87ded41ee"
+      "bytes": 151988,
+      "sha256": "38acb254acf07c8926c3bdf266f186301b042c88c01fb6158a7901abbcb6d5a7"
     },
     "surface-triage-desktop.png": {
-      "bytes": 261889,
-      "sha256": "0c571a96d29ef2ccf75bbbc7786ed1577819843b70f2c4a5f23427bbcd15555c"
+      "bytes": 201012,
+      "sha256": "23f5dc3a2981c7865af1d1c72eb7d6b7afd00cd5e48591bbc3443c84b14aa707"
     },
     "surface-comms-focus-desktop.png": {
-      "bytes": 289856,
-      "sha256": "cfca22415a93d4427a3b5564c35c63a05844be2616ba6a11c83995c5983b9cc6"
+      "bytes": 292238,
+      "sha256": "d237e78f9b0533e4b126875149b1a9f30003ae60f98ba79d071662295a3db257"
     },
     "surface-reminders-desktop.png": {
-      "bytes": 215997,
-      "sha256": "46677873be139c8bf5d2b25a03bef6c2baee99ed9c6a37361dbb8a386d54ff7e"
+      "bytes": 282897,
+      "sha256": "d8f1c794dd7231ae03a5a6fb3d8a01520b8dacdfacac104adc7005f6ba392d69"
     },
     "surface-people-desktop.png": {
-      "bytes": 128732,
-      "sha256": "4266c2e9da0492aaa567e41ca573809c9539ed76add057ec04600ac983a20f1c"
+      "bytes": 344377,
+      "sha256": "4fea1bd67ef8eb7da45842451ed8203290cf1e771d5407622871fef9bd1dd216"
     },
     "surface-notes-meetings-desktop.png": {
-      "bytes": 265243,
-      "sha256": "2db9883f0049e04c42740bdebe7f0f35cc1a6680cda8aeb611acae56da62ae12"
+      "bytes": 331372,
+      "sha256": "e4f9b1a3627aac4683e637708eb878b5f58c83eef0dbd64c662c95c5b458e7b5"
     },
     "surface-finance-desktop.png": {
-      "bytes": 106764,
-      "sha256": "0bd0e8ede0647ce267ec59e5b53ddd450b1ea8b3f135f37c456afa6c2cd05fb3"
+      "bytes": 109552,
+      "sha256": "ef6311ea5fb9ddee06ee07383095078a8b0d7fb2e84216d1c7ae498c17c1f0a4"
     },
     "surface-calendar-week-desktop.png": {
-      "bytes": 345916,
-      "sha256": "962cd9542d21330529f2e5deaa56b3212d41ca9eb01fc90f75ec1c6323a1ccfe"
+      "bytes": 284396,
+      "sha256": "e8638c2069fc7c4fd408a35c2c068d1bbcf06787063205134eaaca37f82298f2"
     },
     "surface-calendar-month-desktop.png": {
-      "bytes": 221181,
-      "sha256": "37a91ad4e9c741a885c08cc859e21ff2e613ee9eec60537c37ebc18a7b281ef8"
+      "bytes": 223810,
+      "sha256": "dd0450632acb7cdcbe73ce746252dbc395620267bba4a4e162e8124ebfcff4e6"
     },
     "surface-scoreboard-desktop.png": {
-      "bytes": 120849,
-      "sha256": "fd7c0f792915917a2eb55fc58c53abbb4da850546ec724670c9d8a103d6c54ea"
+      "bytes": 123421,
+      "sha256": "d572c75f3754527905b5839bfb6202707e00eb2057fab1f45820da526ff19ed5"
     },
-    "surface-settings-desktop.png": {
-      "bytes": 276653,
-      "sha256": "7b72f6a036c22aa477683c54dc18f44b21d5ba96ea7d59e1a4c44914f24de724"
+    "surface-settings-behavior-desktop.png": {
+      "bytes": 242600,
+      "sha256": "e6422e6c0eddb29aaf8db16ce272c136d1a000a73f2be27b128811b3a63c3a0c"
     },
     "surface-comms-focus-narrow.png": {
-      "bytes": 177622,
-      "sha256": "90feeea27b5af90c3d19084bfa4f90e8732022cd656a8dcccc5e50f2711cae6f"
+      "bytes": 181675,
+      "sha256": "1bf53aec492a2ab38fb8915569439403e85d217c36c1a1e93332a5805ca76e9e"
     },
     "surface-notes-narrow.png": {
-      "bytes": 195957,
-      "sha256": "dba333b6a3c968dc0825549678f478f4150389d5c380cba7fc5d5e4b6b834ca5"
+      "bytes": 209519,
+      "sha256": "e1cac45befc3349be065c4f6ff2742c0f7306008f6d7bd37c7bebc962be08e3d"
+    },
+    "surface-settings-connections-narrow.png": {
+      "bytes": 139551,
+      "sha256": "5f37a210af98af79dcf749eebbf1bc14b418cb2dc84a389197bf426958c1b761"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 150297,
-      "sha256": "56b907bf4fc158ae4c587fdeece3b9e3a49d0fa9ea5e327ee1cb68ba62a927ab"
+      "bytes": 151761,
+      "sha256": "c44d83447e10efbd9fa3e265b11b1cecb69ea76aabd5c8715599dcb34d34cfd6"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 123377,
-      "sha256": "230490d6902078eb7133b7cd20b3859a63b47d37dc0bdf98036314cc4745147a"
+      "bytes": 123359,
+      "sha256": "ac17f2b0c343fb18db190436d7cd78764fdd3dd6fa7149a69b00e61f924009b7"
     },
     "quest-private-compressed.png": {
-      "bytes": 198236,
-      "sha256": "5475df1642430e01ffb517ac861dc93157696a09b8e1b454cfdfd4981d8cf5cb"
+      "bytes": 172757,
+      "sha256": "5fb8db7e4a05222a7c61b34657e2a6dfd4aa381354054d03beeb0fa732d41aab"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 213343,
-      "sha256": "e6bec3d8f76e4926906d21b6a84c2f44006698ae6e37a149716d09593493303c"
+      "bytes": 255874,
+      "sha256": "e04b6d08f6b12911f30c58d98d0076acf06b04d570249d8766769489bd5c376c"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 106849,
-      "sha256": "0744a8393312b2807cca36b4e92e2957cf76daab22c68a08035061b24d8718e3"
+      "bytes": 105458,
+      "sha256": "a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 106849,
-      "sha256": "0744a8393312b2807cca36b4e92e2957cf76daab22c68a08035061b24d8718e3"
+      "bytes": 105458,
+      "sha256": "a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 107430,
-      "sha256": "34212b2d001e5571bb762e3198202e5291fe106af3c2ed4797ac73d774c1e593"
+      "bytes": 109439,
+      "sha256": "666510f968fbce89f457c32d929ce3e213abbeb0b4ea94eb61b06d67be81fb95"
     },
     "mode-child-scoreboard-narrow.png": {
-      "bytes": 60322,
-      "sha256": "575b425065a77f7590bf05b6efd14327c8f4514d0ea8c987d1344a4bc205995e"
+      "bytes": 63180,
+      "sha256": "473eafcf06df432060f9f428e26ddb7db1002db8df0977bfe9407a4f015cf318"
     },
     "shared-screen-scoreboard.png": {
-      "bytes": 92830,
-      "sha256": "b915c7580f0171f6cd648ecae4ed63aa6dd15a2d874d641d3d79da8372900b2e"
+      "bytes": 95181,
+      "sha256": "75d6deb9b624d072222eedea8485f1ca4d170f47f569b4130708c17f6e12ef12"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 176694,
-      "sha256": "bf5b0be063115bc88bb3752a70e795f13d46952c6477acae658d9e56b54c9df9"
+      "bytes": 177770,
+      "sha256": "82933408b2da6b3cc4e87e0d0149d22e3a91ac7e77f68d8d5665b94e5d187686"
     }
   },
   "console_errors": [],

@@ -42,6 +42,7 @@ flowchart LR
 | Relationship semantics | Deterministic AdministrateMe code | A bounded model call may propose exact-evidence facts to Triage only; it cannot infer identity/access/relationship, rank people, merge, select outreach, or write a contact. |
 | Extension behavior | Six pack kinds | Profiles and personas are versioned data; activation is staged, tested, atomic, and reversible. |
 | Optional providers | Capability registry | Missing configuration is disabled/blocked, never fabricated health or process failure. |
+| Member Settings control plane | Python read composer, secret-free desired-state journal, adapter supervisor, and typed audit receipts | Setup, runtime, permission, and safety remain separate; view-as cannot mutate; no secret, operator console, second runtime, or fifteenth projection. |
 
 The old `console/` package had no constitutional household surface—it was a
 comment-only server, package metadata, and README placeholders. Its deletion

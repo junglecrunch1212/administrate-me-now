@@ -25,6 +25,7 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
                             "provider_account_id": "personal-fixture",
                             "workspace": "personal",
                             "enable_writes": False,
+                            "oauth_credentials_ref": "keychain://fixture-personal",
                         },
                     },
                     {
@@ -35,6 +36,7 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
                             "provider_account_id": "work-fixture",
                             "workspace": "work",
                             "enable_writes": True,
+                            "oauth_credentials_ref": "keychain://fixture-work",
                         },
                     },
                     {
@@ -60,6 +62,19 @@ def test_account_union_requires_exact_member_binding_and_keeps_workspaces() -> N
             fixture_member_id=None,
         ),
         fixture_adapter=None,
+        adapters=SimpleNamespace(
+            inventory=lambda: {
+                "personal-mail": {
+                    "state": "running",
+                    "write_capabilities": [],
+                },
+                "work-mail": {
+                    "state": "running",
+                    "write_capabilities": ["send_message"],
+                },
+            }
+        ),
+        settings_control=SimpleNamespace(read=lambda: {"connections": {}}),
         _observation_active=True,
     )
 

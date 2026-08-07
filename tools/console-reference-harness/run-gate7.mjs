@@ -353,6 +353,21 @@ async function run() {
         await principal.page.getByRole("button", { name: "Meetings", exact: true }).click();
         record("Notes meeting lens is presentation-only", await principal.page.locator(".notes-master-button").count() === 1, await principal.page.locator(".notes-master").textContent());
         await screenshot(principal.page, "surface-notes-meetings-desktop.png");
+      } else if (surface === "people") {
+        record("People identifies deterministic confirmed identity", await principal.page.locator("#mode-label").textContent() === "Private · confirmed identity · deterministic cues", await principal.page.locator("#mode-label").textContent());
+        await screenshot(principal.page, "surface-people-desktop.png");
+      } else if (surface === "settings") {
+        record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
+        record("Settings exposes all seven control areas", await principal.page.locator(".settings-nav button").count() === 7, await principal.page.locator(".settings-nav").textContent());
+        record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
+        await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
+        record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
+        await principal.page.reload();
+        await principal.page.locator(".settings-nav").waitFor();
+        record("Settings control area survives URL reload", await principal.page.getByRole("button", { name: "Connections", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
+        await principal.page.getByRole("button", { name: "CoS behavior", exact: true }).click();
+        record("Settings offers only adult support profiles", await principal.page.locator(".profile-choice").count() === 3, await principal.page.locator(".profile-grid").textContent());
+        await screenshot(principal.page, "surface-settings-behavior-desktop.png");
       } else {
         record(`${surface} member context`, await principal.page.locator("#mode-label").textContent() === "Private member view", await principal.page.locator("#mode-label").textContent());
         await screenshot(principal.page, `surface-${surface}-desktop.png`);
@@ -377,6 +392,16 @@ async function run() {
     record("Notes phone retains sources, search, and source evidence", await notesPhone.page.locator(".notes-source-button").count() === 3 && await notesPhone.page.locator(".notes-search input").count() === 1 && await notesPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await notesPhone.page.locator("#surface").textContent());
     await screenshot(notesPhone.page, "surface-notes-narrow.png");
     await notesPhone.context.close();
+
+    const settingsPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
+    await visit(settingsPhone.page, server.baseUrl, "/member/settings", "Settings");
+    const settingsPhoneOverflow = await settingsPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    record("Settings reflows without phone overflow", settingsPhoneOverflow === false, settingsPhoneOverflow);
+    record("Settings phone retains all control areas", await settingsPhone.page.locator(".settings-nav button").count() === 7, await settingsPhone.page.locator(".settings-nav").textContent());
+    await settingsPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
+    record("Settings phone retains connection truth", (await settingsPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await settingsPhone.page.locator("#surface").textContent());
+    await screenshot(settingsPhone.page, "surface-settings-connections-narrow.png");
+    await settingsPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");

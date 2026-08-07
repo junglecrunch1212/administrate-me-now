@@ -68,6 +68,7 @@ from adminme.projections.base import Projection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
+from adminme.settings_control import SettingsControlStore
 from adminme.temporary_surfaces import TemporarySurfaceStore
 
 CapabilityState = Literal[
@@ -410,6 +411,7 @@ class AdministrateMeRuntime:
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
+        self.settings_command_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
@@ -422,6 +424,9 @@ class AdministrateMeRuntime:
         )
         self.extensions = ExtensionCatalog(
             settings.repository_root, settings.instance.instance_dir
+        )
+        self.settings_control = SettingsControlStore(
+            settings.instance.config_dir / "settings-control.json"
         )
         self.temporary_surfaces = TemporarySurfaceStore(
             settings.instance.config_dir / "temporary-surfaces.json"
@@ -574,7 +579,9 @@ class AdministrateMeRuntime:
 
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
-                config_data=self.settings.adapter_config,
+                config_data=self.settings_control.effective_adapter_config(
+                    self.settings.adapter_config
+                ),
                 adapter_loader=lambda config: load_builtin_adapters(
                     config, repository_root=self.settings.repository_root
                 ),

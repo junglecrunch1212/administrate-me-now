@@ -113,6 +113,7 @@ class AdapterSupervisor:
         self._http_server: asyncio.base_events.Server | None = None
         self._stopping = False
         self._prepared = False
+        self._reconcile_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # config
@@ -300,21 +301,54 @@ class AdapterSupervisor:
             self._http_server = None
 
         for managed in self._managed.values():
-            try:
-                await managed.adapter.stop()
-            except Exception:  # noqa: BLE001 — best-effort shutdown
-                logger.exception("adapter %s raised on stop()", managed.adapter.name)
-            if managed.task is not None and not managed.task.done():
-                managed.task.cancel()
+            await self._stop_managed(managed)
 
-        for managed in self._managed.values():
-            if managed.task is None:
-                continue
+    async def reconcile(self, config_data: dict[str, Any]) -> dict[str, Any]:
+        """Atomically replace configured adapter instances.
+
+        Candidate configuration is fully parsed and every adapter is
+        constructed before a running instance is touched.  This is the narrow
+        runtime seam used by Settings pause/resume; credentials remain secure
+        references and provider failures continue through normal backoff.
+        """
+
+        async with self._reconcile_lock:
+            candidate_config = dict(config_data)
+            candidates: dict[str, _ManagedAdapter] = {}
+            for index, adapter in enumerate(self._loader(candidate_config)):
+                base = str(getattr(adapter, "instance_name", None) or adapter.name)
+                name = base if base not in candidates else f"{base}:{index}"
+                candidates[name] = _ManagedAdapter(adapter=adapter)
+
+            old_managed = self._managed
+            for managed in old_managed.values():
+                await self._stop_managed(managed)
+
+            self._managed = candidates
+            self._config = candidate_config
+            self._prepared = True
+            if not self._stopping:
+                for name, managed in self._managed.items():
+                    managed.task = asyncio.create_task(
+                        self._run_adapter(managed), name=f"adapter:{name}"
+                    )
+                await asyncio.sleep(0)
+            return self.snapshot()
+
+    @staticmethod
+    async def _stop_managed(managed: _ManagedAdapter) -> None:
+        try:
+            await managed.adapter.stop()
+        except Exception:  # noqa: BLE001 — best-effort shutdown
+            logger.exception("adapter %s raised on stop()", managed.adapter.name)
+        if managed.task is not None and not managed.task.done():
+            managed.task.cancel()
+        if managed.task is not None:
             try:
                 await managed.task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
-            managed.status.state = "stopped"
+        managed.status.state = "stopped"
 
     # ------------------------------------------------------------------
     # status
@@ -331,6 +365,40 @@ class AdapterSupervisor:
                 name: _status_to_dict(m.status) for name, m in self._managed.items()
             },
         }
+
+    def inventory(self) -> dict[str, dict[str, Any]]:
+        """Return secret-free per-instance evidence for product composers."""
+
+        values: dict[str, dict[str, Any]] = {}
+        for name, managed in self._managed.items():
+            supervisor_status = _status_to_dict(managed.status)
+            try:
+                native_status = _status_to_dict(managed.adapter.status())
+            except Exception:  # noqa: BLE001 — status must not break reads
+                native_status = {}
+            state = str(native_status.get("state") or supervisor_status["state"])
+            if supervisor_status["state"] in {"backoff", "stopped", "crashed"}:
+                state = str(supervisor_status["state"])
+            values[name] = {
+                "instance_id": name,
+                "adapter_name": managed.adapter.name,
+                "family": managed.adapter.family,
+                "version": managed.adapter.version,
+                "state": state,
+                "started_at": native_status.get("started_at")
+                or supervisor_status.get("started_at"),
+                "last_cursor_advance_at": native_status.get("last_cursor_advance_at")
+                or supervisor_status.get("last_cursor_advance_at"),
+                "last_error": native_status.get("last_error")
+                or supervisor_status.get("last_error"),
+                "restart_count": supervisor_status.get("restart_count", 0),
+                # This is the adapter's reviewed code ceiling, not proof that
+                # an external provider granted the corresponding scopes.
+                "write_capabilities": list(
+                    getattr(managed.adapter, "write_capabilities", []) or []
+                ),
+            }
+        return values
 
     # ------------------------------------------------------------------
     # internals

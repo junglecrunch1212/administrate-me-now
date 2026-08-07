@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
+from adminme.extensions import ExtensionError
 from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
 from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
@@ -76,6 +77,10 @@ from adminme.projections.member_knowledge.queries import (
     search_visible as search_visible_notes,
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.settings_control import (
+    compose_connections,
+    member_label,
+)
 from adminme.projections.lists.queries import (
     get_item as get_list_item,
     items_for_member as list_items_for_member,
@@ -111,6 +116,42 @@ class ChatRequest(BaseModel):
     model_config = {"extra": "forbid"}
     message: str = Field(min_length=1, max_length=4_000)
     request_id: str = Field(min_length=8, max_length=120)
+
+
+class SettingsProfileRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    profile_id: str = Field(min_length=1, max_length=120)
+    request_id: str = Field(min_length=8, max_length=120)
+
+
+class SettingsPreferencesRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    values: dict[str, int | bool | str] = Field(default_factory=dict)
+
+
+class SettingsConnectionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    action: Literal["pause", "resume"]
+
+
+class SettingsBridgeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    member_id: str = Field(min_length=1, max_length=240)
+    capabilities: list[
+        Literal[
+            "apple_calendar",
+            "apple_reminders",
+            "apple_notes",
+            "apple_voice_memos",
+            "obsidian",
+        ]
+    ] = Field(min_length=1, max_length=5)
 
 
 class PromotionRequest(BaseModel):
@@ -364,6 +405,78 @@ def _runtime(request: Request) -> Any:
     return request.app.state.runtime
 
 
+def _require_self_settings(session: Session) -> None:
+    if session.auth_role in {"child", "device", "ambient"}:
+        raise HTTPException(403, "Settings changes require an authenticated adult")
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Settings are read-only while viewing another member")
+
+
+async def _write_settings_receipt(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    request_id: str,
+    request_fingerprint: str,
+    owner_member_id: str,
+) -> str:
+    if runtime.events is None:
+        raise HTTPException(503, "Settings audit log is unavailable")
+    now = EventEnvelope.now_utc_iso()
+    return await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-settings-control-plane",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{owner_member_id}",
+            visibility_scope=f"private:{owner_member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=(
+                f"member-settings:{event_type}:{session.auth_member_id}:{request_id}"
+            ),
+            raw_ref=f"request-sha256:{request_fingerprint}",
+            payload=payload,
+        )
+    )
+
+
+def _settings_request_fingerprint(event_type: str, values: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {"event_type": event_type, "values": values},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+async def _prior_settings_receipt(
+    runtime: Any,
+    session: Session,
+    *,
+    event_type: str,
+    request_id: str,
+    request_fingerprint: str,
+) -> dict[str, Any] | None:
+    if runtime.event_log is None:
+        raise HTTPException(503, "Settings audit log is unavailable")
+    key = f"member-settings:{event_type}:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is None:
+        return None
+    if prior.get("raw_ref") != f"request-sha256:{request_fingerprint}":
+        raise HTTPException(409, "request id conflicts with a prior Settings command")
+    return prior
+
+
 _EXTERNAL_OPERATIONS = {
     "google_calendar": {
         "create_event",
@@ -613,6 +726,13 @@ def _require_configured_external_route(
         for record in runtime.settings.adapter_config.get("adapters", []):
             if not isinstance(record, dict):
                 continue
+            connection_id = str(record.get("id") or "")
+            if (
+                connection_id
+                and runtime.settings_control.connection_lifecycle(connection_id)
+                == "paused"
+            ):
+                continue
             adapter_id = str(
                 record.get("id")
                 or record.get("kind")
@@ -687,6 +807,13 @@ def _require_configured_external_route(
         )
         for record in runtime.settings.adapter_config.get("adapters", []):
             if not isinstance(record, dict):
+                continue
+            connection_id = str(record.get("id") or "")
+            if (
+                connection_id
+                and runtime.settings_control.connection_lifecycle(connection_id)
+                == "paused"
+            ):
                 continue
             adapter_id = str(record.get("id") or record.get("kind") or "")
             raw_config = record.get("config")
@@ -2459,6 +2586,12 @@ async def bootstrap(request: Request, session: SessionDep) -> dict[str, Any]:
             "id": session.view_member_id,
             "role": session.view_role,
             "auth_role": session.auth_role,
+            "display_name": member_label(runtime, session.view_member_id),
+            "authenticated_id": session.auth_member_id,
+            "authenticated_display_name": member_label(runtime, session.auth_member_id),
+            "authenticated_role": session.auth_role,
+            "authentication_method": "Tailscale",
+            "viewing_as": session.auth_member_id != session.view_member_id,
         },
         "navigation": navigation(session),
         "mode": experience_mode(runtime, session),
@@ -2512,6 +2645,369 @@ async def surface(
         calendar_anchor=calendar_date,
         calendar_view=view,
     )
+
+
+@router.post("/api/member/v1/settings/profile", status_code=202)
+async def change_settings_profile(
+    body: SettingsProfileRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Activate one validated data-only profile for the authenticated member."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    fingerprint = _settings_request_fingerprint(
+        "settings.profile_changed", {"profile_id": body.profile_id}
+    )
+    lock = runtime.settings_command_locks.setdefault("profile-catalog", asyncio.Lock())
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.profile_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "profile_id": prior_receipt["payload"]["profile_id"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "deterministic": True,
+                "authority_changes": False,
+                "model_routing_changes": False,
+            }
+        try:
+            requested_profile = runtime.extensions.get("profile", body.profile_id)
+        except ExtensionError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if requested_profile.data.get("profile_format") in {"ambient", "scoreboard"}:
+            raise HTTPException(422, "profile is unavailable to an adult member")
+        prior = runtime.extensions.profile_for(session.auth_member_id)
+        previous_id = prior.get("id") if isinstance(prior, dict) else None
+        activated = False
+        if previous_id != body.profile_id:
+            try:
+                token = runtime.extensions.stage("profile", body.profile_id)
+                tested = runtime.extensions.test_stage(token)
+                if tested["authority_changes"] or tested["model_routing_changes"]:
+                    raise HTTPException(409, "profile attempted to change authority")
+                runtime.extensions.activate(token, member_id=session.auth_member_id)
+                activated = True
+            except ExtensionError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.profile_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "member_id": session.auth_member_id,
+                    "previous_profile_id": previous_id,
+                    "profile_id": body.profile_id,
+                    "changed_by_member_id": session.auth_member_id,
+                    "authority_changes": False,
+                    "model_routing_changes": False,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception:
+            if activated:
+                runtime.extensions.rollback()
+            raise
+        return {
+            "accepted": True,
+            "profile_id": body.profile_id,
+            "event_id": event_id,
+            "deterministic": True,
+            "authority_changes": False,
+            "model_routing_changes": False,
+        }
+
+
+@router.post("/api/member/v1/settings/preferences", status_code=202)
+async def change_settings_preferences(
+    body: SettingsPreferencesRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Save bounded, replayable CoS presentation and cue preferences."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    fingerprint = _settings_request_fingerprint(
+        "settings.preferences_changed",
+        {"expected_revision": body.expected_revision, "values": body.values},
+    )
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.preferences_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "preferences": prior_receipt["payload"]["values"],
+            }
+        previous_state = runtime.settings_control.read()
+        try:
+            mutation = runtime.settings_control.set_preferences(
+                session.auth_member_id,
+                body.values,
+                expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.preferences_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "member_id": session.auth_member_id,
+                    "changed_by_member_id": session.auth_member_id,
+                    "revision": mutation.revision,
+                    "values": mutation.current,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "revision": mutation.revision,
+            "event_id": event_id,
+            "preferences": mutation.current,
+        }
+
+
+@router.post("/api/member/v1/settings/connections/{connection_id}", status_code=202)
+async def change_settings_connection(
+    connection_id: str,
+    body: SettingsConnectionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Pause or resume one exact member-bound adapter instance."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    visible = {
+        row["id"]: row for row in compose_connections(runtime, session.auth_member_id)
+    }
+    if connection_id not in visible:
+        raise HTTPException(404, "connection not found")
+    if runtime.adapters is None:
+        raise HTTPException(503, "adapter supervisor is unavailable")
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    fingerprint = _settings_request_fingerprint(
+        "settings.connection_lifecycle_changed",
+        {
+            "connection_id": connection_id,
+            "expected_revision": body.expected_revision,
+            "action": body.action,
+        },
+    )
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.connection_lifecycle_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "connection_id": connection_id,
+                "state": (
+                    "paused"
+                    if prior_receipt["payload"]["action"] == "pause"
+                    else "connected"
+                ),
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+            }
+        previous_state = runtime.settings_control.read()
+        try:
+            candidate = runtime.settings_control.preview_connection(
+                connection_id,
+                body.action,
+                expected_revision=body.expected_revision,
+                actor_member_id=session.auth_member_id,
+            )
+            effective = runtime.settings_control.effective_adapter_config(
+                runtime.settings.adapter_config, state=candidate
+            )
+            snapshot = await runtime.adapters.reconcile(effective)
+            runtime.settings_control.save_candidate(candidate)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            try:
+                await runtime.adapters.reconcile(
+                    runtime.settings_control.effective_adapter_config(
+                        runtime.settings.adapter_config, state=previous_state
+                    )
+                )
+            except Exception:
+                pass
+            raise HTTPException(
+                503, "connection change failed; the prior runtime was restored"
+            ) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.connection_lifecycle_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "connection_id": connection_id,
+                    "member_id": session.auth_member_id,
+                    "action": body.action,
+                    "revision": candidate["revision"],
+                    "runtime_reconciled": True,
+                    "changed_by_member_id": session.auth_member_id,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception as exc:
+            try:
+                await runtime.adapters.reconcile(
+                    runtime.settings_control.effective_adapter_config(
+                        runtime.settings.adapter_config, state=previous_state
+                    )
+                )
+                runtime.settings_control.save_candidate(previous_state)
+            except Exception as rollback_exc:
+                raise HTTPException(
+                    503,
+                    "connection audit failed and rollback is incomplete; run Doctor",
+                ) from rollback_exc
+            raise HTTPException(
+                503, "connection audit failed; the prior runtime was restored"
+            ) from exc
+        return {
+            "accepted": True,
+            "connection_id": connection_id,
+            "state": "paused" if body.action == "pause" else "connected",
+            "revision": candidate["revision"],
+            "event_id": event_id,
+            "runtime": snapshot,
+        }
+
+
+@router.post("/api/member/v1/settings/bridges", status_code=202)
+async def request_settings_bridge(
+    body: SettingsBridgeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Create a scoped, resumable bridge-enrollment request without a token."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    role = runtime.settings.member_roles.get(body.member_id)
+    if role is None or role in {"device", "ambient"}:
+        raise HTTPException(422, "bridge target must be an enrolled household member")
+    if body.member_id != session.auth_member_id:
+        if session.auth_role != "principal" or role != "child":
+            raise HTTPException(403, "an adult must enroll their own private bridge")
+    if role == "child" and "obsidian" in body.capabilities:
+        raise HTTPException(403, "Obsidian is unavailable on a child bridge")
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    fingerprint = _settings_request_fingerprint(
+        "settings.bridge_enrollment_requested",
+        {
+            "expected_revision": body.expected_revision,
+            "member_id": body.member_id,
+            "capabilities": sorted(set(body.capabilities)),
+        },
+    )
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.bridge_enrollment_requested",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            return {
+                "accepted": True,
+                "member_id": body.member_id,
+                "state": prior_receipt["payload"]["state"],
+                "revision": prior_receipt["payload"]["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "next_step": (
+                    "Verify this member's Tailscale identity, then export the "
+                    "short-lived reviewed bridge package on the central Mac."
+                ),
+            }
+        previous_state = runtime.settings_control.read()
+        try:
+            mutation = runtime.settings_control.request_bridge(
+                body.member_id,
+                body.capabilities,
+                expected_revision=body.expected_revision,
+                requested_by_member_id=session.auth_member_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.bridge_enrollment_requested",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=body.member_id,
+                payload={
+                    "member_id": body.member_id,
+                    "requested_by_member_id": session.auth_member_id,
+                    "capabilities": mutation.current["capabilities"],
+                    "state": "enrollment_preparation_required",
+                    "revision": mutation.revision,
+                    "requested_at": mutation.current["requested_at"],
+                },
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "member_id": body.member_id,
+            "state": mutation.current["state"],
+            "revision": mutation.revision,
+            "event_id": event_id,
+            "next_step": (
+                "Verify this member's Tailscale identity, then export the "
+                "short-lived reviewed bridge package on the central Mac."
+            ),
+        }
 
 
 def _require_private_notes(session: Session) -> None:

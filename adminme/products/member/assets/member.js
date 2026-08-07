@@ -34,6 +34,7 @@ const state = {
   notesSelected: null,
   notesQuery: "",
   notesResults: null,
+  settingsSection: "overview",
 };
 const $ = (selector) => document.querySelector(selector);
 const text = (tag, value, className) => {
@@ -1920,6 +1921,143 @@ function renderNotes(data) {
   root.append(freshnessStrip(data), notesHero(data), notesControls(data), workspace);
 }
 
+const SETTINGS_SECTIONS = [
+  ["overview", "Overview"],
+  ["account", "My account"],
+  ["behavior", "CoS behavior"],
+  ["connections", "Connections"],
+  ["bridges", "Bridges & devices"],
+  ["privacy", "Household & privacy"],
+  ["system", "Safety & system"],
+];
+
+function settingsNav() {
+  const nav = document.createElement("nav"); nav.className = "settings-nav"; nav.setAttribute("aria-label", "Settings sections");
+  for (const [value, label] of SETTINGS_SECTIONS) {
+    const button = text("button", label, "settings-nav-button"); button.type = "button";
+    button.setAttribute("aria-pressed", String(state.settingsSection === value));
+    button.addEventListener("click", () => { state.settingsSection = value; replaceQuery({ section: value }); renderSettings(state.surface); });
+    nav.append(button);
+  }
+  return nav;
+}
+
+function identitySummary(identity, compact = false) {
+  const section = document.createElement("section"); section.className = compact ? "settings-identity compact" : "card settings-identity";
+  const heading = document.createElement("div"); heading.append(text("p", "SIGNED-IN IDENTITY", "eyebrow"), text("h2", identity.authenticated_display_name));
+  const status = text("span", identity.identity_bound ? "Identity bound" : "Binding incomplete", `pill state-label state-${identity.identity_bound ? "healthy" : "blocked"}`);
+  section.append(heading, status);
+  const facts = document.createElement("dl"); facts.className = "settings-facts";
+  for (const [label, value] of [["Role", titleCase(identity.authenticated_role)], ["Authenticated through", identity.authentication_method], ["Reading as", identity.view_display_name], ["Actions execute as", identity.authenticated_display_name]]) facts.append(text("dt", label), text("dd", value));
+  section.append(facts);
+  if (identity.viewing_as) section.append(text("p", `You are viewing ${identity.view_display_name}. Settings changes are disabled; actions still belong to ${identity.authenticated_display_name}.`, "review-state"));
+  return section;
+}
+
+function settingsHero(data) {
+  const control = data.control; const identity = control.identity;
+  const hero = document.createElement("section"); hero.className = "hero-card settings-hero";
+  const copy = document.createElement("div"); copy.append(text("p", "MEMBER CONTROL PLANE", "eyebrow"), text("h2", `You’re signed in as ${identity.authenticated_display_name}.`, "action-title"), text("p", "See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.", "brief-summary"));
+  const stats = document.createElement("dl"); stats.className = "settings-hero-stats";
+  const healthy = control.connections.filter((item) => item.runtime === "running").length;
+  for (const [label, value] of [["Needs attention", control.needs_attention.length], ["Connected", control.connections.filter((item) => item.setup === "connected").length], ["Running", healthy], ["Writes execute", data.observation.active ? "No" : "Gated"]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); stats.append(item); }
+  hero.append(copy, stats); return hero;
+}
+
+function attentionCard(items) {
+  const section = document.createElement("section"); section.className = "card settings-attention"; section.append(text("h2", "Needs attention"));
+  if (!items.length) { section.append(text("p", "Nothing needs intervention. Unknown state will still remain visible in Connections.", "empty compact-empty")); return section; }
+  const list = document.createElement("ul"); list.className = "settings-attention-list";
+  for (const item of items) { const row = document.createElement("li"); row.append(text("span", titleCase(item.severity), `pill state-label state-${item.severity}`)); const body = document.createElement("div"); body.append(text("strong", item.title), text("small", item.detail)); const open = text("button", "Review", "link-button"); open.type = "button"; open.addEventListener("click", () => { state.settingsSection = item.section; replaceQuery({ section: item.section }); renderSettings(state.surface); }); row.append(body, open); list.append(row); }
+  section.append(list); return section;
+}
+
+function connectionAxis(label, value, stateClass = value) {
+  const axis = document.createElement("div"); axis.className = "connection-axis"; axis.append(text("span", label), text("strong", titleCase(value), `state-label state-${String(stateClass).replaceAll("_", "-")}`)); return axis;
+}
+
+function permissionList(title, values) {
+  const box = document.createElement("div"); box.className = "permission-box"; box.append(text("span", title));
+  if (!values.length) box.append(text("strong", "None"));
+  else { const list = document.createElement("ul"); for (const value of values) list.append(text("li", titleCase(value))); box.append(list); }
+  return box;
+}
+
+function connectionCard(connection, data) {
+  const section = document.createElement("article"); section.className = "card connection-card";
+  const head = document.createElement("div"); head.className = "connection-heading";
+  const copy = document.createElement("div"); copy.append(text("p", connection.product, "eyebrow"), text("h2", connection.label), text("small", `${connection.provider_label} · ${connection.account_hint} · ${titleCase(connection.workspace)}`)); head.append(copy, text("span", titleCase(connection.deployment), "pill pill-lavender")); section.append(head);
+  const axes = document.createElement("div"); axes.className = "connection-axes"; axes.append(connectionAxis("Setup", connection.setup), connectionAxis("Runtime", connection.runtime));
+  const credentialState = connection.permissions.credential_reference_present ? "stored" : "missing"; axes.append(connectionAxis("Credential ref", credentialState, credentialState === "stored" ? "healthy" : "blocked"), connectionAxis("Safety", connection.safety.observation_only ? "observation only" : connection.safety.writes_execute ? "writes gated" : "read only", connection.safety.observation_only ? "observation-only" : "healthy")); section.append(axes);
+  const permissions = document.createElement("div"); permissions.className = "permission-grid"; permissions.append(permissionList("Reviewed read operations", connection.permissions.read), permissionList("Reviewed write operations", connection.permissions.write)); section.append(permissions);
+  const note = connection.safety.observation_only ? "Observation mode suppresses provider changes even when provider write permission exists." : connection.safety.human_gate_required ? "Writes still require member confirmation, governance, rate limits, privacy checks, and independent approval." : "This connection has no provider write capability."; section.append(text("p", note, "state-note"));
+  if (connection.error) section.append(text("p", `${titleCase(connection.error.severity)} ${titleCase(connection.error.kind)} error${connection.error.occurred_at ? ` · ${new Date(connection.error.occurred_at).toLocaleString()}` : ""}.`, "review-state"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  for (const action of connection.actions || []) { const button = text("button", action === "pause" ? "Pause sync" : "Resume sync", action === "pause" ? "button button-quiet" : "button button-primary"); button.type = "button"; button.disabled = !data.control.identity.can_mutate; button.addEventListener("click", async () => { button.disabled = true; setBanner(`${action === "pause" ? "Pausing" : "Resuming"} ${connection.label}…`); try { const result = await api(`/api/member/v1/settings/connections/${encodeURIComponent(connection.id)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ action, expected_revision: data.control.revision, request_id: crypto.randomUUID() }) }); setBanner(`${connection.label} is ${result.state}. Runtime reconciliation was audited.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The connection was not changed.`); button.disabled = false; } }); actions.append(button); }
+  const technical = document.createElement("details"); technical.className = "settings-technical"; technical.append(text("summary", "Technical status")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Connection ID", connection.id], ["Provider", connection.provider], ["Last cursor evidence", connection.last_sync_at ? new Date(connection.last_sync_at).toLocaleString() : "No cursor evidence yet"]]) facts.append(text("dt", label), text("dd", value)); technical.append(facts); section.append(actions, technical); return section;
+}
+
+function renderConnections(data) {
+  const fragment = document.createDocumentFragment(); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Connection truth has four separate axes."), text("p", "Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.")); fragment.append(intro);
+  if (!data.control.connections.length) fragment.append(text("p", "No reviewed provider connection is configured for this member.", "empty card"));
+  else { const grid = document.createElement("div"); grid.className = "settings-card-grid"; for (const connection of data.control.connections) grid.append(connectionCard(connection, data)); fragment.append(grid); }
+  const add = document.createElement("section"); add.className = "card settings-add-provider"; add.append(text("h2", "Add a provider"), text("p", "Only reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.")); const list = document.createElement("div"); list.className = "provider-roadmap"; for (const value of ["Google account · reviewed central adapter", "Apple apps · requires a member bridge", "Outlook, Twilio and BlueBubbles · adapter not installed"]) list.append(text("span", value, "pill pill-lavender")); add.append(list); fragment.append(add); return fragment;
+}
+
+function defaultPreferenceValue(key, data) {
+  const saved = data.control.behavior.preferences || {}; if (saved[key] != null) return saved[key]; const semantic = data.semantics || {};
+  const defaults = { information_density: semantic.information_density ?? 2, planning_horizon_days: semantic.planning_horizon_days ?? 7, task_chunk_minutes: semantic.task_chunk_minutes ?? 15, interruption_budget: semantic.proactive_cap ?? 3, reminder_escalation: semantic.reminder_escalation ?? 1, celebration_intensity: semantic.celebration_intensity ?? 1, digest_hour: semantic.digest_hour ?? 8, quiet_start_hour: semantic.quiet_hours?.start ?? 22, quiet_end_hour: semantic.quiet_hours?.end ?? 7, location_cues: semantic.location_cues ?? false }; return defaults[key];
+}
+
+function behaviorSettings(data) {
+  const fragment = document.createDocumentFragment(); const profiles = document.createElement("section"); profiles.className = "card"; profiles.append(text("h2", "Support profile"), text("p", "Profiles are validated data, not model personalities. They change presentation defaults without changing authority, privacy, or model routing.", "state-note")); const grid = document.createElement("div"); grid.className = "profile-grid";
+  for (const profile of data.control.behavior.profiles) { const item = document.createElement("label"); item.className = "profile-choice"; const input = document.createElement("input"); input.type = "radio"; input.name = "profile"; input.value = profile.id; input.checked = profile.id === data.control.behavior.active_profile_id; input.disabled = !data.control.identity.can_mutate; const body = document.createElement("span"); body.append(text("strong", profile.label), text("small", `${titleCase(profile.format)} · ${profile.behavior.available_minutes} minute default steps`)); item.append(input, body); input.addEventListener("change", async () => { if (!input.checked) return; [...grid.querySelectorAll("input")].forEach((node) => { node.disabled = true; }); setBanner(`Activating ${profile.label} as deterministic member defaults…`); try { await api("/api/member/v1/settings/profile", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ profile_id: profile.id, request_id: crypto.randomUUID() }) }); setBanner(`${profile.label} is active. Authority and model routing were unchanged.`); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The profile was not changed.`); await reloadActiveSurface(); } }); grid.append(item); }
+  profiles.append(grid); fragment.append(profiles);
+  const form = document.createElement("form"); form.className = "card preference-form"; form.append(text("h2", "Fine-tune your CoS"), text("p", "These bounded values feed deterministic ranking and presentation. AdministrateMe does not infer them from a diagnosis or conversation.", "state-note")); const fields = document.createElement("div"); fields.className = "preference-grid";
+  const definitions = [["information_density", "Information shown at once", 1, 5], ["planning_horizon_days", "Default planning horizon (days)", 1, 14], ["task_chunk_minutes", "Default task chunk (minutes)", 5, 90], ["interruption_budget", "Proactive interruption budget", 0, 12], ["reminder_escalation", "Reminder escalation", 0, 3], ["celebration_intensity", "Celebration intensity", 0, 3], ["digest_hour", "Digest hour", 0, 23], ["quiet_start_hour", "Quiet hours start", 0, 23], ["quiet_end_hour", "Quiet hours end", 0, 23]];
+  for (const [name, label, min, max] of definitions) { const input = document.createElement("input"); input.type = "number"; input.name = name; input.min = min; input.max = max; input.required = true; input.value = defaultPreferenceValue(name, data); input.disabled = !data.control.identity.can_mutate; fields.append(field(label, input)); }
+  const location = document.createElement("input"); location.type = "checkbox"; location.name = "location_cues"; location.checked = Boolean(defaultPreferenceValue("location_cues", data)); location.disabled = !data.control.identity.can_mutate; const locationLabel = document.createElement("label"); locationLabel.className = "preference-check"; locationLabel.append(location, document.createTextNode(" Allow expiring, typed location cues from an authorized bridge")); fields.append(locationLabel); form.append(fields); const save = text("button", "Save fine-tuning", "button button-primary"); save.type = "submit"; save.disabled = !data.control.identity.can_mutate; form.append(save);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); save.disabled = true; const values = {}; for (const [name] of definitions) values[name] = Number(form.elements[name].value); values.location_cues = location.checked; setBanner("Saving bounded CoS preferences…"); try { await api("/api/member/v1/settings/preferences", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), values }) }); setBanner("CoS preferences saved and propagated to member surfaces."); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} Preferences were not changed.`); save.disabled = false; } }); fragment.append(form);
+  const persona = data.control.behavior.persona; const personaCard = document.createElement("section"); personaCard.className = "card"; personaCard.append(text("h2", "CoS voice"), text("p", persona.label || titleCase(persona.id)), text("small", "Instance-wide persona · wording only · cannot change authority or model routing")); fragment.append(personaCard); return fragment;
+}
+
+function bridgeSettings(data) {
+  const fragment = document.createDocumentFragment(); const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "A bridge keeps private device sources on the member’s Mac."), text("p", "The target member accepts a short-lived enrollment package. Tailscale identity, owner scope, reviewed capabilities, and macOS permissions are verified independently.")); fragment.append(intro);
+  const grid = document.createElement("div"); grid.className = "settings-card-grid";
+  for (const bridge of data.control.bridges) { const cardNode = document.createElement("article"); cardNode.className = "card bridge-card"; cardNode.append(text("p", titleCase(bridge.role), "eyebrow"), text("h2", bridge.member_label), text("span", titleCase(bridge.status), `pill state-label state-${String(bridge.status).replaceAll("_", "-")}`), text("p", bridge.identity_bound ? "Tailscale identity is bound." : "A verified Tailscale identity is still required.", "state-note")); const capabilities = bridge.adapters_active?.length ? bridge.adapters_active : bridge.requested_capabilities || []; if (capabilities.length) cardNode.append(permissionList("Capabilities", capabilities)); grid.append(cardNode); }
+  if (data.control.bridges.length) fragment.append(grid);
+  const form = document.createElement("form"); form.className = "card bridge-form"; form.append(text("h2", "Add Bridge"), text("p", "Create a resumable, secret-free enrollment request. Package export and acceptance remain a separate short-lived handoff on the target member’s device.", "state-note")); const member = selectControl(data.control.bridge_candidates.map((item) => ({ value: item.member_id, label: `${item.label} · ${titleCase(item.role)}` })), data.control.identity.view_member_id, "Choose member…"); member.name = "member"; member.required = true; member.disabled = !data.control.identity.can_mutate; form.append(field("Member", member)); const capabilities = document.createElement("fieldset"); capabilities.className = "bridge-capabilities"; capabilities.append(text("legend", "Device sources")); const choices = [["apple_calendar", "Apple Calendar"], ["apple_reminders", "Apple Reminders"], ["apple_notes", "Apple Notes"], ["apple_voice_memos", "Apple Voice Memos"], ["obsidian", "Obsidian vault"]]; for (const [value, label] of choices) { const wrap = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.name = "capability"; input.value = value; input.checked = ["apple_calendar", "apple_reminders", "apple_notes"].includes(value); input.disabled = !data.control.identity.can_mutate; wrap.append(input, document.createTextNode(` ${label}`)); capabilities.append(wrap); } form.append(capabilities); const submit = text("button", "Prepare enrollment", "button button-primary"); submit.type = "submit"; submit.disabled = !data.control.identity.can_mutate; form.append(submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); const selected = [...form.querySelectorAll('input[name="capability"]:checked')].map((input) => input.value); if (!selected.length) { setBanner("Choose at least one reviewed bridge capability."); return; } submit.disabled = true; setBanner("Recording a scoped bridge enrollment request…"); try { const result = await api("/api/member/v1/settings/bridges", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), member_id: member.value, capabilities: selected }) }); setBanner(result.next_step); await reloadActiveSurface(); } catch (error) { setBanner(`${error.message} The bridge request was not created.`); submit.disabled = false; } }); fragment.append(form); return fragment;
+}
+
+function privacySettings(data) {
+  const fragment = document.createDocumentFragment(); const rules = document.createElement("section"); rules.className = "card"; rules.append(text("h2", "Privacy rules that cannot be toggled")); const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const value of ["Adults control their own private provider credentials and device bridges.", "A principal may manage a child bridge, but cannot silently inspect another adult’s private sources.", "Provider-native sharing does not create AdministrateMe sharing.", "View-as changes what can be read; it never changes who performs an action.", "Privileged records never enter model processing or generic OpenClaw memory."]) list.append(text("li", value)); rules.append(list); fragment.append(rules);
+  const household = document.createElement("section"); household.className = "card"; household.append(text("h2", "Household portal identities")); const members = document.createElement("ul"); members.className = "household-settings-list"; for (const member of data.control.household) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", member.label), text("small", titleCase(member.role))); item.append(body, text("span", member.portal_identity_bound ? "Tailscale bound" : "No portal login", `pill state-label state-${member.portal_identity_bound ? "healthy" : "not-configured"}`)); members.append(item); } household.append(members); fragment.append(household); return fragment;
+}
+
+function systemSettings(data) {
+  const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 14)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
+  const workbooks = document.createElement("section"); workbooks.className = "card"; workbooks.append(text("h2", "Recovery and workbooks")); const workbookList = document.createElement("ul"); workbookList.className = "household-settings-list"; for (const workbook of data.system.workbooks) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", workbook.name), text("small", workbook.updated_at ? `Updated ${new Date(workbook.updated_at).toLocaleString()}` : "No workbook file yet")); item.append(body, text("span", titleCase(workbook.state), `pill state-label state-${String(workbook.state).replaceAll("_", "-")}`)); workbookList.append(item); } workbooks.append(workbookList); fragment.append(workbooks);
+  const advanced = document.createElement("details"); advanced.className = "card settings-advanced"; advanced.append(text("summary", "Advanced capability inventory"), text("p", "Pack validation, configuration and runtime provider health are different facts. This inventory is diagnostic and does not grant a capability.", "state-note")); const list = document.createElement("ul"); list.className = "advanced-capability-list"; for (const capability of data.system.capabilities) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", capability.name), text("small", capability.kind)); item.append(body, text("span", titleCase(capability.state), `pill state-label state-${String(capability.state).replaceAll("_", "-")}`)); list.append(item); } advanced.append(list); fragment.append(advanced); return fragment;
+}
+
+function accountSettings(data) {
+  const fragment = document.createDocumentFragment(); fragment.append(identitySummary(data.control.identity)); const explanation = document.createElement("section"); explanation.className = "card"; explanation.append(text("h2", "How sign-in works"), text("p", "Tailscale Serve authenticates the connecting user. AdministrateMe accepts that identity only from its loopback ingress and maps it to one reviewed household member."), text("p", "There is no separate AdministrateMe password or simulated logout. To change identity, switch the signed-in Tailscale user; bootstrap enrollment must review any mapping change.", "state-note")); fragment.append(explanation); return fragment;
+}
+
+function renderSettings(data) {
+  const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic control plane";
+  root.append(settingsHero(data), settingsNav()); const content = document.createElement("div"); content.className = "settings-content";
+  if (state.settingsSection === "overview") { const layout = document.createElement("div"); layout.className = "settings-overview-grid"; layout.append(attentionCard(data.control.needs_attention), identitySummary(data.control.identity, true)); content.append(layout); const summaries = document.createElement("div"); summaries.className = "settings-summary-grid"; for (const [title, value, copy, target] of [["Connections", data.control.connections.length, "Provider accounts with separate setup, runtime, permission, and safety state.", "connections"], ["Bridges", data.control.bridges.length, "Per-member device sources with explicit enrollment and consent.", "bridges"], ["CoS profile", data.control.behavior.profiles.find((item) => item.id === data.control.behavior.active_profile_id)?.label || "Not selected", "Validated behavior defaults; no authority or model-routing changes.", "behavior"]]) { const cardNode = document.createElement("button"); cardNode.type = "button"; cardNode.className = "card settings-summary-card"; cardNode.append(text("span", title, "eyebrow"), text("strong", value), text("small", copy)); cardNode.addEventListener("click", () => { state.settingsSection = target; replaceQuery({ section: target }); renderSettings(state.surface); }); summaries.append(cardNode); } content.append(summaries); }
+  else if (state.settingsSection === "account") content.append(accountSettings(data));
+  else if (state.settingsSection === "behavior") content.append(behaviorSettings(data));
+  else if (state.settingsSection === "connections") content.append(renderConnections(data));
+  else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
+  else if (state.settingsSection === "privacy") content.append(privacySettings(data));
+  else content.append(systemSettings(data));
+  root.append(content);
+}
+
 function freshnessStrip(data) {
   const value = data.freshness;
   const strip = document.createElement("div"); strip.className = "freshness-strip";
@@ -1963,7 +2101,7 @@ function renderSurface(data) {
     hero.append(text("p", "YOUR RHYTHM", "eyebrow"), text("h2", `${score.open_count || 0} gentle next steps`, "action-title"), text("p", score.reward_language === "warm" ? "Every small finish counts. You’re building momentum." : "Progress is evidence, not pressure."));
     root.append(hero, card("Up next", score.next_steps));
   } else if (data.surface === "settings") {
-    root.append(card("Capability health", data.capabilities), card("Principal workbooks", data.workbooks), card("Chat transport", [data.chat]));
+    renderSettings(data);
   }
 }
 
@@ -2083,9 +2221,13 @@ async function initialize() {
   $("[data-close-action]").addEventListener("click", closeActionDialog);
   try {
     state.bootstrap = await api("/api/member/v1/bootstrap"); renderNavigation(combinedNavigation(state.bootstrap)); configureChat(state.bootstrap.chat);
-    $("#member-button").textContent = state.bootstrap.member.id.slice(0, 1).toUpperCase();
+    const memberButton = $("#member-button"); memberButton.replaceChildren(); memberButton.className = "member-chip";
+    const memberCopy = document.createElement("span"); memberCopy.append(text("strong", state.bootstrap.member.authenticated_display_name), text("small", `${titleCase(state.bootstrap.member.authenticated_role)} · ${state.bootstrap.member.authentication_method}`)); memberButton.append(memberCopy);
+    memberButton.setAttribute("aria-label", `Open settings for ${state.bootstrap.member.authenticated_display_name}`);
     $("#observation-pill").textContent = state.bootstrap.observation_mode ? "Observation mode" : "Member-safe";
     $("#observation-banner").hidden = !state.bootstrap.observation_mode;
+    const viewAs = $("#view-as-banner"); viewAs.hidden = !state.bootstrap.member.viewing_as;
+    if (state.bootstrap.member.viewing_as) viewAs.textContent = `Viewing ${state.bootstrap.member.display_name}. Reads follow that member’s scope; actions remain attributed to ${state.bootstrap.member.authenticated_display_name}, and Settings changes are disabled.`;
     const active = currentSurface();
     const params = new URLSearchParams(location.search);
     const requestedView = params.get("view");
@@ -2120,6 +2262,10 @@ async function initialize() {
       state.notesSource = params.get("source") || "all";
       state.notesSelected = params.get("note");
       state.notesQuery = params.get("q") || "";
+    }
+    if (active === "settings") {
+      const requestedSection = params.get("section");
+      if (SETTINGS_SECTIONS.some(([value]) => value === requestedSection)) state.settingsSection = requestedSection;
     }
     let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
     if (active === "calendar") {

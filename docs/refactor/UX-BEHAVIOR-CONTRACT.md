@@ -51,7 +51,7 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 | Finance | Scope-filtered accounts/transactions/budgets/subscriptions and workbook state; privileged owner-only details and audit. | Any client-only masking or demo values. |
 | Calendar | Member-isolated Day/Week/Month/Agenda/Find time cockpit plus progressively disclosed Rules over every authorized provider calendar; anchored date navigation; spatial time grids and all-day lanes; route-stable source colors and visibility controls; route-scoped provenance; duplicate-copy grouping; explicit hard-block, soft-load, context, and ignore semantics; tentative/custody policy; typed buffers; protected household windows; conflict/pressure explanations; provider capability truth; and reviewed write destinations shared with Triage. | Treating calendar as the universal task model, treating every observed event as busy, equating a hidden display calendar with free time, model-decided availability, silent duplicate deletion, or writing to an unreviewed calendar. |
 | Scoreboard | Age/role-appropriate household progress and dual-path rewards; child-safe data only. | Client-side hidden navigation as a security boundary. |
-| Settings | Member/profile/persona, connectors, packs, observation, approvals, privacy/audit, backup/restore, diagnostics; progressive disclosure and explicit unavailable states. | Stale adapter inventory and broad OpenClaw operator controls. |
+| Settings | Seven-section deterministic member control plane: visible authenticated/read/action identity; bounded profile/fine tuning; connection setup/runtime/permission/safety axes; bridge requests; household/privacy invariants; observation, workbooks, and diagnostics with progressive disclosure. | Opaque initials/internal ids, a static or truncated capability dump, config-as-health, secret entry in ordinary forms, principal control over another adult's private source, or broad OpenClaw operator controls. |
 
 Generic chat remains an OpenClaw surface. A narrow chat pane may embed/hand off to OpenClaw for authorized members, but AdministrateMe must not persist a second generic transcript or expose operator administration. Members without safe operator access use a narrow member portal.
 
@@ -109,6 +109,10 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-32 | People distinguishes Endpoint, provider Contact Record, qualified Party, Identifier Link, Membership, Relationship, member profile, fact, and Interaction. Unknown communication/calendar endpoints never enter the primary directory; an eligible curated contact may qualify a Party; ambiguous or hidden exact matches fail closed and remain review evidence. |
 | UX-33 | People search, list, detail, counts, sources, cues, and timelines filter authorization before aggregation. Provider records, identifiers, Interactions, facts, and profiles are owner-private by default; an explicit adult field-group grant is independent from provider sharing; privileged content and all child/device/ambient/operator/view-as paths fail closed. |
 | UX-34 | People uses a responsive source/lens → qualified Party list → detail workspace with URL-backed search/selection, safe text rendering, explicit source/freshness, deterministic member-requested cadence cues, Triage review links, and reversible archive/restore. No model infers closeness, relationship, household role, access, priority, outreach, or merge. |
+| UX-35 | The shell names the authenticated member, role, Tailscale ingress, read member, and action member. View-as is conspicuous and makes Settings mutations unavailable; writes remain authorized as `authMember`. |
+| UX-36 | Every connection presents setup, runtime, permission, and safety independently. Config, credential-reference presence, provider handshake, cursor freshness, effective write capability, and observation are never collapsed into one healthy state; unknown remains unknown. |
+| UX-37 | Profile and fine-tuning controls are bounded, revisioned, reversible data. They disclose behavior effects and cannot change authority, privacy, model routing, provider scope, or diagnosis. |
+| UX-38 | Add Bridge records one member/capability-scoped request and explains the separate target-device consent ceremony. Adult private bridges are self-owned; principals may govern child bridges; no portal payload contains enrollment tokens or credential references. |
 
 ## State model
 
@@ -198,3 +202,14 @@ directory; an ambiguous or hidden exact identifier fails closed. All untrusted v
 children and view-as receive no payload, chat becomes a drawer below 1600 px,
 and the 390 px layout becomes one column without page overflow. AC-30 owns the
 production, replay, privacy, adapter, and browser proof.
+
+Settings amendment (2026-08-07): CO-004 replaces the static generic cards with
+the `deterministic-settings-control-plane-v1` contract. The global shell shows
+the authenticated member and Tailscale boundary. Overview, My account, CoS
+behavior, Connections, Bridges & devices, Household & privacy, and Safety &
+system are URL-backed sections. Connection setup/runtime/permission/safety are
+independent; the member can activate validated profiles, save bounded
+fine-tuning, pause/resume an exact adapter through supervisor reconciliation,
+and request a member-scoped bridge. Secrets and raw secure-reference paths
+never enter the response. AC-31 owns process, isolation, status, receipt, and
+browser proof.

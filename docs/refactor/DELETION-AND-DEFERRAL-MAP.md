@@ -15,6 +15,14 @@ workflow engine, executable template/code/SQL, or raw-log query was introduced.
 Only live optional providers and the supported-Mac rehearsal remain deferred
 to Phase 8.
 
+CO-004 update: the static/truncated Settings capability dump and opaque member
+initial are superseded. Provider adapters that do not exist remain deferred
+and visibly unavailable; the UI does not fabricate Connect controls. Live
+OAuth enrollment, scope expansion, and member-device OS consent remain secure
+activation ceremonies, not fixture claims. Identity visibility, truthful
+status axes, view-as/cross-adult denial, bounded fine tuning, adapter
+pause/resume, scoped bridge requests, redaction, and AC-31 are not deferred.
+
 Gate 6 update: deletion prerequisites are now met for the empty `console/`
 Node package, `adminme/daemons/pipeline_supervisor.py`, duplicate xlsx daemon
 facades, and dead correlation/identifier helpers. AdministrateMe-side

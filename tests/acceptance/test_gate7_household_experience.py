@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,46 @@ def _settings(instance_dir: Path, *, model_configured: bool = True) -> RuntimeSe
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
         deterministic_member_chat_fixture=True,
+    )
+
+
+def _settings_control_fixture(instance_dir: Path) -> RuntimeSettings:
+    base = _settings(instance_dir)
+    return replace(
+        base,
+        household_mapping={
+            "household_label": "Fixture household",
+            "members": [
+                {
+                    "member_id": PRINCIPAL,
+                    "label": "Primary adult",
+                    "role": "principal",
+                },
+                {"member_id": ADULT, "label": "Second adult", "role": "principal"},
+                {"member_id": CHILD, "label": "Child member", "role": "child"},
+                {"member_id": DEVICE, "label": "Shared screen", "role": "device"},
+            ],
+            "memberships": [],
+            "relationships": [],
+            "parties": [],
+        },
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "gmail-fixture",
+                    "kind": "messaging-gmail-api",
+                    "config": {
+                        "member_id": PRINCIPAL,
+                        "user_email": "fixture@example.invalid",
+                        "account_label": "Personal email",
+                        "workspace": "personal",
+                        "oauth_credentials_ref": "keychain://fixture/gmail",
+                        "enable_writes": True,
+                    },
+                }
+            ],
+        },
     )
 
 
@@ -1807,3 +1848,213 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
                 f"/api/member/v1/surfaces/{surface}", headers=HEADERS[PRINCIPAL]
             ).json()
             assert value["observation"]["active"] is True
+
+
+def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> None:
+    """CO-004 process proof through the production composition root."""
+
+    instance = tmp_path / "settings-control"
+    instance.mkdir()
+    app = create_application(_settings_control_fixture(instance))
+    with TestClient(app) as client:
+        bootstrap = client.get("/api/member/v1/bootstrap", headers=HEADERS[PRINCIPAL])
+        assert bootstrap.status_code == 200
+        assert bootstrap.json()["member"] == {
+            "id": PRINCIPAL,
+            "role": "principal",
+            "auth_role": "principal",
+            "display_name": "Primary adult",
+            "authenticated_id": PRINCIPAL,
+            "authenticated_display_name": "Primary adult",
+            "authenticated_role": "principal",
+            "authentication_method": "Tailscale",
+            "viewing_as": False,
+        }
+
+        settings_response = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        )
+        assert settings_response.status_code == 200, settings_response.text
+        settings = settings_response.json()
+        assert settings["control"]["identity"]["can_mutate"] is True
+        assert settings["system"]["runtime"]["projection_count"] == 14
+        [connection] = settings["control"]["connections"]
+        assert connection["id"] == "gmail-fixture"
+        assert connection["setup"] == "configured"
+        assert connection["runtime"] in {"starting", "backoff", "crashed"}
+        assert connection["runtime"] != "healthy"
+        assert connection["permissions"]["credential_reference_present"] is True
+        assert connection["safety"]["observation_only"] is True
+        rendered = json.dumps(settings)
+        assert "keychain://" not in rendered
+        assert "oauth_credentials_ref" not in rendered
+
+        viewed = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={**HEADERS[PRINCIPAL], "X-AdminMe-View-Member": ADULT},
+        )
+        assert viewed.status_code == 200
+        assert viewed.json()["control"]["identity"]["viewing_as"] is True
+        assert viewed.json()["control"]["identity"]["can_mutate"] is False
+        denied_view_as = client.post(
+            "/api/member/v1/settings/preferences",
+            headers={**HEADERS[PRINCIPAL], "X-AdminMe-View-Member": ADULT},
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-view-as-denied",
+                "values": {"information_density": 2},
+            },
+        )
+        assert denied_view_as.status_code == 403
+
+        denied_non_adult_profile = client.post(
+            "/api/member/v1/settings/profile",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "profile_id": "kid_scoreboard",
+                "request_id": "ac31-kid-profile-denied",
+            },
+        )
+        assert denied_non_adult_profile.status_code == 422
+
+        profile = client.post(
+            "/api/member/v1/settings/profile",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "profile_id": "power_user",
+                "request_id": "ac31-profile-change",
+            },
+        )
+        assert profile.status_code == 202, profile.text
+        assert profile.json()["authority_changes"] is False
+        assert profile.json()["model_routing_changes"] is False
+
+        preferences = client.post(
+            "/api/member/v1/settings/preferences",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-preferences",
+                "values": {
+                    "information_density": 3,
+                    "planning_horizon_days": 5,
+                    "task_chunk_minutes": 20,
+                    "interruption_budget": 2,
+                    "reminder_escalation": 1,
+                    "celebration_intensity": 1,
+                    "digest_hour": 8,
+                    "quiet_start_hour": 21,
+                    "quiet_end_hour": 7,
+                    "location_cues": True,
+                },
+            },
+        )
+        assert preferences.status_code == 202, preferences.text
+        assert preferences.json()["revision"] == 1
+        replayed_preferences = client.post(
+            "/api/member/v1/settings/preferences",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 0,
+                "request_id": "ac31-preferences",
+                "values": {
+                    "information_density": 3,
+                    "planning_horizon_days": 5,
+                    "task_chunk_minutes": 20,
+                    "interruption_budget": 2,
+                    "reminder_escalation": 1,
+                    "celebration_intensity": 1,
+                    "digest_hour": 8,
+                    "quiet_start_hour": 21,
+                    "quiet_end_hour": 7,
+                    "location_cues": True,
+                },
+            },
+        )
+        assert replayed_preferences.status_code == 202
+        assert replayed_preferences.json()["idempotent"] is True
+        today = client.get(
+            "/api/member/v1/surfaces/today", headers=HEADERS[PRINCIPAL]
+        ).json()
+        assert today["semantics"]["information_density"] == 3
+        assert today["semantics"]["task_chunk_minutes"] == 20
+        assert today["semantics"]["location_cues"] is True
+
+        cross_adult_bridge = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 1,
+                "request_id": "ac31-cross-adult-bridge",
+                "member_id": ADULT,
+                "capabilities": ["apple_calendar"],
+            },
+        )
+        assert cross_adult_bridge.status_code == 403
+        child_bridge = client.post(
+            "/api/member/v1/settings/bridges",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 1,
+                "request_id": "ac31-child-bridge",
+                "member_id": CHILD,
+                "capabilities": ["apple_calendar", "apple_reminders"],
+            },
+        )
+        assert child_bridge.status_code == 202, child_bridge.text
+        assert child_bridge.json()["revision"] == 2
+
+        paused = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-pause-gmail",
+                "action": "pause",
+            },
+        )
+        assert paused.status_code == 202, paused.text
+        assert paused.json()["state"] == "paused"
+        replayed_pause = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-pause-gmail",
+                "action": "pause",
+            },
+        )
+        assert replayed_pause.status_code == 202
+        assert replayed_pause.json()["idempotent"] is True
+        after_pause = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        ).json()
+        [paused_connection] = after_pause["control"]["connections"]
+        assert paused_connection["setup"] == "paused"
+        assert paused_connection["runtime"] == "not_running"
+
+        stale = client.post(
+            "/api/member/v1/settings/connections/gmail-fixture",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 2,
+                "request_id": "ac31-stale-resume",
+                "action": "resume",
+            },
+        )
+        assert stale.status_code == 409
+
+        events = client.portal.call(
+            _events,
+            app.state.runtime,
+            "settings.profile_changed",
+            "settings.preferences_changed",
+            "settings.bridge_enrollment_requested",
+            "settings.connection_lifecycle_changed",
+        )
+        assert {event["type"] for event in events} == {
+            "settings.profile_changed",
+            "settings.preferences_changed",
+            "settings.bridge_enrollment_requested",
+            "settings.connection_lifecycle_changed",
+        }

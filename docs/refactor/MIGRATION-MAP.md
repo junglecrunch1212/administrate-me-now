@@ -1,5 +1,16 @@
 # Migration map
 
+Settings update (2026-08-07): CO-004 **MODERNIZES COMPLETE IN CODE** the
+generic capability/workbook/chat cards into one deterministic member control
+plane. The member shell now names the authenticated identity and Tailscale
+boundary. Connection setup, live runtime, permission, and safety state are
+separate. A secret-free revisioned journal holds bounded preferences, pause
+state, and bridge requests; typed events audit accepted changes. Profile
+activation uses the existing validated extension lifecycle and adapter
+pause/resume reconciles the existing supervisor. No secret editor, second
+runtime, provider SDK, OpenClaw operator console, model router, or fifteenth
+projection was added.
+
 People semantics update (2026-08-06): CO-003 **MODERNIZES LIVE IN OBSERVATION**
 the historical CRM projection and generic member cards into deterministic
 relationship memory. Parties v2 separates unresolved Endpoints, exact

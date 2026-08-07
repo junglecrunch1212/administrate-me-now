@@ -15,6 +15,15 @@ AdministrateMe is a private, household-scale Chief of Staff that turns distribut
 | Working memory/Notes | Each member writes information once, recalls it across authorized sources, and may send exact evidence to the household human gate without remembering the source app. | Cat-D member bridges, provider-neutral `member_knowledge`, explicit per-note grants, privileged exclusion, deterministic FTS, revocable `vector_search`, provenance/corrections, bounded Notes-to-Triage extraction. |
 | Sensor/signal/action layer | Finance, home, calendar, lists, and other sources can be observed and acted on safely. | Cat-B/C/E adapters, typed facts, explicit verbs, observation, authorization, verification events. |
 
+Settings is the member-visible trust and configuration memory for all six
+functions. It tells a member which identity is active, which account or bridge
+belongs to whom, what is configured, what is actually running, what a provider
+permission permits, what AdministrateMe policy permits, and what observation
+will suppress. This externalizes the configuration working memory that an ADHD
+member should not have to reconstruct from several vendor consoles. Settings
+uses deterministic state and receipts; a model may explain a label but cannot
+choose a preference, grant permission, change authority, or infer health.
+
 The target household is multi-member, including principals, children, helpers, devices, and ambient entities. “Single hub” describes the source-of-truth deployment, not a single-user security model.
 
 ## Closed executive-function loop

@@ -68,6 +68,7 @@ from adminme.projections.tasks.queries import open_for_member
 from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.projections.triage.queries import recent_for_member as recent_triage
 from adminme.surface_contracts import surface_freshness, surface_link
+from adminme.settings_control import compose_connections, compose_settings_control
 
 
 ADULT_SURFACES = (
@@ -125,6 +126,9 @@ def people_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
         "microsoft-graph-contacts": "microsoft_graph",
         "carddav-contacts": "carddav",
     }
+    connection_truth = {
+        item["id"]: item for item in compose_connections(runtime, member_id)
+    }
     for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
         if not isinstance(entry, dict) or entry.get("enabled") is False:
             continue
@@ -146,18 +150,30 @@ def people_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
             or config.get("account_url")
             or f"{provider}-{index}"
         )
+        connection_id = str(entry.get("id") or f"{provider}-{index}")
+        truth = connection_truth.get(connection_id)
+        account_state = (
+            str(truth["setup"])
+            if truth and truth["setup"] != "connected"
+            else str(truth["runtime"])
+            if truth and truth["runtime"] != "running"
+            else "observation_only"
+            if runtime._observation_active
+            else "connected"
+        )
         accounts.append(
             {
-                "id": str(entry.get("id") or f"{provider}-{index}"),
+                "id": connection_id,
                 "provider": provider,
                 "provider_account_id": account_id,
                 "label": str(config.get("account_label") or contract["label"]),
                 "runtime": contract["runtime"],
-                "operations": list(contract["operations"]),
+                "operations": list(contract["operations"])
+                if account_state in {"connected", "observation_only"}
+                else [],
                 "limitations": list(contract["limitations"]),
-                "state": "observation_only"
-                if runtime._observation_active
-                else "configured",
+                "state": account_state,
+                "connection_truth": truth,
             }
         )
     return accounts
@@ -173,6 +189,9 @@ def reminder_accounts(
     """Negotiate exact provider capabilities without leaking credentials."""
 
     accounts: dict[tuple[str, str], dict[str, Any]] = {}
+    connection_truth = {
+        item["id"]: item for item in compose_connections(runtime, member_id)
+    }
     for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
         if not isinstance(entry, dict) or entry.get("enabled") is False:
             continue
@@ -205,16 +224,33 @@ def reminder_accounts(
         else:
             continue
         contract = PROVIDER_CONTRACTS[provider]
+        connection_id = str(entry.get("id") or f"{provider}-{index}")
+        truth = connection_truth.get(connection_id)
+        account_ready = bool(
+            truth and truth["setup"] == "connected" and truth["runtime"] == "running"
+        )
+        account_state = (
+            "observation_only"
+            if account_ready and runtime._observation_active
+            else "writable"
+            if account_ready
+            else str(truth["setup"])
+            if truth and truth["setup"] != "connected"
+            else str(truth["runtime"])
+            if truth
+            else "unknown"
+        )
         accounts[(provider, account_id)] = {
-            "id": str(entry.get("id") or f"{provider}-{index}"),
+            "id": connection_id,
             "provider": provider,
             "provider_account_id": account_id,
             "label": label,
             "runtime": runtime_shape,
-            "state": "observation_only" if runtime._observation_active else "writable",
-            "operations": sorted(operations),
+            "state": account_state,
+            "operations": sorted(operations) if account_ready else [],
             "native": contract["native"],
             "limitations": contract["limitations"],
+            "connection_truth": truth,
             "configured_containers": (
                 [
                     {
@@ -261,6 +297,9 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
     """Expose secret-free, member-bound capability negotiation to the UI."""
 
     accounts: list[dict[str, Any]] = []
+    connection_truth = {
+        item["id"]: item for item in compose_connections(runtime, member_id)
+    }
     for index, entry in enumerate(runtime.settings.adapter_config.get("adapters", [])):
         if not isinstance(entry, dict):
             continue
@@ -281,19 +320,30 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
             or f"{provider}-{index}"
         )
         workspace = str(config.get("workspace") or "personal")
-        writes = bool(config.get("enable_writes"))
+        connection_id = str(entry.get("id") or f"{kind}-{index}")
+        truth = connection_truth.get(connection_id)
+        account_ready = bool(
+            truth and truth["setup"] == "connected" and truth["runtime"] == "running"
+        )
+        writes = bool(config.get("enable_writes")) and account_ready
         write_capabilities = _PROVIDER_WRITE_CAPABILITIES[provider]
         accounts.append(
             {
-                "id": str(entry.get("id") or f"{kind}-{index}"),
+                "id": connection_id,
                 "provider": provider,
                 "provider_account_id": account_id,
                 "label": str(config.get("account_label") or account_id),
                 "channel": channel,
                 "workspace": workspace,
                 "state": "observation_only"
-                if runtime._observation_active
-                else "connected",
+                if account_ready and runtime._observation_active
+                else "connected"
+                if account_ready
+                else str(truth["setup"])
+                if truth and truth["setup"] != "connected"
+                else str(truth["runtime"])
+                if truth
+                else "unknown",
                 "capabilities": {
                     "read": True,
                     "threads": True,
@@ -308,6 +358,7 @@ def communication_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]
                 "write_access_remedy": None
                 if writes
                 else "Reconnect this account with provider write access.",
+                "connection_truth": truth,
             }
         )
     if (
@@ -453,6 +504,13 @@ def experience_semantics(runtime: Any, session: Session) -> dict[str, Any]:
     behavior: dict[str, Any] = (
         behavior_value if isinstance(behavior_value, dict) else {}
     )
+    preferences = runtime.settings_control.preferences_for(session.view_member_id)
+    quiet_hours = behavior.get("quiet_hours", {"start": 22, "end": 7})
+    if "quiet_start_hour" in preferences or "quiet_end_hour" in preferences:
+        quiet_hours = {
+            "start": preferences.get("quiet_start_hour", quiet_hours.get("start", 22)),
+            "end": preferences.get("quiet_end_hour", quiet_hours.get("end", 7)),
+        }
     return {
         "profile_id": profile.get("id"),
         "mode": experience_mode(runtime, session),
@@ -463,9 +521,21 @@ def experience_semantics(runtime: Any, session: Session) -> dict[str, Any]:
         "fog_checks_local_hours": [15, 17],
         "rewards_mode": profile.get("rewards_mode", "event_based"),
         "reward_distribution": profile.get("reward_distribution", {}),
-        "quiet_hours": behavior.get("quiet_hours", {"start": 22, "end": 7}),
+        "quiet_hours": quiet_hours,
         "nudge_penalty": behavior.get("nudge_penalty", 0),
-        "proactive_cap": 1 if experience_mode(runtime, session) == "compressed" else 3,
+        "proactive_cap": preferences.get(
+            "interruption_budget",
+            1 if experience_mode(runtime, session) == "compressed" else 3,
+        ),
+        "information_density": preferences.get("information_density", 2),
+        "planning_horizon_days": preferences.get("planning_horizon_days", 7),
+        "task_chunk_minutes": preferences.get(
+            "task_chunk_minutes", behavior.get("available_minutes", 15)
+        ),
+        "reminder_escalation": preferences.get("reminder_escalation", 1),
+        "celebration_intensity": preferences.get("celebration_intensity", 1),
+        "digest_hour": preferences.get("digest_hour", 8),
+        "location_cues": preferences.get("location_cues", False),
         "temporal_horizons": [
             "now",
             "next_hour",
@@ -1203,15 +1273,29 @@ def build_surface(
     elif surface == "settings":
         if session.auth_role != "principal":
             base["state"] = "limited"
-        base["capabilities"] = [
-            record.public() for _, record in sorted(runtime.capabilities.items())
-        ]
-        base["workbooks"] = _workbook_health(runtime)
-        base["observation_mode"] = runtime._observation_active
-        base["chat"] = {
-            "name": "Member chat",
-            **runtime.member_chat_policy(session.auth_member_id, session.auth_role),
+        base["control"] = compose_settings_control(runtime, session)
+        base["system"] = {
+            "capabilities": [
+                record.public() for _, record in sorted(runtime.capabilities.items())
+            ],
+            "workbooks": _workbook_health(runtime),
+            "observation": base["observation"],
+            "chat": {
+                "name": "Member chat",
+                **runtime.member_chat_policy(session.auth_member_id, session.auth_role),
+            },
+            "runtime": {
+                "state": "ready" if runtime.started else "starting",
+                "openclaw": runtime.openclaw_state,
+                "projection_count": len(runtime.projections.projection_names()),
+            },
         }
+        # Compatibility fields remain for pinned clients while the canonical
+        # Settings contract is the structured control/system pair above.
+        base["capabilities"] = base["system"]["capabilities"]
+        base["workbooks"] = base["system"]["workbooks"]
+        base["observation_mode"] = runtime._observation_active
+        base["chat"] = base["system"]["chat"]
     return base
 
 

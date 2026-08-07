@@ -77,6 +77,20 @@ Each section has `not_started|in_progress|complete|failed|rolled_back`, versione
 
 Bootstrap completes only when a secret-scanned report lists versions, checks, events, installed capabilities, skipped optionals, observation start/end-not-before, backup/restore proof, and rollback status. `bootstrap.completed` is not emitted if any required section is incomplete.
 
+## Post-bootstrap Settings reconciliation
+
+After bootstrap, the member portal may change only the operational state that
+ADR-0005 assigns to the Settings control plane. Bounded preferences and
+adapter pause state use an atomic secret-free desired-state journal and typed
+receipts. Pause/resume reconciles the existing supervisor; it does not create a
+new daemon or mutate provider data. Add Bridge may create a scoped enrollment
+request, but the reviewed bootstrap ceremony still owns short-lived package
+export, target-member acceptance, Tailscale and OS-permission verification,
+owner-scoped ingest proof, finalization, and bootstrap-material revocation.
+OAuth grants and scope expansion remain provider-specific secure activation
+steps. No password, token, or secure-reference path is returned to browser
+Settings.
+
 ## Observation trust period
 
 Observation begins before any connector/action becomes live and remains active for at least five full days and normally seven. Disable requires a principal, healthy backup, reviewed suppression history, zero unresolved privacy/governance/identity failures, reconciled connector watermarks, passing Doctor, explicit confirmation, and an audit event. Time alone never flips it. Inbound facts, internal reasoning, projections, workbooks, and local UI continue. The final external seam stores the complete redacted-for-view but audit-complete would-have-happened record and performs no side effect.
