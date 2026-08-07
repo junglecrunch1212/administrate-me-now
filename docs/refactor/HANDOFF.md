@@ -3,16 +3,16 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO001_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
+gate_result: CO002_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
 verified_local_date: 2026-08-06
 verified_github_date: 2026-08-06
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: eeec1a4bd8ef6955636871ff7cc75a41a571fc73
+candidate_commit_resolution: 7e7cff75cbc0d04fedd79cb8e5ef85743ebe5553
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/248
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co002_release_gates_and_live_notes_verification
+next_phase: co002_observation_review_and_personal_knowledge_bridge_enrollment
 ---
 
 # Release handoff
@@ -58,8 +58,29 @@ Python/bridge/OpenClaw builds, clean install, tenant isolation, authenticated
 backup/restore, and performance budgets passed. The rendered Gate 7 portal run
 passed 119/119 checks across desktop, tablet, and phone with zero failed checks,
 including search restoration from a URL reload.
-Exact commit, deployment, Doctor, and live-browser evidence remain pending until
-the reviewed candidate is switched into observation.
+The reviewed candidate was then switched into observation and verified as
+recorded below.
+
+Live activation completed on immutable commit
+`7e7cff75cbc0d04fedd79cb8e5ef85743ebe5553`. The authenticated pre-switch
+backup is `administrateme-20260807T000806Z.ambackup`; the prior release remains
+pointer-addressable for rollback. Stable-wrapper status and the full candidate
+Doctor report healthy loopback services, observation-only runtime state, 14/14
+projection stores and checkpoints, 5/5 managed OpenClaw jobs, exact reviewed
+OpenClaw `2026.7.2` plugin discovery, and a passing canonical synthetic round
+trip with zero external side effects.
+
+The in-app browser verified the canonical `/member/notes` route and the
+`/member/knowledge` 308 compatibility redirect against the running release.
+The adult rail contains exactly ten destinations with Notes active after
+People; observation, source freshness, and a truthful Not Configured empty
+state remain visible. A read-only search restored exactly from its URL after a
+reload and cleared back to the canonical route. The surface had no document
+overflow at 1440x1000, the active 966 px window, or 390x844; its source/search
+controls and chat drawer remained available on phone; and the browser reported
+no warnings or errors. Personal knowledge truthfully remains `pending-bridge`;
+this deployment does not claim a live Notes provider or enable any external
+write.
 
 ## 2026-08-06 CO-001 five-surface executive loop
 
