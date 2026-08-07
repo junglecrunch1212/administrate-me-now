@@ -12,6 +12,8 @@ from keyring.errors import PasswordDeleteError
 
 from bootstrap.contracts import DeploymentPaths, atomic_write
 
+KEYCHAIN_ALIAS_FILENAME = "keychain-runtime-aliases.json"
+
 
 class SecretStore(Protocol):
     provider_name: str
@@ -32,20 +34,75 @@ class MacOSKeychainStore:
 
     def __init__(self, paths: DeploymentPaths) -> None:
         self.account = paths.keychain_account()
+        self._prefix = f"keychain://{self.account}/"
+        self._aliases = self._load_aliases(
+            paths.instance_dir / "config" / KEYCHAIN_ALIAS_FILENAME
+        )
+
+    def _load_aliases(self, path: os.PathLike[str]) -> dict[str, str]:
+        alias_path = os.fspath(path)
+        if not os.path.exists(alias_path):
+            return {}
+        if os.path.islink(alias_path):
+            raise RuntimeError("refusing a symlinked Keychain runtime alias map")
+        try:
+            with open(alias_path, encoding="utf-8") as handle:
+                document = json.loads(handle.read())
+            raw_aliases = document["aliases"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Keychain runtime alias map is invalid") from exc
+        if document.get("schema_version") != 1 or not isinstance(raw_aliases, dict):
+            raise RuntimeError("Keychain runtime alias map is invalid")
+        aliases: dict[str, str] = {}
+        for source, target in raw_aliases.items():
+            if (
+                not isinstance(source, str)
+                or not isinstance(target, str)
+                or not source.startswith(self._prefix)
+                or not target.startswith(self._prefix)
+                or source == target
+                or not source.removeprefix(self._prefix)
+                or not target.removeprefix(self._prefix)
+                or "/" in source.removeprefix(self._prefix)
+                or "/" in target.removeprefix(self._prefix)
+            ):
+                raise RuntimeError(
+                    "Keychain runtime alias map crosses an instance boundary"
+                )
+            aliases[source] = target
+        for source in aliases:
+            self._resolve_reference(source, aliases=aliases)
+        return aliases
+
+    def _resolve_reference(
+        self, reference: str, *, aliases: dict[str, str] | None = None
+    ) -> str:
+        if not reference.startswith(self._prefix):
+            raise RuntimeError("secret reference belongs to another instance")
+        mapping = self._aliases if aliases is None else aliases
+        resolved = reference
+        visited: set[str] = set()
+        while resolved in mapping:
+            if resolved in visited:
+                raise RuntimeError("Keychain runtime alias map contains a cycle")
+            visited.add(resolved)
+            resolved = mapping[resolved]
+        return resolved
 
     def _service(self, name: str) -> str:
         return f"com.administrateme.{self.account}.{name}"
 
     def put(self, name: str, value: bytes) -> str:
+        logical_reference = f"{self._prefix}{name}"
+        physical_reference = self._resolve_reference(logical_reference)
+        physical_name = physical_reference.removeprefix(self._prefix)
         encoded = base64.urlsafe_b64encode(value).decode("ascii")
-        keyring.set_password(self._service(name), self.account, encoded)
-        return f"keychain://{self.account}/{name}"
+        keyring.set_password(self._service(physical_name), self.account, encoded)
+        return logical_reference
 
     def get(self, reference: str) -> bytes:
-        prefix = f"keychain://{self.account}/"
-        if not reference.startswith(prefix):
-            raise RuntimeError("secret reference belongs to another instance")
-        name = reference.removeprefix(prefix)
+        physical_reference = self._resolve_reference(reference)
+        name = physical_reference.removeprefix(self._prefix)
         encoded = keyring.get_password(self._service(name), self.account)
         if encoded is None:
             raise RuntimeError("required Keychain item is unavailable")
@@ -59,10 +116,8 @@ class MacOSKeychainStore:
         return True
 
     def delete(self, reference: str) -> None:
-        prefix = f"keychain://{self.account}/"
-        if not reference.startswith(prefix):
-            raise RuntimeError("secret reference belongs to another instance")
-        name = reference.removeprefix(prefix)
+        physical_reference = self._resolve_reference(reference)
+        name = physical_reference.removeprefix(self._prefix)
         try:
             keyring.delete_password(self._service(name), self.account)
         except PasswordDeleteError:

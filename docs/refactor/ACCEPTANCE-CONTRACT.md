@@ -6,6 +6,12 @@ existed; a dead command is not evidence. Every row below now names a retained
 test, script, build, or CI job. The aggregate interface is
 `scripts/acceptance/release-candidate.sh` on the supported macOS runner.
 
+Runtime-Keychain amendment (2026-08-07): AC-21 additionally proves that a
+Python-boundary migration copies configured logical secrets only through an
+anonymous pipe, verifies them under the candidate interpreter, atomically
+publishes an instance-scoped alias map, preserves old items for rollback, and
+fails before release mutation on copy, receipt, map, or bounded-probe failure.
+
 CO-006 amendment (2026-08-07): AC-32 proves Finance through the production
 composition without adding a projection or provider write seam. The Finance
 workbook is the reviewed planning authority; Plaid owns private provider facts;

@@ -1,6 +1,6 @@
 # ADR-0006 — Runtime baseline and reviewed cutover
 
-Status: **ACCEPTED; CANDIDATE VALIDATED, LIVE CUTOVER NOT AUTHORIZED**
+Status: **ACCEPTED; LIVE CUTOVER AUTHORIZED, KEYCHAIN-BRIDGED RETRY PENDING**
 
 Date: 2026-08-07
 
@@ -57,15 +57,23 @@ Poetry kept outside that venv, and invokes the candidate upgrade manager from
 there. The ordinary same-runtime updater continues to execute the active
 release's trusted controller. Neither path mutates the active application venv.
 
-macOS Keychain items retain an application allowlist. Before release
-preparation or service mutation, the migration controller probes every
-Keychain reference present in validated instance JSON from the candidate
-interpreter in bounded child processes. A prompt, timeout, or inaccessible item
-fails closed while the old release remains active. The operator must keep
-`Confirm before allowing access` and add only the reviewed Python 3.14
-application alongside the existing Python entry for every AdministrateMe item;
-`Allow all applications` is prohibited. Secret values never cross command
-arguments or diagnostic output.
+macOS Keychain items retain both an application allowlist and an application
+partition bound to the creating interpreter. A login-Keychain password reset or
+an ACL edit that appears to allow two Python applications can therefore still
+strand the values at the partition boundary. The migration must not reset the
+Keychain, select `Allow all applications`, or require a household password.
+
+For an approved Python-boundary migration, the reviewed launcher runs a small
+coordinator under the active interpreter. It reads each currently effective
+item in process memory and sends the value only through an anonymous pipe to a
+bounded candidate-interpreter child. The child creates and reads back a new,
+runtime-bound item. After every item verifies, the coordinator atomically
+publishes a non-secret logical-reference alias map. The candidate store resolves
+logical references through that map; an older rollback release ignores the map
+and continues using its untouched original items. A missing source, failed
+copy, invalid map, prompt, timeout, or failed candidate probe aborts before
+release preparation or service mutation. Secret values never cross command
+arguments, files, stdout, stderr, or diagnostic output.
 
 Rollback may cross the version boundary because it restores a previously
 reviewed immutable release and its own venv. Stable wrappers resolve the active
@@ -90,8 +98,8 @@ process without weakening any readiness or release gate.
 - Node 24 can be installed without relinking Node 22, so the live Gateway and
   runtime are unchanged while the candidate is tested.
 - D10 remains historical evidence and is superseded by D30.
-- The 3.11/22 live instance is healthy but is not evidence that the 3.14/24
-  candidate has been promoted.
+- The 3.11/22 live instance remains healthy until the separately authorized
+  migration completes; its original Keychain items remain a rollback asset.
 
 ## Classification
 
@@ -100,5 +108,6 @@ process without weakening any readiness or release gate.
 - **MODERNIZE:** Python, Node, npm, Poetry, manifests, CI, and installer paths.
 - **SUPERSEDE:** D10 as the future runtime baseline and implicit same-runtime
   upgrade assumptions.
-- **DEFER:** only the live cutover, pending explicit post-review authorization;
-  the candidate architecture and executable migration gate are not deferred.
+- **DEFER:** only completion of the already authorized live cutover; the
+  candidate architecture, rehearsal, and executable migration gate are
+  complete.
