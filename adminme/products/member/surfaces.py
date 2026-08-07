@@ -782,7 +782,11 @@ def build_surface(
         base["freshness"] = surface_freshness(
             generated_at=now,
             latest_source_at=_latest_time(
-                today_rows, "updated_at", "occurred_at", "proposed_at", "start_at"
+                today_rows,
+                "provider_updated_at",
+                "updated_at",
+                "occurred_at",
+                "proposed_at",
             ),
             stale_after_seconds=172800,
             row_count=len(today_rows),
@@ -1256,7 +1260,7 @@ def build_surface(
         )
         base["freshness"] = surface_freshness(
             generated_at=now,
-            latest_source_at=_latest_time(rows, "updated_at", "start_at"),
+            latest_source_at=_latest_time(rows, "provider_updated_at", "updated_at"),
             stale_after_seconds=172800,
             row_count=len(rows),
             configured=bool(base["cockpit"]["sources"]),

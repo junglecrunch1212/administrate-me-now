@@ -10,9 +10,9 @@ the future family Mac. Phase A uses a disposable Mac and fake identities.
 - macOS 14, 15, or 26 on officially supported hardware; macOS 26 is preferred
   for a new Mac mini.
 - A dedicated non-administrator-at-runtime account with FileVault enabled.
-- Python `>=3.11,<3.12`, Node `>=22.22.3,<23`, SQLCipher `>=4.12,<5`
+- Python `>=3.14,<3.15`, Node `>=24.15,<25`, SQLCipher `>=4.12,<5`
   through the locked `sqlcipher3==0.6.2` Apple-silicon wheel,
-  Homebrew `>=6,<7`, Poetry `2.2.1`, and npm `>=10.9,<11`.
+  Homebrew `>=6,<7`, Poetry `2.4.1`, and npm `>=11.6,<12`.
 - OpenClaw `2026.7.2`, plugin API `2026.7.2`, and source commit
   `944cf08f94c334cff2b0fdf7e01187a9efa42715` exactly. Because that version is
   unpublished on npm, the installer verifies its GitHub archive SHA-256 and
@@ -20,6 +20,12 @@ the future family Mac. Phase A uses a disposable Mac and fake identities.
 
 The machine-readable source is `bootstrap/versions.json`. These names are the
 stable central/operator surface:
+
+ADR-0006 governs migration from an existing Python 3.11/Node 22 release. The
+new formulae are installed side by side and candidate checks do not relink
+Node, rewrite LaunchAgents, move `current-release.json`, or restart the active
+services. A live cutover is a later explicit operation using
+`--approve-runtime-migration` after the complete rehearsal.
 
 ```text
 bootstrap/bootstrap-macos.sh
@@ -212,6 +218,17 @@ then run:
 ```bash
 ./bootstrap/update.sh /absolute/path/to/reviewed-candidate
 ```
+
+For a separately rehearsed Python/Node baseline change, the reviewed command
+is instead:
+
+```bash
+./bootstrap/update.sh --approve-runtime-migration /absolute/path/to/clean-reviewed-candidate
+```
+
+The migration form refuses a dirty or non-Git candidate and self-hosts the
+candidate controller in a separate versioned tooling venv. It does not run the
+new controller inside, or synchronize, the active release's venv.
 
 Compatibility validation happens before backup, service stop, release copy,
 or pointer replacement. A different OpenClaw version, commit, or plugin API is

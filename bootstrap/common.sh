@@ -7,24 +7,17 @@ REPOSITORY_ROOT="$(cd "$BOOTSTRAP_DIR/.." && pwd -P)"
 DEFAULT_INSTANCE_ROOT="$HOME/Library/Application Support/AdministrateMe"
 ACTIVE_RELEASE_ROOT=""
 
-# Homebrew's versioned Node formula is keg-only on Apple silicon.  A fresh
-# Terminal may therefore find `brew` but not the exact Node/OpenClaw binaries
-# installed by bootstrap.  Reconstruct the supported operator PATH for every
-# stable wrapper instead of relying on shell-profile state.
+# Ensure Homebrew itself is discoverable before resolving the active release.
+# The versioned Node path is selected later from that release's manifest; a
+# candidate wrapper must never make an older live release use the candidate's
+# runtime merely because both formulae are installed side by side.
 for adminme_bin_dir in /opt/homebrew/bin /usr/local/bin; do
   if [[ -d "$adminme_bin_dir" && ":$PATH:" != *":$adminme_bin_dir:"* ]]; then
     PATH="$adminme_bin_dir:$PATH"
   fi
 done
-if command -v brew >/dev/null 2>&1; then
-  adminme_node_prefix="$(brew --prefix node@22 2>/dev/null || true)"
-  if [[ -n "$adminme_node_prefix" && -d "$adminme_node_prefix/bin" \
-    && ":$PATH:" != *":$adminme_node_prefix/bin:"* ]]; then
-    PATH="$adminme_node_prefix/bin:$PATH"
-  fi
-fi
 export PATH
-unset adminme_bin_dir adminme_node_prefix
+unset adminme_bin_dir
 
 fail() {
   echo "AdministrateMe: $1" >&2
@@ -60,7 +53,7 @@ resolve_active_release() {
   fi
   [[ ! -L "$pointer" ]] || fail "refusing a symlinked active-release pointer"
   local parser
-  parser="$(command -v python3.11 || command -v python3 || command -v python || true)"
+  parser="$(command -v python3.14 || command -v python3.11 || command -v python3 || command -v python || true)"
   [[ -n "$parser" ]] || fail "Python is unavailable for the active-release pointer"
   local candidate
   candidate="$("$parser" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["path"])' "$pointer")" \
@@ -72,6 +65,25 @@ resolve_active_release() {
   [[ -d "$candidate" ]] || fail "the active release directory is missing"
   ACTIVE_RELEASE_ROOT="$candidate"
   export ACTIVE_RELEASE_ROOT
+}
+
+configure_active_runtime_path() {
+  command -v brew >/dev/null 2>&1 || return
+  local manifest="$ACTIVE_RELEASE_ROOT/bootstrap/versions.json"
+  [[ -f "$manifest" ]] || fail "the active release version manifest is missing"
+  local parser formula node_prefix
+  parser="$(command -v python3.14 || command -v python3.11 || command -v python3 || command -v python || true)"
+  [[ -n "$parser" ]] || fail "Python is unavailable for the active runtime manifest"
+  formula="$("$parser" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["node"]["formula"])' "$manifest")" \
+    || fail "the active release version manifest is invalid"
+  [[ "$formula" =~ ^node@[0-9]+$ ]] || fail "the active release Node formula is invalid"
+  node_prefix="$(brew --prefix "$formula" 2>/dev/null || true)"
+  [[ -n "$node_prefix" && -d "$node_prefix/bin" ]] \
+    || fail "the active release requires unavailable Homebrew formula $formula"
+  if [[ ":$PATH:" != *":$node_prefix/bin:"* ]]; then
+    PATH="$node_prefix/bin:$PATH"
+    export PATH
+  fi
 }
 
 select_python() {
@@ -100,6 +112,7 @@ run_cli() {
   done
   resolve_instance_root
   resolve_active_release
+  configure_active_runtime_path
   local python_bin
   python_bin="$(select_python)"
   (

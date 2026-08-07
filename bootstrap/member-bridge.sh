@@ -8,7 +8,7 @@ POINTER="$BRIDGE_ROOT/app/current-release.json"
   echo "AdministrateMe member bridge is not installed." >&2
   exit 1
 }
-python_bin="$(command -v python3.11 || command -v python3 || command -v python)"
+python_bin="$(command -v python3.14 || command -v python3.11 || command -v python3 || command -v python)"
 release_root="$("$python_bin" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["path"])' "$POINTER")"
 case "$release_root" in
   "$BRIDGE_ROOT"/app/releases/*) ;;

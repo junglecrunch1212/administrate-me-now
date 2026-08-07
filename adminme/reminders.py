@@ -209,46 +209,83 @@ def _provider_account(account: dict[str, Any]) -> tuple[str, str]:
     )
 
 
-def _possible_copy_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return a conservative read-only grouping key; never merge provider rows."""
+def _possible_copy_key(item: dict[str, Any]) -> tuple[str, str] | None:
+    """Return a conservative provider/title key; never merge provider rows."""
 
     if item.get("completed"):
         return None
     title = re.sub(r"\s+", " ", str(item.get("title") or "").strip()).casefold()
     if len(title) < 4:
         return None
-    return (
-        str(item.get("provider") or ""),
-        str(item.get("provider_account_id") or ""),
-        title,
-    )
+    return (str(item.get("provider") or ""), title)
 
 
 def _mark_possible_copies(items: list[dict[str, Any]]) -> None:
-    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    candidate_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for item in items:
         key = _possible_copy_key(item)
         if key is not None:
-            groups.setdefault(key, []).append(item)
-    for key, rows in groups.items():
-        containers = {
-            (str(row.get("list_external_id") or ""), str(row.get("list_name") or ""))
-            for row in rows
-        }
-        if len(rows) < 2 or len(containers) < 2:
-            continue
-        digest = hashlib.sha256("\x1f".join(key).encode()).hexdigest()[:12]
-        group_id = f"possible-copy:{digest}"
-        identities = [str(row["id"]) for row in rows]
-        for row in rows:
-            row["possible_copy"] = {
-                "contract": "possible-reminder-copy-v1",
-                "group_id": group_id,
-                "count": len(rows),
-                "reason": "Same normalized title appears in more than one provider list",
-                "member_review_required": True,
-                "provider_items_preserved": identities,
+            candidate_groups.setdefault(key, []).append(item)
+
+    for base_key, candidate_rows in candidate_groups.items():
+        known_accounts = sorted(
+            {
+                str(row.get("provider_account_id") or "")
+                for row in candidate_rows
+                if str(row.get("provider_account_id") or "")
             }
+        )
+        if len(known_accounts) <= 1:
+            discriminator = known_accounts[0] if known_accounts else "unknown-account"
+            partitions = [(discriminator, candidate_rows)]
+        else:
+            # A missing legacy account id may only join a group when exactly one
+            # concrete account is possible.  Multiple concrete accounts remain
+            # isolated, and unresolved legacy rows form their own review group.
+            partitions = [
+                (
+                    account_id,
+                    [
+                        row
+                        for row in candidate_rows
+                        if str(row.get("provider_account_id") or "") == account_id
+                    ],
+                )
+                for account_id in known_accounts
+            ]
+            unresolved = [
+                row
+                for row in candidate_rows
+                if not str(row.get("provider_account_id") or "")
+            ]
+            if unresolved:
+                partitions.append(("unknown-account", unresolved))
+
+        for discriminator, rows in partitions:
+            containers = {
+                (
+                    str(row.get("list_external_id") or ""),
+                    str(row.get("list_name") or ""),
+                )
+                for row in rows
+            }
+            if len(rows) < 2 or len(containers) < 2:
+                continue
+            digest_key = (*base_key, discriminator)
+            digest = hashlib.sha256("\x1f".join(digest_key).encode()).hexdigest()[:12]
+            group_id = f"possible-copy:{digest}"
+            identities = sorted(str(row["id"]) for row in rows)
+            for row in rows:
+                row["possible_copy"] = {
+                    "contract": "possible-reminder-copy-v1",
+                    "group_id": group_id,
+                    "count": len(rows),
+                    "reason": (
+                        "Same normalized title appears in more than one provider list"
+                    ),
+                    "member_review_required": True,
+                    "provider_items_preserved": identities,
+                }
 
 
 def compose_effective_reminders(

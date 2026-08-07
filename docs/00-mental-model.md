@@ -1,5 +1,9 @@
 # AdministrateMe — mental model
 
+> Historical runtime note: references to Python 3.11 in this document describe
+> the original implementation baseline. ADR-0006/D30 governs future releases
+> at Python 3.14 and Node 24; live cutover remains separately approved.
+
 _Read this before reading anything else._
 
 This document is the mental model of AdministrateMe. It explains what the system **is**, what is **core** to it, and what is **connected** to it. It is the first read for any human or AI agent joining the project, and it is the reference for catching architectural drift before it becomes spec drift.

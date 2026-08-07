@@ -81,10 +81,19 @@ class ActionGateConfig:
     forbidden_outbound_parties: list[dict[str, Any]] = field(default_factory=list)
 
     def gate(self, action: str) -> GateValue:
-        """Return the gate value for ``action``. Default ``allow`` when the
-        action is unknown — keeps existing routes working as new gates land
-        per CONSOLE_PATTERNS.md §3 ('actions default to allow if absent')."""
-        return self.action_gates.get(action, "allow")
+        """Return the reviewed policy for ``action``; unknown actions fail closed.
+
+        Exact rules override trailing-wildcard family rules.  ``__default__`` is
+        explicit in production policy and defaults to ``deny`` when omitted.
+        """
+
+        exact = self.action_gates.get(action)
+        if exact is not None:
+            return exact
+        for pattern, value in self.action_gates.items():
+            if pattern != "__default__" and _match_pattern(pattern, action):
+                return value
+        return self.action_gates.get("__default__", "deny")
 
     def rate_limit_for(self, action: str) -> RateLimit:
         """Return the RateLimit for ``action`` or the configured default

@@ -111,6 +111,8 @@ def surface_freshness(
         state = "stale"
     elif row_count == 0:
         state = "healthy_empty"
+    elif latest is None:
+        state = "unknown"
     else:
         state = "fresh"
     return {

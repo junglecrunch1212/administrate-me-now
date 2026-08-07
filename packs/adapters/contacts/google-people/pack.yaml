@@ -8,7 +8,7 @@ pack:
   license: Apache-2.0
   min_platform: 0.4.0
 sensitivity_floor: normal
-runtime: {language: python, python_version: ">=3.11", entrypoint: adapter.py, class: GooglePeopleAdapter}
+runtime: {language: python, python_version: ">=3.14,<3.15", entrypoint: adapter.py, class: GooglePeopleAdapter}
 triggers: {kind: external_poll, schedule: "*/5 * * * *"}
 depends_on:
   event_types: [adapter.authenticated, contact.record.observed, contact.record.deleted, contact.group.observed]

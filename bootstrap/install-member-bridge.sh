@@ -69,10 +69,10 @@ commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 [[ "$commit" == "$EXPECTED_COMMIT" ]] \
   || fail "checked-out commit does not match the reviewed bridge release"
 
-if ! brew list --versions python@3.11 >/dev/null 2>&1; then
-  brew install python@3.11
+if ! brew list --versions python@3.14 >/dev/null 2>&1; then
+  brew install python@3.14
 fi
-python_bin="$(brew --prefix python@3.11)/bin/python3.11"
+python_bin="$(brew --prefix python@3.14)/bin/python3.14"
 release_dir="$BRIDGE_ROOT/app/releases/$commit"
 release_parent="$BRIDGE_ROOT/app/releases"
 mkdir -p "$release_parent"
@@ -90,10 +90,10 @@ fi
   && -f "$release_dir/.administrateme-source-commit" \
   && "$(<"$release_dir/.administrateme-source-commit")" == "$commit" ]] \
   || fail "the immutable member release is incomplete; preserve it for diagnosis and use a new bridge root"
-poetry_venv="$BRIDGE_ROOT/app/tooling/poetry-2.2.1"
+poetry_venv="$BRIDGE_ROOT/app/tooling/poetry-2.4.1"
 if [[ ! -x "$poetry_venv/bin/poetry" ]]; then
   "$python_bin" -m venv "$poetry_venv"
-  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.2.1"
+  "$poetry_venv/bin/python" -m pip install --disable-pip-version-check "poetry==2.4.1"
 fi
 if [[ ! -x "$release_dir/.venv/bin/python" ]]; then
   "$python_bin" -m venv "$release_dir/.venv"
@@ -103,7 +103,7 @@ if [[ ! -f "$venv_receipt" || "$(<"$venv_receipt")" != "$commit" ]]; then
   (
     cd "$release_dir"
     VIRTUAL_ENV="$release_dir/.venv" \
-      "$poetry_venv/bin/poetry" -C bridge install --only main --sync --no-interaction
+      "$poetry_venv/bin/poetry" -C bridge sync --only main --no-interaction
   )
   printf '%s\n' "$commit" >"$venv_receipt"
 fi

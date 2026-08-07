@@ -136,7 +136,14 @@ def test_ac30_people_is_private_qualified_replayable_and_human_gated(
         assert [row["display_name"] for row in cockpit["directory"]] == [
             "Example Neighbor"
         ]
-        assert cockpit["needs_review"]["unconfirmed_endpoint_count"] == 0
+        assert cockpit["unresolved_endpoints"] == {
+            "count": 0,
+            "actionable_count": 0,
+            "copy": (
+                "Observed senders stay out of People. Only a deterministic, "
+                "evidence-backed identity candidate may enter Triage for confirmation."
+            ),
+        }
         assert "offers@example.test" not in people.text
         party_id = cockpit["directory"][0]["party_id"]
 

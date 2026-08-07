@@ -286,6 +286,10 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             "memory" in str(getattr(route, "path", "")).casefold()
             for route in app_a.routes
         )
+        assert not any(
+            str(getattr(route, "path", "")) == "/api/member/v1/external-sync/commands"
+            for route in app_a.routes
+        )
 
         # A bridge cannot claim another owner or another running tenant.
         mismatch = EventEnvelope(

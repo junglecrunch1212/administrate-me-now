@@ -64,7 +64,7 @@ def install_launch_agents(
             paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
         ),
         "PATH": (
-            f"{paths.root}/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:"
+            f"{paths.root}/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@24/bin:"
             "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         ),
     }
@@ -688,10 +688,19 @@ class BootstrapWizard:
         }
         mapping_path = config_dir / "member-mapping.json"
         atomic_write(mapping_path, json.dumps(mapping, indent=2).encode("utf-8"))
+        policy_artifacts: list[Path] = []
+        for name in ("governance.yaml", "authority.yaml"):
+            source = self.root / "bootstrap" / "policy" / name
+            if not source.is_file():
+                raise WizardFailure(f"reviewed bootstrap policy is missing: {name}")
+            destination = config_dir / name
+            atomic_write(destination, source.read_bytes())
+            policy_artifacts.append(destination)
         state["tenant_id"] = tenant_id
         state["sections"]["3"]["artifacts"] = [
             str(instance_path.relative_to(self.paths.root)),
             str(mapping_path.relative_to(self.paths.root)),
+            *[str(path.relative_to(self.paths.root)) for path in policy_artifacts],
         ]
         return {
             "member_count": len(members),

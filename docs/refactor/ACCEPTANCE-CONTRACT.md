@@ -6,11 +6,17 @@ existed; a dead command is not evidence. Every row below now names a retained
 test, script, build, or CI job. The aggregate interface is
 `scripts/acceptance/release-candidate.sh` on the supported macOS runner.
 
+CO-005 amendment (2026-08-07): release candidates run on Python
+`>=3.14,<3.15` and Node `>=24.15,<25` under ADR-0006. A live 3.11/22 release
+is not migrated by test setup. Candidate preparation is side-by-side and a
+version-changing activation requires the explicit runtime-migration gate after
+clean bootstrap, replay, backup/restore, browser, Doctor, and rollback proof.
+
 Primary-surface amendment (2026-08-05): AC-05, AC-10, AC-11, AC-14, and AC-21
 also cover the bidirectional Google Calendar, Apple Calendar, Apple Reminders,
 and Apple Notes release. Deterministic tests exercise complete supported
 provider schemas, create/update/delete and completion feedback, recurrence and
-alarms, reminder lists and geofences, Notes folders and mutations, durable
+alarms, reminder lists and geofences, Notes folders and ingestion, durable
 cursors, bridge command idempotency, runtime adapter configuration, and
 observation/governance. Real OAuth, EventKit, Notes Automation consent, and
 iCloud propagation remain explicit live activation evidence.
@@ -23,8 +29,8 @@ xfail. Fakes may stand in for provider credentials and household data, but not
 for the event log, bus, projections, authorization, HTTP composition, backup,
 restore, OpenClaw protocol, or browser rendering boundary named by a row.
 
-The release environment is macOS 14 on Apple silicon, Python 3.11 from the
-lockfile, Node 22.23.1 (the preferred bootstrap pin), OpenClaw API
+The release environment is macOS 14 on Apple silicon, Python 3.14.6 from the
+lockfile, Node 24.19.0 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
 `944cf08f94c334cff2b0fdf7e01187a9efa42715`, installed from the exact
 SHA-256-pinned GitHub source archive because that version is not on npm,

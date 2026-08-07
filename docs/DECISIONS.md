@@ -88,6 +88,9 @@ If Hearth is ever extracted to a separate package (post-v1), that extraction hap
 
 Platform versions for v1: **Python 3.11**, **Node 22 LTS**. These match what prompt 00's sandbox-downgrade established. Version upgrades happen via a dedicated phase prompt with a migration plan; they do not happen opportunistically, and no prompt adds a dependency that requires a newer minimum version without the upgrade prompt having run first.
 
+**Superseded by:** D30 for future releases. Existing deployments remain on
+their reviewed runtime until D30's separate cutover gate is authorized.
+
 ### D11 — Skill pack directory shape
 
 **Decided:** 2026-04-23. **Status:** CONFIRMED.
@@ -538,6 +541,25 @@ optimistic concurrency, and requested/completed/failed audit reconciliation.
 A UI acceptance is not provider success. Live EventKit/Google propagation is
 separate release evidence; absent credentials or grants render read-only or
 not configured without weakening the Reminders product contract.
+
+### D30 — Python 3.14 and Node 24 are the target; runtime cutover is explicit
+
+**Decided:** 2026-08-07. **Status:** CONFIRMED. **Supersedes:** D10 as the
+future architecture. **Governing ADR:**
+`docs/refactor/ADR-0006-RUNTIME-BASELINE-AND-REVIEWED-CUTOVER.md`.
+
+Future central and member-bridge releases target Python `>=3.14,<3.15` and
+Node `>=24.15,<25`; Homebrew 6, Poetry 2.4.1, and npm 11 are the matching
+toolchain. The pinned OpenClaw version/commit and SQLCipher boundary do not
+move as part of this decision.
+
+This decision does not authorize replacement of a running 3.11/22 instance.
+The new runtimes are installed side by side, candidate environments are
+release-local, and a version-changing upgrade fails before service replacement
+without the explicit runtime-migration flag after clean install, replay,
+backup/restore, browser, OpenClaw, Doctor, and rollback evidence. A parser
+fallback for an older release pointer is migration compatibility, not support
+for 3.11 as the future application runtime.
 
 ---
 

@@ -236,10 +236,13 @@ def compose_people_cockpit(
                 str(item.get("provider_account_id") or ""),
             ),
         ),
-        "needs_review": {
-            "unconfirmed_endpoint_count": unconfirmed_endpoint_count,
-            "href": surface_link("triage", object_kind="view", object_id="ready"),
-            "copy": "Observed senders stay out of People until identity is confirmed.",
+        "unresolved_endpoints": {
+            "count": unconfirmed_endpoint_count,
+            "actionable_count": 0,
+            "copy": (
+                "Observed senders stay out of People. Only a deterministic, "
+                "evidence-backed identity candidate may enter Triage for confirmation."
+            ),
         },
         "generated_at": current.isoformat().replace("+00:00", "Z"),
         "rules": {

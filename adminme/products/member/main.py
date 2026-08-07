@@ -253,25 +253,6 @@ class RoutineStepOutcomeRequest(BaseModel):
     outcome: Literal["completed", "skipped"]
 
 
-class ExternalWriteRequest(BaseModel):
-    """One member-authorized mutation of a primary external surface."""
-
-    model_config = {"extra": "forbid"}
-    provider: Literal[
-        "google_calendar",
-        "google_tasks",
-        "apple_calendar",
-        "apple_reminders",
-        "apple_notes",
-    ]
-    provider_account_id: str = Field(min_length=1, max_length=500)
-    operation: str = Field(min_length=1, max_length=120)
-    target_external_id: str | None = Field(default=None, max_length=1000)
-    expected_provider_revision: str | None = Field(default=None, max_length=1000)
-    payload: dict[str, Any] = Field(default_factory=dict)
-    request_id: str = Field(min_length=8, max_length=120)
-
-
 class CommsCommandRequest(BaseModel):
     """One explicit member decision against a visible communication."""
 
@@ -508,16 +489,6 @@ _EXTERNAL_OPERATIONS = {
         "create_list",
         "update_list",
         "delete_list",
-    },
-    "apple_notes": {
-        "create_note",
-        "update_note",
-        "append_note",
-        "move_note",
-        "delete_note",
-        "create_folder",
-        "update_folder",
-        "delete_folder",
     },
 }
 _COMMS_EXTERNAL_OPERATIONS = {
@@ -1274,64 +1245,6 @@ def _materialization_envelopes(
             payload=payload,
         )
     ]
-
-
-@router.post("/api/member/v1/external-sync/commands", status_code=202)
-async def request_external_write(
-    body: ExternalWriteRequest, request: Request, session: SessionDep
-) -> dict[str, Any]:
-    if session.auth_member_id != session.view_member_id:
-        raise HTTPException(
-            403, "external writes are unavailable while viewing another member"
-        )
-    if body.operation not in _EXTERNAL_OPERATIONS[body.provider]:
-        raise HTTPException(422, "operation is not supported by this provider")
-    runtime = _runtime(request)
-    now = EventEnvelope.now_utc_iso()
-    payload = {
-        "command_id": body.request_id,
-        "member_id": session.auth_member_id,
-        "provider": body.provider,
-        "provider_account_id": body.provider_account_id,
-        "operation": body.operation,
-        "target_external_id": body.target_external_id,
-        "expected_provider_revision": body.expected_provider_revision,
-        "payload": {
-            **body.payload,
-            **(
-                {"expected_provider_revision": body.expected_provider_revision}
-                if body.expected_provider_revision
-                else {}
-            ),
-        },
-        "requested_at": now,
-    }
-    decision = await runtime.guarded_write.check(
-        session, "external_sync.write_requested", payload
-    )
-    if not decision.pass_:
-        raise HTTPException(
-            409 if decision.layer_failed == "governance" else 403,
-            {"reason": decision.reason, "correlation_id": decision.correlation_id},
-        )
-    envelope = EventEnvelope(
-        event_at_ms=int(time.time() * 1000),
-        tenant_id=session.tenant_id,
-        type="external_sync.write_requested",
-        schema_version=1,
-        occurred_at=now,
-        source_adapter="member-portal",
-        source_account_id=session.auth_member_id,
-        owner_scope=f"private:{session.auth_member_id}",
-        visibility_scope=f"private:{session.auth_member_id}",
-        sensitivity="normal",
-        correlation_id=decision.correlation_id,
-        actor_identity=session.auth_member_id,
-        idempotency_key=f"external-sync:{session.auth_member_id}:{body.request_id}",
-        payload=payload,
-    )
-    event_id = await runtime.events.write(envelope)
-    return {"accepted": True, "command_id": body.request_id, "event_id": event_id}
 
 
 def _reminder_account_for_command(
@@ -2687,6 +2600,18 @@ async def change_settings_profile(
             raise HTTPException(422, "profile is unavailable to an adult member")
         prior = runtime.extensions.profile_for(session.auth_member_id)
         previous_id = prior.get("id") if isinstance(prior, dict) else None
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.profile_changed",
+            {
+                "member_id": session.auth_member_id,
+                "previous_profile_id": previous_id,
+                "profile_id": body.profile_id,
+                "authority_changes": False,
+                "model_routing_changes": False,
+            },
+        )
         activated = False
         if previous_id != body.profile_id:
             try:
@@ -2763,6 +2688,16 @@ async def change_settings_preferences(
                 "preferences": prior_receipt["payload"]["values"],
             }
         previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.preferences_changed",
+            {
+                "member_id": session.auth_member_id,
+                "expected_revision": body.expected_revision,
+                "values": body.values,
+            },
+        )
         try:
             mutation = runtime.settings_control.set_preferences(
                 session.auth_member_id,
@@ -2848,6 +2783,17 @@ async def change_settings_connection(
                 "idempotent": True,
             }
         previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.connection_lifecycle_changed",
+            {
+                "connection_id": connection_id,
+                "member_id": session.auth_member_id,
+                "action": body.action,
+                "expected_revision": body.expected_revision,
+            },
+        )
         try:
             candidate = runtime.settings_control.preview_connection(
                 connection_id,
@@ -2968,6 +2914,17 @@ async def request_settings_bridge(
                 ),
             }
         previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.bridge_enrollment_requested",
+            {
+                "member_id": body.member_id,
+                "requested_by_member_id": session.auth_member_id,
+                "capabilities": sorted(set(body.capabilities)),
+                "expected_revision": body.expected_revision,
+            },
+        )
         try:
             mutation = runtime.settings_control.request_bridge(
                 body.member_id,

@@ -31,10 +31,10 @@ This repository is a household-scale, local-first, event-sourced platform. Treat
 
 ## Supported checks
 
-Use Python 3.11 and Node 22, matching the manifests. The bridge package must be importable when running the root suite.
+Use Python 3.14 and Node 24, matching the candidate manifests and ADR-0006. Existing Python 3.11/Node 22 deployments remain untouched until the separately approved runtime-migration gate. The bridge package must be importable when running the root suite.
 
 ```bash
-poetry install --with dev
+poetry sync --with dev
 PYTHONPATH=bridge poetry run pytest -q
 PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q
 poetry run ruff check adminme bridge/adminme_bridge

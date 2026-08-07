@@ -1572,7 +1572,7 @@ function peopleHero(cockpit) {
     text("p", "People joins only confirmed identity, relationship, contact, commitment, and interaction facts. Observed senders wait outside the directory until you confirm them."),
   );
   const stats = document.createElement("dl"); stats.className = "brief-stats people-stats";
-  for (const [label, value] of [["People", cockpit.lens_counts?.all || 0], ["Household", cockpit.lens_counts?.household || 0], ["Gentle cues", cockpit.cues?.length || 0], ["Needs review", cockpit.needs_review?.unconfirmed_endpoint_count || 0]]) {
+  for (const [label, value] of [["People", cockpit.lens_counts?.all || 0], ["Household", cockpit.lens_counts?.household || 0], ["Gentle cues", cockpit.cues?.length || 0], ["Unresolved senders", cockpit.unresolved_endpoints?.count || 0]]) {
     const item = document.createElement("div"); item.className = "stat"; item.append(text("dt", label), text("dd", value)); stats.append(item);
   }
   section.append(stats); return section;

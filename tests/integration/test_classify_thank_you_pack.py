@@ -60,7 +60,7 @@ async def event_log(tmp_path: Path):
 
 def _session() -> Session:
     return Session(  # fixture:tenant_data:ok
-        tenant_id="stice-test",
+        tenant_id="tenant-test",
         auth_member_id="m-test",
         auth_role="principal",
         view_member_id="m-test",

@@ -274,7 +274,7 @@ def test_ingest_batch_empty_envelopes_list_returns_422() -> None:
         ("private:m1", 202),
         ("private:m2", 403),
         ("shared:household", 403),
-        ("org:morningside", 403),
+        ("org:external-operator", 403),
     ],
 )
 def test_ingest_single_owner_scope_claim_only_exact_match_accepted(

@@ -181,6 +181,53 @@ def test_possible_copies_are_labeled_but_never_merged() -> None:
     )
 
 
+def test_legacy_missing_account_can_join_one_unambiguous_provider_account() -> None:
+    result = _compose(
+        [
+            _item(
+                "legacy",
+                title="Submit form",
+                provider_account_id=None,
+                list_external_id="legacy-list",
+                list_name="Google Tasks",
+            ),
+            _item(
+                "current",
+                title="Submit form",
+                list_external_id="current-list",
+                list_name="Personal",
+            ),
+        ]
+    )
+    assert len(result["items"]) == 2
+    assert len({item["possible_copy"]["group_id"] for item in result["items"]}) == 1
+
+
+def test_missing_account_does_not_bridge_multiple_concrete_accounts() -> None:
+    result = _compose(
+        [
+            _item(
+                "legacy",
+                title="Submit form",
+                provider_account_id=None,
+                list_external_id="legacy-list",
+            ),
+            _item(
+                "account-a",
+                title="Submit form",
+                list_external_id="a-list",
+            ),
+            _item(
+                "account-b",
+                title="Submit form",
+                provider_account_id="google-b",
+                list_external_id="b-list",
+            ),
+        ]
+    )
+    assert all("possible_copy" not in item for item in result["items"])
+
+
 def _command(
     *,
     provider: str,

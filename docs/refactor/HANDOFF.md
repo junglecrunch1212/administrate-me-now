@@ -3,19 +3,78 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO004_LIVE_OBSERVATION_ACTIVE_MAIN_MERGE_PENDING
+gate_result: CO005_CANDIDATE_VALIDATION_LIVE_RUNTIME_UNCHANGED
 verified_local_date: 2026-08-07
 verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: b9f340a82d2430171fca38a8fc0f529577b35813
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
+candidate_commit_resolution: current_reviewed_commit_after_final_validation
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co004_observation_review_and_member_bridge_provider_enrollment
+next_phase: co005_review_then_explicit_runtime_migration_decision
 ---
 
 # Release handoff
+
+## 2026-08-07 CO-005 constitutional audit candidate
+
+CO-005 is implemented in the candidate under ADR-0006/D30 and
+`CHANGE-ORDER-005-CONSTITUTIONAL-AUDIT.md`. It **PRESERVES** the event-sourced
+topology, exact OpenClaw pin, SQLCipher boundary, member isolation, provider
+authority, Triage human gate, observation, backup, and rollback. It
+**MODERNIZES** production governance, cross-surface freshness/copy/identity
+truth, tenant scanning, and the future runtime baseline. It **SUPERSEDES**
+default-allow unknown governance, the generic provider mutation endpoint,
+Notes provider writes, event-start freshness, unresolved-endpoint-as-review,
+and D10 as the future architecture.
+
+The audit first proved the active immutable release healthy and then passed
+the unchanged candidate baseline release suite. Direct production inspection
+found that the runtime composed `GuardedWrite` with empty policy even though
+fixture tests proved a stronger configuration. The candidate now loads
+reviewed tenant-neutral policy (or an instance override), denies unknown
+actions, preserves strict allowlist -> governance -> rate-limit order, and
+routes Settings changes through it. The unaudited generic external-sync route
+is removed; Notes is rejected by the external-write schema and remains
+ingest/query/Triage-only.
+
+Calendar/Today freshness now uses provider/source update watermarks rather
+than future event starts. Reminders conservatively mark a missing-account
+legacy row as a possible copy only when one concrete provider account is
+possible, never merges/deletes source rows, and isolates ambiguous accounts.
+People reports unresolved senders without linking raw endpoint observations to
+an empty Triage queue. Household-specific built-in/test fixture tokens were
+removed and the tenant canary now includes bridge, packs, and tests.
+
+The candidate targets Python 3.14.6, Node 24.19.0, Homebrew 6, Poetry 2.4.1,
+and npm 11. Node 24 was installed keg-only beside the linked Node 22; Python
+3.14 was already present. No global link, active-release pointer, LaunchAgent,
+service, observation state, provider connection, or production venv changed.
+The candidate upgrade path builds a new release-local environment and refuses
+a Python/Node baseline change before service replacement unless the separate
+runtime-migration flag is explicitly supplied after the complete rehearsal.
+
+Final candidate validation passed 31 acceptance tests, 1,558 root/code/pack
+tests, 60 standalone bridge tests, all Python and TypeScript static/security/
+package gates, clean install, tenant isolation, encrypted backup/restore,
+architecture negatives, performance budgets, and shell validation. The Gate 7
+Chrome-backed production-surface harness also passed. The immutable historical
+console-reference digest is now line-ending portable; its Edge-only interaction
+run remains environment-skipped because Edge is not installed on this Mac.
+
+A final stable-wrapper audit caught and fixed one cutover-safety defect: the
+candidate wrapper briefly selected its Node 24 path before resolving the older
+active release. Wrappers now resolve `current-release.json` first and load the
+Node formula from that release's own manifest. Post-fix live Doctor is healthy
+on Python 3.11.15 / Node 22.23.2 with fourteen healthy projections, five
+reconciled jobs, exact plugin discovery, and observation still active.
+
+The audit does not relabel unfinished required product scope as optional:
+Finance, Scoreboard/reward UX, and privileged-read audit depth require focused
+follow-up. No member bridge is active and Notes remains unconfigured on the
+live instance. Optional Outlook/BlueBubbles/Twilio and other provider edges
+remain truthful disabled capabilities.
 
 ## 2026-08-07 CO-004 Settings control plane live observation release
 

@@ -1,5 +1,9 @@
 # AdministrateMe architecture summary
 
+> Historical bootstrap note: version examples below predate ADR-0006/D30.
+> Future releases target Python 3.14 and Node 24; existing 3.11/22 services are
+> migrated only through the explicit reviewed cutover gate.
+
 _Produced by prompt 01b and reconciled by the v2 constitutional decisions in
 `docs/refactor/`. Where historical counts or topology conflict, D26–D28 and
 the refactor contracts govern._

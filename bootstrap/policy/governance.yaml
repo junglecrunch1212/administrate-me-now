@@ -1,0 +1,43 @@
+# Reviewed tenant-neutral AdministrateMe write policy.
+# Exact actions override family rules. Unknown actions fail closed.
+
+action_gates:
+  __default__: deny
+  commitment.*: allow
+  communication.*: allow
+  task.*: allow
+  triage.*: allow
+  calendar.*: allow
+  member_knowledge.*: allow
+  recurrence.*: allow
+  routine.*: allow
+  reminder.*: allow
+  identifier.*: allow
+  party.*: allow
+  relationship.*: allow
+  relationship_fact.*: allow
+  member_relationship.*: allow
+  household.action.*: allow
+  settings.*: allow
+  money_flow.*: allow
+  xlsx.regenerated: allow
+  external_sync.write_requested: allow
+  send_as_principal: hard_refuse
+  auto_answer_unknown_contact: hard_refuse
+  reference_privileged_content_in_outbound: hard_refuse
+
+rate_limits:
+  __default__:
+    window_s: 60
+    max_n: 60
+  external_sync.write_requested:
+    window_s: 60
+    max_n: 20
+  communication.send:
+    window_s: 60
+    max_n: 20
+  settings.connection_lifecycle_changed:
+    window_s: 60
+    max_n: 10
+
+forbidden_outbound_parties: []

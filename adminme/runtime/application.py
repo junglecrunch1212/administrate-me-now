@@ -29,10 +29,10 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog, new_correlation_id
 from adminme.events.writer import EventWriter
 from adminme.lib.governance import (
-    ActionGateConfig,
-    AgentAllowlist,
     GuardedWrite,
     RateLimiter,
+    load_agent_allowlist,
+    load_governance_config,
 )
 from adminme.extensions import ExtensionCatalog
 from adminme.lib.instance_config import (
@@ -485,41 +485,20 @@ class AdministrateMeRuntime:
                         self.settings.instance.tenant_id,
                     ),
                 )
+            policy_root = self.settings.repository_root / "bootstrap" / "policy"
+            governance_path = self.settings.instance.config_dir / "governance.yaml"
+            authority_path = self.settings.instance.config_dir / "authority.yaml"
             self.guarded_write = GuardedWrite(
-                ActionGateConfig(action_gates={}, rate_limits={}),
+                load_governance_config(
+                    governance_path
+                    if governance_path.is_file()
+                    else policy_root / "governance.yaml"
+                ),
                 RateLimiter(),
-                AgentAllowlist(
-                    [
-                        (
-                            "user:*",
-                            [
-                                "commitment.*",
-                                "communication.*",
-                                "task.*",
-                                "triage.*",
-                                "calendar.event_outcome_recorded",
-                                "member_knowledge.*",
-                                "recurrence.added",
-                                "recurrence.completed",
-                                "routine.*",
-                                "identifier.added",
-                                "party.created",
-                                "party.updated",
-                                "party.archived",
-                                "party.restored",
-                                "relationship.added",
-                                "relationship.updated",
-                                "relationship.ended",
-                                "relationship_fact.confirmed",
-                                "relationship_fact.revoked",
-                                "member_relationship.profile_set",
-                                "party.access_granted",
-                                "party.access_revoked",
-                                "household.action.*",
-                                "external_sync.*",
-                            ],
-                        )
-                    ]
+                load_agent_allowlist(
+                    authority_path
+                    if authority_path.is_file()
+                    else policy_root / "authority.yaml"
                 ),
                 self.events,
             )

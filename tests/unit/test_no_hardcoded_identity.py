@@ -10,17 +10,34 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_ROOTS = (
     "adminme",
     "bootstrap",
-    "profiles",
-    "personas",
-    "integrations",
+    "bridge",
+    "packs",
+    "tests",
 )
 SCANNED_SUFFIXES = frozenset({".py", ".json", ".yaml", ".yml", ".sql", ".ts"})
 
-# These values identify the original household from which the constitutional
-# prohibition was derived. Keeping the terms in this canary (outside platform
-# roots) makes the rule executable without putting them into shipped code.
+
+def _secret_term(*codepoints: int) -> str:
+    """Keep the executable canary from embedding the protected text itself."""
+
+    return "".join(chr(value) for value in codepoints)
+
+
+_PROTECTED_TERMS = (
+    _secret_term(106, 97, 109, 101, 115),
+    _secret_term(106, 105, 109, 109, 121),
+    _secret_term(108, 97, 117, 114, 97),
+    _secret_term(99, 104, 97, 114, 108, 105, 101),
+    _secret_term(101, 115, 116, 104, 101, 114),
+    _secret_term(115, 116, 105, 99, 101),
+    _secret_term(109, 111, 114, 110, 105, 110, 103, 115, 105, 100, 101),
+    _secret_term(104, 111, 108, 108, 97, 110, 100),
+    _secret_term(106, 114, 115, 116, 105, 99, 101),
+    _secret_term(108, 99, 104, 111, 108, 108, 97, 110, 100, 49, 50),
+)
 FORBIDDEN_IDENTITY = re.compile(
-    r"\b(?:james|laura|charlie|stice|morningside)\b", re.IGNORECASE
+    r"\b(?:" + "|".join(re.escape(value) for value in _PROTECTED_TERMS) + r")\b",
+    re.IGNORECASE,
 )
 HARDCODED_INSTANCE = re.compile(
     r"(?:/Users/[^/]+/AdministrateMe|[A-Za-z]:\\Users\\[^\\]+\\AdministrateMe)",
@@ -39,12 +56,12 @@ def test_no_hardcoded_identity_in_platform_code() -> None:
             if path.suffix.lower() not in SCANNED_SUFFIXES:
                 continue
             relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+            if relative == "tests/unit/test_no_hardcoded_identity.py":
+                continue
             for line_number, line in enumerate(
                 path.read_text(encoding="utf-8", errors="replace").splitlines(),
                 start=1,
             ):
-                if "fixture:tenant_data:ok" in line:
-                    continue
                 if FORBIDDEN_IDENTITY.search(line) or HARDCODED_INSTANCE.search(line):
                     violations.append(f"{relative}:{line_number}: {line.strip()}")
 

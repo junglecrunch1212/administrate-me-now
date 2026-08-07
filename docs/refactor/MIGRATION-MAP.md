@@ -1,5 +1,18 @@
 # Migration map
 
+CO-005 update (2026-08-07): production composition is **HARDENED** with
+reviewed fail-closed authority/governance policy, governed Settings changes,
+provider-source freshness, conservative legacy reminder copy presentation,
+and truthful unresolved-endpoint status. The generic external mutation route
+is **DELETE COMPLETE**; provider writes exist only behind typed product
+commands, and Notes remains Cat-D ingest/query-only. ADR-0006/D30 **MODERNIZE**
+the candidate baseline to Python 3.14/Node 24 with side-by-side tools and an
+explicit pre-switch migration flag. The healthy live 3.11/22 release is not
+changed by candidate preparation; stable wrappers resolve its own version
+manifest before choosing a Node formula. Finance, Scoreboard, and privileged-read
+audit depth are recorded as required incomplete work, not optional-provider
+deferrals. See `CHANGE-ORDER-005-CONSTITUTIONAL-AUDIT.md`.
+
 Settings update (2026-08-07): CO-004 **MODERNIZES COMPLETE IN CODE** the
 generic capability/workbook/chat cards into one deterministic member control
 plane. The member shell now names the authenticated identity and Tailscale
@@ -7,7 +20,9 @@ boundary. Connection setup, live runtime, permission, and safety state are
 separate. A secret-free revisioned journal holds bounded preferences, pause
 state, and bridge requests; typed events audit accepted changes. Profile
 activation uses the existing validated extension lifecycle and adapter
-pause/resume reconciles the existing supervisor. No secret editor, second
+pause/resume reconciles the existing supervisor. CO-005 additionally routes
+accepted Settings mutations through production GuardedWrite policy before
+state changes. No secret editor, second
 runtime, provider SDK, OpenClaw operator console, model router, or fifteenth
 projection was added.
 
@@ -66,12 +81,14 @@ plugin trust, and pinned OpenClaw discovery registration. The production
 virtualenv remains synchronized, but no longer contains the Poetry executable
 performing that destructive sync.
 
-Primary-surface update (2026-08-05): central Google Calendar and per-member
-Apple Calendar, Reminders, and Notes are now **KEEP/HARDEN COMPLETE IN CODE**.
+Primary-surface update (2026-08-05, corrected by CO-005): central Google
+Calendar and per-member Apple Calendar and Reminders are **KEEP/HARDEN COMPLETE
+IN CODE**; Apple Notes is **KEEP/HARDEN COMPLETE FOR INGEST ONLY**.
 The release preserves provider-native schemas at the transport boundary,
 normalizes typed facts into the event log, reconciles external authority, and
-routes governed writes and terminal results through the central/bridge command
-paths. Production bootstrap now actually supplies `config/adapters.json` to
+routes supported Calendar/Reminder writes and terminal results through the
+central/bridge command paths. Notes exposes no provider command path.
+Production bootstrap now actually supplies `config/adapters.json` to
 the runtime supervisor. Real OAuth, macOS privacy consent, and device
 propagation remain live activation gates rather than simulated readiness.
 Central and bridge emits now require durable acknowledgement before cursor
@@ -129,7 +146,7 @@ projection, scheduler, workflow, or copied record store.
 | Member CoS chat | COMPATIBILITY ADAPTER COMPLETE | Minimal pinned protocol-v4 Gateway relay; OpenClaw owns transcript/memory/providers/routing/retry/accounting; signed per-member tool provenance is independently authorized. |
 | Temporary quests | NEW DATA-ONLY CONFIG SEAM COMPLETE | Private by default, allowlisted projection queries/actions, reviewed audience/child safety, typed transition audit, atomic persistence, expiry/archive; no household-fact mutation. |
 | Browser runtime | KEEP DELETED NODE / ADD STATIC PYTHON SURFACE | No Node app server, service worker, local transcript/cache, provider SDK, model picker, admin console, plugin manager, or terminal. |
-| Live deployment | DEFER TRUTHFULLY | Supported-Mac real Gateway/providers/Tailscale/Apple grants remain Phase 8 evidence. |
+| Live deployment | KEEP/HARDEN ACTIVE IN OBSERVATION | Central Tailscale/Gateway/provider reads are live; member bridges and optional provider grants remain explicit per-member activation work. The 3.14/24 cutover requires a new rehearsal. |
 
 Gate 6 update (2026-08-03): the remaining retained domain code is converged on
 the Gate 2–5 runtime. All six products, thirteen domain projections, and the

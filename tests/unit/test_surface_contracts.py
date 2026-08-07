@@ -71,9 +71,22 @@ def test_freshness_distinguishes_empty_stale_degraded_and_not_configured() -> No
         row_count=0,
         configured=False,
     )
-    assert [empty["state"], stale["state"], degraded["state"], disabled["state"]] == [
+    unknown = surface_freshness(
+        generated_at=NOW,
+        latest_source_at=None,
+        stale_after_seconds=60,
+        row_count=1,
+    )
+    assert [
+        empty["state"],
+        stale["state"],
+        degraded["state"],
+        disabled["state"],
+        unknown["state"],
+    ] == [
         "healthy_empty",
         "stale",
         "degraded",
         "not_configured",
+        "unknown",
     ]
