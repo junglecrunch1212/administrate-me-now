@@ -22,7 +22,9 @@ CO-005 constitutional audit amendment (2026-08-07): direct production and
 live-portal reconciliation found semantic drift that the aggregate gates did
 not detect. ADR-0006/D30 **MODERNIZE** the future baseline to Python 3.14 and
 Node 24 while **PRESERVING** the running 3.11/22 release through its explicit
-migration gate and rollback window. C062–C067 are **HARDENED** by reviewed fail-closed production
+migration gate and rollback window. Candidate services and Doctor resolve Node
+from the reviewed formula before global Homebrew paths. C062–C067 are
+**HARDENED** by reviewed fail-closed production
 policy, Settings governance, and removal of the generic provider mutation
 route. C077 is **PRESERVED/HARDENED** because Notes is rejected by the
 external-write schema. C076 freshness uses source watermarks, never future

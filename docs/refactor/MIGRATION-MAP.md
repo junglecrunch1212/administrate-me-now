@@ -20,6 +20,9 @@ Keychain transport without creating another credential store.
 The pre-cutover candidate probe enumerates only configured logical references;
 the generated alias map participates in resolution but is not itself scanned as
 credential configuration.
+Central service and Doctor PATH are built from the candidate receipt and put
+the reviewed Node formula ahead of global Homebrew binaries, preventing an
+installed Node 22 from masquerading as the Node 24 candidate runtime.
 
 CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
 under ADR-0007. The existing money projection now separates private provider

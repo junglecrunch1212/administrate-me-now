@@ -254,6 +254,10 @@ backup, atomic release pointer switch, launchd reconciliation, restart, and
 Doctor. Failure restores both the previous pointer and its launchd
 definitions. The lower-level rollback command is:
 
+For central services and post-switch Doctor, the candidate manifest's
+formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older
+side-by-side global Node installation out of the candidate runtime.
+
 ```bash
 python -m bootstrap.cli rollback
 ```

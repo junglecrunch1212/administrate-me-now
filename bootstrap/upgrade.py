@@ -21,7 +21,7 @@ from bootstrap.contracts import (
 from bootstrap.doctor import Doctor
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.services import ServiceManager
-from bootstrap.wizard import install_launch_agents
+from bootstrap.wizard import install_launch_agents, service_environment_path
 
 
 class UpgradeError(RuntimeError):
@@ -182,11 +182,7 @@ class UpgradeManager:
                 "OPENCLAW_CONFIG_PATH": str(
                     self.paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
                 ),
-                "PATH": (
-                    f"{self.paths.root}/bin:/opt/homebrew/bin:"
-                    "/opt/homebrew/opt/node@24/bin:/usr/local/bin:"
-                    "/usr/bin:/bin:/usr/sbin:/sbin"
-                ),
+                "PATH": service_environment_path(self.paths, release),
             }
         )
         command = [

@@ -35,6 +35,8 @@ CO-005 amendment (2026-08-07): release candidates run on Python
 is not migrated by test setup. Candidate preparation is side-by-side and a
 version-changing activation requires the explicit runtime-migration gate after
 clean bootstrap, replay, backup/restore, browser, Doctor, and rollback proof.
+The candidate Node formula must precede global Homebrew paths in both central
+LaunchAgents and the candidate-interpreter Doctor environment.
 
 Primary-surface amendment (2026-08-05): AC-05, AC-10, AC-11, AC-14, and AC-21
 also cover the bidirectional Google Calendar, Apple Calendar, Apple Reminders,

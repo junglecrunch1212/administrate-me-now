@@ -159,6 +159,17 @@ then proves the candidate physical envelopes through the same production store
 used after cutover. Regression evidence retains a physical alias in the map
 while requiring it never to become an independent probe target.
 
+The next guarded cutover reached Python 3.14 liveness and the full post-switch
+Doctor, proving that credential continuity, schema startup, and rollback-safe
+service launch were working. Doctor rejected `runtime_and_package_versions`
+because its PATH and both generated LaunchAgents placed the global Homebrew bin
+before the reviewed Node formula. The host therefore reported Node 22.23.2/npm
+10.9.8 even though Node 24.19.0/npm 11.17.0 were installed side by side. The
+updater restored the old release automatically. Service and Doctor PATH now
+share one release-manifest-derived builder and place the reviewed Node formula
+before the global Homebrew bin; ordering regressions cover both LaunchAgents and
+the candidate-interpreter Doctor process.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and
