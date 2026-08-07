@@ -230,6 +230,17 @@ The migration form refuses a dirty or non-Git candidate and self-hosts the
 candidate controller in a separate versioned tooling venv. It does not run the
 new controller inside, or synchronize, the active release's venv.
 
+Before rerunning this command across a Python boundary, open **Keychain Access
+> login**, inspect every `com.administrateme.<instance>.*` item referenced by
+the live instance (including adapter credential references), and add only the
+reviewed Python 3.14 application to **Access Control > Always allow access by
+these applications**. Keep **Confirm before allowing access** selected, retain
+the existing Python entry for rollback, and never select **Allow all
+applications**. The updater probes the candidate interpreter against every
+configured reference with an eight-second bound and refuses the migration
+before release preparation, backup, service stop, or pointer mutation if an
+ACL prompt or missing item remains.
+
 Compatibility validation happens before backup, service stop, release copy,
 or pointer replacement. A different OpenClaw version, commit, or plugin API is
 refused. A compatible candidate receives an isolated Python environment and

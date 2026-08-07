@@ -18,6 +18,7 @@ from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
 from bootstrap.cli import _bootstrap_diagnostic_status
 from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
+from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, ServiceStatus
@@ -716,7 +717,7 @@ def test_live_services_start_runtime_before_openclaw(
     monkeypatch.setattr(
         manager, "_launchctl_definition_matches", lambda _label, _path: True
     )
-    monkeypatch.setattr(manager, "_runtime_health", lambda: "observation_only")
+    monkeypatch.setattr(manager, "_runtime_liveness", lambda: True)
     monkeypatch.setattr(manager, "status", lambda: healthy)
 
     def run(command, **_kwargs):
@@ -730,6 +731,82 @@ def test_live_services_start_runtime_before_openclaw(
         f"gui/{os.getuid()}/com.administrateme.runtime",
         f"gui/{os.getuid()}/com.administrateme.openclaw",
     ]
+
+
+def test_runtime_launch_probe_uses_lightweight_live_endpoint(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"status":"alive","runtime_started":true}'
+
+    def urlopen(url: str, *, timeout: int):
+        observed.update(url=url, timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr("bootstrap.services.urllib.request.urlopen", urlopen)
+    manager = ServiceManager(test_paths)
+
+    assert manager._runtime_liveness() is True
+    assert str(observed["url"]).endswith("/api/system/live")
+    assert observed["timeout"] == 5
+
+
+def test_keychain_probe_discovers_nested_instance_references(
+    test_paths: DeploymentPaths,
+) -> None:
+    config = test_paths.instance_dir / "config"
+    config.mkdir(parents=True)
+    account = test_paths.keychain_account()
+    first = f"keychain://{account}/event-log"
+    second = f"keychain://{account}/google-oauth-primary"
+    (config / "secret-references.json").write_text(
+        json.dumps({"references": {"event_log": first}}), encoding="utf-8"
+    )
+    (config / "adapters.json").write_text(
+        json.dumps({"adapters": [{"config": {"credential_ref": second}}]}),
+        encoding="utf-8",
+    )
+    (config / "foreign.json").write_text(
+        json.dumps({"reference": "keychain://another-instance/ignored"}),
+        encoding="utf-8",
+    )
+
+    assert configured_keychain_references(test_paths) == (first, second)
+
+
+def test_runtime_migration_keychain_prompt_fails_before_release_preparation(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = UpgradeManager(
+        test_paths,
+        root=REPO_ROOT,
+        test_mode=False,
+        approve_runtime_migration=True,
+    )
+    reference = f"keychain://{test_paths.keychain_account()}/event-log"
+    monkeypatch.setattr(
+        "bootstrap.upgrade.configured_keychain_references", lambda _paths: (reference,)
+    )
+
+    def blocked(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["python"], 8)
+
+    monkeypatch.setattr("bootstrap.upgrade.subprocess.run", blocked)
+    with pytest.raises(UpgradeError, match="Never select 'Allow all applications'"):
+        manager._preflight_keychain_access(REPO_ROOT)
+    assert not (test_paths.app_dir / "current-release.json").exists()
 
 
 def test_live_service_definition_must_match_the_candidate_release(
@@ -961,6 +1038,7 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
         "--no-synthetic-proof",
     ]
     assert calls[0]["cwd"] == release
+    assert calls[0]["timeout"] == 120
     environment = calls[0]["env"]
     assert isinstance(environment, dict)
     assert environment["ADMINME_INSTANCE_ROOT"] == str(test_paths.root)
