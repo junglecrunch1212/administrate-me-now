@@ -543,7 +543,10 @@ def test_launchd_and_bridge_packages_are_member_bound_and_child_safe(
         path = test_paths.launch_agent_dir / f"{label}.plist"
         definition = plistlib.loads(path.read_bytes())
         assert definition["Label"] == label
-        assert "/opt/homebrew/bin" in definition["EnvironmentVariables"]["PATH"]
+        service_path = definition["EnvironmentVariables"]["PATH"].split(":")
+        assert service_path.index("/opt/homebrew/opt/node@24/bin") < service_path.index(
+            "/opt/homebrew/bin"
+        )
         assert definition["EnvironmentVariables"]["ADMINME_INSTANCE_DIR"] == str(
             test_paths.instance_dir
         )
@@ -1391,6 +1394,9 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     release = tmp_path / "release"
+    versions = release / "bootstrap" / "versions.json"
+    versions.parent.mkdir(parents=True)
+    versions.write_bytes((REPO_ROOT / "bootstrap" / "versions.json").read_bytes())
     candidate_python = release / ".venv" / "bin" / "python"
     candidate_python.parent.mkdir(parents=True)
     candidate_python.write_text("fixture", encoding="utf-8")
@@ -1433,5 +1439,8 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
         test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
     )
     assert str(test_paths.root / "bin") in environment["PATH"]
-    assert "/opt/homebrew/opt/node@24/bin" in environment["PATH"]
+    doctor_path = environment["PATH"].split(":")
+    assert doctor_path.index("/opt/homebrew/opt/node@24/bin") < doctor_path.index(
+        "/opt/homebrew/bin"
+    )
     assert "PYTHONPATH" not in environment

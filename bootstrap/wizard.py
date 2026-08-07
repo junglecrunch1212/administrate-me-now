@@ -43,6 +43,18 @@ class WizardFailure(RuntimeError):
     pass
 
 
+def service_environment_path(paths: DeploymentPaths, root: Path) -> str:
+    """Build the release-receipted PATH shared by services and Doctor."""
+
+    node_formula = str(load_versions(root)["node"]["formula"])
+    if re.fullmatch(r"node@[0-9]+", node_formula) is None:
+        raise WizardFailure("release Node formula is invalid")
+    return (
+        f"{paths.root}/bin:/opt/homebrew/opt/{node_formula}/bin:"
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    )
+
+
 def install_launch_agents(
     paths: DeploymentPaths,
     root: Path,
@@ -63,10 +75,7 @@ def install_launch_agents(
         "OPENCLAW_CONFIG_PATH": str(
             paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
         ),
-        "PATH": (
-            f"{paths.root}/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@24/bin:"
-            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        ),
+        "PATH": service_environment_path(paths, root),
     }
     definitions = {
         RUNTIME_LABEL: {

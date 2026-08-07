@@ -91,6 +91,11 @@ runtime from an open-ended compatibility range or an ambiguous executable
 name. This preserves rollback from reviewed legacy releases without weakening
 the receipt boundary.
 
+Central LaunchAgents and post-switch Doctor use one PATH derived from the
+candidate release's validated Node formula. The formula-specific bin precedes
+the global Homebrew bin, so a side-by-side older Node installation cannot
+silently satisfy service launch while failing the reviewed runtime matrix.
+
 An in-process candidate read-back is not launchd evidence for an ad-hoc-signed
 Homebrew interpreter. Runtime-bound alias items are therefore created, read,
 updated, deleted, and independently verified through Apple's signed
