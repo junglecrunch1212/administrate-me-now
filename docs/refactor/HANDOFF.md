@@ -125,6 +125,13 @@ path for aliased get/put/delete, and adapter credential resolution follows the
 validated instance alias map. A disposable cross-process proof passed under
 the actual candidate Python and the exact probe item was deleted afterward.
 
+The first signed-client retry then stopped before copy or service mutation
+because the 3.11 coordinator imported the new helper at module load and resolved
+`adminme` from the old installed environment. Helper imports are now delayed to
+the candidate child and to the matching-new-runtime alias branch. The rolled
+back 3.11 coordinator therefore remains self-contained, while the processes
+that use the helper run only in an environment that contains it.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

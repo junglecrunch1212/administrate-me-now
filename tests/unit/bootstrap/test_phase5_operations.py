@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import builtins
 import copy
 import json
 import plistlib
 import os
 from pathlib import Path
+import runpy
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -978,7 +981,7 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
         )
 
     monkeypatch.setattr(
-        "bootstrap.keychain_runtime_migration.get_runtime_password",
+        "adminme.lib.macos_keychain.get_runtime_password",
         get_runtime_password,
     )
     monkeypatch.setattr(
@@ -1006,6 +1009,31 @@ def test_runtime_keychain_migration_pipes_values_and_atomically_publishes_aliase
         "/event-log-runtime-py315-bbbbbbbbbbbb"
     )
     assert (config / ALIAS_FILENAME).stat().st_mode & 0o777 == 0o600
+
+
+def test_runtime_keychain_coordinator_imports_without_candidate_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def guarded_import(name: str, *args, **kwargs):
+        if name == "adminme.lib.macos_keychain":
+            raise ModuleNotFoundError(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(REPO_ROOT / "bootstrap" / "keychain_runtime_migration.py"), "--help"],
+    )
+
+    with pytest.raises(SystemExit) as captured:
+        runpy.run_path(
+            str(REPO_ROOT / "bootstrap" / "keychain_runtime_migration.py"),
+            run_name="__main__",
+        )
+    assert captured.value.code == 0
 
 
 def test_runtime_keychain_migration_reads_active_release_runtime_receipt(
