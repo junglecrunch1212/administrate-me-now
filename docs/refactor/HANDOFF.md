@@ -132,6 +132,22 @@ the candidate child and to the matching-new-runtime alias branch. The rolled
 back 3.11 coordinator therefore remains self-contained, while the processes
 that use the helper run only in an environment that contains it.
 
+The following retry exposed a final Apple-client representation boundary before
+service mutation: prompt-mode `security add-generic-password -w` silently
+retained only the first 128 characters of the 624-character OAuth record. Four
+shorter records verified, which isolated the failure from Keychain access and
+ACLs. Runtime aliases now use a versioned, checksummed envelope whose Base64
+fragments and root manifest each remain below the prompt limit. A random
+generation is written fragment-first and the manifest is committed last; reads
+reassemble, decode, and verify before returning a value, while failed writes
+remove only their uncommitted generation. Exact disposable 624-character
+create/read/delete evidence passed through fresh Apple-signed processes. Values
+still enter neither argv, environment, files, logs, nor diagnostics, and the
+five original rollback items remain untouched. The exact coordinator-child
+proof also caught Python resolving `bootstrap/secrets.py` in place of the
+standard-library module; generation now uses `os.urandom` directly, and a
+script-path-shadow regression test preserves child importability.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and

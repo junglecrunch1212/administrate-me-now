@@ -16,7 +16,10 @@ shapes plus ambiguous-receipt rejection.
 AC-21 also requires separate-process create/read verification through the
 Apple-signed Keychain client, proof that values never enter command arguments,
 alias-aware production-store and adapter reads, and preservation of the
-unaliased rollback keyring path.
+unaliased rollback keyring path. Long values must survive the Apple prompt
+reader through bounded, versioned fragments and a manifest-last, checksummed
+envelope; tampering, truncation, missing parts, and partial publication fail
+closed without exposing a value.
 
 CO-006 amendment (2026-08-07): AC-32 proves Finance through the production
 composition without adding a projection or provider write seam. The Finance

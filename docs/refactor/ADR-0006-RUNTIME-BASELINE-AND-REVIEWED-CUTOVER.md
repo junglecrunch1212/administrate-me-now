@@ -97,6 +97,17 @@ same validated alias map before choosing the signed-client path. This is a
 narrow Keychain transport change, not an additional secret store or a runtime
 process.
 
+Apple's prompt-mode `-w` reader also truncates long input. Every signed-client
+value is therefore stored as a versioned, checksummed envelope: Base64
+fragments and the root manifest are individually bounded below the prompt
+limit, fragments use a random generation, and the manifest is published last.
+A reader returns plaintext only after strict manifest validation, complete
+reassembly, UTF-8 decoding, size enforcement, and digest verification. Failed
+writes clean their unpublished generation; successful replacement may clean
+the prior generation only after the new root is committed. This fragmentation
+is an implementation detail inside the same Keychain store, not a new source
+of truth or a relaxation of the anonymous-pipe rule.
+
 Rollback may cross the version boundary because it restores a previously
 reviewed immutable release and its own venv. Stable wrappers resolve the active
 release first, then select both its interpreter and the Node formula declared

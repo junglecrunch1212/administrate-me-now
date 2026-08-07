@@ -13,7 +13,10 @@ Because Homebrew Python is ad-hoc signed, candidate verification now proves an
 independent fresh process through Apple's signed `security` client rather than
 trusting the creating Python process's read-back. Aliased runtime reads/writes
 and adapter credentials use that same anonymous-pipe seam; originals remain on
-the old keyring path for rollback.
+the old keyring path for rollback. Because Apple's prompt reader truncates long
+input, runtime copies now use bounded Base64 fragments plus a versioned,
+checksummed root manifest committed last. This **HARDENS** the existing
+Keychain transport without creating another credential store.
 
 CO-006 update (2026-08-07): Finance is **MODERNIZED COMPLETE IN CANDIDATE**
 under ADR-0007. The existing money projection now separates private provider

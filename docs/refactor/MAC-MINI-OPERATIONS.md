@@ -235,7 +235,9 @@ Python-boundary migration encounters an access prompt. The explicit migration
 launcher preserves the existing items for rollback. Under the active
 interpreter it reads each currently effective value, transfers it only through
 an anonymous pipe to the candidate interpreter, and has that interpreter create
-and verify a runtime-bound copy. Only then does it atomically publish
+and verify a runtime-bound copy. Long values are represented as bounded,
+versioned Keychain fragments plus a checksummed root manifest committed last;
+no fragment crosses the Apple prompt reader's input limit. Only then does it atomically publish
 `state/config/keychain-runtime-aliases.json`, which contains references and
 release metadata but no values. The candidate probes every configured logical
 and physical reference with an eight-second bound and refuses the migration
