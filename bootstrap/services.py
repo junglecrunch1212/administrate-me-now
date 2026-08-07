@@ -21,6 +21,9 @@ from bootstrap.contracts import (
     load_versions,
 )
 
+RUNTIME_LIVENESS_TIMEOUT_SECONDS = 300
+RUNTIME_LIVENESS_POLL_SECONDS = 1
+
 
 @dataclass(frozen=True)
 class ServiceStatus:
@@ -176,14 +179,10 @@ class ServiceManager:
                     f"launchd could not start {label}: {kickstart.stderr.strip()}"
                 )
             if label == RUNTIME_LABEL:
-                deadline = time.monotonic() + 90
-                runtime_live = self._runtime_liveness()
-                while not runtime_live and time.monotonic() < deadline:
-                    time.sleep(1)
-                    runtime_live = self._runtime_liveness()
-                if not runtime_live:
+                if not self._wait_for_runtime_liveness():
                     raise RuntimeError(
-                        "AdministrateMe runtime did not become ready before OpenClaw startup"
+                        "AdministrateMe runtime did not become live within the "
+                        "bounded cold-start window before OpenClaw startup"
                     )
         result = self.status()
         for _ in range(30):
@@ -192,6 +191,18 @@ class ServiceManager:
             time.sleep(1)
             result = self.status()
         return result
+
+    def _wait_for_runtime_liveness(
+        self, timeout_seconds: int = RUNTIME_LIVENESS_TIMEOUT_SECONDS
+    ) -> bool:
+        """Allow bounded cold schema/replay work without weakening liveness."""
+
+        deadline = time.monotonic() + timeout_seconds
+        runtime_live = self._runtime_liveness()
+        while not runtime_live and time.monotonic() < deadline:
+            time.sleep(RUNTIME_LIVENESS_POLL_SECONDS)
+            runtime_live = self._runtime_liveness()
+        return runtime_live
 
     def stop(self) -> ServiceStatus:
         if self.test_mode:

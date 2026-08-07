@@ -27,7 +27,11 @@ from bootstrap.keychain_runtime_migration import (
 )
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import MacOSKeychainStore, secret_store
-from bootstrap.services import ServiceManager, ServiceStatus
+from bootstrap.services import (
+    RUNTIME_LIVENESS_TIMEOUT_SECONDS,
+    ServiceManager,
+    ServiceStatus,
+)
 from bootstrap.state import EncryptedStateStore
 from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
@@ -770,6 +774,35 @@ def test_runtime_launch_probe_uses_lightweight_live_endpoint(
     assert manager._runtime_liveness() is True
     assert str(observed["url"]).endswith("/api/system/live")
     assert observed["timeout"] == 5
+
+
+def test_service_cold_start_window_is_bounded_and_retries_liveness(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths)
+    outcomes = iter((False, False, True))
+    times = iter((0.0, 1.0, 2.0))
+    sleeps: list[float] = []
+    monkeypatch.setattr(manager, "_runtime_liveness", lambda: next(outcomes))
+    monkeypatch.setattr("bootstrap.services.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("bootstrap.services.time.sleep", sleeps.append)
+
+    assert RUNTIME_LIVENESS_TIMEOUT_SECONDS == 300
+    assert manager._wait_for_runtime_liveness() is True
+    assert sleeps == [1, 1]
+
+
+def test_service_cold_start_window_fails_closed_at_deadline(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths)
+    times = iter((10.0, 12.0))
+    monkeypatch.setattr(manager, "_runtime_liveness", lambda: False)
+    monkeypatch.setattr("bootstrap.services.time.monotonic", lambda: next(times))
+
+    assert manager._wait_for_runtime_liveness(timeout_seconds=2) is False
 
 
 def test_keychain_probe_discovers_nested_instance_references(

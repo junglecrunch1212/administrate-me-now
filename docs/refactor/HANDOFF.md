@@ -82,6 +82,14 @@ Homebrew base interpreter without the controller dependencies. The coordinator
 now normalizes the absolute launcher path without dereferencing it, and the
 regression test requires the venv path to reach the child process.
 
+After the Keychain bridge passed, the first candidate cutover exposed a second
+fail-closed live-only boundary: the cold schema/projection start completed just
+after the fixed 90-second liveness deadline, so the upgrade restored the old
+release. Service launch now permits a bounded five-minute cold-start window,
+still probes only `/api/system/live`, and still requires full post-switch Doctor
+before retaining the candidate. Unit evidence covers both retry success and
+deadline failure.
+
 ## 2026-08-07 CO-005 constitutional audit candidate
 
 CO-005 is implemented in the candidate under ADR-0006/D30 and
