@@ -46,6 +46,12 @@ def _save_private_workbook(wb: Workbook, path: Path) -> None:
     """Atomically publish a workbook readable only by the service account."""
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     try:
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            _PRIVATE_FILE_MODE,
+        )
+        os.close(fd)
         wb.save(str(tmp))
         os.chmod(tmp, _PRIVATE_FILE_MODE)
         os.replace(tmp, path)

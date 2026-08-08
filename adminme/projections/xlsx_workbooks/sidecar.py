@@ -52,7 +52,12 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     os.chmod(path.parent, _PRIVATE_DIRECTORY_MODE)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     try:
-        with tmp.open("w", encoding="utf-8") as f:
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            _PRIVATE_FILE_MODE,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, sort_keys=True, separators=(",", ":"), default=str)
         os.chmod(tmp, _PRIVATE_FILE_MODE)
         os.replace(tmp, path)
