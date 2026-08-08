@@ -2,9 +2,10 @@
 
 Date: 2026-08-08
 
-Branches: `codex/repair-triage-extraction`, `codex/repair-openclaw-skill-auth`
+Branches: `codex/repair-triage-extraction`, `codex/repair-openclaw-skill-auth`,
+`codex/repair-openclaw-tool-status`
 
-Disposition: **first repair live; authenticated NLP/tool-registration follow-up in PR #290**
+Disposition: **first repair live; PR #290 merged; pinned tool-status follow-up in PR #291**
 
 ## Incident evidence
 
@@ -44,6 +45,15 @@ bundled optional plugin, disabled by default; it also requires an explicit
 `tools.alsoAllow` entry. Plugin discovery of `administrateme` alone was not
 proof of the constitutional model seam.
 
+PR #290 merged at `2b2919f8adb22242fa7d849e3e73b6cd4fc5ad56` after both
+GitHub gates passed. Its pre-switch reconciler safely stopped before release
+activation when the live pinned CLI reported the successful plugin state as
+`loaded`/activated rather than the fixture's incorrect `active` label. The
+additive enable/allow configuration validated and remained compatible with the
+still-active prior release; no service or release pointer changed. The focused
+follow-up encodes the pinned host's exact status and makes a missing reviewed
+executable a secret-free unhealthy result instead of a Doctor exception.
+
 ## Reviewed repair behavior
 
 1. The production composition explicitly injects the event sink, encrypted
@@ -73,8 +83,10 @@ proof of the constitutional model seam.
    never consult ambient token state.
 9. Bootstrap and upgrade reconcile the pinned bundled `llm-task` plugin plus
    its additive tool-policy allow entry through OpenClaw's validated config
-   command. Doctor requires configuration and runtime tool registration, not
-   only AdministrateMe plugin discovery.
+   command. Doctor requires configuration and the pinned CLI's exact
+   `loaded`/activated runtime registration evidence, not only AdministrateMe
+   plugin discovery, and reports an unavailable reviewed executable as an
+   unhealthy check instead of aborting diagnostics.
 10. `noise_filtering` v4 replays language recovery without rewriting fallback
     classifications or existing proposals. Changed semantic facts use a
     reviewed idempotency generation and only newly discovered candidate
@@ -108,7 +120,7 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH \
 Result:
 
 - strict acceptance: 36 passed;
-- root and pack Python: 1,631 passed;
+- root and pack Python: 1,632 passed;
 - member bridge: 60 passed;
 - Ruff: 502 files formatted and 225 production files clean;
 - mypy: 225-source release target clean;

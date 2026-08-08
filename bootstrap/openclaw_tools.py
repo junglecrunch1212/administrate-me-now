@@ -94,7 +94,8 @@ def required_llm_tool_status(
             inspected_plugin = _mapping(_mapping(inspected).get("plugin"))
             tool_names = inspected_plugin.get("toolNames", [])
             runtime_registered = (
-                inspected_plugin.get("status") == "active"
+                inspected_plugin.get("status") == "loaded"
+                and inspected_plugin.get("activated") is True
                 and isinstance(tool_names, list)
                 and (REQUIRED_LLM_TOOL in tool_names)
             )
@@ -105,7 +106,12 @@ def required_llm_tool_status(
             version_matches = inspected_plugin.get("packageVersion") == str(
                 load_versions()["openclaw"]["version"]
             )
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        except (
+            OSError,
+            RuntimeError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+        ):
             runtime_registered = False
     return {
         "ok": (
