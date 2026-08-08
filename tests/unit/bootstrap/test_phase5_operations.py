@@ -45,6 +45,7 @@ from bootstrap.openclaw_activation import activate, model_provider_configured
 from bootstrap.openclaw_install import reviewed_source_status, source_receipt_path
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
+    probe_required_llm_tool,
     required_llm_tool_status,
 )
 
@@ -332,6 +333,53 @@ def test_required_llm_tool_status_fails_closed_when_executable_is_unavailable(
     assert status["runtime_registered"] is False
     assert status["bundled_origin"] is False
     assert status["version_matches"] is False
+
+
+def test_required_llm_tool_probe_executes_canonical_secret_free_json_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"ok": True, "result": {"details": {"json": {"ok": True}}}}
+            ).encode("utf-8")
+
+    def urlopen(request, *, timeout: int):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("bootstrap.openclaw_tools.urllib.request.urlopen", urlopen)
+
+    result = probe_required_llm_tool("gateway-token-fixture")
+
+    assert result["ok"] is True
+    assert result["credentials_in_report"] is False
+    assert "gateway-token-fixture" not in json.dumps(result)
+    request = captured["request"]
+    body = json.loads(request.data)
+    assert body["agentId"] == "main"
+    assert body["sessionKey"].startswith("agent:main:adminme:doctor:")
+    assert request.get_header("Authorization") == "Bearer gateway-token-fixture"
+    assert captured["timeout"] == 45
+
+
+def test_required_llm_tool_probe_fails_closed_without_a_gateway_credential() -> None:
+    result = probe_required_llm_tool(None)
+
+    assert result["ok"] is False
+    assert result["state"] == "credential_unavailable"
+    assert result["credentials_in_report"] is False
 
 
 def test_macos_installer_dispatches_without_optional_passthrough_args(
@@ -1487,6 +1535,69 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         "python": {"from": ">=3.11,<3.12", "to": ">=3.14,<3.15"},
         "node": {"from": ">=22.22.3,<23", "to": ">=24.15,<25"},
     }
+
+
+def test_same_version_openclaw_repair_requires_declared_successor(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / "active"
+    candidate = tmp_path / "candidate"
+    (active / "bootstrap").mkdir(parents=True)
+    for source in (
+        REPO_ROOT / "poetry.lock",
+        REPO_ROOT / "bootstrap" / "versions.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "package.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "openclaw.plugin.json",
+    ):
+        destination = candidate / source.relative_to(REPO_ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    active_versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )
+    old_commit = active_versions["openclaw"].pop("supersedes_commit")
+    active_versions["openclaw"]["commit"] = old_commit
+    (active / "bootstrap" / "versions.json").write_text(
+        json.dumps(active_versions), encoding="utf-8"
+    )
+
+    result = validate_candidate(candidate, active_root=active)
+
+    assert result["openclaw_migration"] == {
+        "from": old_commit,
+        "to": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+    }
+
+    candidate_versions_path = candidate / "bootstrap" / "versions.json"
+    candidate_versions = json.loads(candidate_versions_path.read_text("utf-8"))
+    candidate_versions["openclaw"]["supersedes_commit"] = "0" * 40
+    candidate_versions_path.write_text(json.dumps(candidate_versions), encoding="utf-8")
+    with pytest.raises(UpgradeError, match="not the declared reviewed successor"):
+        validate_candidate(candidate, active_root=active)
+
+
+def test_failed_openclaw_install_restores_only_the_previous_selector(
+    tmp_path: Path,
+) -> None:
+    old = tmp_path / "old" / "openclaw.mjs"
+    new = tmp_path / "new" / "openclaw.mjs"
+    old.parent.mkdir()
+    new.parent.mkdir()
+    old.write_text("old", encoding="utf-8")
+    new.write_text("new", encoding="utf-8")
+    selected = tmp_path / "bin" / "openclaw"
+    selected.parent.mkdir()
+    selected.symlink_to(new)
+
+    UpgradeManager._restore_openclaw_selection(selected, old)
+
+    assert selected.is_symlink()
+    assert selected.resolve() == old.resolve()
+    assert new.read_text("utf-8") == "new"
+
+    UpgradeManager._restore_openclaw_selection(selected, None)
+    assert not selected.exists()
+    assert old.read_text("utf-8") == "old"
 
 
 def test_upgrade_waits_only_for_known_post_switch_transients(

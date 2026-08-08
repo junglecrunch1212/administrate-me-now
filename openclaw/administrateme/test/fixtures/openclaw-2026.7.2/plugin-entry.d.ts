@@ -1,6 +1,6 @@
 /**
  * Narrow official-contract fixture copied from the OpenClaw plugin SDK shape
- * at commit 944cf08f94c334cff2b0fdf7e01187a9efa42715.  It is intentionally
+ * at commit ce67ffb70e83e5ebb56ea02e814e577153f84f61.  It is intentionally
  * limited to the surfaces used by this plugin and is not a live-runtime claim.
  */
 

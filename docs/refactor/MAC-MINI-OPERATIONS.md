@@ -14,7 +14,7 @@ the future family Mac. Phase A uses a disposable Mac and fake identities.
   through the locked `sqlcipher3==0.6.2` Apple-silicon wheel,
   Homebrew `>=6,<7`, Poetry `2.4.1`, and npm `>=11.6,<12`.
 - OpenClaw `2026.7.2`, plugin API `2026.7.2`, and source commit
-  `944cf08f94c334cff2b0fdf7e01187a9efa42715` exactly. Because that version is
+  `ce67ffb70e83e5ebb56ea02e814e577153f84f61` exactly. Because that version is
   unpublished on npm, the installer verifies its GitHub archive SHA-256 and
   builds with the source-declared `pnpm@11.15.1`. Bun is not required.
 

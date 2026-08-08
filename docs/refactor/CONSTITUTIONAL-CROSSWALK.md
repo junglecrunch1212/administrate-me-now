@@ -1,5 +1,18 @@
 # Constitutional crosswalk
 
+Pinned `llm-task` execution amendment (2026-08-08): C001/C002/C007/C035/
+C046/C050/C055/C071/C076 are **PRESERVED/HARDENED** after authenticated live
+execution proved the former exact OpenClaw snapshot's bundled tool was
+internally incompatible with its SQLite session runtime. The same-version
+official successor is exact-commit and archive-checksum pinned; it uses
+OpenClaw-owned isolated tool-free completion. The guarded updater permits only
+the declared forward transition and exact rollback. AdministrateMe adds no
+provider client or model route. Canonical member-isolated outer sessions,
+version-qualified skill audit identities, a v5 append-only replay, and Doctor's
+bounded authenticated synthetic execution prevent registration-only false
+health while preserving source facts, member scope, human gating, and
+observation.
+
 Live OpenClaw language-seam amendment (2026-08-08): C035/C046/C050/C055/C076
 are **PRESERVED/HARDENED** after Phase-B replay proved that a healthy Gateway
 and discovered AdministrateMe plugin did not make the required NLP tool

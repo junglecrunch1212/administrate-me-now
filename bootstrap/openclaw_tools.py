@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from bootstrap.openclaw_install import resolve_reviewed_openclaw
 
 
 REQUIRED_LLM_TOOL = "llm-task"
+REQUIRED_LLM_AGENT = "main"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -197,9 +200,109 @@ def configure_required_llm_tool(
     return status
 
 
+def probe_required_llm_tool(
+    gateway_token: str | None,
+    *,
+    test_mode: bool = False,
+    timeout_seconds: int = 45,
+) -> dict[str, Any]:
+    """Execute one bounded, credential-free JSON task through the live seam.
+
+    Registration is insufficient evidence: the pinned host must authenticate,
+    route to its configured model, execute the bundled tool, and return JSON
+    that satisfies the requested schema.  Response bodies and bearer material
+    are deliberately excluded from diagnostic evidence.
+    """
+
+    if test_mode:
+        return {
+            "ok": True,
+            "state": "fixture_passed",
+            "http_status": 200,
+            "gateway_ok": True,
+            "schema_result_ok": True,
+            "credentials_in_report": False,
+        }
+    if not gateway_token:
+        return {
+            "ok": False,
+            "state": "credential_unavailable",
+            "http_status": None,
+            "gateway_ok": False,
+            "schema_result_ok": False,
+            "credentials_in_report": False,
+        }
+    body = {
+        "tool": REQUIRED_LLM_TOOL,
+        "action": "json",
+        "args": {
+            "prompt": "Return the supplied boolean in the required JSON schema.",
+            "input": {"ok": True},
+            "schema": {
+                "type": "object",
+                "required": ["ok"],
+                "properties": {"ok": {"type": "boolean"}},
+                "additionalProperties": False,
+            },
+            "maxTokens": 32,
+            "timeoutMs": 30_000,
+            "temperature": 0,
+        },
+        "agentId": REQUIRED_LLM_AGENT,
+        "sessionKey": (f"agent:{REQUIRED_LLM_AGENT}:adminme:doctor:synthetic:llm-task"),
+        "dryRun": False,
+    }
+    request = urllib.request.Request(
+        "http://127.0.0.1:18789/tools/invoke",
+        data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {gateway_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = int(response.status)
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "state": "http_error",
+            "http_status": int(exc.code),
+            "gateway_ok": False,
+            "schema_result_ok": False,
+            "credentials_in_report": False,
+        }
+    except (OSError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
+        return {
+            "ok": False,
+            "state": "transport_or_response_error",
+            "http_status": None,
+            "gateway_ok": False,
+            "schema_result_ok": False,
+            "credentials_in_report": False,
+        }
+    gateway_ok = isinstance(payload, dict) and payload.get("ok") is True
+    result = _mapping(payload.get("result")) if isinstance(payload, dict) else {}
+    details = _mapping(result.get("details"))
+    schema_result_ok = details.get("json") == {"ok": True}
+    ok = status == 200 and gateway_ok and schema_result_ok
+    return {
+        "ok": ok,
+        "state": "passed" if ok else "schema_or_envelope_mismatch",
+        "http_status": status,
+        "gateway_ok": gateway_ok,
+        "schema_result_ok": schema_result_ok,
+        "credentials_in_report": False,
+    }
+
+
 __all__ = [
+    "REQUIRED_LLM_AGENT",
     "REQUIRED_LLM_TOOL",
     "configure_required_llm_tool",
+    "probe_required_llm_tool",
     "required_llm_tool_status",
 ]
 

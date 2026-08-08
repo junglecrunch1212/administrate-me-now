@@ -2,7 +2,7 @@
 
 This is the only OpenClaw plugin package for AdministrateMe v2. It targets the
 official-contract snapshot for OpenClaw `2026.7.2` at commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`. The repository fixture validates
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`. The repository fixture validates
 the used SDK surface; it is not a claim that a live Gateway ran on Windows.
 
 ## Trust boundary

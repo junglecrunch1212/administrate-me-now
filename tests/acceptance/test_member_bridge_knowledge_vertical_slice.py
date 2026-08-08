@@ -373,8 +373,12 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             correction_ids[0],
         )
         assert [event["type"] for event in corrected_derivatives] == [
-            "embedding.generated"
+            "embedding.generated",
+            "skill.call.failed",
         ]
+        assert corrected_derivatives[-1]["payload"]["skill_name"] == (
+            "skill:extract_note_semantics"
+        )
         _wait_for_vector_source(runtime_a, correction_ids[0])
 
         before_rebuild = _projection_rows(runtime_a)

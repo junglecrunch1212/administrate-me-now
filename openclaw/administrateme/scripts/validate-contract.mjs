@@ -9,7 +9,7 @@ const pkg = await readJson("package.json");
 const manifest = await readJson("openclaw.plugin.json");
 const automations = await readJson("automations.json");
 const expectedVersion = "2026.7.2";
-const expectedCommit = "944cf08f94c334cff2b0fdf7e01187a9efa42715";
+const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
 const expectedNode = ">=24.15.0 <25";
 const expectedTools = [
   "administrateme_state",

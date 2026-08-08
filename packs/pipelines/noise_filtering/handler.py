@@ -52,8 +52,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "4.0.0"
+SKILL_VERSION = "4.0.1"
 DEFAULT_CLASSIFICATION = "personal"
+_REPLAY_GENERATION = 5
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -69,6 +70,42 @@ _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     # extraction and a defensive classification can still proceed safely.
     RuntimeError,
 )
+
+
+def _versioned_idempotency_keys(prefix: str, source_event_id: str) -> list[str]:
+    """Return the historical baseline plus reviewed replay generations."""
+
+    return [
+        f"{prefix}:{source_event_id}",
+        *(
+            f"{prefix}:v{generation}:{source_event_id}"
+            for generation in range(4, _REPLAY_GENERATION + 1)
+        ),
+    ]
+
+
+async def _select_payload_idempotency_key(
+    *,
+    ctx: PipelineContext,
+    tenant_id: str,
+    prefix: str,
+    source_event_id: str,
+    payload: dict[str, Any],
+) -> str:
+    """Reuse byte-identical history or append at the current replay boundary."""
+
+    first_unused: str | None = None
+    for key in _versioned_idempotency_keys(prefix, source_event_id):
+        prior = await ctx.event_log.get_by_idempotency(tenant_id, key)
+        if prior is None:
+            first_unused = first_unused or key
+        elif prior.get("payload") == payload:
+            return key
+    if first_unused is not None:
+        return first_unused
+    raise RuntimeError(
+        f"{prefix} exhausted reviewed replay generations for {source_event_id}"
+    )
 
 
 def _extract_text_and_inputs(
@@ -114,7 +151,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "4.0.0"
+    version: str = "5.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -232,12 +269,13 @@ class NoiseFilteringPipeline:
             "skill_name": SKILL_NAME,
             "skill_version": SKILL_VERSION,
         }
-        idempotency_key = f"messaging:classified:{source_event_id}"
-        prior = await ctx.event_log.get_by_idempotency(
-            event["tenant_id"], idempotency_key
+        idempotency_key = await _select_payload_idempotency_key(
+            ctx=ctx,
+            tenant_id=event["tenant_id"],
+            prefix="messaging:classified",
+            source_event_id=source_event_id,
+            payload=payload,
         )
-        if prior is not None and prior.get("payload") != payload:
-            idempotency_key = f"messaging:classified:v4:{source_event_id}"
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -279,12 +317,13 @@ class NoiseFilteringPipeline:
             "skill_name": SKILL_NAME,
             "skill_version": SKILL_VERSION,
         }
-        idempotency_key = f"messaging:semantic-features:{source_event_id}"
-        prior = await ctx.event_log.get_by_idempotency(
-            event["tenant_id"], idempotency_key
+        idempotency_key = await _select_payload_idempotency_key(
+            ctx=ctx,
+            tenant_id=event["tenant_id"],
+            prefix="messaging:semantic-features",
+            source_event_id=source_event_id,
+            payload=payload,
         )
-        if prior is not None and prior.get("payload") != payload:
-            idempotency_key = f"messaging:semantic-features:v4:{source_event_id}"
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -351,15 +390,24 @@ class NoiseFilteringPipeline:
                 event["event_at_ms"] / 1000, timezone.utc
             ).isoformat()
         )
-        baseline_idempotency = f"triage:message-features:{source_event_id}"
-        prior_extraction = await ctx.event_log.get_by_idempotency(
-            event["tenant_id"], baseline_idempotency
+        extraction_keys = _versioned_idempotency_keys(
+            "triage:message-features", source_event_id
         )
-        idempotency_generation = ""
-        if prior_extraction is not None:
-            prior_proposals = await ctx.event_log.get_by_causation(
-                prior_extraction["event_id"]
+        prior_extractions = [
+            prior
+            for key in extraction_keys
+            if (
+                prior := await ctx.event_log.get_by_idempotency(event["tenant_id"], key)
             )
+            is not None
+        ]
+        idempotency_generation = ""
+        if prior_extractions:
+            prior_proposals = []
+            for prior_extraction in prior_extractions:
+                prior_proposals.extend(
+                    await ctx.event_log.get_by_causation(prior_extraction["event_id"])
+                )
             existing = {
                 (
                     str(proposal["payload"].get("target_kind") or ""),
@@ -379,7 +427,7 @@ class NoiseFilteringPipeline:
             # exact-source candidates after a defensive deterministic pass.
             # Append only those additions under a new idempotency generation;
             # never rewrite or duplicate proposals already reviewed in Triage.
-            idempotency_generation = "v4:"
+            idempotency_generation = f"v{_REPLAY_GENERATION}:"
         extraction_event_id = await ctx.event_sink.write(
             EventEnvelope(
                 event_at_ms=event["event_at_ms"],

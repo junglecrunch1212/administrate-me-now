@@ -2770,7 +2770,7 @@ async def _execute_lifecycle(
                     call_kind="tool",
                     openclaw_version=cast(Literal["2026.7.2"], OPENCLAW_VERSION),
                     openclaw_commit=cast(
-                        Literal["944cf08f94c334cff2b0fdf7e01187a9efa42715"],
+                        Literal["ce67ffb70e83e5ebb56ea02e814e577153f84f61"],
                         OPENCLAW_COMMIT,
                     ),
                 ),

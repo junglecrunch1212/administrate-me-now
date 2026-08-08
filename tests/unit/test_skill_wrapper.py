@@ -36,6 +36,7 @@ from adminme.events.registry import ensure_autoloaded
 from adminme.lib.session import Session
 from adminme.lib.skill_runner.pack_loader import invalidate_cache
 from adminme.lib.skill_runner.wrapper import (
+    OPENCLAW_AGENT_ID,
     OPENCLAW_GATEWAY_URL,
     OpenClawResponseMalformed,
     OpenClawTimeout,
@@ -210,6 +211,10 @@ async def test_happy_path_records_event_and_posts_correct_body(
     assert body["tool"] == "llm-task"
     assert body["action"] == "json"
     assert body["dryRun"] is False
+    assert body["agentId"] == OPENCLAW_AGENT_ID == "main"
+    assert body["sessionKey"] == (
+        "agent:main:adminme:tenant-test:m-test:per_channel_peer"
+    )
     args = body["args"]
     assert "provider" not in args
     assert "model" not in args
@@ -217,6 +222,43 @@ async def test_happy_path_records_event_and_posts_correct_body(
     assert args["timeoutMs"] == 5000
     assert args["input"] == {"text": "hi"}
     assert "schema" in args
+
+
+async def test_openclaw_session_keys_preserve_member_isolation(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    first = _session()
+    second = Session(
+        tenant_id=first.tenant_id,
+        auth_member_id="m-second",
+        auth_role=first.auth_role,
+        view_member_id="m-second",
+        view_role=first.view_role,
+        dm_scope=first.dm_scope,
+        source=first.source,
+        correlation_id="corr-test-2",
+    )
+
+    await run_skill(
+        "classify_test",
+        {"text": "first"},
+        SkillContext(session=first),
+        _runtime=runtime,
+    )
+    await run_skill(
+        "classify_test",
+        {"text": "second"},
+        SkillContext(session=second),
+        _runtime=runtime,
+    )
+
+    bodies = [json.loads(request.content) for request in transport.requests]
+    assert [body["agentId"] for body in bodies] == ["main", "main"]
+    assert bodies[0]["sessionKey"].startswith("agent:main:adminme:")
+    assert bodies[1]["sessionKey"].startswith("agent:main:adminme:")
+    assert bodies[0]["sessionKey"] != bodies[1]["sessionKey"]
 
 
 async def test_explicit_runtime_gateway_token_does_not_use_ambient_environment(

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_on": "2026-08-07",
+  "reviewed_on": "2026-08-08",
   "macos": {
     "supported_majors": [14, 15, 26],
     "preferred_major": 26,
@@ -22,9 +22,10 @@
   },
   "openclaw": {
     "version": "2026.7.2",
-    "commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
-    "source_archive_url": "https://codeload.github.com/openclaw/openclaw/tar.gz/944cf08f94c334cff2b0fdf7e01187a9efa42715",
-    "source_archive_sha256": "a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8",
+    "commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+    "supersedes_commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
+    "source_archive_url": "https://codeload.github.com/openclaw/openclaw/tar.gz/ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+    "source_archive_sha256": "3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577",
     "package_manager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065",
     "plugin_api": "2026.7.2",
     "gateway_port": 18789

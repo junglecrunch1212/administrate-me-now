@@ -33,7 +33,8 @@ The target release baseline is:
 - Homebrew `>=6,<7`, Poetry `2.4.1`, and npm `>=11.6,<12`;
 - SQLCipher `>=4.12,<5` through the existing `sqlcipher3==0.6.2` boundary;
 - OpenClaw `2026.7.2` at reviewed commit
-  `944cf08f94c334cff2b0fdf7e01187a9efa42715`, unchanged.
+  `ce67ffb70e83e5ebb56ea02e814e577153f84f61`, unchanged after the reviewed
+  same-version llm-task compatibility cutover in ADR-0001.
 
 Python and Node are installed side by side. The candidate builds a new,
 release-local virtual environment and plugin dependency tree. It never edits
