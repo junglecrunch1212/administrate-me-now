@@ -95,8 +95,11 @@ def surface_freshness(
     row_count: int,
     degraded_reason: str | None = None,
     configured: bool = True,
+    checkpoint_event_id: str | None = None,
+    checkpoint_required: bool = False,
+    lag_count: int | None = None,
 ) -> dict[str, Any]:
-    """Distinguish healthy empty state from stale, degraded, or disabled state."""
+    """Distinguish proven empty state from unprocessed, stale, or degraded state."""
 
     generated = generated_at.astimezone(timezone.utc)
     latest = latest_source_at.astimezone(timezone.utc) if latest_source_at else None
@@ -104,6 +107,10 @@ def surface_freshness(
         state = "not_configured"
     elif degraded_reason:
         state = "degraded"
+    elif checkpoint_required and checkpoint_event_id is None:
+        state = "uninitialized"
+    elif lag_count is not None and lag_count > 0:
+        state = "processing"
     elif (
         latest is not None
         and (generated - latest).total_seconds() > stale_after_seconds
@@ -123,6 +130,9 @@ def surface_freshness(
         "stale_after_seconds": stale_after_seconds,
         "row_count": row_count,
         "degraded_reason": degraded_reason,
+        "checkpoint_event_id": checkpoint_event_id,
+        "checkpoint_required": checkpoint_required,
+        "lag_count": lag_count,
         "safe_read_functions_available": configured,
     }
 

@@ -42,7 +42,12 @@ from adminme.lib.instance_config import (
     load_instance_config,
     resolve_instance_dir,
 )
-from adminme.lib.observation import ObservationManager
+from adminme.lib.observation import (
+    ObservationManager,
+    OutboundAuditContext,
+    reset_outbound_audit_context,
+    set_outbound_audit_context,
+)
 from adminme.lib.adapters import OutboundMessage, WriteOperation
 from adminme.lib.session import build_internal_session
 from adminme.lib.skill_runner import set_default_event_sink
@@ -54,6 +59,7 @@ from adminme.member_chat import (
     OpenClawGatewayChatTransport,
     UnavailableMemberChatTransport,
 )
+from adminme.openclaw_approvals import OpenClawApprovalStore
 from adminme.pipelines.runner import PipelineRunner
 from adminme.products.automation.main import router as automation_router
 from adminme.products.bridge.auth import (
@@ -409,6 +415,7 @@ class AdministrateMeRuntime:
         self.pipelines: PipelineRunner | None = None
         self.adapters: AdapterSupervisor | None = None
         self.adapter_cursor_store: AdapterCursorStore | None = None
+        self.openclaw_approval_store: OpenClawApprovalStore | None = None
         self.fixture_adapter: FixtureMessagingAdapter | None = None
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
@@ -419,6 +426,7 @@ class AdministrateMeRuntime:
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
+        self.member_chat_last_failure: dict[str, Any] | None = None
         self.observation: ObservationManager | None = None
         self.guarded_write: GuardedWrite | None = None
         self.member_id_resolver = (
@@ -563,6 +571,9 @@ class AdministrateMeRuntime:
             self.adapter_cursor_store = AdapterCursorStore(
                 self.settings.instance.adapter_cursor_path
             )
+            self.openclaw_approval_store = OpenClawApprovalStore(
+                self.settings.instance.config_dir / "openclaw-approvals.sqlite3"
+            )
             self.adapters = AdapterSupervisor(
                 config_path=self.settings.instance.config_dir / "adapters.yaml",
                 config_data=self.settings_control.effective_adapter_config(
@@ -653,6 +664,9 @@ class AdministrateMeRuntime:
             if self.adapter_cursor_store is not None:
                 self.adapter_cursor_store.close()
                 self.adapter_cursor_store = None
+            if self.openclaw_approval_store is not None:
+                self.openclaw_approval_store.close()
+                self.openclaw_approval_store = None
             if self.events is not None:
                 self.events.stop_accepting()
             if self.pipelines is not None:
@@ -855,6 +869,38 @@ class AdministrateMeRuntime:
             raise RuntimeError("adapter supervisor unavailable")
         now = EventEnvelope.now_utc_iso()
         result_type = "external_sync.write_completed"
+        provider_called = False
+        is_v2 = int(event.get("schema_version") or 1) >= 2
+        content_fingerprint = str(
+            payload.get("request_fingerprint")
+            or hashlib.sha256(
+                json.dumps(
+                    payload.get("payload") or {},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode()
+            ).hexdigest()
+        )
+        audit_token = None
+        if is_v2:
+            audit_token = set_outbound_audit_context(
+                OutboundAuditContext(
+                    initiating_command_id=str(payload["command_id"]),
+                    initiating_event_id=str(event["event_id"]),
+                    domain_approval_event_id=str(payload["domain_approval_event_id"]),
+                    openclaw_approval_event_id=str(
+                        payload["openclaw_approval_event_id"]
+                    ),
+                    provider=str(payload["provider"]),
+                    provider_account_id=str(payload["provider_account_id"]),
+                    operation=str(payload["operation"]),
+                    content_fingerprint=content_fingerprint,
+                    owner_scope=str(event["owner_scope"]),
+                    visibility_scope=str(event["visibility_scope"]),
+                    sensitivity=str(event["sensitivity"]),
+                )
+            )
         try:
             if provider in communication_providers:
                 command_body = {
@@ -874,6 +920,7 @@ class AdministrateMeRuntime:
                         raise ValueError("reply recipient is unavailable")
                     if not isinstance(body, str) or not body.strip():
                         raise ValueError("reply body is empty")
+                    provider_called = True
                     send_result = await self.fixture_adapter.send(
                         OutboundMessage(
                             channel="fixture",
@@ -891,7 +938,9 @@ class AdministrateMeRuntime:
                         "external_id": send_result.external_id,
                         "state": {},
                     }
+                    provider_called = not send_result.suppressed
                 else:
+                    provider_called = True
                     communication_result = (
                         await self.adapters.dispatch_communication_write(
                             provider=str(provider),
@@ -901,6 +950,7 @@ class AdministrateMeRuntime:
                             payload=command_body,
                         )
                     )
+                    provider_called = not bool(communication_result.get("suppressed"))
                 applied = bool(communication_result.get("applied"))
                 suppressed = bool(communication_result.get("suppressed"))
                 external_id = communication_result.get("external_id")
@@ -910,6 +960,7 @@ class AdministrateMeRuntime:
                     "state": communication_result.get("state") or {},
                 }
             else:
+                provider_called = True
                 result = await self.adapters.dispatch_write(
                     provider=str(payload["provider"]),
                     member_id=str(payload["member_id"]),
@@ -922,6 +973,7 @@ class AdministrateMeRuntime:
                 )
                 applied = result.applied
                 suppressed = result.suppressed
+                provider_called = not result.suppressed
                 external_id = result.external_id
                 result_body = {"applied": applied}
             result_payload: dict[str, Any] = {
@@ -936,6 +988,8 @@ class AdministrateMeRuntime:
                 "suppressed": suppressed,
             }
         except Exception as exc:  # provider failures are terminal, typed evidence
+            if isinstance(exc, (LookupError, ValueError)):
+                provider_called = False
             result_type = "external_sync.write_failed"
             result_payload = {
                 "command_id": payload["command_id"],
@@ -954,21 +1008,37 @@ class AdministrateMeRuntime:
                 "retryable": not isinstance(exc, (LookupError, ValueError)),
                 "failed_at": now,
             }
+        finally:
+            if audit_token is not None:
+                reset_outbound_audit_context(audit_token)
+        if is_v2:
+            result_payload.update(
+                {
+                    "command_event_id": event["event_id"],
+                    "domain_approval_event_id": payload["domain_approval_event_id"],
+                    "openclaw_approval_event_id": payload["openclaw_approval_event_id"],
+                    "provider_account_id": payload["provider_account_id"],
+                    "request_fingerprint": content_fingerprint,
+                    "provider_called": provider_called,
+                    "origin_proposal_id": payload.get("origin_proposal_id"),
+                }
+            )
         await self._require_events().write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=event["tenant_id"],
                 type=result_type,
-                schema_version=1,
+                schema_version=2 if is_v2 else 1,
                 occurred_at=now,
                 source_adapter="external-sync-central-dispatcher",
                 source_account_id=str(payload["provider_account_id"]),
-                owner_scope=f"private:{payload['member_id']}",
-                visibility_scope=f"private:{payload['member_id']}",
-                sensitivity="normal",
+                owner_scope=event["owner_scope"],
+                visibility_scope=event["visibility_scope"],
+                sensitivity=event["sensitivity"],
                 correlation_id=event.get("correlation_id"),
                 causation_id=event["event_id"],
                 idempotency_key=f"external-sync-result:{payload['command_id']}",
+                raw_ref=f"content-sha256:{content_fingerprint}",
                 payload=result_payload,
             )
         )
@@ -1236,12 +1306,81 @@ class AdministrateMeRuntime:
                 details={
                     "version": status["version"],
                     "lag_count": status["lag_count"],
+                    "checkpoint_event_id": status["checkpoint"],
+                    "last_success_at": status["last_success_at"],
+                    "last_failure_at": status["last_failure_at"],
+                    "consecutive_failures": status["consecutive_failures"],
+                    "poison_event_id": status["poison_event_id"],
+                    "retry_policy": status["retry_policy"],
                 },
             )
+        pipeline_status = await self.pipelines.status()
         for pack_id in self.pipelines.registered_pack_ids():
-            self.capabilities[f"pipeline:{pack_id}"] = CapabilityRecord(
-                name=pack_id, kind="reactive_pipeline", state="healthy"
+            status = pipeline_status.get(pack_id) or {}
+            subscriber = status.get("subscriber_status") or {}
+            degraded = bool(
+                subscriber.get("degraded")
+                or subscriber.get("poison_event_id")
+                or int(subscriber.get("consecutive_failures") or 0) > 0
             )
+            self.capabilities[f"pipeline:{pack_id}"] = CapabilityRecord(
+                name=pack_id,
+                kind="reactive_pipeline",
+                state="degraded" if degraded else "healthy",
+                reason=("subscriber delivery is degraded" if degraded else None),
+                details={
+                    "version": status.get("version"),
+                    "checkpoint_event_id": subscriber.get("checkpoint_event_id"),
+                    "lag_count": subscriber.get("lag_count"),
+                    "last_success_at": subscriber.get("last_success_at"),
+                    "last_failure_at": subscriber.get("last_failure_at"),
+                    "consecutive_failures": subscriber.get("consecutive_failures", 0),
+                    "poison_event_id": subscriber.get("poison_event_id"),
+                    "retry_policy": subscriber.get("retry_policy"),
+                },
+            )
+
+        if self.adapters is not None:
+            live_adapters = self.adapters.inventory()
+            by_name: dict[str, list[dict[str, Any]]] = {}
+            for live in live_adapters.values():
+                by_name.setdefault(str(live["adapter_name"]), []).append(live)
+            for capability_key, existing in list(self.capabilities.items()):
+                if not capability_key.startswith("adapter:"):
+                    continue
+                matching = by_name.get(existing.name) or []
+                if not matching:
+                    continue
+                unhealthy = [
+                    item for item in matching if item.get("state") not in {"running"}
+                ]
+                live_state: CapabilityState = (
+                    "degraded"
+                    if unhealthy
+                    else "observation_only"
+                    if self._observation_active
+                    else "healthy"
+                )
+                existing.state = live_state
+                existing.reason = (
+                    "one or more configured adapter instances are not running"
+                    if unhealthy
+                    else (
+                        "inbound sync is running; outbound writes are observation-only"
+                        if self._observation_active
+                        else None
+                    )
+                )
+                existing.details.update(
+                    {
+                        "provider_health": live_state,
+                        "instances": matching,
+                        "durable_watermarks": [
+                            (item.get("extra") or {}).get("durable_cursor")
+                            for item in matching
+                        ],
+                    }
+                )
         if not self.settings.openclaw_enabled:
             standing_state: CapabilityState = "blocked"
         elif self.openclaw_state == "healthy":
@@ -1266,9 +1405,50 @@ class AdministrateMeRuntime:
                 state=standing_state,
                 reason=standing_reason,
             )
+        triage_projection = self.capabilities.get("projection:triage")
+        extraction_pipeline = self.capabilities.get("pipeline:pipeline:noise_filtering")
+        triage_degraded = any(
+            record is not None and record.state in {"degraded", "blocked"}
+            for record in (triage_projection, extraction_pipeline)
+        )
+        self.capabilities["surface:triage-processing"] = CapabilityRecord(
+            name="triage-processing",
+            kind="member_surface_processing",
+            state="degraded" if triage_degraded else "healthy",
+            reason=(
+                "Triage projection or automatic message extraction is degraded"
+                if triage_degraded
+                else None
+            ),
+            details={
+                "projection_checkpoint_event_id": (
+                    triage_projection.details.get("checkpoint_event_id")
+                    if triage_projection is not None
+                    else None
+                ),
+                "projection_lag_count": (
+                    triage_projection.details.get("lag_count")
+                    if triage_projection is not None
+                    else None
+                ),
+                "extraction_checkpoint_event_id": (
+                    extraction_pipeline.details.get("checkpoint_event_id")
+                    if extraction_pipeline is not None
+                    else None
+                ),
+            },
+        )
         for product in self.PRODUCT_NAMES:
+            product_degraded = product == "member" and triage_degraded
             self.capabilities[f"product:{product}"] = CapabilityRecord(
-                name=product, kind="product_namespace", state="healthy"
+                name=product,
+                kind="product_namespace",
+                state="degraded" if product_degraded else "healthy",
+                reason=(
+                    "one or more member-surface processing capabilities are degraded"
+                    if product_degraded
+                    else None
+                ),
             )
         self.capabilities["read_model:activity-feed"] = CapabilityRecord(
             name="activity-feed",
@@ -1300,6 +1480,11 @@ class AdministrateMeRuntime:
         elif not self.settings.openclaw_model_configured:
             chat_state = "blocked"
             chat_reason = "OpenClaw model provider is not configured"
+        elif self.member_chat_last_failure is not None:
+            chat_state = "degraded"
+            chat_reason = (
+                f"OpenClaw chat method failed: {self.member_chat_last_failure['code']}"
+            )
         elif self.settings.deterministic_member_chat_fixture:
             chat_state = "healthy"
             chat_reason = None
@@ -1328,6 +1513,7 @@ class AdministrateMeRuntime:
                 "model_provider_configured": self.settings.openclaw_model_configured,
                 "transcripts_owned_by": "openclaw",
                 "provider_credentials_exposed": False,
+                "last_method_failure": self.member_chat_last_failure,
             },
         )
 

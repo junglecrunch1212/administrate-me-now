@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -22,6 +23,7 @@ from adminme.events.log import IdempotencyConflict
 from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session, Source
 from adminme.lib.skill_runner.wrapper import SkillContext
+from adminme.openclaw_approvals import ApprovalReceiptError
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import build_surface
@@ -76,6 +78,23 @@ class Provenance(BaseModel):
 class ContextRequest(BaseModel):
     model_config = {"extra": "forbid"}
     provenance: Provenance
+    openclaw_approval_receipt_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
+
+
+class ApprovalResolutionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    receipt_id: str = Field(min_length=1, max_length=240)
+    tool_name: str = Field(min_length=1, max_length=120)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issued_at_ms: int = Field(ge=0)
+    expires_at_ms: int = Field(ge=0)
+    decision: Literal["allow-once"]
+    openclaw_version: Literal["2026.7.2"]
+    openclaw_commit: Literal["944cf08f94c334cff2b0fdf7e01187a9efa42715"]
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ActionRequest(ContextRequest):
@@ -87,6 +106,27 @@ class ActionRequest(ContextRequest):
     owed_to_party_id: str | None = Field(default=None, min_length=1)
 
 
+class AddForReviewRequest(ContextRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    text: str = Field(min_length=1, max_length=2000)
+    kind_hint: (
+        Literal[
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "list",
+            "list_item",
+            "recurrence",
+            "party_identifier",
+            "party_candidate",
+            "party_relationship",
+            "relationship_fact",
+        ]
+        | None
+    ) = None
+
+
 class ReviewRequest(ContextRequest):
     request_id: str = Field(min_length=1, max_length=120)
     action: Literal["inspect", "approve", "dismiss", "edit"]
@@ -96,7 +136,6 @@ class ReviewRequest(ContextRequest):
     due_at: str | None = None
     reason: str | None = Field(default=None, max_length=500)
     send_acknowledgement: bool = False
-    openclaw_approved: bool = False
 
 
 class LifecycleRequest(ContextRequest):
@@ -156,6 +195,10 @@ class NotificationResultRequest(ContextRequest):
     provider_receipt_id: str | None = Field(default=None, max_length=500)
     error_code: str | None = Field(default=None, max_length=120)
     next_retry_at: str | None = None
+
+
+class ExecutePendingProviderActionRequest(ContextRequest):
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
 
 
 class HealthReport(BaseModel):
@@ -339,6 +382,75 @@ async def _record_tool_call(
     return event_id
 
 
+async def _consume_openclaw_approval(
+    request: Request,
+    session: Session,
+    provenance: Provenance,
+    body: ContextRequest,
+    *,
+    tool_name: str,
+    action: str,
+    causation_id: str | None = None,
+) -> str:
+    """Consume the exact allow-once receipt and append its private audit fact."""
+
+    receipt_id = body.openclaw_approval_receipt_id
+    if not receipt_id:
+        raise HTTPException(403, "independent OpenClaw allow-once approval is required")
+    runtime = _runtime(request)
+    if runtime.openclaw_approval_store is None:
+        raise HTTPException(503, "OpenClaw approval storage is unavailable")
+    values = body.model_dump(
+        mode="json",
+        exclude={"provenance", "openclaw_approval_receipt_id"},
+        exclude_unset=True,
+    )
+    fingerprint = _fingerprint(values)
+    try:
+        receipt = runtime.openclaw_approval_store.consume(
+            receipt_id=receipt_id,
+            tool_name=tool_name,
+            request_fingerprint=fingerprint,
+            member_id=session.auth_member_id,
+            allow_same_binding_recovery=True,
+        )
+    except ApprovalReceiptError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    consumed_at = EventEnvelope.now_utc_iso()
+    event_id, _ = await _append(
+        runtime,
+        session,
+        event_type="openclaw.approval.received",
+        source_account_id=provenance.account_id or provenance.channel_id,
+        owner_scope=f"private:{session.auth_member_id}",
+        visibility_scope=f"private:{session.auth_member_id}",
+        payload={
+            "receipt_id": receipt.receipt_id,
+            "member_id": session.auth_member_id,
+            "tool_name": receipt.tool_name,
+            "action": action,
+            "request_fingerprint": receipt.request_fingerprint,
+            "resource_fingerprint": receipt.request_fingerprint,
+            "issued_at": datetime.fromtimestamp(
+                receipt.issued_at_ms / 1000, tz=timezone.utc
+            ).isoformat(),
+            "expires_at": datetime.fromtimestamp(
+                receipt.expires_at_ms / 1000, tz=timezone.utc
+            ).isoformat(),
+            "consumed_at": consumed_at,
+            "single_use": True,
+            "approval_method": "allow_once",
+            "openclaw_version": receipt.openclaw_version,
+            "openclaw_commit": receipt.openclaw_commit,
+            "provenance": provenance.audit_payload(member_id=session.auth_member_id),
+        },
+        request_id=receipt.receipt_id,
+        causation_id=causation_id,
+        request_fingerprint=receipt.request_fingerprint,
+    )
+    return event_id
+
+
 def _result_event_ids(result: Any) -> list[str]:
     if not isinstance(result, dict):
         return []
@@ -366,6 +478,40 @@ async def health(request: Request) -> dict[str, Any]:
         "expected_openclaw_commit": OPENCLAW_COMMIT,
         "compatible": True,
         "runtime": await runtime.diagnostics(),
+    }
+
+
+@router.post("/approvals/resolve")
+async def resolve_approval(
+    body: ApprovalResolutionRequest, request: Request
+) -> dict[str, Any]:
+    """Record an allow-once decision emitted only by OpenClaw's resolution hook."""
+
+    _authenticate(request)
+    runtime = _runtime(request)
+    if runtime.openclaw_approval_store is None:
+        raise HTTPException(503, "OpenClaw approval storage is unavailable")
+    secret = runtime.settings.openclaw_shared_secret
+    if not secret:
+        raise HTTPException(503, "OpenClaw approval credential is unavailable")
+    try:
+        receipt = runtime.openclaw_approval_store.resolve(
+            secret=secret,
+            receipt_id=body.receipt_id,
+            tool_name=body.tool_name,
+            request_fingerprint=body.request_fingerprint,
+            issued_at_ms=body.issued_at_ms,
+            expires_at_ms=body.expires_at_ms,
+            openclaw_version=body.openclaw_version,
+            openclaw_commit=body.openclaw_commit,
+            signature=body.signature,
+        )
+    except ApprovalReceiptError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    return {
+        "accepted": True,
+        "receipt_id": receipt.receipt_id,
+        "expires_at_ms": receipt.expires_at_ms,
     }
 
 
@@ -435,94 +581,145 @@ async def what_now(body: ContextRequest, request: Request) -> dict[str, Any]:
     return result
 
 
+@router.post("/tools/execute-pending-provider-action")
+async def execute_pending_provider_action(
+    body: ExecutePendingProviderActionRequest, request: Request
+) -> dict[str, Any]:
+    """Consume both independent approvals before creating one provider command."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    result = await _execute_pending_provider_action(
+        request,
+        session,
+        body.provenance,
+        body,
+        domain_approval_event_id=body.domain_approval_event_id,
+        tool_name="administrateme_execute_pending_provider_action",
+    )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.execute-pending-provider-action",
+        result_event_ids=[result["event_id"]],
+    )
+    return result
+
+
+async def _execute_pending_provider_action(
+    request: Request,
+    session: Session,
+    provenance: Provenance,
+    approval_body: ContextRequest,
+    *,
+    domain_approval_event_id: str,
+    tool_name: str,
+) -> dict[str, Any]:
+    """Bind a signed OpenClaw decision to one immutable member decision."""
+
+    runtime = _runtime(request)
+    domain_event = await runtime.event_log.get(domain_approval_event_id)
+    if (
+        domain_event is None
+        or domain_event.get("type") != "member.provider_action.confirmed"
+        or domain_event.get("tenant_id") != session.tenant_id
+        or domain_event.get("owner_scope") != f"private:{session.auth_member_id}"
+        or domain_event.get("payload", {}).get("member_id") != session.auth_member_id
+    ):
+        raise HTTPException(404, "pending provider action not found")
+    prior_key = f"external-sync-approved:{domain_event['event_id']}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, prior_key)
+    if prior is not None:
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "event_id": prior["event_id"],
+            "domain_approval_event_id": domain_event["event_id"],
+        }
+    payload = domain_event["payload"]
+    request_fingerprint = str(payload["request_fingerprint"])
+    approval_event_id = await _consume_openclaw_approval(
+        request,
+        session,
+        provenance,
+        approval_body,
+        tool_name=tool_name,
+        action=str(payload["operation"]),
+        causation_id=domain_event["event_id"],
+    )
+    now = EventEnvelope.now_utc_iso()
+    command_payload = {
+        "command_id": payload["action_id"],
+        "member_id": session.auth_member_id,
+        "provider": payload["provider"],
+        "provider_account_id": payload["provider_account_id"],
+        "operation": payload["operation"],
+        "target_external_id": payload.get("target_external_id"),
+        "expected_provider_revision": payload.get("expected_provider_revision"),
+        "payload": dict(payload.get("command_payload") or {}),
+        "requested_at": now,
+        "domain_approval_event_id": domain_event["event_id"],
+        "openclaw_approval_event_id": approval_event_id,
+        "request_fingerprint": request_fingerprint,
+        "privacy_guard_version": "member-provider-action-v1",
+        "origin_proposal_id": payload.get("origin_proposal_id"),
+    }
+    await _guard(runtime, session, "external_sync.write_requested", command_payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="external_sync.write_requested",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="openclaw-plugin",
+            source_account_id=provenance.account_id or provenance.channel_id,
+            owner_scope=domain_event["owner_scope"],
+            visibility_scope=domain_event["visibility_scope"],
+            sensitivity=domain_event["sensitivity"],
+            correlation_id=session.correlation_id,
+            causation_id=approval_event_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=prior_key,
+            raw_ref=f"request-sha256:{request_fingerprint}",
+            payload=command_payload,
+        )
+    )
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": event_id,
+        "domain_approval_event_id": domain_event["event_id"],
+        "openclaw_approval_event_id": approval_event_id,
+        "observation_mode": runtime._observation_active,
+    }
+
+
 @router.post("/tools/action")
 async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str, Any]:
+    """Compatibility alias that can only propose; direct capture is superseded."""
+
     session = _session(request, body.provenance)
     _require_adult(session)
     runtime = _runtime(request)
     observation_active = await runtime.observation.is_active()
-    payload: dict[str, Any]
-    if body.mode == "propose" or observation_active:
-        payload = {
-            "proposal_id": f"ocp_{body.request_id}",
-            "kind": body.kind,
-            "title": body.title,
-            "owner_member_id": session.auth_member_id,
-            "due": body.due,
-            "reason": (
-                "observation_mode_active" if observation_active else "explicit_proposal"
-            ),
-            "provenance": body.provenance.audit_payload(
-                member_id=session.auth_member_id
-            ),
-        }
-        await _guard(runtime, session, "household.action.proposed", payload)
-        event_id, duplicate = await _append(
-            runtime,
-            session,
-            event_type="household.action.proposed",
-            source_account_id="actions",
-            owner_scope=f"private:{session.auth_member_id}",
-            visibility_scope=f"private:{session.auth_member_id}",
-            payload=payload,
-            request_id=body.request_id,
-            request_fingerprint=_fingerprint(
-                body.model_dump(mode="json", exclude={"provenance"})
-            ),
-        )
-        await _record_tool_call(
-            request,
-            session,
-            body.provenance,
-            operation="tools.action",
-            result_event_ids=[event_id],
-        )
-        return {
-            "state": "proposal_only",
-            "observation_active": observation_active,
-            "event_id": event_id,
-            "duplicate": duplicate,
-        }
-
-    if body.kind == "task":
-        event_type = "task.created"
-        item_id = f"oct_{body.request_id}"
-        payload = {
-            "task_id": item_id,
-            "title": body.title,
-            "description": None,
-            "owner_member_id": session.auth_member_id,
-            "due": body.due,
-            "energy": None,
-            "effort_min": None,
-            "source_commitment_id": None,
-        }
-        projection = "tasks"
-    else:
-        if not body.owed_to_party_id:
-            raise HTTPException(422, "owed_to_party_id is required for a commitment")
-        event_type = "commitment.proposed"
-        item_id = f"occ_{body.request_id}"
-        payload = {
-            "commitment_id": item_id,
-            "kind": "task",
-            "owed_by_member_id": session.auth_member_id,
-            "owed_to_party_id": body.owed_to_party_id,
-            "text_summary": body.title,
-            "suggested_due": body.due,
-            "urgency": "this_week",
-            "confidence": 1.0,
-            "strength": "confident",
-            "source_interaction_id": None,
-            "source_message_preview": None,
-            "classify_reasons": ["explicit member capture through OpenClaw"],
-        }
-        projection = "commitments"
-    await _guard(runtime, session, event_type, payload)
+    payload = {
+        "proposal_id": f"ocp_{body.request_id}",
+        "kind": body.kind,
+        "title": body.title,
+        "owner_member_id": session.auth_member_id,
+        "due": body.due,
+        "reason": "observation_mode_active"
+        if observation_active
+        else "explicit_proposal",
+        "provenance": body.provenance.audit_payload(member_id=session.auth_member_id),
+    }
+    await _guard(runtime, session, "household.action.proposed", payload)
     event_id, duplicate = await _append(
         runtime,
         session,
-        event_type=event_type,
+        event_type="household.action.proposed",
         source_account_id="actions",
         owner_scope=f"private:{session.auth_member_id}",
         visibility_scope=f"private:{session.auth_member_id}",
@@ -532,7 +729,6 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
             body.model_dump(mode="json", exclude={"provenance"})
         ),
     )
-    await runtime.wait_for_projection(projection, event_id)
     await _record_tool_call(
         request,
         session,
@@ -541,12 +737,45 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
         result_event_ids=[event_id],
     )
     return {
-        "state": "captured",
-        "item_id": item_id,
+        "state": "proposal_only",
+        "observation_active": observation_active,
         "event_id": event_id,
         "duplicate": duplicate,
-        "what_now": core._what_now(runtime, session),
     }
+
+
+@router.post("/tools/add-for-review")
+async def add_for_review(body: AddForReviewRequest, request: Request) -> dict[str, Any]:
+    """Native OpenClaw exact-text entry into the same member Triage contract."""
+
+    session = _session(request, body.provenance)
+    _require_adult(session)
+    from adminme.products.member.main import (  # local import avoids router cycle
+        TriageIntentRequest,
+        submit_triage_intent,
+    )
+
+    result = await submit_triage_intent(
+        TriageIntentRequest(
+            text=body.text,
+            source_surface="openclaw",
+            kind_hint=body.kind_hint,
+            client_request_id=body.request_id,
+        ),
+        request,
+        session,
+    )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.add-for-review",
+        result_event_ids=[
+            result["intent_event_id"],
+            *result["proposal_event_ids"],
+        ],
+    )
+    return result
 
 
 @router.post("/tools/review")
@@ -570,11 +799,28 @@ async def review(body: ReviewRequest, request: Request) -> dict[str, Any]:
                 request_id=body.request_id,
                 expected_last_event_id=body.expected_last_event_id,
                 send_acknowledgement=body.send_acknowledgement,
-                openclaw_approved=body.openclaw_approved,
             ),
             request,
             session,
         )
+        pending_event_id = result.get("pending_provider_action_event_id")
+        if body.send_acknowledgement and isinstance(pending_event_id, str):
+            external = await _execute_pending_provider_action(
+                request,
+                session,
+                body.provenance,
+                body,
+                domain_approval_event_id=pending_event_id,
+                tool_name="administrateme_review",
+            )
+            result["external_write"] = external
+            result["delivery"] = {
+                "delivered": False,
+                "suppressed": False,
+                "held": True,
+                "reason": "provider_result_pending",
+                "command_event_id": external["event_id"],
+            }
     elif body.action == "dismiss":
         result = await comms.dismiss_commitment(
             body.commitment_id,
@@ -603,7 +849,14 @@ async def review(body: ReviewRequest, request: Request) -> dict[str, Any]:
         session,
         body.provenance,
         operation=f"tools.review.{body.action}",
-        result_event_ids=_result_event_ids(result),
+        result_event_ids=[
+            *(_result_event_ids(result)),
+            *(
+                [result["external_write"]["event_id"]]
+                if isinstance(result.get("external_write"), dict)
+                else []
+            ),
+        ],
     )
     return result
 

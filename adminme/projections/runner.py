@@ -266,6 +266,11 @@ class ProjectionRunner:
                 "lag_count": bus_status.get("lag_count"),
                 "last_event_applied": bus_status.get("checkpoint_event_id"),
                 "degraded": bus_status.get("degraded", False),
+                "last_success_at": bus_status.get("last_success_at"),
+                "last_failure_at": bus_status.get("last_failure_at"),
+                "consecutive_failures": bus_status.get("consecutive_failures", 0),
+                "poison_event_id": bus_status.get("poison_event_id"),
+                "retry_policy": bus_status.get("retry_policy"),
             }
         return out
 

@@ -56,7 +56,6 @@ export function registerDashboard(api: OpenClawPluginApi, runtime: PluginRuntime
         due_at: params.dueAt,
         reason: params.reason,
         send_acknowledgement: false,
-        openclaw_approved: false,
       })),
     { scope: "operator.write" },
   );

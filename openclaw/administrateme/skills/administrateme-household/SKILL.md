@@ -12,7 +12,7 @@ membership; the AdministrateMe process independently maps trusted
 channel/account/actor provenance.
 
 - Use `administrateme_state` or `administrateme_what_now` for reads.
-- Use `administrateme_action` for an explicit proposal or capture request.
+- Use `administrateme_add_for_review` to save the member's exact words in Triage. It never creates canonical household truth without member confirmation.
 - Use `administrateme_review` for pending commitment decisions.
 - Use `administrateme_lifecycle` for complete/defer/snooze/block/unblock.
 - Use `administrateme_correct` only for its allowlisted fields.

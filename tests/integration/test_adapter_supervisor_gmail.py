@@ -30,6 +30,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import Adapter, AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.daemons.adapter_supervisor import (
     INITIAL_BACKOFF_S,
     AdapterSupervisor,
@@ -104,7 +105,7 @@ class _FakeGmailService:
         *,
         profile: dict[str, Any] | None = None,
         history_pages: list[dict[str, Any]] | None = None,
-        messages: dict[str, dict[str, Any]] | None = None,
+        messages: dict[str, Any] | None = None,
     ) -> None:
         self._profile = profile
         self._history_pages = list(history_pages or [])
@@ -173,8 +174,17 @@ class _FakeExecute:
             msg_id = self._params.get("id")
             if msg_id not in self._service._messages:
                 raise KeyError(f"unknown message id {msg_id!r}")
-            return dict(self._service._messages[msg_id])
+            value = self._service._messages[msg_id]
+            if isinstance(value, BaseException):
+                raise value
+            return dict(value)
         raise AssertionError(f"unhandled fake call {self._kind!r}")
+
+
+class _FakeHttpError(RuntimeError):
+    def __init__(self, status: int) -> None:
+        super().__init__(f"fixture HTTP {status}")
+        self.resp = type("FixtureResponse", (), {"status": status})()
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +255,7 @@ def _supervisor(
     observation_session: Any = None,
     observation_manager: Any = None,
     observation_event_log: Any = None,
+    cursor_store: AdapterCursorStore | None = None,
 ) -> AdapterSupervisor:
     """Build a supervisor whose ``ctx_factory`` hands each adapter a
     context tied to the shared recording log + frozen clock + a
@@ -267,6 +278,7 @@ def _supervisor(
             observation_session=observation_session,
             observation_manager=observation_manager,
             observation_event_sink=observation_event_log,
+            cursor_store=cursor_store,
         )
 
     return AdapterSupervisor(
@@ -371,6 +383,144 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
         await sup.stop()
         snap_after = sup.snapshot()
         assert snap_after["adapters"]["messaging-gmail-api"]["state"] == "stopped"
+
+
+async def test_durable_cursor_and_dedupe_survive_supervisor_restart(
+    tmp_path: Path,
+) -> None:
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+    cursor_store = AdapterCursorStore(tmp_path / "adapter-cursors.sqlite3")
+    first_log = _RecordingEventLog()
+    first_service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        history_pages=[_fixture("history_response.json")],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    first_adapter = _build_gmail_adapter(service=first_service, max_poll_cycles=2)
+    first = _supervisor(
+        config_path=channels,
+        event_log=first_log,
+        adapters=[first_adapter],
+        cursor_store=cursor_store,
+    )
+    await first.start()
+    try:
+        await _wait_for(lambda: len(first_log.by_type("messaging.received")) == 2)
+    finally:
+        await first.stop()
+
+    cursor_id = first_adapter._cursor_id
+    assert cursor_id is not None
+    assert cursor_store.get(cursor_id).provider_watermark == "9002"
+
+    new_message = json.loads(json.dumps(_fixture("message_alice.json")))
+    new_message["id"] = "msg-later"
+    new_message["threadId"] = "thr-later"
+    new_message["historyId"] = "9003"
+    second_service = _FakeGmailService(
+        profile={"historyId": "9999", "emailAddress": "sandbox@example.test"},
+        history_pages=[
+            {
+                "history": [
+                    {
+                        "id": "9003",
+                        "messagesAdded": [
+                            {"message": {"id": "msg-alice", "threadId": "thr-alice"}},
+                            {
+                                "message": {
+                                    "id": "msg-later",
+                                    "threadId": "thr-later",
+                                }
+                            },
+                        ],
+                    }
+                ],
+                "historyId": "9003",
+            }
+        ],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-later": new_message,
+        },
+    )
+    second_log = _RecordingEventLog()
+    second_adapter = _build_gmail_adapter(service=second_service, max_poll_cycles=1)
+    second = _supervisor(
+        config_path=channels,
+        event_log=second_log,
+        adapters=[second_adapter],
+        cursor_store=cursor_store,
+    )
+    await second.start()
+    try:
+        await _wait_for(lambda: len(second_log.by_type("messaging.received")) == 1)
+        [received] = second_log.by_type("messaging.received")
+        assert received["payload"]["thread_id"] == "thr-later"
+        assert second_service.get_profile_calls == []
+        assert second_service.history_list_calls[0]["startHistoryId"] == "9002"
+        assert cursor_store.get(cursor_id).provider_watermark == "9003"
+    finally:
+        await second.stop()
+        cursor_store.close()
+
+
+async def test_malformed_message_is_quarantined_without_hiding_later_message(
+    tmp_path: Path,
+) -> None:
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+    cursor_store = AdapterCursorStore(tmp_path / "adapter-cursors.sqlite3")
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        history_pages=[
+            {
+                "history": [
+                    {
+                        "id": "9002",
+                        "messagesAdded": [
+                            {"message": {"id": "msg-malformed", "threadId": "bad"}},
+                            {"message": {"id": "msg-bob", "threadId": "thr-bob"}},
+                        ],
+                    }
+                ],
+                "historyId": "9002",
+            }
+        ],
+        messages={
+            "msg-malformed": _FakeHttpError(404),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    event_log = _RecordingEventLog()
+    adapter = _build_gmail_adapter(service=service, max_poll_cycles=2)
+    supervisor = _supervisor(
+        config_path=channels,
+        event_log=event_log,
+        adapters=[adapter],
+        cursor_store=cursor_store,
+    )
+    await supervisor.start()
+    try:
+        await _wait_for(
+            lambda: (
+                len(event_log.by_type("adapter.record.quarantined")) == 1
+                and len(event_log.by_type("messaging.received")) == 1
+            )
+        )
+        [quarantine] = event_log.by_type("adapter.record.quarantined")
+        assert quarantine["payload"]["external_id"] == "msg-malformed"
+        assert quarantine["payload"]["provider_watermark"] == "9002"
+        [received] = event_log.by_type("messaging.received")
+        assert received["payload"]["thread_id"] == "thr-bob"
+        assert cursor_store.get(adapter._cursor_id).provider_watermark == "9002"
+        assert adapter.status().state == "backoff"
+    finally:
+        await supervisor.stop()
+        cursor_store.close()
 
 
 # ---------------------------------------------------------------------------

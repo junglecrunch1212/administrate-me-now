@@ -1,5 +1,17 @@
 # Migration map
 
+CO-007 update (2026-08-08): trustworthy capture and Triage are **MODERNIZED
+COMPLETE IN THE PHASE-A CANDIDATE**. New exact-text intent and feature events
+are additive. `triage.item.proposed@v1` and legacy external-write events remain
+readable; new candidate lineage, confirmation chronology, independent approval,
+and terminal audit use versioned schemas. Triage projection v5 rebuilds from the
+immutable log, adding pending interpretation and approval/outcome linkage.
+Gmail adopts the shared durable cursor/lease store with per-message dedupe and
+explicit quarantine before page-watermark advancement. Rollback cannot delete
+new events and must ignore unknown additive types safely. No migration collapses
+domain kinds, turns a projection into truth, advances a provider cursor before
+durability, or reclassifies a historical record through a model.
+
 Runtime-Keychain update (2026-08-07): ADR-0006 **PRESERVES** every original
 interpreter-bound item and **MODERNIZES** an authorized Python-boundary cutover
 with candidate-bound copies plus an atomic, non-secret logical-reference alias

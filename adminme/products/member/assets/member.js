@@ -255,8 +255,11 @@ function triageDetail(item, data, readOnly = false) {
   section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", item.title));
   if (item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
   if (readOnly) {
-    section.append(text("p", `${titleCase(item.state)} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, "review-state ready"));
+    const outcome = item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
+    section.append(text("p", `${outcome} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
     if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
+    if (item.domain_approval_event_id) section.append(text("p", item.materialized_event_ids?.length ? "Your confirmation was recorded before canonical materialization." : "Your domain confirmation is recorded before any provider action.", "meta"));
+    if (item.outcome_event_id) section.append(text("p", "A terminal provider-path outcome is linked to this decision.", "meta"));
     const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id)); section.append(evidence);
     return section;
   }
@@ -384,14 +387,15 @@ function triageSurface(data) {
   const pending = data.items || [];
   const recent = data.recent_items || [];
   const groups = {
+    needs_interpretation: pending.filter((item) => item.review_state?.state === "needs_interpretation"),
     ready: pending.filter((item) => item.review_state?.state === "ready"),
-    needs_details: pending.filter((item) => item.review_state?.state !== "ready"),
+    needs_details: pending.filter((item) => item.review_state?.state === "needs_details"),
     recent,
   };
   if (!groups[state.triageView]) state.triageView = "ready";
   const controls = document.createElement("section"); controls.className = "card comms-controls";
   const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
-  for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["recent", "Recent"]]) {
+  for (const [key, label] of [["needs_interpretation", "Needs interpretation"], ["needs_details", "Needs details"], ["ready", "Ready"], ["recent", "Recent"]]) {
     const button = text("button", `${label} ${groups[key].length}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
     button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
   }
@@ -401,11 +405,11 @@ function triageSurface(data) {
   const selected = visible.find((item) => item.proposal_id === state.triageSelected) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Awaiting review"));
-  if (!visible.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : "No recent decisions yet.", "empty"));
+  if (!visible.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : "No recent decisions yet.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
   for (const item of visible) {
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
-    button.append(text("strong", item.title), text("small", `${titleCase(item.target_kind)} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}`));
+    button.append(text("strong", item.title), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}`));
     button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;
@@ -579,10 +583,9 @@ async function executeTodayAction(item, action, container) {
           expected_provider_revision: item.provider_revision,
           payload: {},
           request_id: crypto.randomUUID(),
-          openclaw_approved: true,
         }),
       });
-      setBanner("Completion requested. It will leave Today after the provider confirms it.");
+      setBanner("Completion saved for approval. The provider is unchanged until OpenClaw confirms this exact action.");
     }
     await reloadActiveSurface();
   } catch (error) {
@@ -913,7 +916,7 @@ function commsHero(cockpit) {
 }
 
 async function runCommsCommand(thread, operation, extras = {}) {
-  setBanner(operation === "reply" ? "Sending through the governed provider gate…" : "Updating this conversation…");
+  setBanner(operation === "reply" ? "Saving this exact reply for independent approval…" : "Saving this change for independent approval…");
   try {
     const result = await api(`/api/member/v1/comms/${encodeURIComponent(thread.last_interaction_id)}/commands`, {
       method: "POST",
@@ -922,11 +925,10 @@ async function runCommsCommand(thread, operation, extras = {}) {
         operation,
         expected_last_event_id: thread.last_event_id,
         request_id: crypto.randomUUID(),
-        openclaw_approved: false,
         ...extras,
       }),
     });
-    setBanner(result.local ? "Updated. The focus view has been recalculated." : result.observation_mode ? "Approved and audited. Observation mode suppressed the external change." : "Approved. Waiting for the provider result.");
+    setBanner(result.local ? "Updated. The focus view has been recalculated." : "Your decision is saved. OpenClaw must separately approve this exact provider action before anything changes outside AdministrateMe.");
     await reloadActiveSurface();
   } catch (error) {
     setBanner(`${error.message} Nothing was changed.`);
@@ -988,12 +990,12 @@ function commsReadingPane(thread) {
   if (thread.capabilities.mark_read) {
     const operation = latest.unread ? "mark_read" : "mark_unread";
     const button = text("button", latest.unread ? "Mark read" : "Mark unread", "button button-quiet"); button.type = "button";
-    button.addEventListener("click", () => runCommsCommand(thread, operation, { openclaw_approved: true })); actions.append(button);
+    button.addEventListener("click", () => runCommsCommand(thread, operation)); actions.append(button);
   }
   if (thread.capabilities.archive) {
     const operation = thread.archived ? "restore" : "archive";
     const button = text("button", thread.archived ? "Restore" : "Archive", "button button-quiet"); button.type = "button";
-    button.addEventListener("click", () => runCommsCommand(thread, operation, { openclaw_approved: true })); actions.append(button);
+    button.addEventListener("click", () => runCommsCommand(thread, operation)); actions.append(button);
   }
   const snooze = text("button", thread.bucket === "snoozed" ? "Unsnooze" : "Snooze 2h", "button button-quiet"); snooze.type = "button";
   snooze.addEventListener("click", () => runCommsCommand(thread, thread.bucket === "snoozed" ? "unsnooze" : "snooze", thread.bucket === "snoozed" ? {} : { snoozed_until: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() })); actions.append(snooze);
@@ -1004,15 +1006,13 @@ function commsReadingPane(thread) {
   compose.append(text("label", "Reply in this thread"));
   const input = document.createElement("textarea"); input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(input);
   if (thread.capabilities.reply) {
-    const approvalLabel = document.createElement("label"); approvalLabel.className = "approval-check";
-    const approval = document.createElement("input"); approval.type = "checkbox";
-    approvalLabel.append(approval, document.createTextNode(" Approve the independent OpenClaw delivery gate for this exact reply"));
-    const send = text("button", "Send reply", "button button-primary"); send.type = "submit";
-    compose.append(approvalLabel, send);
+    compose.append(text("p", "This saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.", "state-note"));
+    const send = text("button", "Save reply for approval", "button button-primary"); send.type = "submit";
+    compose.append(send);
     compose.addEventListener("submit", (event) => {
       event.preventDefault();
-      if (!approval.checked) { setBanner("Check the OpenClaw delivery approval before sending. Nothing was sent."); return; }
-      runCommsCommand(thread, "reply", { body: input.value.trim(), openclaw_approved: true });
+      if (!input.value.trim()) { setBanner("Write the reply you want approved. Nothing was sent."); return; }
+      runCommsCommand(thread, "reply", { body: input.value.trim() });
     });
   } else {
     input.disabled = true;
@@ -1062,7 +1062,7 @@ function reminderOperation(item, stem) {
 }
 
 async function runReminderCommand(item, operation, payload = {}) {
-  setBanner("Sending one explicit change through both approval gates…");
+  setBanner("Saving one explicit provider change for independent approval…");
   try {
     const result = await api("/api/member/v1/reminders/commands", {
       method: "POST",
@@ -1077,10 +1077,9 @@ async function runReminderCommand(item, operation, payload = {}) {
         expected_provider_revision: item.provider_revision || null,
         payload,
         request_id: crypto.randomUUID(),
-        openclaw_approved: true,
       }),
     });
-    setBanner(result.observation_mode ? "Approved and audited. Observation mode suppressed the provider change." : "Approved. The provider result will update this view when observed.");
+    setBanner("Your decision is saved. OpenClaw must approve this exact provider action before the provider can change.");
     await reloadActiveSurface();
   } catch (error) {
     setBanner(`${error.message} Nothing was changed or implied.`);
@@ -1096,6 +1095,62 @@ function openActionDialog(title, content) {
 }
 
 function closeActionDialog() { $("#action-dialog").close(); }
+
+function openAddForReview() {
+  const form = document.createElement("form");
+  form.className = "triage-review-form add-for-review-form";
+  form.append(text("p", "This saves your thought in Triage. Nothing becomes a task, event, reminder, or provider change until you confirm it.", "state-note"));
+  const input = document.createElement("textarea");
+  input.name = "text"; input.rows = 5; input.maxLength = 2000; input.required = true;
+  input.placeholder = "What just came up?";
+  form.append(field("Thought to hold", input));
+  const hints = [
+    { value: "", label: "Let Triage identify possible types" },
+    ...["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "relationship_fact"].map((value) => ({ value, label: titleCase(value) })),
+  ];
+  const hint = selectControl(hints, "", ""); hint.name = "kind_hint";
+  form.append(field("Type hint (optional)", hint));
+  const note = text("p", "If the wording is unclear, it stays under Needs interpretation—never silently discarded.", "meta");
+  const submit = text("button", "Add for review", "button button-primary"); submit.type = "submit";
+  const cancel = text("button", "Cancel", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+  const actions = document.createElement("div"); actions.className = "button-row"; actions.append(submit, cancel);
+  form.append(note, actions);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const exactText = input.value.trim();
+    if (!exactText) return;
+    submit.disabled = true;
+    setBanner("Saving your exact words before interpretation…");
+    const allowedSurfaces = new Set(["today", "triage", "comms", "reminders", "calendar", "people", "notes", "finance", "scoreboard", "settings"]);
+    const sourceSurface = allowedSurfaces.has(currentSurface()) ? currentSurface() : "today";
+    try {
+      const result = await api("/api/member/v1/triage/intents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({
+          text: exactText,
+          source_surface: sourceSurface,
+          kind_hint: hint.value || null,
+          source_event_id: null,
+          client_request_id: crypto.randomUUID(),
+        }),
+      });
+      closeActionDialog();
+      setBanner(result.state === "pending_interpretation" ? "Saved. Triage needs you to choose what this is; nothing was lost or created." : `${result.proposal_ids.length} review item${result.proposal_ids.length === 1 ? "" : "s"} saved in Triage. Nothing is committed yet.`);
+      if (currentSurface() === "triage") {
+        state.triageView = result.state === "pending_interpretation" ? "needs_interpretation" : "needs_details";
+        state.triageSelected = result.proposal_ids[0] || result.intent_id;
+        replaceQuery({ view: state.triageView, item: state.triageSelected });
+        await reloadActiveSurface();
+      }
+    } catch (error) {
+      setBanner(`${error.message} Your thought was not saved; the text is still here.`);
+      submit.disabled = false;
+      input.focus();
+    }
+  });
+  openActionDialog("Add for review", form);
+}
 
 function configureReminderCue(item) {
   const form = document.createElement("form"); form.className = "dialog-form";
@@ -2216,6 +2271,8 @@ function freshnessStrip(data) {
   strip.append(text("span", titleCase(value.state), `pill state-label state-${String(value.state).replaceAll("_", "-")}`));
   const latest = value.latest_source_at ? `Latest source ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
   strip.append(text("span", `${latest} · ${value.row_count} visible record${value.row_count === 1 ? "" : "s"}`));
+  if (value.checkpoint_required) strip.append(text("span", value.checkpoint_event_id ? `Checkpoint ${String(value.checkpoint_event_id).slice(-10)}` : "No processing checkpoint yet"));
+  if (Number(value.lag_count || 0) > 0) strip.append(text("strong", `${value.lag_count} event${value.lag_count === 1 ? "" : "s"} waiting to process`));
   if (value.degraded_reason) strip.append(text("strong", value.degraded_reason));
   return strip;
 }
@@ -2370,6 +2427,7 @@ async function initialize() {
   $("#chat-stop").addEventListener("click", async () => { state.controller?.abort(); await fetch("/api/member/v1/chat/abort", { method: "POST", credentials: "same-origin" }); });
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
   $("[data-close-action]").addEventListener("click", closeActionDialog);
+  $("#add-for-review").addEventListener("click", openAddForReview);
   try {
     state.bootstrap = await api("/api/member/v1/bootstrap"); renderNavigation(combinedNavigation(state.bootstrap)); configureChat(state.bootstrap.chat);
     const memberButton = $("#member-button"); memberButton.replaceChildren(); memberButton.className = "member-chip";
@@ -2379,12 +2437,13 @@ async function initialize() {
     $("#observation-banner").hidden = !state.bootstrap.observation_mode;
     const viewAs = $("#view-as-banner"); viewAs.hidden = !state.bootstrap.member.viewing_as;
     if (state.bootstrap.member.viewing_as) viewAs.textContent = `Viewing ${state.bootstrap.member.display_name}. Reads follow that member’s scope; actions remain attributed to ${state.bootstrap.member.authenticated_display_name}, and Settings changes are disabled.`;
+    $("#add-for-review").disabled = Boolean(state.bootstrap.member.viewing_as);
     const active = currentSurface();
     const params = new URLSearchParams(location.search);
     const requestedView = params.get("view");
     if (active === "today" && ["brief", "carousel"].includes(requestedView)) state.todayView = requestedView;
     if (active === "triage") {
-      if (["ready", "needs_details", "recent"].includes(requestedView)) state.triageView = requestedView;
+      if (["needs_interpretation", "ready", "needs_details", "recent"].includes(requestedView)) state.triageView = requestedView;
       state.triageSelected = params.get("item");
     }
     if (active === "comms") {

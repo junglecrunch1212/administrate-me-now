@@ -40,13 +40,9 @@ function makeTool(
         runtime.transport.config.sharedSecretEnv,
       );
       trackSession(runtime, provenance);
-      const approvedParams =
-        definition.name === "administrateme_review"
-          ? { ...params, openclaw_approved: true }
-          : params;
       const invocationParams = definition.standingOrder
-        ? { ...approvedParams, trigger_id: id }
-        : approvedParams;
+        ? { ...params, trigger_id: id }
+        : params;
       const result = await runtime.transport.request(definition.path, {
         ...invocationParams,
         provenance,
@@ -71,20 +67,32 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/tools/what-now",
     },
     {
-      name: "administrateme_action",
-      description: "Propose or capture one authorized household task or commitment.",
+      name: "administrateme_add_for_review",
+      description:
+        "Save exact member text in Triage for deterministic interpretation and human confirmation.",
       parameters: Type.Object(
         {
-          request_id: Type.String({ minLength: 1 }),
-          mode: Type.Union([Type.Literal("propose"), Type.Literal("capture")]),
-          kind: ItemKind,
-          title: Type.String({ minLength: 1, maxLength: 500 }),
-          due: Type.Optional(Type.String()),
-          owed_to_party_id: Type.Optional(Type.String({ minLength: 1 })),
+          request_id: Type.String({ minLength: 8, maxLength: 120 }),
+          text: Type.String({ minLength: 1, maxLength: 2000 }),
+          kind_hint: Type.Optional(
+            Type.Union([
+              Type.Literal("task"),
+              Type.Literal("commitment"),
+              Type.Literal("calendar_event"),
+              Type.Literal("reminder"),
+              Type.Literal("list"),
+              Type.Literal("list_item"),
+              Type.Literal("recurrence"),
+              Type.Literal("party_identifier"),
+              Type.Literal("party_candidate"),
+              Type.Literal("party_relationship"),
+              Type.Literal("relationship_fact"),
+            ]),
+          ),
         },
         { additionalProperties: false },
       ),
-      path: "/api/openclaw/v1/tools/action",
+      path: "/api/openclaw/v1/tools/add-for-review",
     },
     {
       name: "administrateme_review",
@@ -141,6 +149,18 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
         { additionalProperties: false },
       ),
       path: "/api/openclaw/v1/tools/correct",
+    },
+    {
+      name: "administrateme_execute_pending_provider_action",
+      description:
+        "Execute one member-confirmed provider action after this separate OpenClaw allow-once approval.",
+      parameters: Type.Object(
+        {
+          domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
+        },
+        { additionalProperties: false },
+      ),
+      path: "/api/openclaw/v1/tools/execute-pending-provider-action",
     },
     {
       name: "administrateme_skill",

@@ -37,7 +37,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.utils import formatdate, getaddresses
@@ -50,6 +53,7 @@ from adminme.adapters.base import (
 )
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import resolve_json_credentials
+from adminme.events.registry import EventValidationError
 from adminme.lib.adapters import (
     CommunicationAdapter,
     InboundEnvelope,
@@ -207,6 +211,8 @@ class GmailAdapter(CommunicationAdapter):
         self._status = AdapterStatus()
         self._service: Any = None
         self._cursor: str | None = None
+        self._cursor_id: str | None = None
+        self._lease_owner = f"gmail-{uuid.uuid4()}"
         self._events_since_advance: int = 0
         self._last_advance_at: datetime | None = None
         self._stop_requested: bool = False
@@ -277,6 +283,19 @@ class GmailAdapter(CommunicationAdapter):
         creds_json = self._credentials_resolver(op_ref)
         self._service = self._service_factory(creds_json, self._scopes, user_email)
         self._ctx = ctx
+        self._cursor_id = str(
+            getattr(self, "instance_name", None)
+            or self._config.get("id")
+            or ":".join(
+                (
+                    self.name,
+                    str(self._config.get("member_id") or "unbound"),
+                    str(self._config.get("user_email") or "gmail"),
+                )
+            )
+        )
+        if ctx.cursor_store is not None:
+            self._cursor = ctx.cursor_store.get(self._cursor_id).provider_watermark
         self._status.started_at = ctx.now_factory()
         self._status.state = "running"
         self._last_advance_at = ctx.now_factory()
@@ -312,7 +331,10 @@ class GmailAdapter(CommunicationAdapter):
                     error_message=str(exc) or type(exc).__name__,
                     retry_after_s=retry_after_s,
                 )
-                if severity == "fatal":
+                if ctx.cursor_store is not None and self._cursor_id is not None:
+                    cursor = ctx.cursor_store.record_error(self._cursor_id)
+                    self._status.extra["durable_cursor"] = cursor.public()
+                if severity == "fatal" or error_kind == "api_changed":
                     self._status.state = "crashed"
                     return
                 self._status.state = "backoff"
@@ -334,23 +356,112 @@ class GmailAdapter(CommunicationAdapter):
         """
         if self._service is None:
             raise RuntimeError("Gmail service not initialized; call start() first")
-        if self._cursor is None:
-            self._cursor = self._bootstrap_cursor()
+        store = ctx.cursor_store
+        cursor_id = self._cursor_id or self.name
+        claimed = store is None or store.claim(
+            cursor_id,
+            self._lease_owner,
+            ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
+        )
+        if not claimed:
+            self._status.state = "backoff"
+            self._status.extra["cursor_lease"] = "held_by_another_runtime"
             return 0
+        try:
+            if store is not None:
+                self._cursor = store.get(cursor_id).provider_watermark
+            if self._cursor is None:
+                self._cursor = self._bootstrap_cursor()
+                if store is not None:
+                    store.record_success(cursor_id, provider_watermark=self._cursor)
+                    self._status.extra["durable_cursor"] = store.get(cursor_id).public()
+                return 0
 
-        new_history_id, history_records = self._fetch_history(self._cursor)
-        message_ids = self._extract_added_message_ids(history_records)
-        emitted = 0
-        for msg_id in message_ids:
-            full_msg = self._fetch_message(msg_id)
-            await self._emit_messaging_received(ctx=ctx, message=full_msg)
-            emitted += 1
-            self._events_since_advance += 1
+            new_history_id, history_records = self._fetch_history(self._cursor)
+            message_ids = self._extract_added_message_ids(history_records)
+            emitted = 0
+            quarantined = 0
+            for msg_id in message_ids:
+                try:
+                    full_msg = self._fetch_message(msg_id)
+                except Exception as exc:
+                    _, error_kind, _ = self._classify_gmail_error(exc)
+                    if error_kind != "api_changed":
+                        raise
+                    quarantined += 1
+                    fingerprint = hashlib.sha256(
+                        f"gmail-message-id:{msg_id}".encode()
+                    ).hexdigest()
+                    quarantine_event_id = await self._emit_quarantine(
+                        ctx=ctx,
+                        external_id=msg_id,
+                        fingerprint=fingerprint,
+                        error=exc,
+                        provider_watermark=new_history_id,
+                    )
+                    if store is not None:
+                        store.record_success(
+                            cursor_id,
+                            external_id=msg_id,
+                            fingerprint=fingerprint,
+                            event_id=quarantine_event_id,
+                        )
+                    continue
+                fingerprint = self._message_fingerprint(full_msg)
+                if store is not None and store.dedupe_event(
+                    cursor_id, msg_id, fingerprint
+                ):
+                    continue
+                try:
+                    event_id = await self._emit_messaging_received(
+                        ctx=ctx,
+                        message=full_msg,
+                        fingerprint=fingerprint,
+                    )
+                    if store is not None:
+                        store.record_success(
+                            cursor_id,
+                            external_id=msg_id,
+                            fingerprint=fingerprint,
+                            event_id=event_id,
+                        )
+                    emitted += 1
+                    self._events_since_advance += 1
+                except EventValidationError as exc:
+                    quarantined += 1
+                    quarantine_event_id = await self._emit_quarantine(
+                        ctx=ctx,
+                        external_id=msg_id,
+                        fingerprint=fingerprint,
+                        error=exc,
+                        provider_watermark=new_history_id,
+                    )
+                    if store is not None:
+                        store.record_success(
+                            cursor_id,
+                            external_id=msg_id,
+                            fingerprint=fingerprint,
+                            event_id=quarantine_event_id,
+                        )
 
-        if new_history_id and new_history_id != self._cursor:
-            self._cursor = new_history_id
-        await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
-        return emitted
+            if new_history_id and new_history_id != self._cursor:
+                self._cursor = new_history_id
+            if store is not None:
+                store.record_success(cursor_id, provider_watermark=self._cursor)
+                if quarantined:
+                    store.record_error(cursor_id)
+                self._status.extra["durable_cursor"] = store.get(cursor_id).public()
+            self._status.extra["last_poll"] = {
+                "emitted": emitted,
+                "quarantined": quarantined,
+                "provider_watermark": self._cursor,
+            }
+            self._status.state = "backoff" if quarantined else "running"
+            await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
+            return emitted
+        finally:
+            if store is not None:
+                store.release(cursor_id, self._lease_owner)
 
     async def stop(self) -> None:
         """Release the Gmail service handle. Idempotent."""
@@ -785,8 +896,12 @@ class GmailAdapter(CommunicationAdapter):
         await self._append(ctx=ctx, event_type="adapter.authenticated", payload=payload)
 
     async def _emit_messaging_received(
-        self, *, ctx: AdapterContext, message: dict[str, Any]
-    ) -> None:
+        self,
+        *,
+        ctx: AdapterContext,
+        message: dict[str, Any],
+        fingerprint: str | None = None,
+    ) -> str:
         """Translate a Gmail ``users.messages.get`` response into a
         ``messaging.received`` v3 event. The pack's ``user_email`` is the
         ``to_identifier``; ``from_identifier`` comes from the From header.
@@ -835,11 +950,57 @@ class GmailAdapter(CommunicationAdapter):
             "starred": "STARRED" in labels,
             "important": "IMPORTANT" in labels,
         }
-        await self._append(
+        native_message_id = str(message.get("id") or "unknown")
+        stable_fingerprint = fingerprint or self._message_fingerprint(message)
+        return await self._append(
             ctx=ctx,
             event_type="messaging.received",
             payload=event_payload,
             schema_version=3,
+            idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
+            raw_ref=(
+                f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
+            ),
+        )
+
+    @staticmethod
+    def _message_fingerprint(message: dict[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                message, sort_keys=True, separators=(",", ":"), default=str
+            ).encode()
+        ).hexdigest()
+
+    async def _emit_quarantine(
+        self,
+        *,
+        ctx: AdapterContext,
+        external_id: str,
+        fingerprint: str,
+        error: Exception,
+        provider_watermark: str | None,
+    ) -> str:
+        now = ctx.now_factory().astimezone(timezone.utc).isoformat()
+        self._status.last_error = {
+            "error_kind": "api_changed",
+            "error_message": f"{type(error).__name__}: {error}"[:2000],
+            "external_id_fingerprint": hashlib.sha256(external_id.encode()).hexdigest(),
+        }
+        return await self._append(
+            ctx=ctx,
+            event_type="adapter.record.quarantined",
+            payload={
+                "adapter_name": self.name,
+                "adapter_family": self.family,
+                "external_id": external_id,
+                "content_fingerprint": fingerprint,
+                "error_kind": "api_changed",
+                "error_message": f"{type(error).__name__}: {error}"[:2000],
+                "quarantined_at": now,
+                "provider_watermark": provider_watermark,
+            },
+            idempotency_key=f"gmail-quarantine:{external_id}:{fingerprint}",
+            raw_ref=f"gmail://messages/{external_id}#quarantined={fingerprint}",
         )
 
     async def _maybe_emit_cursor_advance(
@@ -910,24 +1071,25 @@ class GmailAdapter(CommunicationAdapter):
         event_type: str,
         payload: dict[str, Any],
         schema_version: int = 1,
-    ) -> None:
+        idempotency_key: str | None = None,
+        raw_ref: str | None = None,
+    ) -> str:
         """Append a typed event via the supervisor-provided event log.
 
         [§7.3, D17] adapters never write to projections — append-only
         event log is the sole write surface.
         """
-        try:
-            await write_adapter_event(
-                ctx,
-                adapter_name=self.name,
-                sensitivity_floor=self.sensitivity_floor,
-                config=self._config,
-                event_type=event_type,
-                payload=payload,
-                schema_version=schema_version,
-            )
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception("gmail adapter failed to emit %s event", event_type)
+        return await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            schema_version=schema_version,
+            idempotency_key=idempotency_key,
+            raw_ref=raw_ref,
+        )
 
     # ------------------------------------------------------------------
     # Error classification

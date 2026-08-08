@@ -1249,7 +1249,7 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
         assert item["why"] == ["Presence cue matched"]
         assert surface.json()["cockpit"]["accounts"][0]["state"] == "read_only"
 
-        no_independent_approval = client.post(
+        forged_approval = client.post(
             "/api/member/v1/reminders/commands",
             headers=HEADERS[PRINCIPAL],
             json={
@@ -1264,7 +1264,23 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
                 "openclaw_approved": False,
             },
         )
-        assert no_independent_approval.status_code == 403
+        assert forged_approval.status_code == 422
+        awaiting_openclaw = client.post(
+            "/api/member/v1/reminders/commands",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "provider": "google_tasks",
+                "provider_account_id": "google-a",
+                "operation": "complete_task",
+                "list_external_id": "list-a",
+                "item_external_id": "take-bins",
+                "expected_last_event_id": item_event,
+                "payload": {},
+                "request_id": "gate7-reminders-command",
+            },
+        )
+        assert awaiting_openclaw.status_code == 409
+        assert app.state.runtime.fixture_adapter.delivered == []
 
         provenance = {
             "actor_id": "actor-principal",
@@ -1328,7 +1344,6 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
                 "request_id": "gate7-daily-loop-approve",
                 "expected_last_event_id": proposal["last_event_id"],
                 "send_acknowledgement": False,
-                "openclaw_approved": True,
             },
         ).json()["commitment"]
         before = client.get(
@@ -1406,7 +1421,7 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
         assert updated["threads"][0]["bucket"] == "snoozed"
         assert updated["counts"]["snoozed"] == 1
         current = updated["threads"][0]
-        unapproved = client.post(
+        forged_approval = client.post(
             f"/api/member/v1/comms/{current['last_interaction_id']}/commands",
             headers=HEADERS[PRINCIPAL],
             json={
@@ -1417,7 +1432,7 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
                 "openclaw_approved": False,
             },
         )
-        assert unapproved.status_code == 403
+        assert forged_approval.status_code == 422
         approved = client.post(
             f"/api/member/v1/comms/{current['last_interaction_id']}/commands",
             headers=HEADERS[PRINCIPAL],
@@ -1426,23 +1441,12 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
                 "expected_last_event_id": current["last_event_id"],
                 "request_id": "gate7-comms-reply-approved",
                 "body": "A calm fixture reply.",
-                "openclaw_approved": True,
             },
         )
         assert approved.status_code == 200, approved.text
+        assert approved.json()["state"] == "awaiting_openclaw_approval"
         assert approved.json()["observation_mode"] is True
-        terminal = client.portal.call(
-            _wait_for_command_result,
-            app.state.runtime,
-            "gate7-comms-reply-approved",
-        )
-        assert terminal["type"] == "external_sync.write_completed"
-        assert terminal["payload"]["suppressed"] is True
         assert app.state.runtime.fixture_adapter.delivered == []
-        command_state = client.get(
-            "/api/member/v1/surfaces/comms", headers=HEADERS[PRINCIPAL]
-        ).json()["cockpit"]["threads"][0]["command_state"]
-        assert command_state == "suppressed"
         stale = client.post(
             f"/api/member/v1/comms/{thread['last_interaction_id']}/commands",
             headers=HEADERS[PRINCIPAL],
@@ -2113,7 +2117,11 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
         triage = client.get(
             "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
         ).json()
-        [proposal] = triage["items"]
+        proposal = next(
+            item
+            for item in triage["items"]
+            if item["proposal_id"] == "ac28-school-form"
+        )
         assert proposal["review_state"]["state"] == "ready"
         assert proposal["source_event_id"] == message_event
         assert triage["recent_items"] == []
@@ -2144,8 +2152,18 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
         resolved = client.get(
             "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
         ).json()
-        assert resolved["items"] == []
-        assert resolved["recent_items"][0]["state"] == "confirmed"
+        assert all(
+            item["proposal_id"] != "ac28-school-form" for item in resolved["items"]
+        )
+        assert any(
+            item["source_event_id"] == message_event for item in resolved["items"]
+        )
+        reviewed = next(
+            item
+            for item in resolved["recent_items"]
+            if item["proposal_id"] == "ac28-school-form"
+        )
+        assert reviewed["state"] == "confirmed"
         for surface in ("today", "triage", "comms", "reminders", "calendar"):
             value = client.get(
                 f"/api/member/v1/surfaces/{surface}", headers=HEADERS[PRINCIPAL]

@@ -92,6 +92,27 @@ class OpenClawToolCallRecordedV1(BaseModel):
     openclaw_commit: str = Field(min_length=7)
 
 
+class OpenClawApprovalReceivedV1(BaseModel):
+    """One resolved, content-bound OpenClaw plugin approval consumed once."""
+
+    model_config = {"extra": "forbid"}
+
+    receipt_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    tool_name: str = Field(min_length=1, max_length=120)
+    action: str = Field(min_length=1, max_length=120)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    resource_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issued_at: str = Field(min_length=1)
+    expires_at: str = Field(min_length=1)
+    consumed_at: str = Field(min_length=1)
+    single_use: Literal[True]
+    approval_method: Literal["allow_once", "standing_order"]
+    openclaw_version: str = Field(min_length=1)
+    openclaw_commit: str = Field(min_length=7)
+    provenance: dict[str, Any]
+
+
 registry.register(
     "openclaw.integration.state_changed", 1, OpenClawIntegrationStateChangedV1
 )
@@ -102,6 +123,7 @@ registry.register(
 )
 registry.register("openclaw.model_call.recorded", 1, OpenClawModelCallRecordedV1)
 registry.register("openclaw.tool_call.recorded", 1, OpenClawToolCallRecordedV1)
+registry.register("openclaw.approval.received", 1, OpenClawApprovalReceivedV1)
 
 
 __all__ = []

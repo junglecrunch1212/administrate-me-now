@@ -89,7 +89,6 @@ def _command(**updates: object) -> ReminderCommandRequest:
         "list_external_id": "list-a",
         "payload": {"title": "Pick up milk"},
         "request_id": "request-reminders-2",
-        "openclaw_approved": True,
     }
     raw.update(updates)
     return ReminderCommandRequest.model_validate(raw)

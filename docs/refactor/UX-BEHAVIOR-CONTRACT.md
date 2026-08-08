@@ -1,5 +1,16 @@
 # UX behavior contract
 
+CO-007 amendment (2026-08-08): every authorized adult surface exposes the same
+Add for review action. Its only required input is exact text; the optional type
+hint never becomes authority. The browser preserves failed input, reports the
+number of derived review items, and routes all results to Triage without a
+canonical/provider write. Triage has separate Needs interpretation, Needs
+details, Ready, and Recent lenses, plus real projection checkpoint/source
+freshness. Natural dictation is split only at bounded explicit intent starts by
+deterministic code. Recent local outcomes say `confirmed_local`; provider paths
+show awaiting approval/provider, suppression, failure, and linked observation
+without conflating a domain confirmation with provider success.
+
 Gate 7 production status (amended 2026-08-06): the real member portal now implements
 the ten stable adult surfaces, role-derived navigation/routes, carousel,
 compressed, and child modes, evidence dialog, lifecycle-to-next-action
@@ -113,6 +124,8 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-36 | Every connection presents setup, runtime, permission, and safety independently. Config, credential-reference presence, provider handshake, cursor freshness, effective write capability, and observation are never collapsed into one healthy state; unknown remains unknown. |
 | UX-37 | Profile and fine-tuning controls are bounded, revisioned, reversible data. They disclose behavior effects and cannot change authority, privacy, model routing, provider scope, or diagnosis. |
 | UX-38 | Add Bridge records one member/capability-scoped request and explains the separate target-device consent ceremony. Adult private bridges are self-owned; principals may govern child bridges; no portal payload contains enrollment tokens or credential references. |
+| UX-39 | The adult shared shell provides Add for review with one exact-text field, an optional non-authorizing type hint, dictation-compatible focus, explicit “nothing official yet” copy, preserved text on failure, idempotent submission, and a result count. It appends member intent before extraction and never bypasses Triage or creates a provider command. |
+| UX-40 | Triage independently renders Needs interpretation, Needs details, Ready, and Recent. Local confirmation is labeled separately from OpenClaw/provider approval; immutable confirmation, materialization, provider command, suppression/failure, and terminal observation remain distinct linked evidence states. Queue emptiness never substitutes for source, pipeline, or projection health. |
 
 ## State model
 

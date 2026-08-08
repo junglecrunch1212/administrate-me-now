@@ -220,11 +220,15 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
                 "request_id": "approve-1",
                 "expected_last_event_id": edited["commitment"]["last_event_id"],
                 "send_acknowledgement": True,
-                "openclaw_approved": True,
             },
         )
         assert approved["commitment"]["confirmed_at"] is not None
-        assert approved["delivery"] == {"delivered": False, "suppressed": True}
+        assert approved["delivery"]["held"] is True
+        assert approved["delivery"]["reason"] == "openclaw_approval_required"
+        assert (
+            approved["pending_provider_action_event_id"]
+            == (approved["delivery"]["domain_approval_event_id"])
+        )
         assert runtime.fixture_adapter.delivered == []
         approved_again = _post(
             client,
@@ -233,7 +237,6 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
                 "request_id": "approve-1",
                 "expected_last_event_id": edited["commitment"]["last_event_id"],
                 "send_acknowledgement": True,
-                "openclaw_approved": True,
             },
         )
         assert approved_again["duplicate"] is True
@@ -335,10 +338,15 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
             "skill.call.recorded",
             "commitment.proposed",
         }
-        observation = client.portal.call(
+        decision_chain = client.portal.call(
             runtime.event_log.get_by_correlation, "demo:golden-1"
         )
-        assert any(e["type"] == "observation.suppressed" for e in observation)
+        assert any(
+            e["type"] == "member.provider_action.confirmed" for e in decision_chain
+        )
+        assert not any(
+            e["type"].startswith("external_sync.write_") for e in decision_chain
+        )
 
         workbook_path = settings.instance.xlsx_workbooks_dir / "adminme-ops.xlsx"
         workbook = load_workbook(workbook_path, data_only=False)

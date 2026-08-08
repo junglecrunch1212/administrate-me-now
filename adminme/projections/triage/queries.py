@@ -20,12 +20,20 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
     result["materialized_event_ids"] = json.loads(
         result.pop("materialized_event_ids_json") or "[]"
     )
+    result["eligibility_rule_ids"] = json.loads(
+        result.pop("eligibility_rule_ids_json") or "[]"
+    )
     result["id"] = result["proposal_id"]
     result["kind"] = result["target_kind"]
     result["actions"] = (
         ["edit", "approve", "dismiss"]
         if result["source_kind"] == "commitment_proposal"
+        and result["state"] == "pending_review"
         else ["enrich", "approve", "dismiss"]
+        if result["state"] in {"pending_interpretation", "pending_review"}
+        else ["await_openclaw_approval"]
+        if result["state"] == "approved"
+        else []
     )
     if result.get("resolution_reason") in {
         "source_changed",
@@ -59,7 +67,8 @@ def pending_for_member(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """SELECT * FROM triage_items
-             WHERE tenant_id=? AND owner_member_id=? AND state='pending_review'
+             WHERE tenant_id=? AND owner_member_id=?
+               AND state IN ('pending_interpretation','pending_review')
              ORDER BY proposed_at DESC, proposal_id
              LIMIT ?""",
         (session.tenant_id, member_id, limit),
@@ -79,7 +88,8 @@ def recent_for_member(
     rows = conn.execute(
         """SELECT * FROM triage_items
              WHERE tenant_id=? AND owner_member_id=?
-               AND state IN ('confirmed','dismissed')
+               AND state IN ('approved','confirmed','dismissed','failed')
+               AND COALESCE(resolution_reason, '') != 'candidates_extracted'
              ORDER BY resolved_at DESC, proposal_id
              LIMIT ?""",
         (session.tenant_id, member_id, limit),

@@ -242,7 +242,6 @@ def _command(
             "list_external_id": "list-a",
             "payload": payload,
             "request_id": "request-reminders-1",
-            "openclaw_approved": True,
         }
     )
 

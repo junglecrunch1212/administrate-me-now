@@ -290,7 +290,6 @@ class OpenClawGatewayChatTransport:
                             "sessionKey": session_key,
                             "message": message,
                             "deliver": False,
-                            "suppressCommandInterpretation": True,
                             "idempotencyKey": idempotency_key,
                         },
                     },

@@ -109,7 +109,7 @@ def test_note_recurrence_candidate_remains_human_gated_and_type_distinct(
         ]
         assert proposal["target_kind"] == "recurrence"
         assert proposal["review_state"] == {
-            "contract": "triage-review-state-v1",
+            "contract": "triage-review-state-v2",
             "state": "ready",
             "missing": [],
             "human_gate_required": True,
@@ -150,6 +150,109 @@ def test_note_recurrence_candidate_remains_human_gated_and_type_distinct(
             .fetchone()[0]
             == 0
         )
+
+
+def test_add_for_review_holds_exact_text_and_splits_typed_candidates(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance-intent"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        ambiguous_text = "Maybe something about the school form"
+        ambiguous = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": ambiguous_text,
+                "source_surface": "today",
+                "client_request_id": "intent-ambiguous-0001",
+            },
+        )
+        assert ambiguous.status_code == 202, ambiguous.text
+        assert ambiguous.json()["state"] == "pending_interpretation"
+        assert ambiguous.json()["canonical_event_ids"] == []
+
+        multi_text = (
+            "Call the school office; appointment on "
+            "2026-08-10T18:00:00-04:00 until 2026-08-10T19:00:00-04:00; "
+            "every Friday return the school form"
+        )
+        multi = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": multi_text,
+                "source_surface": "calendar",
+                "client_request_id": "intent-multi-0001",
+            },
+        )
+        assert multi.status_code == 202, multi.text
+        assert multi.json()["state"] == "pending_review"
+        assert multi.json()["canonical_event_ids"] == []
+        assert len(multi.json()["proposal_event_ids"]) == 3
+
+        surface = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()
+        ambiguous_row = next(
+            item for item in surface["items"] if item["title"] == ambiguous_text
+        )
+        assert ambiguous_row["state"] == "pending_interpretation"
+        assert ambiguous_row["candidate"]["exact_text"] == ambiguous_text
+        typed = [
+            item
+            for item in surface["items"]
+            if item.get("parent_intent_id") == multi.json()["intent_id"]
+        ]
+        assert {item["target_kind"] for item in typed} == {
+            "task",
+            "calendar_event",
+            "recurrence",
+        }
+        assert all(item["confidence"] is None for item in typed)
+
+        retry = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": multi_text,
+                "source_surface": "calendar",
+                "client_request_id": "intent-multi-0001",
+            },
+        )
+        assert retry.status_code == 202
+        assert retry.json()["duplicate"] is True
+        assert retry.json()["proposal_event_ids"] == multi.json()["proposal_event_ids"]
+        conflict = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": "Different text",
+                "source_surface": "calendar",
+                "client_request_id": "intent-multi-0001",
+            },
+        )
+        assert conflict.status_code == 409
+        assert (
+            client.post(
+                "/api/member/v1/triage/intents",
+                headers=CHILD_AUTH,
+                json={
+                    "text": "Call the school",
+                    "source_surface": "today",
+                    "client_request_id": "intent-child-0001",
+                },
+            ).status_code
+            == 403
+        )
+
+        canonical = client.portal.call(
+            _events,
+            app.state.runtime,
+            "task.created",
+            "recurrence.added",
+            "external_sync.write_requested",
+        )
+        assert canonical == []
 
 
 async def _events(runtime: object, *types: str) -> list[dict]:
@@ -253,26 +356,34 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             "household.action.proposed",
             "task.created",
             "triage.item.confirmed",
+            "triage.item.materialized",
         )
         assert [event["type"] for event in events] == [
             "household.action.proposed",
-            "task.created",
             "triage.item.confirmed",
+            "task.created",
+            "triage.item.materialized",
         ]
         assert events[-1]["payload"]["materialized_event_ids"] == [
             events[-2]["event_id"]
         ]
+        assert events[-2]["causation_id"] == events[-3]["event_id"]
+        assert (
+            events[-1]["payload"]["confirmation_event_id"] == (events[-3]["event_id"])
+        )
         client.portal.call(runtime.projections.rebuild, "triage")
         rebuilt = (
             runtime.projections.connection("triage")
             .execute(
-                "SELECT state, materialized_event_ids_json FROM triage_items WHERE proposal_id=?",
+                "SELECT state, resolution_reason, materialized_event_ids_json "
+                "FROM triage_items WHERE proposal_id=?",
                 (item["proposal_id"],),
             )
             .fetchone()
         )
         assert tuple(rebuilt) == (
             "confirmed",
+            "confirmed_local",
             f'["{events[-2]["event_id"]}"]',
         )
 
@@ -401,11 +512,23 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             },
         )
         assert calendar_approved.status_code == 200, calendar_approved.text
-        [write] = client.portal.call(_events, runtime, "external_sync.write_requested")
-        assert write["payload"]["member_id"] == MEMBER
-        assert write["payload"]["provider"] == "apple_calendar"
-        assert write["payload"]["operation"] == "create_event"
-        assert write["payload"]["payload"]["calendar_id"] == "calendar-primary"
+        assert calendar_approved.json()["state"] == "approved_awaiting_openclaw"
+        [pending_action] = client.portal.call(
+            _events, runtime, "member.provider_action.confirmed"
+        )
+        assert pending_action["payload"]["member_id"] == MEMBER
+        assert pending_action["payload"]["provider"] == "apple_calendar"
+        assert pending_action["payload"]["operation"] == "create_event"
+        assert pending_action["payload"]["command_payload"]["calendar_id"] == (
+            "calendar-primary"
+        )
+        assert (
+            pending_action["payload"]["origin_proposal_id"]
+            == (calendar_candidate["proposal_id"])
+        )
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
         assert (
             runtime.projections.connection("calendars")
             .execute("SELECT COUNT(*) FROM calendar_events")
@@ -460,8 +583,7 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         assert retried_dismissal.status_code == 200, retried_dismissal.text
         assert retried_dismissal.json() == {**dismissed.json(), "duplicate": True}
         assert (
-            len(client.portal.call(_events, runtime, "external_sync.write_requested"))
-            == 1
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
         )
 
         party_created = EventEnvelope(
@@ -680,11 +802,23 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             },
         )
         assert task_list_approved.status_code == 200, task_list_approved.text
-        writes = client.portal.call(_events, runtime, "external_sync.write_requested")
-        google_task_write = writes[-1]
-        assert google_task_write["payload"]["provider"] == "google_tasks"
-        assert google_task_write["payload"]["operation"] == "create_task"
-        assert google_task_write["payload"]["payload"]["tasklist_id"] == "@default"
+        pending_actions = client.portal.call(
+            _events, runtime, "member.provider_action.confirmed"
+        )
+        google_task_action = next(
+            event
+            for event in pending_actions
+            if event["payload"].get("origin_proposal_id")
+            == task_list_item["proposal_id"]
+        )
+        assert google_task_action["payload"]["provider"] == "google_tasks"
+        assert google_task_action["payload"]["operation"] == "create_task"
+        assert google_task_action["payload"]["command_payload"]["tasklist_id"] == (
+            "@default"
+        )
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
 
         recovery_proposal = client.post(
             "/api/openclaw/v1/tools/action",
