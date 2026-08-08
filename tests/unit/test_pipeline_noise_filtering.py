@@ -254,7 +254,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "4.0.1"
+    assert envelope.payload["skill_version"] == "4.0.2"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -274,7 +274,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "4.0.1"
+    assert envelope.payload["skill_version"] == "4.0.2"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
 
 
@@ -512,11 +512,11 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v5:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v6:")
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_uses_v5_after_baseline_and_v4_payloads() -> None:
+async def test_reviewed_replay_uses_v6_after_prior_generations() -> None:
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -529,10 +529,14 @@ async def test_reviewed_replay_uses_v5_after_baseline_and_v4_payloads() -> None:
     async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
         return _make_skill_result(classification="noise", confidence=0.9)
 
+    async def startup_order_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(classification="personal", confidence=0.7)
+
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(event, _make_ctx(log, first))
     await pipeline.handle(event, _make_ctx(log, unavailable))
     await pipeline.handle(event, _make_ctx(log, recovered))
+    await pipeline.handle(event, _make_ctx(log, startup_order_recovered))
 
     classified_keys = [
         call.envelope.idempotency_key
@@ -543,4 +547,5 @@ async def test_reviewed_replay_uses_v5_after_baseline_and_v4_payloads() -> None:
         "messaging:classified:trigger-eid-001",
         "messaging:classified:v4:trigger-eid-001",
         "messaging:classified:v5:trigger-eid-001",
+        "messaging:classified:v6:trigger-eid-001",
     ]

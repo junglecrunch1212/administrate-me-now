@@ -1,12 +1,20 @@
 # Migration map
 
+Gateway-first startup repair (2026-08-08): central service ordering is
+**HARDENED** after the guarded Phase-B candidate proved that starting the Python
+runtime first lets reactive language replay race the unavailable Gateway. The
+exact pinned OpenClaw health endpoint must be live before the runtime starts.
+`noise_filtering` v6 and `classify_message_nature` 4.0.2 form a new append-only
+replay boundary; they retain failed-start audit facts and deduplicate proposals
+across baseline/v4/v5 history.
+
 Pinned language execution repair (2026-08-08): OpenClaw `2026.7.2` commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61` **SUPERSEDES** only the declared
 defective same-version snapshot. The updater installs and atomically selects
 the exact reviewed source, with exact-source rollback. Doctor full proof now
 executes a bounded synthetic JSON call, not merely registration inspection.
 Canonical member-isolated Gateway sessions and version-qualified skill terminal
-events are **HARDENED**. `noise_filtering` v5 replays immutable message facts,
+events are **HARDENED**. `noise_filtering` v5 first replayed immutable message facts,
 versions changed semantic facts, and appends only proposal kind/key pairs absent
 across the baseline and v4 extraction generations.
 

@@ -23,6 +23,9 @@ from bootstrap.contracts import (
 
 RUNTIME_LIVENESS_TIMEOUT_SECONDS = 300
 RUNTIME_LIVENESS_POLL_SECONDS = 1
+OPENCLAW_LIVENESS_TIMEOUT_SECONDS = 120
+OPENCLAW_LIVENESS_POLL_SECONDS = 1
+SERVICE_READINESS_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,11 @@ class ServiceManager:
         return path
 
     def start(self) -> ServiceStatus:
-        for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
+        # The language-backed pipelines begin replay as part of runtime
+        # startup.  Bring the Gateway to a proved-live HTTP state first so a
+        # reviewed replay cannot turn a normal service restart into a durable
+        # generation of transport-failure defaults.
+        for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
             self._validate_plist(label)
         if self.test_mode:
             self._write_test_state(
@@ -131,8 +138,10 @@ class ServiceManager:
             return self.status()
         uid = int(getattr(os, "getuid", lambda: 0)())
         domain = f"gui/{uid}"
+        # Quiesce both old definitions before starting either new one.  This
+        # prevents an already-running runtime from consuming source events
+        # while the Gateway is between exact releases.
         for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
-            path = self.paths.launch_agent_dir / f"{label}.plist"
             if self._launchctl_loaded(label):
                 completed = subprocess.run(
                     ["launchctl", "bootout", f"{domain}/{label}"],
@@ -148,6 +157,8 @@ class ServiceManager:
                     raise RuntimeError(
                         f"launchd retained the previous {label} definition"
                     )
+        for label in (OPENCLAW_LABEL, RUNTIME_LABEL):
+            path = self.paths.launch_agent_dir / f"{label}.plist"
             completed = subprocess.run(
                 ["launchctl", "bootstrap", domain, str(path)],
                 check=False,
@@ -178,19 +189,50 @@ class ServiceManager:
                 raise RuntimeError(
                     f"launchd could not start {label}: {kickstart.stderr.strip()}"
                 )
-            if label == RUNTIME_LABEL:
+            if label == OPENCLAW_LABEL:
+                if not self._wait_for_openclaw_liveness():
+                    raise RuntimeError(
+                        "OpenClaw Gateway did not become live within the "
+                        "bounded cold-start window before runtime startup"
+                    )
+            elif label == RUNTIME_LABEL:
                 if not self._wait_for_runtime_liveness():
                     raise RuntimeError(
                         "AdministrateMe runtime did not become live within the "
-                        "bounded cold-start window before OpenClaw startup"
+                        "bounded cold-start window"
                     )
         result = self.status()
-        for _ in range(30):
+        deadline = time.monotonic() + SERVICE_READINESS_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
             if result.status in {"healthy", "failed"}:
                 break
             time.sleep(1)
             result = self.status()
         return result
+
+    def _openclaw_liveness(self) -> bool:
+        """Use OpenClaw's credential-free local health endpoint."""
+
+        port = load_versions()["openclaw"]["gateway_port"]
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/health",
+                timeout=5,
+            ) as response:
+                data = json.loads(response.read())
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            return False
+        return data.get("ok") is True and data.get("status") == "live"
+
+    def _wait_for_openclaw_liveness(
+        self, timeout_seconds: int = OPENCLAW_LIVENESS_TIMEOUT_SECONDS
+    ) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        gateway_live = self._openclaw_liveness()
+        while not gateway_live and time.monotonic() < deadline:
+            time.sleep(OPENCLAW_LIVENESS_POLL_SECONDS)
+            gateway_live = self._openclaw_liveness()
+        return gateway_live
 
     def _wait_for_runtime_liveness(
         self, timeout_seconds: int = RUNTIME_LIVENESS_TIMEOUT_SECONDS
