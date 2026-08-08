@@ -87,13 +87,15 @@ Focused suites cover:
 
 Final candidate results:
 
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,467 passed;
-- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 33 passed;
-- `poetry run ruff check adminme bridge/adminme_bridge`: passed, 203 source files;
+- `PYTHONPATH=bridge poetry run pytest tests packs -q --import-mode=importlib`:
+  1,616 passed;
+- `poetry -C bridge run pytest -q`: 60 passed;
+- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 34 passed;
+- `poetry run ruff check .`: passed, 224 source files;
 - `poetry run mypy adminme bridge/adminme_bridge`: passed;
 - `bash scripts/verify_invariants.sh`: passed;
 - Node 24.19 `npm ci`, `npm run check`, `npm test`, `npm run build`, and
-  `npm pack --dry-run`: contract/build/package passed and 14 plugin tests passed;
+  `npm pack --dry-run`: contract/build/package passed and 15 plugin tests passed;
 - architecture-negative checks: passed (no second model router, truth store,
   scheduler, or forbidden dependency direction introduced);
 - production npm audit: zero vulnerabilities;
@@ -107,3 +109,20 @@ unaffected and CO-007 does not silently alter that unrelated toolchain lock.
 
 Live Gateway process rehearsal, real provider read/write evidence, family-Mac
 rollout, and observation exit remain separate activation gates.
+
+## Phase-B migration evidence
+
+The first guarded activation of merged PR #287 on 2026-08-08 reached the
+post-switch Doctor and exposed a production-shaped migration-order defect:
+`schema.sql` attempted to index `parent_intent_id` before the deployed Triage
+v2 table had that additive column. Launchd never reached a healthy candidate;
+the guarded updater restored the previous release and observation remained
+active.
+
+The repair moves the dependent index behind `migrate_schema()` and adds
+`test_real_process_upgrades_existing_triage_projection_before_indexing`. That
+acceptance test creates an encrypted database with the exact deployed v2 table,
+boots the production FastAPI composition root, reads the preserved member
+candidate through the authorized Triage route, and verifies the v5 lineage and
+approval columns plus the index. This closes the clean-instance/deployed-state
+test gap without treating the projection as source truth.

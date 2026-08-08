@@ -49,6 +49,10 @@ class TriageProjection(Projection):
             and "parent_intent_id" in columns
             and not target_is_required
         ):
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent "
+                "ON triage_items(tenant_id, parent_intent_id)"
+            )
             return
         conn.executescript(
             """
@@ -109,9 +113,11 @@ class TriageProjection(Projection):
                 ON triage_items(tenant_id, owner_member_id, state, proposed_at);
             CREATE INDEX IF NOT EXISTS idx_triage_tenant_source
                 ON triage_items(tenant_id, source_event_id);
-            CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent
-                ON triage_items(tenant_id, parent_intent_id);
             """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent "
+            "ON triage_items(tenant_id, parent_intent_id)"
         )
 
 

@@ -42,5 +42,5 @@ CREATE INDEX IF NOT EXISTS idx_triage_tenant_owner_state
     ON triage_items(tenant_id, owner_member_id, state, proposed_at);
 CREATE INDEX IF NOT EXISTS idx_triage_tenant_source
     ON triage_items(tenant_id, source_event_id);
-CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent
-    ON triage_items(tenant_id, parent_intent_id);
+-- parent_intent_id is additive for deployed projection databases. Its index is
+-- created by TriageProjection.migrate_schema() after that column exists.
