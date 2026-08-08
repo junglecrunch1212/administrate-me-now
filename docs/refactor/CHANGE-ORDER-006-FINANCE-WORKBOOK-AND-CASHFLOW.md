@@ -1,6 +1,6 @@
 # CO-006 — Finance workbook, cash-flow safety, and scenario planning
 
-Status: **APPROVED AND IMPLEMENTED IN CANDIDATE; LIVE ACTIVATION NOT AUTHORIZED**
+Status: **APPROVED; LIVE CORE IMPLEMENTED, PLAID ACTIVATION PENDING**
 
 Date: 2026-08-07
 
@@ -112,8 +112,10 @@ and protection, reverse events, validation, amount semantics, provider removal,
 restart-safe cursor behavior, and member rendering.
 
 The local workbook artifact is additionally inspected sheet-by-sheet and
-scanned for formula errors. Browser verification uses the isolated Gate 7
-runtime; this change order does not mutate the live family release.
+scanned for formula errors. Candidate browser verification used the isolated
+Gate 7 runtime; the reviewed live activation subsequently repeated all six
+Finance views against the family runtime and regenerated the canonical
+workbook from converged projection state.
 
 ## Classification
 

@@ -2,7 +2,7 @@
 
 Date: 2026-08-07
 
-Status: **PASS — candidate implementation and aggregate validation complete**
+Status: **PASS — live core activated; provider enrollment pending**
 
 ## Reviewed behavior
 
@@ -71,4 +71,38 @@ passed on Python 3.14.6 and Node 24.19.0 with:
 
 The Python suite reports one upstream Starlette/FastAPI test-client deprecation
 warning; it is not a functional failure or a dependency vulnerability. Live
-Plaid consent and the family runtime were intentionally untouched.
+Plaid consent was intentionally untouched.
+
+## Live family activation
+
+PR 283 passed the cascade check and the complete credential-free macOS
+rehearsal, then merged to `main`. The rollback-safe updater activated exact
+commit `f8a96e4f90526598bb86fbdefcee6daa10cedd19`, retained the previous release,
+created an encrypted backup, and passed full Doctor with 14/14 healthy
+projection checkpoints, 5/5 managed OpenClaw jobs, loopback-only listeners,
+and observation mode.
+
+The live canonical workbook contains twelve sheets, 38 assumptions, 14
+budgets, five scenarios, five goals, and 791 historical/manual rows. The money
+projection retains every row: 750 participate in current Finance arithmetic;
+41 transfer/excluded rows remain available to provenance and replay without
+distorting cash flow. The source workbook, live workbook, event log, and
+projection therefore agree on the intentional inclusion boundary.
+
+The original attempt proved a production-only defect: the generic 60/minute
+budget refused 491 otherwise-valid rows after the reverse sidecar had consumed
+the reviewed save. Exact caller/action policy now grants bounded bulk headroom
+only to `daemon:xlsx_reverse`, validation caps Raw Data at 5,000 populated rows,
+and the principal/agent/external defaults remain unchanged. Rebaseline plus
+retry produced no additional denial and converged the full import.
+
+The regenerated workbook passed the exact-sheet and row-count contract, formula
+error scan, and visual inspection of Dashboard, Cash Flow Plan, Budget vs
+Actual, Scenarios, Balance Sheet, and Checks. Live Tailscale browser exercise
+passed Overview, Cash flow, Spending, Scenarios, Net worth, and Data health;
+each route retained one visible Finance H1, one selected view, and its expected
+deterministic section.
+
+Plaid remains explicitly disabled/not configured and the cockpit therefore has
+zero provider accounts. Live Link/consent and propagation evidence are still
+deferred; no bank write capability was added.
