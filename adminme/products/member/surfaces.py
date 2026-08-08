@@ -1047,9 +1047,7 @@ def build_surface(
             now=now,
         )
         base["connector_catalog"] = _connector_catalog()
-        interactions_capability = runtime.capabilities.get(
-            "projection:interactions"
-        )
+        interactions_capability = runtime.capabilities.get("projection:interactions")
         interaction_details = (
             interactions_capability.details
             if interactions_capability is not None

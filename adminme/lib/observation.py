@@ -323,9 +323,7 @@ async def outbound(
             sensitivity=sensitivity,  # type: ignore[arg-type]
             causation_id=audit.initiating_event_id if audit else None,
             actor_identity=session.auth_member_id,
-            raw_ref=(
-                f"content-sha256:{audit.content_fingerprint}" if audit else None
-            ),
+            raw_ref=(f"content-sha256:{audit.content_fingerprint}" if audit else None),
             payload={
                 "attempted_action": action,
                 "attempted_at": now,

@@ -506,8 +506,10 @@ async def test_malformed_message_is_quarantined_without_hiding_later_message(
     await supervisor.start()
     try:
         await _wait_for(
-            lambda: len(event_log.by_type("adapter.record.quarantined")) == 1
-            and len(event_log.by_type("messaging.received")) == 1
+            lambda: (
+                len(event_log.by_type("adapter.record.quarantined")) == 1
+                and len(event_log.by_type("messaging.received")) == 1
+            )
         )
         [quarantine] = event_log.by_type("adapter.record.quarantined")
         assert quarantine["payload"]["external_id"] == "msg-malformed"

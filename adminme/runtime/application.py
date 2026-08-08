@@ -888,9 +888,7 @@ class AdministrateMeRuntime:
                 OutboundAuditContext(
                     initiating_command_id=str(payload["command_id"]),
                     initiating_event_id=str(event["event_id"]),
-                    domain_approval_event_id=str(
-                        payload["domain_approval_event_id"]
-                    ),
+                    domain_approval_event_id=str(payload["domain_approval_event_id"]),
                     openclaw_approval_event_id=str(
                         payload["openclaw_approval_event_id"]
                     ),
@@ -952,9 +950,7 @@ class AdministrateMeRuntime:
                             payload=command_body,
                         )
                     )
-                    provider_called = not bool(
-                        communication_result.get("suppressed")
-                    )
+                    provider_called = not bool(communication_result.get("suppressed"))
                 applied = bool(communication_result.get("applied"))
                 suppressed = bool(communication_result.get("suppressed"))
                 external_id = communication_result.get("external_id")
@@ -1019,12 +1015,8 @@ class AdministrateMeRuntime:
             result_payload.update(
                 {
                     "command_event_id": event["event_id"],
-                    "domain_approval_event_id": payload[
-                        "domain_approval_event_id"
-                    ],
-                    "openclaw_approval_event_id": payload[
-                        "openclaw_approval_event_id"
-                    ],
+                    "domain_approval_event_id": payload["domain_approval_event_id"],
+                    "openclaw_approval_event_id": payload["openclaw_approval_event_id"],
                     "provider_account_id": payload["provider_account_id"],
                     "request_fingerprint": content_fingerprint,
                     "provider_called": provider_called,
@@ -1335,20 +1327,14 @@ class AdministrateMeRuntime:
                 name=pack_id,
                 kind="reactive_pipeline",
                 state="degraded" if degraded else "healthy",
-                reason=(
-                    "subscriber delivery is degraded"
-                    if degraded
-                    else None
-                ),
+                reason=("subscriber delivery is degraded" if degraded else None),
                 details={
                     "version": status.get("version"),
                     "checkpoint_event_id": subscriber.get("checkpoint_event_id"),
                     "lag_count": subscriber.get("lag_count"),
                     "last_success_at": subscriber.get("last_success_at"),
                     "last_failure_at": subscriber.get("last_failure_at"),
-                    "consecutive_failures": subscriber.get(
-                        "consecutive_failures", 0
-                    ),
+                    "consecutive_failures": subscriber.get("consecutive_failures", 0),
                     "poison_event_id": subscriber.get("poison_event_id"),
                     "retry_policy": subscriber.get("retry_policy"),
                 },
@@ -1366,9 +1352,7 @@ class AdministrateMeRuntime:
                 if not matching:
                     continue
                 unhealthy = [
-                    item
-                    for item in matching
-                    if item.get("state") not in {"running"}
+                    item for item in matching if item.get("state") not in {"running"}
                 ]
                 live_state: CapabilityState = (
                     "degraded"
@@ -1422,9 +1406,7 @@ class AdministrateMeRuntime:
                 reason=standing_reason,
             )
         triage_projection = self.capabilities.get("projection:triage")
-        extraction_pipeline = self.capabilities.get(
-            "pipeline:pipeline:noise_filtering"
-        )
+        extraction_pipeline = self.capabilities.get("pipeline:pipeline:noise_filtering")
         triage_degraded = any(
             record is not None and record.state in {"degraded", "blocked"}
             for record in (triage_projection, extraction_pipeline)
@@ -1501,8 +1483,7 @@ class AdministrateMeRuntime:
         elif self.member_chat_last_failure is not None:
             chat_state = "degraded"
             chat_reason = (
-                "OpenClaw chat method failed: "
-                f"{self.member_chat_last_failure['code']}"
+                f"OpenClaw chat method failed: {self.member_chat_last_failure['code']}"
             )
         elif self.settings.deterministic_member_chat_fixture:
             chat_state = "healthy"

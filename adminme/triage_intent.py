@@ -30,9 +30,7 @@ CANDIDATE_FIELD_ALLOWLISTS: dict[str, frozenset[str]] = {
             "source_message_preview",
         }
     ),
-    "calendar_event": frozenset(
-        {"start", "end", "all_day", "event_type", "location"}
-    ),
+    "calendar_event": frozenset({"start", "end", "all_day", "event_type", "location"}),
     "reminder": frozenset({"due", "notes", "priority"}),
     "list": frozenset({"notes"}),
     "list_item": frozenset({"due", "notes", "priority"}),
@@ -230,9 +228,7 @@ def _recurrence_fields(
     }, match.group(1)
 
 
-def _fields_for(
-    kind: str, clause: str, submitted_at: datetime
-) -> dict[str, Any]:
+def _fields_for(kind: str, clause: str, submitted_at: datetime) -> dict[str, Any]:
     dates = _ISO_DATE.findall(clause)
     if kind == "recurrence":
         fields, _ = _recurrence_fields(clause, submitted_at)

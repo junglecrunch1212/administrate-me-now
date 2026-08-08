@@ -1613,9 +1613,7 @@ async def reminder_command(
         request_id=body.request_id,
         request_fingerprint=fingerprint,
         source_adapter="member-reminders",
-        sensitivity=cast(
-            Sensitivity, (target or {}).get("sensitivity") or "normal"
-        ),
+        sensitivity=cast(Sensitivity, (target or {}).get("sensitivity") or "normal"),
         causation_id=(target or {}).get("last_event_id"),
     )
     return {
@@ -1721,9 +1719,7 @@ async def submit_triage_intent(
     request_fingerprint = hashlib.sha256(
         json.dumps(request_values, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    intent_key = (
-        f"triage-intent:{session.auth_member_id}:{body.client_request_id}"
-    )
+    intent_key = f"triage-intent:{session.auth_member_id}:{body.client_request_id}"
     prior_intent = await runtime.event_log.get_by_idempotency(
         session.tenant_id, intent_key
     )
@@ -1738,12 +1734,9 @@ async def submit_triage_intent(
         )
     else:
         intent_seed = (
-            f"{session.tenant_id}|{session.auth_member_id}|"
-            f"{body.client_request_id}"
+            f"{session.tenant_id}|{session.auth_member_id}|{body.client_request_id}"
         )
-        intent_id = (
-            "intent_" + hashlib.sha256(intent_seed.encode()).hexdigest()[:28]
-        )
+        intent_id = "intent_" + hashlib.sha256(intent_seed.encode()).hexdigest()[:28]
         submitted_at = datetime.now(timezone.utc)
         intent_payload = {
             "intent_id": intent_id,
@@ -1833,9 +1826,7 @@ async def submit_triage_intent(
     for candidate in candidates:
         candidate_values = candidate.feature_payload()
         candidate_fingerprint = hashlib.sha256(
-            json.dumps(
-                candidate_values, sort_keys=True, separators=(",", ":")
-            ).encode()
+            json.dumps(candidate_values, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         proposal_seed = (
             f"{session.tenant_id}|{intent_id}|{candidate.candidate_key}|"
@@ -2080,9 +2071,10 @@ async def _approve_triage_item_locked(
                 ],
                 "duplicate": True,
             }
-        if _triage_candidate_fingerprint(item) != prior_confirmation["payload"][
-            "candidate_fingerprint"
-        ]:
+        if (
+            _triage_candidate_fingerprint(item)
+            != prior_confirmation["payload"]["candidate_fingerprint"]
+        ):
             raise HTTPException(
                 409, "triage candidate changed after confirmation; run Doctor"
             )
@@ -2090,9 +2082,7 @@ async def _approve_triage_item_locked(
     else:
         _require_current_triage(item, body.expected_last_event_id)
         # Validate the full closed materializer before recording the decision.
-        _materialization_envelopes(
-            runtime, session, item, request_id=body.request_id
-        )
+        _materialization_envelopes(runtime, session, item, request_id=body.request_id)
         confirm_payload_for_gate = {
             "proposal_id": proposal_id,
             "confirmed_by_member_id": session.auth_member_id,
@@ -2129,20 +2119,19 @@ async def _approve_triage_item_locked(
             request_id=body.request_id,
             causation_id=confirmation_event_id,
         )
-        pending_event_id, pending_duplicate = (
-            await _append_provider_action_confirmation(
-                runtime,
-                session,
-                command_payload=external_candidate.payload,
-                request_id=f"triage:{proposal_id}:{body.request_id}",
-                request_fingerprint=_triage_candidate_fingerprint(item),
-                source_adapter="member-triage",
-                sensitivity=cast(
-                    Sensitivity, item.get("sensitivity") or "normal"
-                ),
-                causation_id=confirmation_event_id,
-                origin_proposal_id=proposal_id,
-            )
+        (
+            pending_event_id,
+            pending_duplicate,
+        ) = await _append_provider_action_confirmation(
+            runtime,
+            session,
+            command_payload=external_candidate.payload,
+            request_id=f"triage:{proposal_id}:{body.request_id}",
+            request_fingerprint=_triage_candidate_fingerprint(item),
+            source_adapter="member-triage",
+            sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+            causation_id=confirmation_event_id,
+            origin_proposal_id=proposal_id,
         )
         return {
             "event_id": confirmation_event_id,

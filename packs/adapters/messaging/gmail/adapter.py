@@ -359,7 +359,9 @@ class GmailAdapter(CommunicationAdapter):
         store = ctx.cursor_store
         cursor_id = self._cursor_id or self.name
         claimed = store is None or store.claim(
-            cursor_id, self._lease_owner, ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000)
+            cursor_id,
+            self._lease_owner,
+            ttl_ms=max(30_000, self.POLL_INTERVAL_S * 2000),
         )
         if not claimed:
             self._status.state = "backoff"
@@ -371,12 +373,8 @@ class GmailAdapter(CommunicationAdapter):
             if self._cursor is None:
                 self._cursor = self._bootstrap_cursor()
                 if store is not None:
-                    store.record_success(
-                        cursor_id, provider_watermark=self._cursor
-                    )
-                    self._status.extra["durable_cursor"] = store.get(
-                        cursor_id
-                    ).public()
+                    store.record_success(cursor_id, provider_watermark=self._cursor)
+                    self._status.extra["durable_cursor"] = store.get(cursor_id).public()
                 return 0
 
             new_history_id, history_records = self._fetch_history(self._cursor)
@@ -459,9 +457,7 @@ class GmailAdapter(CommunicationAdapter):
                 "provider_watermark": self._cursor,
             }
             self._status.state = "backoff" if quarantined else "running"
-            await self._maybe_emit_cursor_advance(
-                ctx=ctx, cursor_value=self._cursor
-            )
+            await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
             return emitted
         finally:
             if store is not None:
@@ -961,9 +957,7 @@ class GmailAdapter(CommunicationAdapter):
             event_type="messaging.received",
             payload=event_payload,
             schema_version=3,
-            idempotency_key=(
-                f"gmail-message:{native_message_id}:{stable_fingerprint}"
-            ),
+            idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
             raw_ref=(
                 f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
             ),
@@ -990,9 +984,7 @@ class GmailAdapter(CommunicationAdapter):
         self._status.last_error = {
             "error_kind": "api_changed",
             "error_message": f"{type(error).__name__}: {error}"[:2000],
-            "external_id_fingerprint": hashlib.sha256(
-                external_id.encode()
-            ).hexdigest(),
+            "external_id_fingerprint": hashlib.sha256(external_id.encode()).hexdigest(),
         }
         return await self._append(
             ctx=ctx,

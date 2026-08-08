@@ -2153,12 +2153,10 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
             "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]
         ).json()
         assert all(
-            item["proposal_id"] != "ac28-school-form"
-            for item in resolved["items"]
+            item["proposal_id"] != "ac28-school-form" for item in resolved["items"]
         )
         assert any(
-            item["source_event_id"] == message_event
-            for item in resolved["items"]
+            item["source_event_id"] == message_event for item in resolved["items"]
         )
         reviewed = next(
             item

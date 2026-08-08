@@ -179,16 +179,19 @@ class OpenClawApprovalStore:
                         values,
                     )
                 else:
-                    stored = tuple(existing[key] for key in (
-                        "receipt_id",
-                        "tool_name",
-                        "request_fingerprint",
-                        "issued_at_ms",
-                        "expires_at_ms",
-                        "openclaw_version",
-                        "openclaw_commit",
-                        "signature",
-                    ))
+                    stored = tuple(
+                        existing[key]
+                        for key in (
+                            "receipt_id",
+                            "tool_name",
+                            "request_fingerprint",
+                            "issued_at_ms",
+                            "expires_at_ms",
+                            "openclaw_version",
+                            "openclaw_commit",
+                            "signature",
+                        )
+                    )
                     if stored != values:
                         raise ApprovalReceiptError(
                             "approval receipt id belongs to different content"

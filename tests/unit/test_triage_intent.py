@@ -46,7 +46,9 @@ def test_multi_candidate_text_preserves_types_spans_and_no_confidence_gate() -> 
 
 
 def test_ambiguous_text_remains_without_an_invented_candidate() -> None:
-    assert extract_intent_candidates("Maybe something about that", submitted_at=NOW) == []
+    assert (
+        extract_intent_candidates("Maybe something about that", submitted_at=NOW) == []
+    )
 
 
 def test_natural_dictation_splits_only_at_explicit_intent_starts() -> None:

@@ -45,6 +45,8 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "3.0.0"
 DEFAULT_CLASSIFICATION = "personal"
+
+
 def _extract_text_and_inputs(
     event_type: str, payload: dict[str, Any]
 ) -> tuple[str, dict[str, Any]] | None:
@@ -304,7 +306,9 @@ class NoiseFilteringPipeline:
                     "skill_call_event_id": None,
                     "extractor_id": EXTRACTOR_ID,
                     "language": None,
-                    "candidates": [candidate.feature_payload() for candidate in candidates],
+                    "candidates": [
+                        candidate.feature_payload() for candidate in candidates
+                    ],
                     "extraction_state": "complete",
                     "extracted_at": extracted_at,
                 },

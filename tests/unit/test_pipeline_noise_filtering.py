@@ -292,8 +292,7 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
 
     event = _messaging_received_event(
         body_text=(
-            "Appointment on 2034-03-02T16:00:00-05:00 until "
-            "2034-03-02T17:00:00-05:00"
+            "Appointment on 2034-03-02T16:00:00-05:00 until 2034-03-02T17:00:00-05:00"
         )
     )
     event["owner_scope"] = "private:member-fixture"

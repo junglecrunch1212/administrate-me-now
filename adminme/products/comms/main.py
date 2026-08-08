@@ -325,9 +325,7 @@ async def approve_commitment(
             session.tenant_id, action_key
         )
         if prior_action is not None:
-            if prior_action.get("raw_ref") != (
-                f"request-sha256:{action_fingerprint}"
-            ):
+            if prior_action.get("raw_ref") != (f"request-sha256:{action_fingerprint}"):
                 raise HTTPException(409, "acknowledgement request id conflict")
             pending_provider_action_event_id = prior_action["event_id"]
         else:
@@ -352,13 +350,9 @@ async def approve_commitment(
                         "action_id": command_payload["command_id"],
                         "member_id": session.auth_member_id,
                         "provider": command_payload["provider"],
-                        "provider_account_id": command_payload[
-                            "provider_account_id"
-                        ],
+                        "provider_account_id": command_payload["provider_account_id"],
                         "operation": command_payload["operation"],
-                        "target_external_id": command_payload[
-                            "target_external_id"
-                        ],
+                        "target_external_id": command_payload["target_external_id"],
                         "expected_provider_revision": None,
                         "command_payload": command_payload["payload"],
                         "request_fingerprint": action_fingerprint,

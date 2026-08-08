@@ -225,8 +225,9 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
         assert approved["commitment"]["confirmed_at"] is not None
         assert approved["delivery"]["held"] is True
         assert approved["delivery"]["reason"] == "openclaw_approval_required"
-        assert approved["pending_provider_action_event_id"] == (
-            approved["delivery"]["domain_approval_event_id"]
+        assert (
+            approved["pending_provider_action_event_id"]
+            == (approved["delivery"]["domain_approval_event_id"])
         )
         assert runtime.fixture_adapter.delivered == []
         approved_again = _post(

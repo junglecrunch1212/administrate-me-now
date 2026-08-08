@@ -109,19 +109,22 @@ class ActionRequest(ContextRequest):
 class AddForReviewRequest(ContextRequest):
     request_id: str = Field(min_length=8, max_length=120)
     text: str = Field(min_length=1, max_length=2000)
-    kind_hint: Literal[
-        "task",
-        "commitment",
-        "calendar_event",
-        "reminder",
-        "list",
-        "list_item",
-        "recurrence",
-        "party_identifier",
-        "party_candidate",
-        "party_relationship",
-        "relationship_fact",
-    ] | None = None
+    kind_hint: (
+        Literal[
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "list",
+            "list_item",
+            "recurrence",
+            "party_identifier",
+            "party_candidate",
+            "party_relationship",
+            "relationship_fact",
+        ]
+        | None
+    ) = None
 
 
 class ReviewRequest(ContextRequest):
@@ -439,9 +442,7 @@ async def _consume_openclaw_approval(
             "approval_method": "allow_once",
             "openclaw_version": receipt.openclaw_version,
             "openclaw_commit": receipt.openclaw_commit,
-            "provenance": provenance.audit_payload(
-                member_id=session.auth_member_id
-            ),
+            "provenance": provenance.audit_payload(member_id=session.auth_member_id),
         },
         request_id=receipt.receipt_id,
         causation_id=causation_id,
@@ -624,8 +625,7 @@ async def _execute_pending_provider_action(
         or domain_event.get("type") != "member.provider_action.confirmed"
         or domain_event.get("tenant_id") != session.tenant_id
         or domain_event.get("owner_scope") != f"private:{session.auth_member_id}"
-        or domain_event.get("payload", {}).get("member_id")
-        != session.auth_member_id
+        or domain_event.get("payload", {}).get("member_id") != session.auth_member_id
     ):
         raise HTTPException(404, "pending provider action not found")
     prior_key = f"external-sync-approved:{domain_event['event_id']}"
@@ -713,9 +713,7 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
         "reason": "observation_mode_active"
         if observation_active
         else "explicit_proposal",
-        "provenance": body.provenance.audit_payload(
-            member_id=session.auth_member_id
-        ),
+        "provenance": body.provenance.audit_payload(member_id=session.auth_member_id),
     }
     await _guard(runtime, session, "household.action.proposed", payload)
     event_id, duplicate = await _append(
@@ -747,9 +745,7 @@ async def propose_or_capture(body: ActionRequest, request: Request) -> dict[str,
 
 
 @router.post("/tools/add-for-review")
-async def add_for_review(
-    body: AddForReviewRequest, request: Request
-) -> dict[str, Any]:
+async def add_for_review(body: AddForReviewRequest, request: Request) -> dict[str, Any]:
     """Native OpenClaw exact-text entry into the same member Triage contract."""
 
     session = _session(request, body.provenance)

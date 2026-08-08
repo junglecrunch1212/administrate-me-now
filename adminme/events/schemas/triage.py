@@ -136,9 +136,7 @@ class TriageIntentFeaturesExtractedV1(BaseModel):
     candidates: list[TriageFeatureCandidateV1] = Field(
         default_factory=list, max_length=10
     )
-    extraction_state: Literal[
-        "complete", "defensive_default", "unavailable", "invalid"
-    ]
+    extraction_state: Literal["complete", "defensive_default", "unavailable", "invalid"]
     extracted_at: datetime
 
 
