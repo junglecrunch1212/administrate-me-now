@@ -7,8 +7,8 @@ gate_result: CO006_LIVE_FINANCE_ACTIVATED
 verified_local_date: 2026-08-07
 verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: f8a96e4f90526598bb86fbdefcee6daa10cedd19
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/283
+candidate_commit_resolution: 33c5622d4953b01263914ae77a7de0cdac9aa65e
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/285
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
@@ -55,7 +55,7 @@ deterministic scenario changes; direct desktop/mobile browser simulation found
 no overflow, console, page, or request failures.
 
 The reviewed runtime migration and CO-006 core are live at merge commit
-`f8a96e4f90526598bb86fbdefcee6daa10cedd19`. The rollback-safe updater created
+`33c5622d4953b01263914ae77a7de0cdac9aa65e`. The rollback-safe updater created
 an encrypted pre-switch backup, retained the previous release, and passed full
 post-switch Doctor: exact Python 3.14.6, Node 24.19.0, OpenClaw 2026.7.2,
 14/14 healthy projection checkpoints, 5/5 managed OpenClaw jobs, loopback-only
@@ -71,6 +71,15 @@ isolated a bounded higher budget to `daemon:xlsx_reverse` only, and the clean
 retry added no further denial. The regenerated workbook passed its structural,
 formula-error, and visual checks, and all six URL-backed Finance views passed
 the live Tailscale browser exercise.
+
+The final privacy audit found that atomic workbook and sidecar writers inherited
+broader mode bits than the constitutional privacy contract allows. The live
+files were immediately restricted, and PR 285 hardened the boundary rather than
+relying on a parent directory: workbooks and sidecars are created as
+`0600`, workbook-specific sidecar directories are `0700`, and the temporary
+file has its private mode before any content is written. A forced live Finance
+regeneration under the active release retained those modes for the workbook and
+all twelve sidecars while preserving the same validated row counts and cockpit.
 
 Plaid remains disabled and unconfigured, so the live cockpit intentionally has
 no provider accounts. Live Link/consent, per-account sharing, and provider
