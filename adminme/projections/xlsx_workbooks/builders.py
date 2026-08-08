@@ -39,6 +39,24 @@ from adminme.projections.xlsx_workbooks.sheets import (
 )
 
 
+_PRIVATE_FILE_MODE = 0o600
+
+
+def _save_private_workbook(wb: Workbook, path: Path) -> None:
+    """Atomically publish a workbook readable only by the service account."""
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        wb.save(str(tmp))
+        os.chmod(tmp, _PRIVATE_FILE_MODE)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def build_ops_workbook(
     path: Path,
     ctx: XlsxQueryContext,
@@ -78,16 +96,7 @@ def build_ops_workbook(
         session=session,
     )
 
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        wb.save(str(tmp))
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    _save_private_workbook(wb, path)
 
 
 def build_finance_workbook(
@@ -196,13 +205,4 @@ def build_finance_workbook(
         instructions_ws, ctx, tenant_id=tenant_id, session=session
     )
 
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        wb.save(str(tmp))
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    _save_private_workbook(wb, path)

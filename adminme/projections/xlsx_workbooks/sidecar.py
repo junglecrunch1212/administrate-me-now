@@ -33,6 +33,10 @@ from pathlib import Path
 from typing import Any
 
 
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+
+
 def sidecar_dir(xlsx_workbooks_dir: Path) -> Path:
     """Return the ``.xlsx-state/`` directory — sibling of workbooks dir."""
     return xlsx_workbooks_dir.parent / ".xlsx-state"
@@ -45,10 +49,12 @@ def sidecar_path(xlsx_workbooks_dir: Path, workbook_name: str, sheet_name: str) 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, _PRIVATE_DIRECTORY_MODE)
     tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     try:
         with tmp.open("w", encoding="utf-8") as f:
             json.dump(payload, f, sort_keys=True, separators=(",", ":"), default=str)
+        os.chmod(tmp, _PRIVATE_FILE_MODE)
         os.replace(tmp, path)
     finally:
         if tmp.exists():

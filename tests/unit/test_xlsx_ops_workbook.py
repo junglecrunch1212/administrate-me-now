@@ -287,6 +287,7 @@ async def test_workbook_creates_file(populated: dict[str, Any]) -> None:
     build_ops_workbook(path, ctx, tenant_id=config.tenant_id, last_event_id="ev_test")
     assert path.exists()
     assert path.stat().st_size > 0
+    assert path.stat().st_mode & 0o777 == 0o600
     wb = load_workbook(str(path))
     assert set(wb.sheetnames) == {
         "Tasks",

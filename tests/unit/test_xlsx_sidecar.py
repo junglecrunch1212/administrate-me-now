@@ -64,6 +64,18 @@ def test_write_then_read_sheet_state_roundtrip(tmp_path: Path) -> None:
     assert out == rows
 
 
+def test_sidecar_state_is_owner_only(tmp_path: Path) -> None:
+    workbooks = tmp_path / "projections" / "xlsx_workbooks"
+    path = write_sheet_state(
+        workbooks,
+        "adminme-finance.xlsx",
+        "Raw Data",
+        [{"txn_id": "t1"}],
+    )
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
 def test_read_missing_returns_none_for_both_shapes(tmp_path: Path) -> None:
     workbooks = tmp_path / "projections" / "xlsx_workbooks"
     assert read_sheet_state(workbooks, "adminme-ops.xlsx", "Tasks") is None

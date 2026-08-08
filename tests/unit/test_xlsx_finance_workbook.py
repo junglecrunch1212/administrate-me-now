@@ -235,6 +235,18 @@ def _column_values(ws: Worksheet, header: str) -> list[Any]:
     return [ws.cell(row=i, column=col_idx).value for i in range(2, ws.max_row + 1)]
 
 
+async def test_finance_workbook_is_owner_only(populated: dict[str, Any]) -> None:
+    config = populated["config"]
+    path = config.xlsx_workbooks_dir / "adminme-finance.xlsx"
+    build_finance_workbook(
+        path,
+        populated["ctx"],
+        tenant_id=config.tenant_id,
+        last_event_id="ev_test",
+    )
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 async def test_raw_data_sheet_shows_plaid_and_manual(populated: dict[str, Any]) -> None:
     config = populated["config"]
     ctx = populated["ctx"]
