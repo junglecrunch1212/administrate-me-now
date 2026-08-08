@@ -413,10 +413,8 @@ class GmailAdapter(CommunicationAdapter):
                 ):
                     continue
                 try:
-                    event_id = await self._emit_messaging_received(
-                        ctx=ctx,
-                        message=full_msg,
-                        fingerprint=fingerprint,
+                    event_id = await self._emit_message_observation(
+                        ctx=ctx, message=full_msg, fingerprint=fingerprint
                     )
                     if store is not None:
                         store.record_success(
@@ -961,6 +959,48 @@ class GmailAdapter(CommunicationAdapter):
             raw_ref=(
                 f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
             ),
+        )
+
+    async def _emit_message_observation(
+        self,
+        *,
+        ctx: AdapterContext,
+        message: dict[str, Any],
+        fingerprint: str,
+    ) -> str:
+        """Preserve Gmail direction instead of treating SENT as inbound."""
+
+        labels = {str(value).upper() for value in message.get("labelIds") or []}
+        if "SENT" not in labels:
+            return await self._emit_messaging_received(
+                ctx=ctx, message=message, fingerprint=fingerprint
+            )
+        payload_dict = message.get("payload") or {}
+        headers = self._headers_to_map(payload_dict.get("headers"))
+        body_text, _body_html = self._extract_bodies(payload_dict)
+        native_message_id = str(message.get("id") or "unknown")
+        configured_account = str(self._config.get("user_email") or "gmail")
+        return await self._append(
+            ctx=ctx,
+            event_type="messaging.sent",
+            schema_version=2,
+            idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
+            raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
+            payload={
+                "source_channel": "gmail",
+                "to_identifier": headers.get("to") or "unknown@unknown",
+                "thread_id": message.get("threadId"),
+                "subject": headers.get("subject"),
+                "body_text": body_text,
+                "sent_at": self._epoch_ms_to_iso(message.get("internalDate")),
+                "delivery_status": "sent",
+                "member_id": str(self._config.get("member_id") or "unbound"),
+                "provider": "gmail",
+                "provider_account_id": configured_account,
+                "workspace": str(self._config.get("workspace") or "personal"),
+                "native_message_id": native_message_id,
+                "in_reply_to_interaction_id": None,
+            },
         )
 
     @staticmethod

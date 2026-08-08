@@ -1,5 +1,26 @@
 # Constitutional crosswalk
 
+Live Triage extraction repair amendment (2026-08-08): C001/C002/C004/C007,
+C010/C012/C014–C017/C023/C025, C035/C044/C045/C048/C050/C053/C056/C071/C076,
+and C101 are **PRESERVED/HARDENED** after the live adapter-to-Triage path
+accepted message facts but poisoned before its first interpretation. The
+production composition now injects the skill event log and raw path directly,
+reuses recorded model results on retry, and recovers a poison state only across
+a reviewed consumer-version boundary while preserving the last good
+checkpoint. Doctor treats a missing, failed, degraded, or poisoned required
+reactive subscriber as unhealthy; an empty Triage queue can never prove that
+sources were processed. `classify_message_nature` v4 may perform natural-
+language extraction, including due actions and recurrences, but deterministic
+code requires a verbatim source quote, filters target fields and privacy scope,
+deduplicates evidence, and emits only a human-gated proposal. Confidence does
+not decide eligibility. Gmail preserves `SENT` as an outbound observation;
+historical provider labels drive the same direction-aware replay. Only an
+outbound first-person promise can become a member commitment through this
+seam; inbound promises remain attributable to the sender. Identity endpoint
+observations use per-source idempotency while retaining one stable endpoint
+identity. No provider write,
+canonical household record, model router, or model-owned decision is added.
+
 CO-007 amendment (2026-08-08): C001/C002/C003/C009/C010/C011/C012/C013,
 C035/C044/C045, and C048–C058 are **PRESERVED/HARDENED** by exact-text member
 intent facts, deterministic typed candidate eligibility, confirmation-before-

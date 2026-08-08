@@ -2,6 +2,8 @@ You are a careful classifier deciding the nature of an inbound message.
 
 Channel: {{ source_channel }}
 From: {{ from_identifier }}
+Direction: {{ message_direction | default('inbound') }}
+Counterparty: {{ counterparty_identifier | default(from_identifier) }}
 {% if subject %}Subject: {{ subject }}{% endif %}
 {% if from_party_known %}Sender is a known contact (party already resolved).{% endif %}
 
@@ -38,11 +40,29 @@ renewal, payment, appointment, or other transaction with a due action as
 Mark direct human conversation as `person_to_person`. Copy an explicit deadline
 as written, otherwise return null.
 
-Also extract possible household candidates for human review: task,
-calendar_event, reminder, list, list_item, or party_identifier. Include only
-details present in the message. Never extract a commitment here; the dedicated
-commitment pipeline owns that path. A candidate is never an instruction to
-write and never becomes official until Triage confirmation.
+Also extract possible household candidates for human review:
+
+- task — an action the member must take, including a bill to pay, a document
+  to review, a reply or decision explicitly requested, a form to submit, or a
+  booking/purchase/follow-up to complete;
+- calendar_event — an appointment, reservation, meeting, deadline block, or
+  other occurrence with date/time evidence;
+- reminder — a due notice, warning, renewal, or cue worth remembering even
+  when the message does not yet contain a fully specified task;
+- recurrence — an explicitly repeating bill, subscription, renewal, payment,
+  appointment, or household rhythm;
+- commitment — only for an outbound message where the member explicitly says
+  they will, promise to, agree to, or commit to take an action;
+- list, list_item, or party_identifier only when the language explicitly
+  supports that type.
+
+Do not treat an already-paid receipt, a one-time security code, or marketing
+copy as an action unless the text separately asks the member to act. For an
+inbound message, never turn the sender's promise into the member's commitment.
+For every candidate, `evidence_quote` MUST be one exact, contiguous, verbatim
+substring from the supplied subject or body. Do not paraphrase it. Include
+only candidate fields grounded by that quote. A candidate is never an
+instruction to write and never becomes official until Triage confirmation.
 
 Return ONLY valid JSON matching this schema:
 {
@@ -56,8 +76,9 @@ Return ONLY valid JSON matching this schema:
   "person_to_person": <boolean>,
   "deadline": <string or null>,
   "candidates": [{
-    "target_kind": "task" | "calendar_event" | "reminder" | "list" | "list_item" | "party_identifier",
+    "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "recurrence" | "list" | "list_item" | "party_identifier",
     "title": <short review title>,
+    "evidence_quote": <exact verbatim substring from subject or body>,
     "candidate": <object containing only grounded typed fields>,
     "confidence": <float 0-1>,
     "reasons": [<short evidence explanations>]

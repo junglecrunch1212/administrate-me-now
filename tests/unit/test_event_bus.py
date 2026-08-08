@@ -266,6 +266,45 @@ async def test_checkpoint_persists_across_restart(tmp_path: Path) -> None:
     await log.close()
 
 
+async def test_reviewed_consumer_version_replays_from_last_good_checkpoint(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    checkpoint_db = tmp_path / "bus.db"
+    bus = EventBus(log, checkpoint_db, failure_threshold=1)
+
+    async def broken(_event: dict) -> None:
+        raise RuntimeError("poisoned consumer v1")
+
+    bus.subscribe("pipeline:test", "*", broken, consumer_version="1.0.0")
+    await bus.start()
+    event_id = await log.append(_event(1))
+    await bus.notify(event_id)
+    await _wait_for(lambda: bus._subscribers["pipeline:test"].degraded)
+    await bus.stop()
+
+    same_version = EventBus(log, checkpoint_db, failure_threshold=1)
+    same_version.subscribe("pipeline:test", "*", broken, consumer_version="1.0.0")
+    assert (await same_version.subscriber_status("pipeline:test"))["degraded"]
+    await same_version.stop()
+
+    delivered: list[str] = []
+
+    async def repaired(event: dict) -> None:
+        delivered.append(event["event_id"])
+
+    repaired_bus = EventBus(log, checkpoint_db, failure_threshold=1)
+    repaired_bus.subscribe("pipeline:test", "*", repaired, consumer_version="2.0.0")
+    status = await repaired_bus.subscriber_status("pipeline:test")
+    assert status["degraded"] is False
+    assert status["poison_event_id"] is None
+    assert status["consumer_version"] == "2.0.0"
+    await repaired_bus.start()
+    await _wait_for(lambda: delivered == [event_id])
+    await repaired_bus.stop()
+    await log.close()
+
+
 async def test_subscriber_registered_after_events_replays_on_start(
     tmp_path: Path,
 ) -> None:

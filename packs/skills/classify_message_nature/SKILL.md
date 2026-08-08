@@ -1,7 +1,7 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 3.0.0
+version: 4.0.0
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -80,7 +80,14 @@ Automation, transactional-due, security-code, person-to-person, and deadline
 fields are typed evidence consumed by deterministic code. The model does not
 rank messages or authorize a write.
 
-Possible tasks, calendar events, reminders, list items, lists, and party
-identifiers are returned as candidates. They remain derived proposals until
-the member reviews them in Triage. Commitment extraction remains owned by the
-existing commitment pipeline so the same promise is not proposed twice.
+Possible tasks, outbound member commitments, calendar events, reminders,
+recurrences, list items, lists, and party identifiers are returned as
+candidates. Direction is derived from the event type or immutable provider
+`SENT` label, so another person's inbound promise is never attributed to the
+member. Every admitted candidate
+must carry a verbatim source quote; deterministic code rejects ungrounded
+output, filters candidate fields, preserves privacy scope, and owns Triage
+eligibility. They remain derived proposals until the member reviews them in
+Triage. The dedicated commitment pipeline continues to own richer attributed
+inbound-request semantics; this skill covers grounded outbound member promises
+that the legacy pipeline intentionally suppresses without a sender identity.

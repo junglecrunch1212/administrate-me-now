@@ -483,6 +483,46 @@ async def test_history_sync_emits_messaging_received_per_added_message() -> None
     assert bob["body_html"] == "<p>Hello html world</p>"
 
 
+async def test_history_sync_preserves_sent_direction() -> None:
+    sent_message = _fixture("message_alice.json")
+    sent_message["id"] = "msg-sent"
+    sent_message["threadId"] = "thr-sent"
+    sent_message["labelIds"] = ["SENT"]
+    for header in sent_message["payload"]["headers"]:
+        if header["name"] == "From":
+            header["value"] = "sandbox@example.test"
+        elif header["name"] == "To":
+            header["value"] = "recipient@example.test"
+    service = _FakeGmailService(
+        history_pages=[
+            {
+                "historyId": "9003",
+                "history": [
+                    {
+                        "id": "9003",
+                        "messagesAdded": [{"message": {"id": "msg-sent"}}],
+                    }
+                ],
+            }
+        ],
+        messages={"msg-sent": sent_message},
+    )
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    emitted = await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    assert emitted == 1
+    [sent] = [call for call in event_log.calls if call["type"] == "messaging.sent"]
+    assert sent["schema_version"] == 2
+    assert sent["payload"]["to_identifier"] == "recipient@example.test"
+    assert sent["payload"]["body_text"] == "Hi sandbox"
+    assert sent["payload"]["native_message_id"] == "msg-sent"
+    assert not [
+        call for call in event_log.calls if call["type"] == "messaging.received"
+    ]
+
+
 async def test_cursor_advanced_emits_on_event_milestone() -> None:
     """When the events-since-last-advance counter hits the milestone
     threshold (100), the adapter MUST emit ``adapter.cursor_advanced``

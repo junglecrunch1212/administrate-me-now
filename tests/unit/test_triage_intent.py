@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from adminme.triage_intent import extract_intent_candidates
+from adminme.triage_intent import (
+    extract_grounded_nlp_candidates,
+    extract_intent_candidates,
+    merge_intent_candidates,
+)
 
 
 NOW = datetime(2026, 8, 8, 16, tzinfo=timezone.utc)
@@ -75,3 +79,77 @@ def test_natural_dictation_splits_only_at_explicit_intent_starts() -> None:
     for candidate in candidates:
         [span] = candidate.evidence_spans
         assert text[span["start"] : span["end"]] == candidate.title
+
+
+def test_grounded_nlp_admission_requires_exact_quote_and_allowlisted_fields() -> None:
+    text = "Your utility payment is due August 15 and repeats monthly."
+    candidates = extract_grounded_nlp_candidates(
+        text,
+        [
+            {
+                "target_kind": "task",
+                "title": "Pay utilities",
+                "evidence_quote": text,
+                "candidate": {
+                    "description": "model paraphrase",
+                    "due": "2026-08-15T17:00:00Z",
+                    "provider_write": True,
+                },
+                "confidence": 0.97,
+                "reasons": ["explicit due action"],
+            },
+            {
+                "target_kind": "calendar_event",
+                "title": "Invented appointment",
+                "evidence_quote": "Appointment tomorrow at noon",
+                "candidate": {"start": "2026-08-09T12:00:00Z"},
+                "confidence": 0.99,
+                "reasons": ["not actually present"],
+            },
+        ],
+    )
+
+    [task] = candidates
+    assert task.title == text
+    assert task.fields == {
+        "description": text,
+        "due": "2026-08-15T17:00:00Z",
+    }
+    assert task.confidence == 0.97
+    assert task.eligibility_rule_ids == [
+        "private_member_message_v1",
+        "exact_source_quote_grounded_v1",
+        "candidate_fields_task_v1",
+    ]
+
+
+def test_model_fields_enrich_overlapping_deterministic_candidate_without_duplicate() -> (
+    None
+):
+    text = "Every month pay the utility bill"
+    deterministic = extract_intent_candidates(text, submitted_at=NOW)
+    grounded = extract_grounded_nlp_candidates(
+        text,
+        [
+            {
+                "target_kind": "recurrence",
+                "title": text,
+                "evidence_quote": text,
+                "candidate": {
+                    "rrule": "FREQ=MONTHLY",
+                    "kind": "bill_payment",
+                    "trackable": True,
+                },
+                "confidence": 0.94,
+                "reasons": ["explicit monthly cadence"],
+            }
+        ],
+    )
+
+    [merged] = merge_intent_candidates(deterministic, grounded)
+    assert merged.target_kind == "recurrence"
+    assert merged.fields["rrule"] == "FREQ=MONTHLY"
+    assert merged.fields["kind"] == "bill_payment"
+    assert merged.fields["notes"] == text
+    assert "explicit_recurrence_language_v1" in merged.eligibility_rule_ids
+    assert "exact_source_quote_grounded_v1" in merged.eligibility_rule_ids

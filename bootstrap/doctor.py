@@ -103,6 +103,22 @@ def _event_log_check(path: Path, key: bytes) -> tuple[bool, dict[str, Any]]:
     }
 
 
+def _required_reactive_pipeline_ids(root: Path) -> set[str]:
+    """Discover reviewed built-in consumers from their executable manifests."""
+
+    required: set[str] = set()
+    for manifest in sorted((root / "packs" / "pipelines").glob("*/pipeline.yaml")):
+        try:
+            document = yaml.safe_load(manifest.read_text("utf-8")) or {}
+            pack_id = str((document.get("pack") or {}).get("id") or "")
+            events = (document.get("triggers") or {}).get("events") or []
+        except (OSError, TypeError, yaml.YAMLError):
+            continue
+        if pack_id and isinstance(events, list) and events:
+            required.add(f"pipeline:{pack_id}")
+    return required
+
+
 def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
     """Exercise message -> review -> workbook -> completion -> what-now."""
     repo = (root or repository_root()).resolve()
@@ -474,6 +490,68 @@ class Doctor:
                     "projections": projection_files,
                     "checkpoint_count": checkpoint_count,
                     "degraded_count": degraded_count,
+                },
+            )
+        )
+        required_pipeline_ids = _required_reactive_pipeline_ids(self.root)
+        pipeline_rows: dict[str, dict[str, Any]] = {}
+        if checkpoint_path.is_file():
+            connection = sqlite3.connect(str(checkpoint_path))
+            connection.row_factory = sqlite3.Row
+            try:
+                for row in connection.execute(
+                    "SELECT subscriber_id, checkpoint_event_id, last_success_at_ms, "
+                    "last_failure_at_ms, consecutive_failures, degraded, "
+                    "poison_event_id, consumer_version "
+                    "FROM bus_consumer_offsets "
+                    "WHERE subscriber_id LIKE 'pipeline:%'"
+                ):
+                    pipeline_rows[str(row["subscriber_id"])] = {
+                        "checkpoint_event_id": row["checkpoint_event_id"],
+                        "last_success_at_ms": row["last_success_at_ms"],
+                        "last_failure_at_ms": row["last_failure_at_ms"],
+                        "consecutive_failures": int(row["consecutive_failures"] or 0),
+                        "degraded": bool(row["degraded"]),
+                        "poison_event_id": row["poison_event_id"],
+                        "consumer_version": row["consumer_version"],
+                    }
+            except sqlite3.OperationalError:
+                # A pre-migration checkpoint DB has no consumer_version yet.
+                pipeline_rows = {}
+            finally:
+                connection.close()
+        missing_pipelines = sorted(required_pipeline_ids - set(pipeline_rows))
+        unhealthy_pipelines = sorted(
+            subscriber_id
+            for subscriber_id in required_pipeline_ids & set(pipeline_rows)
+            if pipeline_rows[subscriber_id]["degraded"]
+            or pipeline_rows[subscriber_id]["poison_event_id"] is not None
+            or pipeline_rows[subscriber_id]["consecutive_failures"] > 0
+        )
+        pipeline_delivery_ok = (
+            bool(required_pipeline_ids)
+            and not missing_pipelines
+            and not unhealthy_pipelines
+        )
+        checks.append(
+            DoctorCheck(
+                "required_reactive_pipeline_delivery",
+                pipeline_delivery_ok,
+                (
+                    f"{len(required_pipeline_ids)}/{len(required_pipeline_ids)} "
+                    "required pipeline subscribers healthy"
+                    if pipeline_delivery_ok
+                    else (
+                        f"{len(missing_pipelines)} missing; "
+                        f"{len(unhealthy_pipelines)} degraded or poisoned"
+                    )
+                ),
+                "Deploy a reviewed pipeline repair and replay from each last good checkpoint.",
+                {
+                    "required": sorted(required_pipeline_ids),
+                    "missing": missing_pipelines,
+                    "unhealthy": unhealthy_pipelines,
+                    "subscribers": pipeline_rows,
                 },
             )
         )

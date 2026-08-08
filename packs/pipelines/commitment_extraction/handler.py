@@ -166,6 +166,14 @@ class CommitmentExtractionPipeline:
 
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
+        if event_type == "messaging.received" and "SENT" in {
+            str(label).upper() for label in payload.get("provider_labels") or []
+        }:
+            # Legacy Gmail history represented SENT observations as received.
+            # Direction-aware noise_filtering v3 owns the exact-quote outbound
+            # member-promise proposal; do not attribute the member's own From
+            # address as an inbound counterparty or create a duplicate.
+            return
         source_event_id = str(event.get("event_id", ""))
         message_text = str(payload.get("body_text") or "")
         try:

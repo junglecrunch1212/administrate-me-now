@@ -14,6 +14,7 @@ from adminme.lib.skill_runner.wrapper import (
     SkillResult,
     SkillScopeInsufficient,
     SkillSensitivityRefused,
+    build_skill_runtime,
     run_skill,
     set_default_event_sink,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "SkillResult",
     "SkillScopeInsufficient",
     "SkillSensitivityRefused",
+    "build_skill_runtime",
     "run_skill",
     "set_default_event_sink",
 ]

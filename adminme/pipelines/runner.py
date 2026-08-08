@@ -184,7 +184,12 @@ class PipelineRunner:
                 continue
             subscriber_id = f"pipeline:{pack.pack_id}"
             types = cast("list[str] | Literal['*']", list(events))
-            self._bus.subscribe(subscriber_id, types, self._make_callback(pack))
+            self._bus.subscribe(
+                subscriber_id,
+                types,
+                self._make_callback(pack),
+                consumer_version=pack.version,
+            )
         # `EventBus.start()` is a no-op if already running, so this is
         # safe for both test and production wiring orderings.
         if start_bus:

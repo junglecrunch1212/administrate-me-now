@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -100,6 +101,49 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     for reference in references.values():
         secret = store.get(reference)
         assert secret not in backup_bytes
+
+
+def test_doctor_fails_when_required_triage_pipeline_is_poisoned(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-poisoned")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    checkpoint_path = paths.instance_dir / "events" / "bus_checkpoints.db"
+    connection = sqlite3.connect(str(checkpoint_path))
+    try:
+        connection.execute(
+            "UPDATE bus_consumer_offsets SET degraded=1, "
+            "consecutive_failures=5, poison_event_id='fixture-poison' "
+            "WHERE subscriber_id='pipeline:pipeline:noise_filtering'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    report = Doctor(paths, root=REPO_ROOT, test_mode=True).run(
+        include_synthetic_proof=False
+    )
+    assert report["status"] == "failed"
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "required_reactive_pipeline_delivery"
+    )
+    assert check["ok"] is False
+    assert check["evidence"]["unhealthy"] == ["pipeline:pipeline:noise_filtering"]
 
 
 def test_member_bridge_export_accept_finalize_uses_production_ingest_composition(
