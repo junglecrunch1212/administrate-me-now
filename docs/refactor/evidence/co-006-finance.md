@@ -76,8 +76,8 @@ Plaid consent was intentionally untouched.
 ## Live family activation
 
 PR 283 passed the cascade check and the complete credential-free macOS
-rehearsal, then merged to `main`. The rollback-safe updater activated exact
-commit `f8a96e4f90526598bb86fbdefcee6daa10cedd19`, retained the previous release,
+rehearsal, then merged to `main`. The rollback-safe updater activated its exact
+merge, retained the previous release,
 created an encrypted backup, and passed full Doctor with 14/14 healthy
 projection checkpoints, 5/5 managed OpenClaw jobs, loopback-only listeners,
 and observation mode.
@@ -106,3 +106,12 @@ deterministic section.
 Plaid remains explicitly disabled/not configured and the cockpit therefore has
 zero provider accounts. Live Link/consent and propagation evidence are still
 deferred; no bank write capability was added.
+
+PR 285 subsequently closed the local-file permission boundary exposed during
+the final live artifact inspection. It passed the full macOS rehearsal and
+release suite, then activated as exact commit
+`33c5622d4953b01263914ae77a7de0cdac9aa65e`. A fresh production regeneration
+proved the canonical workbook and all twelve sidecars are `0600`, the
+workbook-specific sidecar directory is `0700`, and the protected modes survive
+the real atomic write path. Doctor and ready state remained healthy,
+observation-only, and at zero projection lag.
