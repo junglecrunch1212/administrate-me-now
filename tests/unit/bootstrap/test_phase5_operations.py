@@ -204,7 +204,8 @@ def test_required_llm_tool_status_proves_config_and_runtime_registration(
             stdout=json.dumps(
                 {
                     "plugin": {
-                        "status": "active",
+                        "status": "loaded",
+                        "activated": True,
                         "toolNames": ["llm-task"],
                         "origin": "bundled",
                         "packageName": "@openclaw/llm-task",
@@ -257,7 +258,8 @@ def test_required_llm_tool_configuration_preserves_existing_allow_entries(
                 stdout=json.dumps(
                     {
                         "plugin": {
-                            "status": "active",
+                            "status": "loaded",
+                            "activated": True,
                             "toolNames": ["llm-task"],
                             "origin": "bundled",
                             "packageName": "@openclaw/llm-task",
@@ -295,6 +297,38 @@ def test_required_llm_tool_status_fails_closed_on_malformed_config_nodes(
     assert status["ok"] is False
     assert status["plugin_enabled"] is False
     assert status["tool_allowed"] is False
+    assert status["runtime_registered"] is False
+    assert status["bundled_origin"] is False
+    assert status["version_matches"] is False
+
+
+def test_required_llm_tool_status_fails_closed_when_executable_is_unavailable(
+    test_paths: DeploymentPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {"entries": {"llm-task": {"enabled": True}}},
+                "tools": {"alsoAllow": ["llm-task"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unavailable(paths: DeploymentPaths) -> str:
+        raise RuntimeError("reviewed executable unavailable")
+
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw", unavailable
+    )
+
+    status = required_llm_tool_status(test_paths)
+
+    assert status["ok"] is False
+    assert status["plugin_enabled"] is True
+    assert status["tool_allowed"] is True
     assert status["runtime_registered"] is False
     assert status["bundled_origin"] is False
     assert status["version_matches"] is False
