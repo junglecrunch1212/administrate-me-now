@@ -114,7 +114,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "3.0.0"
+    version: str = "4.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -225,6 +225,19 @@ class NoiseFilteringPipeline:
         classification: str,
         confidence: float,
     ) -> None:
+        payload = {
+            "source_event_id": source_event_id,
+            "classification": classification,
+            "confidence": round(confidence, 4),
+            "skill_name": SKILL_NAME,
+            "skill_version": SKILL_VERSION,
+        }
+        idempotency_key = f"messaging:classified:{source_event_id}"
+        prior = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"], idempotency_key
+        )
+        if prior is not None and prior.get("payload") != payload:
+            idempotency_key = f"messaging:classified:v4:{source_event_id}"
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -236,14 +249,8 @@ class NoiseFilteringPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
-            idempotency_key=f"messaging:classified:{source_event_id}",
-            payload={
-                "source_event_id": source_event_id,
-                "classification": classification,
-                "confidence": round(confidence, 4),
-                "skill_name": SKILL_NAME,
-                "skill_version": SKILL_VERSION,
-            },
+            idempotency_key=idempotency_key,
+            payload=payload,
         )
         await ctx.event_sink.write(
             envelope,
@@ -259,6 +266,25 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         output: dict[str, Any],
     ) -> None:
+        payload = {
+            "source_event_id": source_event_id,
+            "reply_signal": str(output.get("reply_signal") or "unknown"),
+            "automated": bool(output.get("automated", False)),
+            "transactional_due": bool(output.get("transactional_due", False)),
+            "security_code": bool(output.get("security_code", False)),
+            "person_to_person": bool(output.get("person_to_person", False)),
+            "deadline": output.get("deadline"),
+            "confidence": round(float(output.get("confidence", 0.0)), 4),
+            "reasons": [str(value) for value in output.get("reasons") or []][:20],
+            "skill_name": SKILL_NAME,
+            "skill_version": SKILL_VERSION,
+        }
+        idempotency_key = f"messaging:semantic-features:{source_event_id}"
+        prior = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"], idempotency_key
+        )
+        if prior is not None and prior.get("payload") != payload:
+            idempotency_key = f"messaging:semantic-features:v4:{source_event_id}"
         envelope = EventEnvelope(
             event_at_ms=event["event_at_ms"],
             tenant_id=event["tenant_id"],
@@ -270,20 +296,8 @@ class NoiseFilteringPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
-            idempotency_key=f"messaging:semantic-features:{source_event_id}",
-            payload={
-                "source_event_id": source_event_id,
-                "reply_signal": str(output.get("reply_signal") or "unknown"),
-                "automated": bool(output.get("automated", False)),
-                "transactional_due": bool(output.get("transactional_due", False)),
-                "security_code": bool(output.get("security_code", False)),
-                "person_to_person": bool(output.get("person_to_person", False)),
-                "deadline": output.get("deadline"),
-                "confidence": round(float(output.get("confidence", 0.0)), 4),
-                "reasons": [str(value) for value in output.get("reasons") or []][:20],
-                "skill_name": SKILL_NAME,
-                "skill_version": SKILL_VERSION,
-            },
+            idempotency_key=idempotency_key,
+            payload=payload,
         )
         await ctx.event_sink.write(
             envelope,
@@ -337,6 +351,35 @@ class NoiseFilteringPipeline:
                 event["event_at_ms"] / 1000, timezone.utc
             ).isoformat()
         )
+        baseline_idempotency = f"triage:message-features:{source_event_id}"
+        prior_extraction = await ctx.event_log.get_by_idempotency(
+            event["tenant_id"], baseline_idempotency
+        )
+        idempotency_generation = ""
+        if prior_extraction is not None:
+            prior_proposals = await ctx.event_log.get_by_causation(
+                prior_extraction["event_id"]
+            )
+            existing = {
+                (
+                    str(proposal["payload"].get("target_kind") or ""),
+                    str(proposal["payload"].get("candidate_key") or ""),
+                )
+                for proposal in prior_proposals
+                if proposal.get("type") == "triage.item.proposed"
+            }
+            candidates = [
+                candidate
+                for candidate in candidates
+                if (candidate.target_kind, candidate.candidate_key) not in existing
+            ]
+            if not candidates:
+                return
+            # A later reviewed language-seam repair may discover additional
+            # exact-source candidates after a defensive deterministic pass.
+            # Append only those additions under a new idempotency generation;
+            # never rewrite or duplicate proposals already reviewed in Triage.
+            idempotency_generation = "v4:"
         extraction_event_id = await ctx.event_sink.write(
             EventEnvelope(
                 event_at_ms=event["event_at_ms"],
@@ -349,7 +392,9 @@ class NoiseFilteringPipeline:
                 owner_scope=owner_scope,
                 visibility_scope=event["visibility_scope"],
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=f"triage:message-features:{source_event_id}",
+                idempotency_key=(
+                    f"triage:message-features:{idempotency_generation}{source_event_id}"
+                ),
                 payload={
                     "intent_id": intent_id,
                     "source_event_id": source_event_id,
@@ -387,7 +432,8 @@ class NoiseFilteringPipeline:
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
                 idempotency_key=(
-                    f"triage:message-candidate:{source_event_id}:"
+                    f"triage:message-candidate:{idempotency_generation}"
+                    f"{source_event_id}:"
                     f"{candidate.candidate_key}:{target_kind}"
                 ),
                 payload={

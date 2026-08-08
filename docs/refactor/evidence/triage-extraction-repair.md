@@ -2,9 +2,9 @@
 
 Date: 2026-08-08
 
-Branch: `codex/repair-triage-extraction`
+Branches: `codex/repair-triage-extraction`, `codex/repair-openclaw-skill-auth`
 
-Disposition: **PRESERVE/HARDEN/MODERNIZE candidate; live replay pending merge**
+Disposition: **first repair live; authenticated NLP/tool-registration follow-up in PR #290**
 
 ## Incident evidence
 
@@ -28,6 +28,21 @@ source-interaction payload.
 No provider write occurred during diagnosis. Observation mode remained active.
 No private message text, household identifier, credential, or token was copied
 into the repository or this evidence.
+
+The first reviewed repair merged as PR #289 at commit
+`fc258ec84d20706a249a0f9fdc1b7cdac4c8db6c` and upgraded through the guarded
+updater. Its versioned replay completed with zero lag, failures, poison events,
+confirmations, canonical task creations, or external-write requests. It
+produced 51 exact-source pending proposals from 31 messages: 47 tasks, two
+recurrences, one reminder, and one relationship fact.
+
+That live evidence exposed two further production-only gaps hidden by fixture
+tests: all 105 language calls lacked the injected Gateway bearer token and,
+after supplying it in an isolated synthetic probe, the Gateway reported
+`llm-task` unavailable. The pinned OpenClaw build includes `llm-task` as a
+bundled optional plugin, disabled by default; it also requires an explicit
+`tools.alsoAllow` entry. Plugin discovery of `administrateme` alone was not
+proof of the constitutional model seam.
 
 ## Reviewed repair behavior
 
@@ -53,6 +68,17 @@ into the repository or this evidence.
 7. Doctor fails when a required reactive subscriber is absent, failed,
    degraded, or poisoned. An empty Triage queue is therefore never accepted as
    proof that extraction succeeded.
+8. The skill-runtime dependency includes the Keychain-resolved Gateway token
+   with secret-safe representation; explicitly constructed production runtimes
+   never consult ambient token state.
+9. Bootstrap and upgrade reconcile the pinned bundled `llm-task` plugin plus
+   its additive tool-policy allow entry through OpenClaw's validated config
+   command. Doctor requires configuration and runtime tool registration, not
+   only AdministrateMe plugin discovery.
+10. `noise_filtering` v4 replays language recovery without rewriting fallback
+    classifications or existing proposals. Changed semantic facts use a
+    reviewed idempotency generation and only newly discovered candidate
+    kind/key pairs append.
 
 ## Executable proof
 
@@ -82,10 +108,10 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH \
 Result:
 
 - strict acceptance: 36 passed;
-- root and pack Python: 1,625 passed;
+- root and pack Python: 1,631 passed;
 - member bridge: 60 passed;
-- Ruff: 501 files formatted and 224 production files clean;
-- mypy: 224-source release target clean (plus direct 203-source check);
+- Ruff: 502 files formatted and 225 production files clean;
+- mypy: 225-source release target clean;
 - Pyright: zero errors/warnings;
 - dependency audits: Python clean; production Node clean;
 - performance budgets: pass;
@@ -112,4 +138,7 @@ subscribers to replay, then require:
 - zero provider writes during replay.
 
 Live candidate contents and household decisions remain private runtime data and
-must not be committed as release evidence.
+must not be committed as release evidence. The follow-up must additionally
+prove an authenticated synthetic `llm-task` call, successful language records
+for the source backlog, grounded aggregate candidate counts, zero lag, healthy
+Doctor tool-registration evidence, and zero provider/canonical writes.

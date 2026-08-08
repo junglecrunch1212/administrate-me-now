@@ -29,7 +29,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -146,6 +146,7 @@ class _Runtime:
     raw_events_dir: Path
     httpx_client_factory: Any = None  # callable() -> httpx.AsyncClient | None
     gateway_url: str = OPENCLAW_GATEWAY_URL
+    gateway_token: str | None = field(default=None, repr=False)
     event_log: Any = None
 
 
@@ -157,6 +158,7 @@ def build_skill_runtime(
     event_sink: "EventSink",
     event_log: Any,
     raw_events_dir: Path,
+    gateway_token: str | None,
 ) -> _Runtime:
     """Build the explicit production dependency bundle for ``run_skill``.
 
@@ -170,6 +172,7 @@ def build_skill_runtime(
         event_sink=event_sink,
         event_log=event_log,
         raw_events_dir=Path(raw_events_dir),
+        gateway_token=gateway_token,
     )
 
 
@@ -198,6 +201,7 @@ def _resolve_runtime() -> _Runtime:
     return _Runtime(
         event_sink=_DEFAULT_EVENT_SINK,
         raw_events_dir=Path(instance_dir) / "data" / "raw_events",
+        gateway_token=os.environ.get(OPENCLAW_GATEWAY_TOKEN_ENV),
     )
 
 
@@ -206,8 +210,15 @@ def _resolve_runtime() -> _Runtime:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_gateway_token(session: "Session") -> str | None:
-    return os.environ.get(OPENCLAW_GATEWAY_TOKEN_ENV)
+def _resolve_gateway_token(runtime: _Runtime) -> str | None:
+    """Return the token injected by the production composition root.
+
+    The legacy fallback runtime may populate this field from its environment,
+    but an explicitly constructed runtime must never depend on ambient process
+    state for Gateway authentication.
+    """
+
+    return runtime.gateway_token
 
 
 def _build_envelope(
@@ -725,7 +736,7 @@ async def run_skill(
         )
 
     # Step 6: one POST; OpenClaw owns provider/model routing and fallback.
-    token = _resolve_gateway_token(ctx.session)
+    token = _resolve_gateway_token(runtime)
     timeout_seconds = int(fm.get("timeout_seconds", 15))
     session_key = _derive_session_key(ctx)
     started_at = time.perf_counter()

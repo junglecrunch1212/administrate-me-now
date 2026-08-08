@@ -111,6 +111,7 @@ def _runtime_for(
     tmp_path: Path,
     *,
     transport: httpx.MockTransport | None = None,
+    gateway_token: str | None = None,
 ) -> _Runtime:
     raw_dir = tmp_path / "raw_events"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +126,7 @@ def _runtime_for(
         event_sink=EventWriter(event_log, _NoopBus()),  # type: ignore[arg-type]
         raw_events_dir=raw_dir,
         httpx_client_factory=client_factory,
+        gateway_token=gateway_token,
     )
 
 
@@ -215,6 +217,31 @@ async def test_happy_path_records_event_and_posts_correct_body(
     assert args["timeoutMs"] == 5000
     assert args["input"] == {"text": "hi"}
     assert "schema" in args
+
+
+async def test_explicit_runtime_gateway_token_does_not_use_ambient_environment(
+    event_log: EventLog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(
+        event_log,
+        tmp_path,
+        transport=transport,
+        gateway_token="injected-gateway-token",
+    )
+
+    await run_skill(
+        "classify_test",
+        {"text": "hi"},
+        SkillContext(session=_session()),
+        _runtime=runtime,
+    )
+
+    assert len(transport.requests) == 1
+    assert transport.requests[0].headers["Authorization"] == (
+        "Bearer injected-gateway-token"
+    )
 
 
 # ---------------------------------------------------------------------------

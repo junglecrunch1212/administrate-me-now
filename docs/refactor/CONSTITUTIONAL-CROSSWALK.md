@@ -1,5 +1,17 @@
 # Constitutional crosswalk
 
+Live OpenClaw language-seam amendment (2026-08-08): C035/C046/C050/C055/C076
+are **PRESERVED/HARDENED** after Phase-B replay proved that a healthy Gateway
+and discovered AdministrateMe plugin did not make the required NLP tool
+callable. The production composition injects the Keychain-resolved Gateway
+token into the explicit skill runtime without ambient secret lookup. Bootstrap
+and upgrade enable only the pinned bundled `llm-task`, preserve existing tool
+policy while adding its reviewed allow entry, and validate configuration.
+Doctor requires enabled, allowed, runtime-registered tool evidence. A reviewed
+consumer replay adds only new exact-source candidate kind/key pairs and versions
+changed defensive semantic facts; no model output rewrites source evidence,
+scope, route, authority, canonical truth, or prior Triage proposals.
+
 Live Triage extraction repair amendment (2026-08-08): C001/C002/C004/C007,
 C010/C012/C014–C017/C023/C025, C035/C044/C045/C048/C050/C053/C056/C071/C076,
 and C101 are **PRESERVED/HARDENED** after the live adapter-to-Triage path

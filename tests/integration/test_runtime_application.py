@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
+from adminme.lib.session import Session
+from adminme.lib.skill_runner import wrapper as skill_wrapper
+from adminme.lib.skill_runner.wrapper import SkillContext
 from adminme.runtime.application import (
     AdministrateMeRuntime,
     RuntimeSettings,
@@ -147,6 +150,58 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
         )
         assert ingest.status_code == 202, ingest.text
         assert ingest.json()["owner_scope"] == "private:member-a"
+
+
+def test_production_composition_injects_skill_gateway_auth_without_ambient_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "composition-gateway-token-at-least-24-characters"
+    (tmp_path / "instance").mkdir()
+    settings = RuntimeSettings.credential_free(
+        tmp_path / "instance",
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={"member-a.ts.net": "member-a"},
+        openclaw_enabled=True,
+        openclaw_shared_secret=token,
+        openclaw_actor_identities={"portal|central|member-a": "member-a"},
+        openclaw_gateway_token=token,
+        member_roles={"member-a": "principal"},
+    )
+    captured: dict[str, object] = {}
+
+    async def invoke(**kwargs: object) -> skill_wrapper._OpenClawCallOutcome:
+        captured.update(kwargs)
+        return skill_wrapper._OpenClawCallOutcome(
+            kind="ok",
+            raw_result={"is_thing": True, "confidence": 0.9},
+            invocation_id="composition-invocation",
+            provider_model="fixture/composition",
+        )
+
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setattr(skill_wrapper, "_post_one_provider", invoke)
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        session = Session(
+            tenant_id=runtime.settings.instance.tenant_id,
+            auth_member_id="member-a",
+            auth_role="principal",
+            view_member_id="member-a",
+            view_role="principal",
+            dm_scope="per_channel_peer",
+            source="product_api_internal",
+        )
+        result = client.portal.call(
+            runtime.run_skill_fn,
+            "skill:classify_test",
+            {"text": "hi"},
+            SkillContext(session=session),
+        )
+
+    assert result.output == {"is_thing": True, "confidence": 0.9}
+    assert captured["token"] == token
 
 
 def test_reviewed_household_enrollment_becomes_idempotent_people_truth(

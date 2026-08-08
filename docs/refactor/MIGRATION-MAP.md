@@ -1,5 +1,14 @@
 # Migration map
 
+Live Triage NLP runtime update (2026-08-08): the OpenClaw skill seam is
+**HARDENED IN THE FOLLOW-UP CANDIDATE**. The Keychain-resolved Gateway token is
+an explicit secret-safe skill-runtime dependency. The pinned bundled optional
+`llm-task` plugin and additive tool-policy entry are reconciled by bootstrap and
+upgrade through OpenClaw's validated config writer; Doctor now proves runtime
+registration. `noise_filtering` v4 is a replay boundary that preserves v3
+fallback facts and proposals while appending only newly grounded NLP kinds
+under a new idempotency generation.
+
 CO-007 update (2026-08-08): trustworthy capture and Triage are **MODERNIZED
 COMPLETE IN THE PHASE-A CANDIDATE**. New exact-text intent and feature events
 are additive. `triage.item.proposed@v1` and legacy external-write events remain
