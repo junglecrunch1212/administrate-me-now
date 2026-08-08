@@ -4,7 +4,7 @@ Date: 2026-08-08
 
 Branches: `codex/repair-triage-extraction`, `codex/repair-openclaw-skill-auth`
 
-Disposition: **first repair live; authenticated NLP/tool-registration follow-up candidate**
+Disposition: **first repair live; authenticated NLP/tool-registration follow-up in PR #290**
 
 ## Incident evidence
 
