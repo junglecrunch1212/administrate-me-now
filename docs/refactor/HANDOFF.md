@@ -3,23 +3,23 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO006_CANDIDATE_VALIDATION_LIVE_RUNTIME_UNCHANGED
+gate_result: CO006_LIVE_FINANCE_ACTIVATED
 verified_local_date: 2026-08-07
 verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: current_reviewed_commit_after_final_validation
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/271
+candidate_commit_resolution: f8a96e4f90526598bb86fbdefcee6daa10cedd19
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/283
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: co006_review_then_explicit_runtime_migration_decision
+next_phase: live_plaid_consent_and_member_bridge_activation
 ---
 
 # Release handoff
 
-## 2026-08-07 CO-006 Finance workbook and cash-flow candidate
+## 2026-08-07 CO-006 Finance workbook and cash-flow activation
 
-CO-006 is implemented in the candidate under ADR-0007. It **PRESERVES** the
+CO-006 is implemented in the live family runtime under ADR-0007. It **PRESERVES** the
 encrypted append-only log, private provider authority, member isolation,
 deterministic projections, workbook round-trip, observation, and exact
 OpenClaw boundary. It **MODERNIZES** the existing money projection into one
@@ -54,10 +54,28 @@ passed 136/136 checks, including all six Finance views, URL restoration, and
 deterministic scenario changes; direct desktop/mobile browser simulation found
 no overflow, console, page, or request failures.
 
-CO-006 does not authorize a deployment, service restart, observation change,
-provider enrollment, or the staged Python 3.14/Node 24 runtime migration. The
-current family release remains unchanged pending review and an explicit
-runtime migration decision.
+The reviewed runtime migration and CO-006 core are live at merge commit
+`f8a96e4f90526598bb86fbdefcee6daa10cedd19`. The rollback-safe updater created
+an encrypted pre-switch backup, retained the previous release, and passed full
+post-switch Doctor: exact Python 3.14.6, Node 24.19.0, OpenClaw 2026.7.2,
+14/14 healthy projection checkpoints, 5/5 managed OpenClaw jobs, loopback-only
+services, and observation mode.
+
+The private reviewed planner is now represented in the canonical twelve-sheet
+Finance workbook and encrypted event/projection state without committing any
+household value. Live evidence contains 38 assumptions, 14 budgets, five
+scenarios, five goals, and 791 historical/manual rows. Of those rows, 750 are
+included in Finance arithmetic and 41 transfer/excluded rows remain preserved
+for provenance. The earlier generic write budget refused 491 rows; PR 283
+isolated a bounded higher budget to `daemon:xlsx_reverse` only, and the clean
+retry added no further denial. The regenerated workbook passed its structural,
+formula-error, and visual checks, and all six URL-backed Finance views passed
+the live Tailscale browser exercise.
+
+Plaid remains disabled and unconfigured, so the live cockpit intentionally has
+no provider accounts. Live Link/consent, per-account sharing, and provider
+propagation evidence remain the next explicit activation boundary. Observation
+mode remains active and no bank write seam exists.
 
 ## 2026-08-07 runtime-Keychain reconciliation
 
