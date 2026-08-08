@@ -25,7 +25,10 @@ from typing import Any, AsyncIterator
 import pytest
 from openpyxl import load_workbook
 
-from adminme.daemons.xlsx_sync.reverse import XlsxReverseDaemon
+from adminme.daemons.xlsx_sync.reverse import (
+    MAX_FINANCE_RAW_DATA_ROWS,
+    XlsxReverseDaemon,
+)
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
@@ -427,3 +430,37 @@ async def test_invalid_planning_save_keeps_sidecar_for_corrected_retry(
     assert len(budgets) == 1
     assert budgets[0]["payload"]["category"] == "Food"
     assert budgets[0]["payload"]["amount_minor"] == 50_000
+
+
+async def test_raw_data_over_household_limit_rejects_whole_save(
+    rig: dict[str, Any],
+) -> None:
+    reverse = rig["reverse"]
+    log = rig["log"]
+    config = rig["config"]
+    cursor = rig["cursor"]
+    before = read_sheet_state(
+        config.xlsx_workbooks_dir, FINANCE_WORKBOOK_NAME, "Raw Data"
+    )
+
+    wb, path = _open_finance(config)
+    ws = wb["Raw Data"]
+    for offset in range(MAX_FINANCE_RAW_DATA_ROWS):
+        row_number = ws.max_row + 1
+        ws.cell(row=row_number, column=2, value="2026-08-01")
+        ws.cell(row=row_number, column=6, value=offset + 1)
+    _save(wb, path)
+
+    await reverse.run_cycle_now(FINANCE_WORKBOOK_NAME)
+
+    published = await _events_of_type(log, "finance.workbook_published", cursor)
+    assert published[-1]["payload"]["validation_state"] == "rejected"
+    assert any(
+        "row count exceeds" in failure
+        for failure in published[-1]["payload"]["validation_failures"]
+    )
+    assert await _events_of_type(log, "money_flow.manually_added", cursor) == []
+    assert (
+        read_sheet_state(config.xlsx_workbooks_dir, FINANCE_WORKBOOK_NAME, "Raw Data")
+        == before
+    )

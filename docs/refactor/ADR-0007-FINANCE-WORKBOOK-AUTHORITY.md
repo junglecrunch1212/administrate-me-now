@@ -49,6 +49,17 @@ The reviewed planning loop is:
 
 `workbook edit -> structural/type/semantic validation -> typed planning event -> scoped money projection -> regenerated workbook and Finance views`.
 
+Each imported row remains an independently governed typed fact. The xlsx
+reverse daemon has a reviewed caller-and-action-scoped local import budget for
+manual add/enrichment events; the ordinary per-principal budget for the same
+actions remains unchanged. This prevents a valid household workbook from being
+silently truncated at the generic interactive limit without granting broader
+write authority to a member, OpenClaw, another daemon, or any external seam.
+Validation caps Raw Data at 5,000 populated rows, while each daemon-only action
+budget admits 10,000 events per minute, leaving deterministic headroom for one
+add plus one enrichment per row without making the workbook an unbounded event
+ingress.
+
 The workbook contract is schema version 2. It contains twelve canonical
 sheets: Dashboard, Cash Flow Plan, Assumptions, Budget vs Actual, Scenarios,
 Goals, Balance Sheet, Raw Data, Accounts, Checks, Metadata, and Instructions.
@@ -102,6 +113,9 @@ observation behavior, terminal audit, and change order.
   deletion.
 - Scenario calculations are useful planning estimates, not financial advice,
   lending recommendations, or autonomous decisions.
+- Bulk workbook ingestion preserves row-level event provenance while its
+  higher local budget remains isolated to `daemon:xlsx_reverse`; interactive
+  callers retain the conservative default.
 - The existing count of thirteen domain projections plus derived Triage is
   preserved; Finance deepens the existing `money` capability.
 - The attached private source workbook may be transformed into a local ignored

@@ -104,7 +104,10 @@ AC-32 demonstrates the full production composition: detailed observations and
 planning events project into one scoped Finance cockpit, a validated workbook
 edit round-trips, an invalid workbook fails closed, replay is equivalent,
 private member data stays private, and the system still registers exactly
-fourteen projections. Supporting unit/integration tests cover workbook shape
+fourteen projections. The process proof also imports 61 manual rows plus their
+enrichments in one cycle—past the ordinary interactive 60/minute budget—and
+proves the scoped xlsx daemon budget accepts every row without a rate-limit
+denial or weakening the principal budget. Supporting unit/integration tests cover workbook shape
 and protection, reverse events, validation, amount semantics, provider removal,
 restart-safe cursor behavior, and member rendering.
 
