@@ -5,7 +5,7 @@ Date: 2026-08-08
 Branches: `codex/repair-triage-extraction`, `codex/repair-openclaw-skill-auth`,
 `codex/repair-openclaw-tool-status`
 
-Disposition: **first repair live; PR #290 merged; pinned tool-status follow-up candidate**
+Disposition: **first repair live; PR #290 merged; pinned tool-status follow-up in PR #291**
 
 ## Incident evidence
 
