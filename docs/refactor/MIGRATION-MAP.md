@@ -6,6 +6,11 @@ are additive. `triage.item.proposed@v1` and legacy external-write events remain
 readable; new candidate lineage, confirmation chronology, independent approval,
 and terminal audit use versioned schemas. Triage projection v5 rebuilds from the
 immutable log, adding pending interpretation and approval/outcome linkage.
+For deployed Triage v2 databases, the `parent_intent_id` index is created only
+by the projection migration hook after the v5 table rebuild adds that column;
+`schema.sql` must never reference an additive column before the hook runs. A
+production-composition fixture preserves a legacy candidate while proving the
+new lineage/approval columns and dependent index.
 Gmail adopts the shared durable cursor/lease store with per-message dedupe and
 explicit quarantine before page-watermark advancement. Rollback cannot delete
 new events and must ignore unknown additive types safely. No migration collapses

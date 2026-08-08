@@ -49,16 +49,33 @@ performed, observation remained active, and no family-Mac deployment occurred.
 Exact candidate evidence and remaining activation boundaries are in
 `evidence/co-007-capture-triage-ssot.md`.
 
-Candidate validation passed 1,467/1,467 root/bridge/pack Python tests and
-33/33 strict acceptance tests, Ruff over 203 production source files, mypy,
+Candidate validation passed 1,616/1,616 root/pack Python tests, 60/60 bridge
+tests, and 34/34 strict acceptance tests, Ruff over 224 production source files, mypy,
 the invariant and architecture-negative scripts, and the exact-pinned Node
-24.19 plugin contract/build/dry-run package with 14/14 tests. Desktop and
+24.19 plugin contract/build/dry-run package with 15/15 tests. Desktop and
 390×844 in-app browser exercises produced four
 natural-dictation proposals, showed the expected Triage lanes and immutable
 local outcome, had zero browser-console errors, and had no horizontal overflow.
 The production npm dependency audit is clean. The full dev-tree audit retains
 one transitive `nanoid@3.3.16` advisory under Vitest/Vite/PostCSS; it is not
 runtime reachable and is not silently rewritten as part of CO-007.
+
+### Phase-B legacy projection repair
+
+PR #287 was independently reviewed and merged on 2026-08-08. Its first guarded
+family-Mac activation correctly failed closed and restored the prior release:
+the deployed Triage v2 database did not yet have `parent_intent_id`, while the
+candidate `schema.sql` tried to create that column's index before
+`TriageProjection.migrate_schema()` could rebuild the table. No provider write
+was attempted and the encrypted event log remained authoritative.
+
+The deployment repair **HARDENS** the additive migration without changing
+Triage semantics: the dependent index is now created only by the migration
+hook after the column exists. A production-composition acceptance test starts
+the real runtime over the exact pre-PR #287 encrypted table shape, proves the
+legacy candidate survives, and verifies the new lineage/approval columns and
+index. The guarded updater, backup, full Doctor, and observation-mode checks
+remain mandatory for the retry.
 
 ## 2026-08-07 CO-006 Finance workbook and cash-flow activation
 
