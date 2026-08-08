@@ -1,16 +1,18 @@
 # OpenClaw compatibility matrix
 
-Gate 4 selects OpenClaw package/source version `2026.7.2` at exact commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`. The selection was made from
-official docs and current source on 2026-07-30 because Prompt 4 requires the
-current native dashboard binding and authenticated actor contracts. It is not
-a floating dependency.
+OpenClaw package/source version `2026.7.2` is pinned at exact commit
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`. This same-version reviewed
+snapshot supersedes `944cf08f94c334cff2b0fdf7e01187a9efa42715`, whose
+bundled `llm-task` failed against its SQLite session runtime before provider
+execution. The replacement includes OpenClaw's official isolated, tool-free
+completion surface and remains an exact snapshot, not a floating dependency.
 
 Phase-B language-seam amendment (2026-08-08): the pinned host includes
 `@openclaw/llm-task` as a bundled optional plugin that is disabled by default.
 AdministrateMe bootstrap and upgrade explicitly enable that exact bundled tool,
 preserve unrelated tool-policy entries while adding `llm-task`, validate with
-OpenClaw's own writer, and require Doctor runtime-registration evidence. The
+OpenClaw's own writer, and require Doctor runtime-registration plus authenticated
+synthetic-execution evidence. The
 central Python composition injects the Keychain-resolved Gateway bearer token
 into the skill runtime; it never depends on an ambient token for an explicitly
 constructed production dependency bundle.
@@ -23,7 +25,7 @@ constructed production dependency bundle.
 | Approval | `before_tool_call.requireApproval`; plugin approval routing; optional exposure | Side effects request `allow-once` or deny; the plugin resolves a signed, exact-body, expiring receipt and AdministrateMe consumes it independently after domain approval | Approval hook, forgery/change/expiry/replay tests, and process retry proof |
 | Dashboard | Manifest data/action binding metadata; authenticated Gateway client; `operator.read`/`operator.write` registration | All ten domain reads plus health; review/lifecycle writes; calls without `authenticatedUserId` denied | Dashboard fixture and child/operator process tests |
 | Actor provenance | Tool requester, agent/session, channel/account/delivery/thread; command sender; message hook context | Full metadata audit plus exact `channel|account|actor` mapping. Gate 7 additionally derives portal actor/channel/account only from a valid HMAC-signed isolated session; Python independently recomputes it. Operator scope and `senderIsOwner` remain insufficient. | Fixture and process denial tests |
-| Skills/model routing | OpenClaw skills workspace and one bundled, explicitly enabled/allowed `llm-task` tool invocation | OpenClaw-format skill instructs the typed wrapper; the composition injects the Keychain-resolved bearer token; wrapper makes one routed call and records actual `skill.call.recorded` provenance; Doctor rejects configured-but-unregistered tool state | Python wrapper and production-composition tests, bootstrap required-tool/Doctor tests, authenticated Phase-B probe |
+| Skills/model routing | OpenClaw skills workspace and one bundled, explicitly enabled/allowed `llm-task` tool invocation through isolated tool-free completion | OpenClaw-format skill instructs the typed wrapper; the composition injects the Keychain-resolved bearer token; wrapper uses a canonical member-isolated Gateway session, makes one routed call, and records actual `skill.call.recorded` provenance; Doctor rejects registered-but-unexecutable tool state | Python wrapper and production-composition tests, bootstrap required-tool/Doctor tests, authenticated Phase-B probe |
 | Slash commands | Native command definition, required auth, command context | Seven commands dispatch only to typed loopback endpoints | TypeScript fixture test |
 | Standing orders | OpenClaw standing orders/automations plus agent workspace instructions | Five derived automation declarations call one typed trigger; no Python scheduler | Contract validation and process event proof |
 | Conversation hooks | Typed `message_received`; sanitized `model_call_started/ended` | Explicit consent/channel/event allowlist; no generic mirroring; metadata-only tracked model calls; no `llm_input/output` | Allowlist and privileged exclusion tests |
@@ -83,4 +85,4 @@ claim only. See `MAC-MINI-OPERATIONS.md` and
 - https://docs.openclaw.ai/automation/standing-orders
 - https://docs.openclaw.ai/plugins/hooks
 - https://docs.openclaw.ai/concepts/agent-workspace
-- https://github.com/openclaw/openclaw/commit/944cf08f94c334cff2b0fdf7e01187a9efa42715
+- https://github.com/openclaw/openclaw/commit/ce67ffb70e83e5ebb56ea02e814e577153f84f61

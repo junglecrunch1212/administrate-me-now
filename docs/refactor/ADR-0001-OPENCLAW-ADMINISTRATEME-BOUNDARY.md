@@ -10,7 +10,18 @@ Gate 3 evidence: `FixtureMessagingAdapter` supplies a credential-free Cat-A sour
 
 OpenClaw is the generic assistant runtime. AdministrateMe is the typed household operational system. Integration is one native TypeScript plugin package and four explicit seams; HTTP/event schemas at the boundary are versioned and tested.
 
-Gate 4 selects the current OpenClaw source package version `2026.7.2` at commit `944cf08f94c334cff2b0fdf7e01187a9efa42715`, reviewed 2026-07-30. This supersedes the earlier stable `v2026.7.1` implementation target because Prompt 4 requires native dashboard data/action bindings and authenticated dashboard actor context from the current source contract. The selection is an exact source snapshot, not a floating `main` dependency and not a claim that `2026.7.2` was installed from npm or exercised live on this Windows host. No different release or commit is adopted without this ADR being revised and the complete fixture plus disposable-macOS live contract gate passing.
+Gate 4 initially selected OpenClaw source package version `2026.7.2` at commit
+`944cf08f94c334cff2b0fdf7e01187a9efa42715`. Live Phase-B execution proved
+that snapshot's bundled `llm-task` still launched the retired file-backed
+embedded session path without an agent identity; the SQLite session runtime
+therefore failed every real invocation before model execution. On 2026-08-08
+the exact same-version snapshot moved to official commit
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`, whose reviewed upstream change
+routes `llm-task` through OpenClaw's isolated, tool-free `runtime.llm.complete`
+surface. This is a required compatibility repair, not a floating `main`
+dependency or an AdministrateMe provider bypass. No later release or commit is
+adopted without this ADR being revised and the complete fixture plus disposable
+macOS live contract gate passing.
 
 | OpenClaw owns | AdministrateMe owns |
 |---|---|
@@ -32,7 +43,7 @@ The deliverable is one package (provisional id `administrateme`) containing narr
 - A default TypeScript entry using the SDK helper appropriate to the selected pinned host. Registration must be safe under non-full discovery modes.
 - Loopback client code with bounded timeouts, schema validation, correlation/causation, idempotency keys, and a least-privilege shared-secret reference. It never opens SQLCipher or receives the AdministrateMe master key.
 
-Current official docs and source reviewed on 2026-07-30 define `openclaw.plugin.json`, `package.json#openclaw.extensions/runtimeExtensions`, `definePluginEntry`, manifest-declared tools, authenticated dashboard bindings, plugin permission requests, skills, slash commands, automations/standing orders, and typed hooks. The exact compatibility inventory and fixture/live distinction are in `OPENCLAW-COMPATIBILITY.md`. Authoritative discovery evidence is https://docs.openclaw.ai/plugins/manifest, https://docs.openclaw.ai/plugins/building-plugins, https://docs.openclaw.ai/web/dashboard-architecture, and https://github.com/openclaw/openclaw/commit/944cf08f94c334cff2b0fdf7e01187a9efa42715. “Latest” remains prohibited.
+Current official docs and source reviewed through 2026-08-08 define `openclaw.plugin.json`, `package.json#openclaw.extensions/runtimeExtensions`, `definePluginEntry`, manifest-declared tools, authenticated dashboard bindings, plugin permission requests, skills, slash commands, automations/standing orders, typed hooks, and isolated tool-free completion. The exact compatibility inventory and fixture/live distinction are in `OPENCLAW-COMPATIBILITY.md`. Authoritative discovery evidence is https://docs.openclaw.ai/plugins/manifest, https://docs.openclaw.ai/plugins/building-plugins, https://docs.openclaw.ai/web/dashboard-architecture, and https://github.com/openclaw/openclaw/commit/ce67ffb70e83e5ebb56ea02e814e577153f84f61. “Latest” remains prohibited.
 
 ## Four preserved seams
 
@@ -75,7 +86,7 @@ Both approval systems must pass when both apply. OpenClaw approval never grants 
 - The integration capability fails closed if the configured OpenClaw version/commit is outside the exact tested pin, the plugin manifest/config is invalid, the `llm-task` tool is unavailable, or required schema negotiation fails. The AdministrateMe process still opens its durable log and safe domain reads.
 - OpenClaw unavailable means deterministic/internal functions, event recording, projections, and local reads remain available. LLM/proactive/channel actions show a degraded state and do not silently fall back to a provider SDK.
 - Requests and outcomes are idempotent under at-least-once delivery. Timeouts do not imply failure; reconciliation queries or outcome events determine final state.
-- `Doctor` reports host version/pin, plugin discovery/activation, manifest validation, `llm-task` enablement and allowlist, loopback reachability, schema versions, standing-order drift, channel-bridge health, and last successful invocation without printing secrets.
+- `Doctor` reports host version/pin, plugin discovery/activation, manifest validation, `llm-task` enablement and allowlist, a bounded authenticated synthetic JSON execution, loopback reachability, schema versions, standing-order drift, channel-bridge health, and last successful invocation without printing secrets.
 
 ## Rejected alternatives
 

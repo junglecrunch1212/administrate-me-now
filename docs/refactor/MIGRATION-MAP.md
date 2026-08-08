@@ -1,5 +1,15 @@
 # Migration map
 
+Pinned language execution repair (2026-08-08): OpenClaw `2026.7.2` commit
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61` **SUPERSEDES** only the declared
+defective same-version snapshot. The updater installs and atomically selects
+the exact reviewed source, with exact-source rollback. Doctor full proof now
+executes a bounded synthetic JSON call, not merely registration inspection.
+Canonical member-isolated Gateway sessions and version-qualified skill terminal
+events are **HARDENED**. `noise_filtering` v5 replays immutable message facts,
+versions changed semantic facts, and appends only proposal kind/key pairs absent
+across the baseline and v4 extraction generations.
+
 Live Triage NLP runtime update (2026-08-08): the OpenClaw skill seam is
 **HARDENED IN THE FOLLOW-UP CANDIDATE**. The Keychain-resolved Gateway token is
 an explicit secret-safe skill-runtime dependency. The pinned bundled optional
@@ -274,8 +284,8 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
 | Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v3 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, and replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE FOR CO-001 + LIVE REPAIR CANDIDATE | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, and outcome feedback; confidence never gates a review candidate and no model owns a decision. |
-| Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` v4 returns classification, bounded semantic features, and exact-quote typed candidates defensively | HARDEN COMPLETE FOR CO-001 + LIVE REPAIR CANDIDATE | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
-| OpenClaw skill wrapper | `adminme/lib/skill_runner/` | Gate 4 makes exactly one pinned `llm-task` request, records actual returned provider/model provenance, and receives the event log/raw path explicitly from the production composition so retry reuses its recorded result | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
+| Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` 4.0.1 returns classification, bounded semantic features, and exact-quote typed candidates defensively | HARDEN COMPLETE FOR CO-001 + LIVE REPAIR CANDIDATE | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
+| OpenClaw skill wrapper | `adminme/lib/skill_runner/` | exactly one pinned `llm-task` request uses a canonical member-isolated Gateway session, records actual returned provider/model provenance, and versions durable terminal identity by skill version | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |
 | guardedWrite/rate limiter | `adminme/lib/governance.py` | strict three-layer order plus exact caller/action rate-budget precedence; reviewed xlsx bulk ingestion is isolated from conservative principal and agent defaults | HARDEN | Preserve independent approvals, content/privacy/persona and observation gates; audit all terminal outcomes; never widen an external seam through a local-daemon exception. |
 | Observation | `adminme/lib/observation.py` | on-by-default and suppression code/tests | HARDEN | Persist start/trust window/review prerequisites; complete payload; Cat-B explicit rule; final seam only. |

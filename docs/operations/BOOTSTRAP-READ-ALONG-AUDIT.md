@@ -65,8 +65,8 @@ lost.
 The previous `npm install --global openclaw@2026.7.2` would fail because that
 version is not in the npm registry. `bootstrap/install-openclaw-source.sh` now
 downloads only the codeload archive for commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`, verifies SHA-256
-`a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8`,
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`, verifies SHA-256
+`3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577`,
 uses `pnpm@11.15.1` with the source lock, builds UI/CLI, installs an
 instance-local executable, and writes a Doctor-validated provenance receipt.
 There is no npm or branch fallback.

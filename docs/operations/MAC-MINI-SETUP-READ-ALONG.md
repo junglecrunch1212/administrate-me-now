@@ -254,7 +254,7 @@ it only after the release check and stop it before the real install:
 
 This can take 15–30 minutes on the first run. OpenClaw `2026.7.2` is not
 published as an npm release, so the installer downloads the reviewed GitHub
-commit `944cf08f94c334cff2b0fdf7e01187a9efa42715` as a roughly 95 MB source
+commit `ce67ffb70e83e5ebb56ea02e814e577153f84f61` as a roughly 95 MB source
 archive, verifies its pinned SHA-256, installs its exact pnpm lock, and builds
 the UI and CLI locally. It never falls back to npm `latest`, a beta, or a
 floating branch. Normal output includes package downloads and TypeScript/UI

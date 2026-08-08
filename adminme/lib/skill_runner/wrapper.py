@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 OPENCLAW_GATEWAY_URL = "http://127.0.0.1:18789/tools/invoke"
+OPENCLAW_AGENT_ID = "main"
 OPENCLAW_GATEWAY_TOKEN_ENV = "OPENCLAW_GATEWAY_TOKEN"
 INPUT_SPILL_THRESHOLD_BYTES = 50 * 1024
 
@@ -282,9 +283,14 @@ async def _emit_failed(
     )
     if ctx.triggering_event_id:
         envelope.idempotency_key = (
-            f"skill:failed:{ctx.triggering_event_id}:{pack_id_str}:{failure_class}"
+            f"skill:failed:{ctx.triggering_event_id}:{pack_id_str}:"
+            f"{pack_version}:{failure_class}"
         )
-    await runtime.event_sink.write(envelope, correlation_id=correlation)
+    await runtime.event_sink.write(
+        envelope,
+        correlation_id=correlation,
+        causation_id=ctx.triggering_event_id,
+    )
 
 
 async def _emit_suppressed(
@@ -315,9 +321,14 @@ async def _emit_suppressed(
     )
     if ctx.triggering_event_id:
         envelope.idempotency_key = (
-            f"skill:suppressed:{ctx.triggering_event_id}:{pack_id_str}:{reason}"
+            f"skill:suppressed:{ctx.triggering_event_id}:{pack_id_str}:"
+            f"{pack_version}:{reason}"
         )
-    await runtime.event_sink.write(envelope, correlation_id=correlation)
+    await runtime.event_sink.write(
+        envelope,
+        correlation_id=correlation,
+        causation_id=ctx.triggering_event_id,
+    )
 
 
 async def _emit_recorded(
@@ -358,7 +369,7 @@ async def _emit_recorded(
         sensitivity=ctx.sensitivity,
     )
     envelope.idempotency_key = (
-        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}:{pack_version}"
         if ctx.triggering_event_id
         else None
     )
@@ -444,6 +455,7 @@ def _build_request_body(
         "tool": "llm-task",
         "action": "json",
         "args": args,
+        "agentId": OPENCLAW_AGENT_ID,
         "sessionKey": session_key,
         "dryRun": False,
     }
@@ -597,7 +609,7 @@ async def run_skill(
     fm = pack.skill_frontmatter
 
     idempotency_key = (
-        f"skill:{ctx.triggering_event_id}:{pack_id_str}"
+        f"skill:{ctx.triggering_event_id}:{pack_id_str}:{pack_version}"
         if ctx.triggering_event_id
         else None
     )
@@ -623,6 +635,7 @@ async def run_skill(
                 for event in reversed(related)
                 if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
                 and event["payload"].get("skill_name") == pack_id_str
+                and event["payload"].get("skill_version") == pack_version
             ),
             None,
         )
@@ -909,14 +922,20 @@ def _max_sensitivity(values: Any) -> str:
 def _derive_session_key(ctx: SkillContext) -> str:
     """OpenClaw `sessionKey` derived from the AdministrateMe Session.
 
-    The tenant, authenticated member, and DM scope form a stable isolation key;
-    no tenant identity or provider credential is embedded in platform code.
+    OpenClaw requires the canonical ``agent:<agent-id>:<opaque-key>`` form to
+    resolve the SQLite session store that owns a tool invocation.  The opaque
+    portion keeps AdministrateMe's tenant, authenticated-member, and DM-scope
+    isolation boundary; no provider credential is embedded in the key.
     """
     sess = ctx.session
-    return f"adminme:{sess.tenant_id}:{sess.auth_member_id}:{sess.dm_scope}"
+    return (
+        f"agent:{OPENCLAW_AGENT_ID}:adminme:"
+        f"{sess.tenant_id}:{sess.auth_member_id}:{sess.dm_scope}"
+    )
 
 
 __all__ = [
+    "OPENCLAW_AGENT_ID",
     "OPENCLAW_GATEWAY_URL",
     "OpenClawResponseMalformed",
     "OpenClawTimeout",

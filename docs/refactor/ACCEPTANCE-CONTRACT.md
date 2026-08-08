@@ -79,7 +79,7 @@ restore, OpenClaw protocol, or browser rendering boundary named by a row.
 The release environment is macOS 14 on Apple silicon, Python 3.14.6 from the
 lockfile, Node 24.19.0 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
-`944cf08f94c334cff2b0fdf7e01187a9efa42715`, installed from the exact
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`, installed from the exact
 SHA-256-pinned GitHub source archive because that version is not on npm,
 loopback-only services, encrypted
 temporary instances, and no real household account. Live provider grants are a

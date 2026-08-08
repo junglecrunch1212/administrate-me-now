@@ -45,6 +45,7 @@ def validate_candidate(
     *,
     active_root: Path | None = None,
     approve_runtime_migration: bool = False,
+    allow_openclaw_rollback: bool = False,
 ) -> dict[str, Any]:
     """Fail before any service or active-release mutation on incompatibility."""
     candidate = candidate.resolve()
@@ -61,18 +62,27 @@ def validate_candidate(
     incoming = load_versions(candidate)
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
-    for key in ("version", "commit", "plugin_api"):
+    for key in ("version", "plugin_api"):
         if incoming_claw[key] != active_claw[key]:
             raise UpgradeError(
                 f"candidate OpenClaw {key} is incompatible; service replacement refused"
             )
+    commit_changed = incoming_claw["commit"] != active_claw["commit"]
+    reviewed_forward_transition = (
+        incoming_claw.get("supersedes_commit") == active_claw["commit"]
+    )
+    if commit_changed and not (reviewed_forward_transition or allow_openclaw_rollback):
+        raise UpgradeError(
+            "candidate OpenClaw commit is not the declared reviewed successor; "
+            "service replacement refused"
+        )
     package = json.loads(
         (candidate / "openclaw" / "administrateme" / "package.json").read_text("utf-8")
     )
     build = package.get("openclaw", {}).get("build", {})
     compat = package.get("openclaw", {}).get("compat", {})
     if (
-        build.get("openclawCommit") != active_claw["commit"]
+        build.get("openclawCommit") != incoming_claw["commit"]
         or compat.get("pluginApi") != active_claw["plugin_api"]
     ):
         raise UpgradeError(
@@ -94,7 +104,12 @@ def validate_candidate(
     return {
         "compatible": True,
         "openclaw_version": active_claw["version"],
-        "openclaw_commit": active_claw["commit"],
+        "openclaw_commit": incoming_claw["commit"],
+        "openclaw_migration": (
+            {"from": active_claw["commit"], "to": incoming_claw["commit"]}
+            if commit_changed
+            else None
+        ),
         "lockfile": "poetry.lock",
         "runtime_migration": runtime_changes or None,
     }
@@ -306,17 +321,27 @@ class UpgradeManager:
         ).create()
         pointer = self.paths.app_dir / "current-release.json"
         previous = json.loads(pointer.read_text("utf-8")) if pointer.exists() else None
-        was_running = self.services.status().status != "stopped"
-        if was_running:
-            self.services.stop()
-        atomic_write(
-            pointer,
-            json.dumps(
-                {"path": str(release), "commit": commit, "previous": previous},
-                indent=2,
-            ).encode("utf-8"),
+        previous_release = (
+            ensure_within(Path(previous["path"]), self.paths.app_dir / "releases")
+            if previous
+            else None
         )
+        was_running = self.services.status().status != "stopped"
+        pointer_switched = False
+        openclaw_switched = False
         try:
+            self._install_reviewed_openclaw(release)
+            openclaw_switched = True
+            if was_running:
+                self.services.stop()
+            atomic_write(
+                pointer,
+                json.dumps(
+                    {"path": str(release), "commit": commit, "previous": previous},
+                    indent=2,
+                ).encode("utf-8"),
+            )
+            pointer_switched = True
             configure_required_llm_tool(self.paths, test_mode=self.test_mode)
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
@@ -330,26 +355,30 @@ class UpgradeManager:
                 self.services.stop()
         except Exception as candidate_error:
             self.services.stop()
-            if previous:
+            if previous and pointer_switched:
+                assert previous_release is not None
                 atomic_write(
                     pointer,
                     json.dumps(previous, indent=2).encode("utf-8"),
                 )
                 install_launch_agents(
                     self.paths,
-                    ensure_within(
-                        Path(previous["path"]), self.paths.app_dir / "releases"
-                    ),
+                    previous_release,
                     test_mode=self.test_mode,
                 )
-            else:
+            elif pointer_switched:
                 pointer.unlink(missing_ok=True)
             rollback_error: Exception | None = None
+            if openclaw_switched and previous_release is not None:
+                try:
+                    self._install_reviewed_openclaw(previous_release)
+                except Exception as exc:
+                    rollback_error = exc
             if was_running:
                 try:
                     self.services.start()
                 except Exception as exc:  # preserve the candidate failure as primary
-                    rollback_error = exc
+                    rollback_error = rollback_error or exc
             if rollback_error is not None:
                 raise UpgradeError(
                     f"candidate failed ({candidate_error}); the previous release "
@@ -379,7 +408,10 @@ class UpgradeManager:
             release,
             active_root=self._active_release_root(),
             approve_runtime_migration=True,
+            allow_openclaw_rollback=True,
         )
+        current_release = self._active_release_root()
+        self._install_reviewed_openclaw(release)
         stopped = self.services.status().status == "stopped"
         if not stopped:
             self.services.stop()
@@ -398,6 +430,7 @@ class UpgradeManager:
         except Exception:
             self.services.stop()
             atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
+            self._install_reviewed_openclaw(current_release)
             install_launch_agents(
                 self.paths,
                 ensure_within(Path(current["path"]), self.paths.app_dir / "releases"),
@@ -407,6 +440,70 @@ class UpgradeManager:
                 self.services.start()
             raise
         return {"status": "rolled_back", "commit": previous["commit"]}
+
+    def _install_reviewed_openclaw(self, release: Path) -> None:
+        """Build and atomically select the exact OpenClaw pin for a release."""
+
+        if self.test_mode:
+            return
+        script = release / "bootstrap" / "install-openclaw-source.sh"
+        python = release / ".venv" / "bin" / "python"
+        versions = load_versions(release)
+        node_bin = Path("/opt/homebrew/opt") / str(versions["node"]["formula"]) / "bin"
+        if (
+            not script.is_file()
+            or not python.is_file()
+            or not (node_bin / "node").is_file()
+        ):
+            raise UpgradeError("candidate cannot install its reviewed OpenClaw source")
+        environment = os.environ.copy()
+        environment["PATH"] = f"{node_bin}:{environment.get('PATH', '')}"
+        selected = self.paths.root / "bin" / "openclaw"
+        previous_target = selected.resolve() if selected.exists() else None
+        completed = subprocess.run(
+            [
+                str(script),
+                "--instance-root",
+                str(self.paths.root),
+                "--python",
+                str(python),
+            ],
+            cwd=release,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+        if completed.returncode:
+            self._restore_openclaw_selection(selected, previous_target)
+            raise UpgradeError("reviewed OpenClaw source installation failed")
+        commit = str(versions["openclaw"]["commit"])
+        expected = self.paths.app_dir / "openclaw" / commit / "openclaw.mjs"
+        if (
+            not expected.is_file()
+            or not selected.exists()
+            or selected.resolve() != expected.resolve()
+        ):
+            self._restore_openclaw_selection(selected, previous_target)
+            raise UpgradeError("reviewed OpenClaw executable selection did not verify")
+
+    @staticmethod
+    def _restore_openclaw_selection(
+        selected: Path, previous_target: Path | None
+    ) -> None:
+        """Atomically restore only the narrow executable selector after failure."""
+
+        if previous_target is None:
+            selected.unlink(missing_ok=True)
+            return
+        temporary = selected.with_name(f".{selected.name}.rollback.{os.getpid()}")
+        temporary.unlink(missing_ok=True)
+        try:
+            temporary.symlink_to(previous_target)
+            os.replace(temporary, selected)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _prepare_release(self, release: Path) -> None:
         if self.test_mode:

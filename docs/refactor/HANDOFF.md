@@ -3,19 +3,56 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_NLP_RUNTIME_REPAIR_CANDIDATE
+gate_result: TRIAGE_LLM_EXECUTION_REPAIR_CANDIDATE
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-07
-branch: codex/repair-openclaw-tool-status
-candidate_commit_resolution: pull_request_291_pending_review
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/291
+branch: codex/repair-openclaw-agent-session
+candidate_commit_resolution: independent_review_pending
+pull_request_url: pending
 openclaw_version: 2026.7.2
-openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
-openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
+openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
+openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
 next_phase: independent_review_then_phase_b_activation
 ---
 
 # Release handoff
+
+## 2026-08-08 pinned llm-task execution and Triage v5 repair
+
+The authenticated Phase-B probe reached the enabled, allowed, runtime-registered
+`llm-task` tool but failed before provider execution. The former exact
+OpenClaw `2026.7.2` snapshot launched the bundled tool through a retired
+file-backed embedded-session path without an agent identity; its own SQLite
+session runtime rejected every call. Registration evidence alone therefore
+produced a false healthy Doctor result.
+
+This repair **PRESERVES** one exact-pinned OpenClaw model router, member privacy,
+typed exact-source proposals, append-only history, the Triage human gate, and
+observation mode. It **SUPERSEDES** only the defective same-version OpenClaw
+snapshot with exact official commit
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`, reviewed because its upstream
+`llm-task` uses isolated, tool-free completion instead of the incompatible
+session path. The archive SHA-256, package version, package manager, plugin API,
+Node engine, bundled tool tests, and complete source build are verified. The
+guarded updater accepts only the declared predecessor-to-successor transition,
+installs the reviewed source before cutover, and restores the previous exact
+source as part of rollback.
+
+AdministrateMe now sends a canonical `agent:main:adminme:...` Gateway session
+that remains distinct per authenticated member. Skill result/failure identities
+include the skill version, and terminal failures carry correlation plus
+causation, allowing an explicitly versioned repair to retry without rewriting
+prior audit facts. `classify_message_nature` 4.0.1 and `noise_filtering` 5.0.0
+form the reviewed replay boundary. Classification and semantic facts select the
+first byte-identical or unused baseline/v4/v5 generation; candidate replay
+deduplicates across all earlier extraction generations and appends only absent
+target-kind/candidate-key pairs under v5.
+
+Doctor's full proof now makes one bounded, authenticated, household-free JSON
+execution through the real Gateway, configured model route, bundled tool, and
+schema validator. A registered tool that returns 4xx/5xx, malformed JSON, or a
+schema mismatch is unhealthy and blocks release cutover. No credential or model
+response body enters diagnostic evidence.
 
 ## 2026-08-08 live Triage extraction incident and runtime follow-up
 

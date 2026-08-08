@@ -38,7 +38,7 @@ from bootstrap.contracts import (
 from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import reviewed_source_status
-from bootstrap.openclaw_tools import required_llm_tool_status
+from bootstrap.openclaw_tools import probe_required_llm_tool, required_llm_tool_status
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 
@@ -599,6 +599,13 @@ class Doctor:
                 {"states": adapter_categories},
             )
         )
+        model_configured = model_provider_configured(self.paths)
+        shared_reference = references.get("openclaw_shared")
+        gateway_token = (
+            self.store.get(shared_reference).decode("ascii")
+            if isinstance(shared_reference, str) and self.store.has(shared_reference)
+            else None
+        )
         plugin_manifest = (
             self.root / "openclaw" / "administrateme" / "openclaw.plugin.json"
         )
@@ -633,33 +640,44 @@ class Doctor:
             )
             llm_tool = required_llm_tool_status(self.paths, test_mode=self.test_mode)
             plugin_evidence["required_llm_tool"] = llm_tool
+            if model_configured and include_synthetic_proof:
+                execution_probe = probe_required_llm_tool(
+                    gateway_token, test_mode=self.test_mode
+                )
+            elif model_configured:
+                execution_probe = {
+                    "ok": True,
+                    "state": "deferred_until_full_proof",
+                    "credentials_in_report": False,
+                }
+            else:
+                execution_probe = {
+                    "ok": True,
+                    "state": "model_provider_optional_unconfigured",
+                    "credentials_in_report": False,
+                }
+            plugin_evidence["required_llm_tool_execution"] = execution_probe
             plugin_ok = (
                 compat.get("pluginApi") == versions["openclaw"]["plugin_api"]
                 and build.get("openclawCommit") == versions["openclaw"]["commit"]
                 and plugin_evidence["discovered"]
                 and llm_tool["ok"]
+                and execution_probe["ok"]
             )
         checks.append(
             DoctorCheck(
                 "openclaw_compatibility_and_plugin_discovery",
                 plugin_ok,
-                "manifest, plugin discovery, and required llm-task registration agree"
+                "manifest, plugin discovery, and required llm-task execution agree"
                 if plugin_ok
                 else "plugin compatibility or required llm-task registration mismatch",
-                "Restore the tested exact OpenClaw build and reconcile its reviewed llm-task configuration.",
+                "Restore the tested exact OpenClaw build, reconcile llm-task, and pass its authenticated synthetic execution probe.",
                 plugin_evidence,
             )
         )
         try:
             instance_config = yaml.safe_load(config_path.read_text("utf-8")) or {}
             timezone_name = instance_config.get("timezone", "")
-            shared_reference = references.get("openclaw_shared")
-            gateway_token = (
-                self.store.get(shared_reference).decode("ascii")
-                if isinstance(shared_reference, str)
-                and self.store.has(shared_reference)
-                else None
-            )
             cron_status = OpenClawCronReconciler(
                 self.paths,
                 root=self.root,
@@ -685,7 +703,6 @@ class Doctor:
             (portal_assets / name).is_file()
             for name in ("index.html", "member.css", "member.js")
         )
-        model_configured = model_provider_configured(self.paths)
         references_path = self.paths.instance_dir / "config" / "secret-references.json"
         try:
             references = json.loads(references_path.read_text("utf-8")).get(
