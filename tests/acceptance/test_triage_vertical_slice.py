@@ -62,6 +62,96 @@ def _provenance() -> dict[str, object]:
     }
 
 
+def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Production composition proves adapter fact -> NLP -> deterministic gate."""
+
+    monkeypatch.delenv("ADMINME_INSTANCE_DIR", raising=False)
+    instance = tmp_path / "instance-inbound-message"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        body = (
+            "[fixture:recurring-bill] Your household utility payment is due "
+            "August 15 and repeats monthly."
+        )
+        source_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_100_000_000,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=3,
+                occurred_at="2026-08-07T12:00:00Z",
+                source_adapter="gmail",
+                source_account_id="fixture-account",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture:recurring-bill:source",
+                payload={
+                    "provider": "gmail",
+                    "provider_account_id": "fixture-account",
+                    "member_id": MEMBER,
+                    "source_channel": "gmail",
+                    "native_message_id": "fixture-recurring-bill",
+                    "thread_id": "fixture-recurring-bill-thread",
+                    "from_identifier": "billing@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "workspace": "personal",
+                    "subject": "Monthly utility payment due",
+                    "body_text": body,
+                    "received_at": "2026-08-07T12:00:00Z",
+                    "provider_labels": ["INBOX"],
+                    "attachments": [],
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            source_event_id,
+        )
+        task_proposal = client.portal.call(
+            runtime.event_log.get_by_idempotency,
+            runtime.settings.instance.tenant_id,
+            f"triage:message-candidate:{source_event_id}:nlp-candidate-1:task",
+        )
+        recurrence_proposal = client.portal.call(
+            runtime.event_log.get_by_idempotency,
+            runtime.settings.instance.tenant_id,
+            f"triage:message-candidate:{source_event_id}:candidate-1:recurrence",
+        )
+        assert task_proposal is not None
+        assert recurrence_proposal is not None
+        client.portal.call(
+            runtime.wait_for_projection, "triage", recurrence_proposal["event_id"]
+        )
+
+        items = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()[
+            "items"
+        ]
+        assert {item["target_kind"] for item in items} == {"task", "recurrence"}
+        assert all(item["review_state"]["human_gate_required"] for item in items)
+        grounded_source = f"Subject: Monthly utility payment due\n\n{body}"
+        assert all(item["title"] in grounded_source for item in items)
+        assert (
+            runtime.projections.connection("tasks")
+            .execute("SELECT COUNT(*) FROM tasks")
+            .fetchone()[0]
+            == 0
+        )
+        assert (
+            runtime.projections.connection("recurrences")
+            .execute("SELECT COUNT(*) FROM recurrences")
+            .fetchone()[0]
+            == 0
+        )
+        assert runtime.fixture_adapter.delivered == []
+
+
 def test_note_recurrence_candidate_remains_human_gated_and_type_distinct(
     tmp_path: Path,
 ) -> None:

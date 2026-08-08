@@ -44,14 +44,15 @@
       "maxItems": 10,
       "items": {
         "type": "object",
-        "required": ["target_kind", "title", "candidate", "confidence", "reasons"],
+        "required": ["target_kind", "title", "evidence_quote", "candidate", "confidence", "reasons"],
         "additionalProperties": false,
         "properties": {
           "target_kind": {
             "type": "string",
-            "enum": ["task", "calendar_event", "reminder", "list", "list_item", "party_identifier"]
+            "enum": ["task", "commitment", "calendar_event", "reminder", "recurrence", "list", "list_item", "party_identifier"]
           },
           "title": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "evidence_quote": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "candidate": { "type": "object" },
           "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
           "reasons": {

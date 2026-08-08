@@ -50,7 +50,7 @@ from adminme.lib.observation import (
 )
 from adminme.lib.adapters import OutboundMessage, WriteOperation
 from adminme.lib.session import build_internal_session
-from adminme.lib.skill_runner import set_default_event_sink
+from adminme.lib.skill_runner import build_skill_runtime, set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
 from adminme.lib.skill_runner.wrapper import run_skill
 from adminme.member_chat import (
@@ -536,18 +536,20 @@ class AdministrateMeRuntime:
                     projection = projection_class()
                 self.projections.register(projection)
 
-            self.run_skill_fn = (
-                partial(
-                    run_skill,
-                    _runtime=build_fixture_runtime(
-                        event_sink=self.events,
-                        event_log=self.event_log,
-                        raw_events_dir=self.settings.instance.raw_events_dir,
-                    ),
+            skill_runtime = (
+                build_fixture_runtime(
+                    event_sink=self.events,
+                    event_log=self.event_log,
+                    raw_events_dir=self.settings.instance.raw_events_dir,
                 )
                 if self.settings.deterministic_openclaw_fixture
-                else run_skill
+                else build_skill_runtime(
+                    event_sink=self.events,
+                    event_log=self.event_log,
+                    raw_events_dir=self.settings.instance.raw_events_dir,
+                )
             )
+            self.run_skill_fn = partial(run_skill, _runtime=skill_runtime)
             self.pipelines = PipelineRunner(
                 self.bus,
                 self.event_log,

@@ -226,3 +226,12 @@ fine-tuning, pause/resume an exact adapter through supervisor reconciliation,
 and request a member-scoped bridge. Secrets and raw secure-reference paths
 never enter the response. AC-31 owns process, isolation, status, receipt, and
 browser proof.
+
+Triage extraction-health amendment (2026-08-08): UX-25, UX-29, UX-39, and
+UX-40 apply to the durable source-to-candidate worker, not only its projection.
+An empty queue may be called healthy-empty only when every required extraction
+subscriber is registered and non-poisoned. A degraded subscriber must expose
+its last good checkpoint and remediation rather than rendering celebratory
+zero-state copy. NLP-derived candidates display verbatim source evidence and
+remain ordinary human-gated proposals; model confidence never hides a
+candidate that passed the fixed exact-quote/type/privacy rules.

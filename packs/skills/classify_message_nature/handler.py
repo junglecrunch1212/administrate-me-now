@@ -16,8 +16,10 @@ from typing import Any
 _VALID = {"noise", "transactional", "personal", "professional", "promotional"}
 _CANDIDATE_KINDS = {
     "task",
+    "commitment",
     "calendar_event",
     "reminder",
+    "recurrence",
     "list",
     "list_item",
     "party_identifier",
@@ -70,5 +72,7 @@ def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
         for candidate in (candidates if isinstance(candidates, list) else [])
         if isinstance(candidate, dict)
         and candidate.get("target_kind") in _CANDIDATE_KINDS
+        and isinstance(candidate.get("evidence_quote"), str)
+        and bool(candidate["evidence_quote"].strip())
     ]
     return result

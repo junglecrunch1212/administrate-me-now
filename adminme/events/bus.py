@@ -51,6 +51,7 @@ class _SubscriberState:
     subscriber_id: str
     types: list[str] | Literal["*"]
     callback: EventCallback
+    consumer_version: str | None
     checkpoint: str | None
     degraded: bool
     consecutive_failures: int = 0
@@ -116,6 +117,10 @@ class EventBus:
             conn.execute(
                 "ALTER TABLE bus_consumer_offsets ADD COLUMN poison_event_id TEXT"
             )
+        if "consumer_version" not in columns:
+            conn.execute(
+                "ALTER TABLE bus_consumer_offsets ADD COLUMN consumer_version TEXT"
+            )
         return conn
 
     # ------------------------------------------------------------------
@@ -126,6 +131,8 @@ class EventBus:
         subscriber_id: str,
         types: list[str] | Literal["*"],
         callback: EventCallback,
+        *,
+        consumer_version: str | None = None,
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -142,8 +149,9 @@ class EventBus:
         ).fetchone()
         if row is None:
             self._ckpt_conn.execute(
-                "INSERT INTO bus_consumer_offsets (subscriber_id) VALUES (?)",
-                (subscriber_id,),
+                "INSERT INTO bus_consumer_offsets (subscriber_id, consumer_version) "
+                "VALUES (?, ?)",
+                (subscriber_id, consumer_version),
             )
             checkpoint: str | None = None
             degraded = False
@@ -158,11 +166,36 @@ class EventBus:
             last_ok = row["last_success_at_ms"]
             last_fail = row["last_failure_at_ms"]
             poison_event_id = row["poison_event_id"]
+            stored_version = row["consumer_version"]
+            if (
+                consumer_version is not None
+                and stored_version != consumer_version
+                and degraded
+            ):
+                # A reviewed consumer upgrade is the safe automatic recovery
+                # boundary for a durable poison state.  Preserve the last good
+                # checkpoint and replay forward under the new version.
+                degraded = False
+                failures = 0
+                poison_event_id = None
+                self._ckpt_conn.execute(
+                    "UPDATE bus_consumer_offsets "
+                    "SET degraded=0, consecutive_failures=0, poison_event_id=NULL, "
+                    "consumer_version=? WHERE subscriber_id=?",
+                    (consumer_version, subscriber_id),
+                )
+            elif stored_version != consumer_version:
+                self._ckpt_conn.execute(
+                    "UPDATE bus_consumer_offsets SET consumer_version=? "
+                    "WHERE subscriber_id=?",
+                    (consumer_version, subscriber_id),
+                )
 
         self._subscribers[subscriber_id] = _SubscriberState(
             subscriber_id=subscriber_id,
             types=types,
             callback=callback,
+            consumer_version=consumer_version,
             checkpoint=checkpoint,
             degraded=degraded,
             consecutive_failures=failures,
@@ -270,6 +303,7 @@ class EventBus:
             "consecutive_failures": state.consecutive_failures,
             "degraded": state.degraded,
             "poison_event_id": state.poison_event_id,
+            "consumer_version": state.consumer_version,
             "retry_policy": {
                 "delivery": "at_least_once",
                 "failure_threshold": self._failure_threshold,
@@ -369,7 +403,8 @@ class EventBus:
             "       last_failure_at_ms=?,"
             "       consecutive_failures=?,"
             "       degraded=?,"
-            "       poison_event_id=?"
+            "       poison_event_id=?,"
+            "       consumer_version=?"
             " WHERE subscriber_id=?",
             (
                 state.checkpoint,
@@ -378,6 +413,7 @@ class EventBus:
                 state.consecutive_failures,
                 1 if state.degraded else 0,
                 state.poison_event_id,
+                state.consumer_version,
                 state.subscriber_id,
             ),
         )

@@ -152,6 +152,27 @@ class _Runtime:
 _RUNTIME_OVERRIDE: _Runtime | None = None
 
 
+def build_skill_runtime(
+    *,
+    event_sink: "EventSink",
+    event_log: Any,
+    raw_events_dir: Path,
+) -> _Runtime:
+    """Build the explicit production dependency bundle for ``run_skill``.
+
+    The central runtime must not rely on process-global environment lookup for
+    durable event replay or spill paths.  Keeping the event log in this bundle
+    also lets retried pipeline deliveries reuse the already-recorded model
+    result instead of making a second, potentially different invocation.
+    """
+
+    return _Runtime(
+        event_sink=event_sink,
+        event_log=event_log,
+        raw_events_dir=Path(raw_events_dir),
+    )
+
+
 def _set_runtime_for_tests(runtime: _Runtime | None) -> None:
     global _RUNTIME_OVERRIDE
     _RUNTIME_OVERRIDE = runtime
@@ -161,7 +182,7 @@ def _resolve_runtime() -> _Runtime:
     if _RUNTIME_OVERRIDE is not None:
         return _RUNTIME_OVERRIDE
     if _DEFAULT_EVENT_SINK is None:
-        raise RuntimeError(
+        raise OpenClawUnreachable(
             "skill_runner: no default EventSink configured; "
             "call set_default_event_sink(...) at service start"
         )
@@ -170,7 +191,7 @@ def _resolve_runtime() -> _Runtime:
     # the gap loudly rather than guess.
     instance_dir = os.environ.get("ADMINME_INSTANCE_DIR")
     if not instance_dir:
-        raise RuntimeError(
+        raise OpenClawUnreachable(
             "skill_runner: ADMINME_INSTANCE_DIR unset; cannot resolve "
             "raw_events_dir per [§15]"
         )

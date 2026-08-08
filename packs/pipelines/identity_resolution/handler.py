@@ -160,7 +160,7 @@ def _stable_id(prefix: str, value: str) -> str:
 
 class IdentityResolutionPipeline:
     pack_id: str = "pipeline:identity_resolution"
-    version: str = "1.0.0"
+    version: str = "2.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -337,6 +337,7 @@ class IdentityResolutionPipeline:
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity="normal",
+            idempotency_key=f"identity:merge-suggested:{source_event_id}",
             payload={
                 "surviving_party_id": surviving_party_id,
                 "candidate_value": from_id,
@@ -364,6 +365,7 @@ class IdentityResolutionPipeline:
         evidence: list[str],
     ) -> None:
         payload = event.get("payload") or {}
+        source_event_id = str(event.get("event_id") or "")
         member_id = str(payload.get("member_id") or "")
         if not member_id and str(event.get("owner_scope") or "").startswith("private:"):
             member_id = str(event["owner_scope"]).removeprefix("private:")
@@ -381,7 +383,10 @@ class IdentityResolutionPipeline:
             owner_scope=f"private:{member_id}",
             visibility_scope=f"private:{member_id}",
             sensitivity=event.get("sensitivity", "normal"),
-            idempotency_key=f"identity:endpoint:{stable_seed}",
+            # Each source observation is an immutable fact.  Reusing one
+            # endpoint-wide key while changing source_interaction_id caused a
+            # durable idempotency conflict on the second email from a sender.
+            idempotency_key=f"identity:endpoint:{source_event_id}",
             payload={
                 "endpoint_id": _stable_id("endpoint", stable_seed),
                 "member_id": member_id,

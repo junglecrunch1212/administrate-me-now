@@ -196,6 +196,57 @@ async def test_identity_resolution_retains_messaging_sent_endpoint(
         await log.close()
 
 
+async def test_identity_resolution_accepts_repeated_messages_from_same_endpoint(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log = EventLog(config, TEST_KEY)
+    bus = EventBus(log, config.bus_checkpoint_path)
+    runner = PipelineRunner(bus, log, EventWriter(log, bus), config)
+    runner.register(load_pipeline_pack(IDENTITY_PACK_ROOT))
+    await runner.start()
+
+    try:
+        source_ids = []
+        for index in range(2):
+            source_id = await log.append(
+                _envelope(
+                    "messaging.received",
+                    {
+                        "source_channel": "gmail",
+                        "from_identifier": "repeat@example.com",
+                        "to_identifier": "me@example.com",
+                        "subject": f"Message {index}",
+                        "received_at": EventEnvelope.now_utc_iso(),
+                    },
+                    tenant_id=config.tenant_id,
+                )
+            )
+            source_ids.append(source_id)
+            await bus.notify(source_id)
+        await _wait_for_checkpoint(
+            bus, "pipeline:pipeline:identity_resolution", source_ids[-1]
+        )
+
+        status = await bus.subscriber_status("pipeline:pipeline:identity_resolution")
+        assert status["degraded"] is False
+        all_events = await _read_all(log)
+        observations = [
+            event
+            for event in all_events
+            if event["type"] == "endpoint.observed"
+            and event["payload"]["value_normalized"] == "repeat@example.com"
+        ]
+        assert len(observations) == 2
+        assert {event["causation_id"] for event in observations} == set(source_ids)
+    finally:
+        await runner.stop()
+        await bus.stop()
+        await log.close()
+
+
 async def test_noise_filtering_emits_classified_with_stubbed_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -255,7 +306,7 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
         assert e["payload"]["confidence"] == 0.93
         assert e["payload"]["source_event_id"] == triggering_eid
         assert e["payload"]["skill_name"] == "classify_message_nature"
-        assert e["payload"]["skill_version"] == "3.0.0"
+        assert e["payload"]["skill_version"] == "4.0.0"
         semantic = [
             event
             for event in all_events

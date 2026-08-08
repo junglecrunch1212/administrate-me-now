@@ -41,10 +41,47 @@ def _response(request: httpx.Request) -> httpx.Response:
             "confidence": 0.96,
         }
     elif title.startswith("classify_message_nature"):
+        body_text = str(inputs.get("body_text", ""))
+        candidates = []
+        if "[fixture:recurring-bill]" in body_text:
+            candidates = [
+                {
+                    "target_kind": "task",
+                    "title": "Pay the recurring fixture bill",
+                    "evidence_quote": body_text,
+                    "candidate": {
+                        "due": "2026-08-15T17:00:00Z",
+                        "description": body_text,
+                    },
+                    "confidence": 0.97,
+                    "reasons": ["explicit payment due action"],
+                },
+                {
+                    "target_kind": "recurrence",
+                    "title": "Track the monthly fixture bill",
+                    "evidence_quote": body_text,
+                    "candidate": {
+                        "recurrence_text": "monthly",
+                        "rrule": "FREQ=MONTHLY",
+                        "next_occurrence": "2026-08-15T17:00:00Z",
+                        "kind": "bill_payment",
+                        "trackable": True,
+                    },
+                    "confidence": 0.96,
+                    "reasons": ["explicit monthly cadence"],
+                },
+            ]
         output = {
-            "classification": "personal",
+            "classification": "transactional" if candidates else "personal",
             "confidence": 0.99,
             "reasons": ["fixture household message"],
+            "reply_signal": "not_required" if candidates else "unknown",
+            "automated": bool(candidates),
+            "transactional_due": bool(candidates),
+            "security_code": False,
+            "person_to_person": not candidates,
+            "deadline": "2026-08-15T17:00:00Z" if candidates else None,
+            "candidates": candidates,
         }
     elif title.startswith("classify_thank_you_candidate"):
         output = {"is_candidate": False, "confidence": 0.02, "reasons": ["request"]}

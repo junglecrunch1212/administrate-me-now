@@ -3,10 +3,10 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO007_PHASE_A_CANDIDATE_PASS_LIVE_NOT_DEPLOYED
+gate_result: TRIAGE_EXTRACTION_REPAIR_CANDIDATE
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-07
-branch: codex/administrateme-v2-runtime
+branch: codex/repair-triage-extraction
 candidate_commit_resolution: pending_reviewed_commit
 pull_request_url: null
 openclaw_version: 2026.7.2
@@ -16,6 +16,49 @@ next_phase: independent_review_then_phase_b_activation
 ---
 
 # Release handoff
+
+## 2026-08-08 live Triage extraction incident and repair candidate
+
+The live Gmail adapter had durably accepted 82 private message facts, but
+`pipeline:pipeline:noise_filtering` failed before its first delivery because
+the skill runner tried to rediscover `ADMINME_INSTANCE_DIR` from process state.
+After five attempts the bus correctly poisoned the subscriber, retained a null
+checkpoint, and accumulated 347 relevant events. The failure then survived
+service and release restarts by design. Doctor incorrectly reported healthy
+because it inspected fourteen projection consumers but no required reactive
+pipeline consumers. The identity subscriber was independently poisoned by an
+endpoint-wide idempotency key whose payload changed on the second observation.
+
+This repair **PRESERVES** source facts, member privacy, typed domain
+distinctions, observation, the Triage human gate, and the pinned OpenClaw
+`llm-task` seam. It **HARDENS** the production composition with an explicit
+skill-runtime dependency bundle, recorded-result reuse on retry, replay-stable
+derived payloads, per-source endpoint observation keys, consumer-version
+checkpoints, and automatic replay from the last good checkpoint only after a
+reviewed consumer version changes. Doctor now fails when any required reactive
+subscriber is missing, degraded, failed, or poisoned.
+
+It also **MODERNIZES** message interpretation without transferring decision
+authority to a model. `classify_message_nature` v4 may report tasks, calendar
+events, reminders, recurrences, lists, list items, and party identifiers, but
+fixed code rejects every candidate without an exact contiguous subject/body
+quote, filters fields through the target-kind allowlist, enforces the private
+member scope, deduplicates overlapping deterministic evidence, and emits only
+a review proposal. Confidence is presentation evidence, never an eligibility
+threshold. Bills, explicit decisions/replies, due actions, repeating charges,
+and exact first-person promises in outbound mail can therefore reach Triage
+while remaining unofficial until member confirmation. Gmail now preserves the
+provider `SENT` direction as `messaging.sent`; historical v3 facts retain the
+same label for direction-aware replay, and inbound promises are never assigned
+to the member. `noise_filtering` v3 and `identity_resolution` v2 are the reviewed
+replay boundaries. Live replay and candidate counts remain Phase-B evidence
+until this candidate is independently reviewed, merged, and guardedly deployed.
+Credential-free release evidence is recorded in
+`evidence/triage-extraction-repair.md`: 36 strict acceptance tests, 1,625 root
+and pack tests, 60 bridge tests, 15 pinned plugin tests, both type checkers,
+lint, dependency audits, performance, architecture negatives, clean install,
+tenant isolation, backup/restore, build, and package all pass under Python
+3.14.6 and the reviewed Node 24.19.0 path.
 
 ## 2026-08-08 CO-007 trustworthy capture, Triage, and SSOT candidate
 

@@ -33,18 +33,42 @@ from adminme.lib.skill_runner import (
     OpenClawTimeout,
     OpenClawUnreachable,
     SkillContext,
+    SkillHandlerError,
     SkillInputInvalid,
     SkillOutputInvalid,
+    SkillScopeInsufficient,
+    SkillSensitivityRefused,
 )
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
-from adminme.triage_intent import EXTRACTOR_ID, extract_intent_candidates
+from adminme.triage_intent import (
+    EXTRACTOR_ID,
+    GROUNDED_NLP_EXTRACTOR_ID,
+    extract_grounded_nlp_candidates,
+    extract_intent_candidates,
+    merge_intent_candidates,
+)
 
 _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "3.0.0"
+SKILL_VERSION = "4.0.0"
 DEFAULT_CLASSIFICATION = "personal"
+
+_SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
+    SkillInputInvalid,
+    SkillOutputInvalid,
+    SkillSensitivityRefused,
+    SkillScopeInsufficient,
+    SkillHandlerError,
+    OpenClawTimeout,
+    OpenClawUnreachable,
+    OpenClawResponseMalformed,
+    # The language seam is non-authoritative.  A configuration or transport
+    # RuntimeError must not poison durable message ingestion; deterministic
+    # extraction and a defensive classification can still proceed safely.
+    RuntimeError,
+)
 
 
 def _extract_text_and_inputs(
@@ -52,13 +76,20 @@ def _extract_text_and_inputs(
 ) -> tuple[str, dict[str, Any]] | None:
     """Build the skill input payload, or return None if there's nothing
     to classify (empty body)."""
+    outbound_message = False
     if event_type == "telephony.sms_received":
         text = (payload.get("body") or "").strip()
         from_id = str(payload.get("from_number", ""))
         source_channel = "sms"
     else:
         text = (payload.get("body_text") or "").strip()
-        from_id = str(payload.get("from_identifier", ""))
+        provider_labels = {
+            str(label).upper() for label in payload.get("provider_labels") or []
+        }
+        outbound_message = event_type == "messaging.sent" or "SENT" in provider_labels
+        from_id = str(
+            payload.get("to_identifier" if outbound_message else "from_identifier", "")
+        )
         source_channel = str(payload.get("source_channel", ""))
     if not text:
         return None
@@ -66,6 +97,8 @@ def _extract_text_and_inputs(
         "body_text": text,
         "source_channel": source_channel,
         "from_identifier": from_id,
+        "counterparty_identifier": from_id,
+        "message_direction": "outbound" if outbound_message else "inbound",
         # Conservative — the runner does not yet expose the parties DB
         # to the pipeline (see identity_resolution module docstring), so
         # we cannot cheaply check whether the sender is resolved. The
@@ -75,18 +108,26 @@ def _extract_text_and_inputs(
     subject = payload.get("subject")
     if subject:
         inputs["subject"] = str(subject)
-    return text, inputs
+    grounded_source = f"Subject: {subject}\n\n{text}" if subject else text
+    return grounded_source, inputs
 
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "2.0.0"
-    triggers: Triggers = {"events": ["messaging.received", "telephony.sms_received"]}
+    version: str = "3.0.0"
+    triggers: Triggers = {
+        "events": [
+            "messaging.received",
+            "messaging.sent",
+            "telephony.sms_received",
+        ]
+    }
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
         if event_type not in (
             "messaging.received",
+            "messaging.sent",
             "telephony.sms_received",
         ):
             return
@@ -111,13 +152,7 @@ class NoiseFilteringPipeline:
 
         try:
             result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
-        except (
-            SkillInputInvalid,
-            SkillOutputInvalid,
-            OpenClawTimeout,
-            OpenClawUnreachable,
-            OpenClawResponseMalformed,
-        ) as exc:
+        except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
                 "noise_filtering skill failure (%s); emitting defensive default",
                 type(exc).__name__,
@@ -178,6 +213,7 @@ class NoiseFilteringPipeline:
             ctx=ctx,
             source_event_id=source_event_id,
             source_text=source_text,
+            raw_candidates=output.get("candidates"),
         )
 
     async def _emit_classified(
@@ -262,6 +298,7 @@ class NoiseFilteringPipeline:
         ctx: PipelineContext,
         source_event_id: str,
         source_text: str,
+        raw_candidates: Any,
     ) -> None:
         payload = event.get("payload") or {}
         owner_scope = str(event.get("owner_scope") or "")
@@ -278,15 +315,28 @@ class NoiseFilteringPipeline:
                 str(event["occurred_at"]).replace("Z", "+00:00")
             )
         except (KeyError, TypeError, ValueError):
-            submitted_at = datetime.now(timezone.utc)
-        candidates = extract_intent_candidates(
-            source_text,
-            submitted_at=submitted_at,
+            submitted_at = datetime.fromtimestamp(
+                event["event_at_ms"] / 1000, timezone.utc
+            )
+        candidates = merge_intent_candidates(
+            extract_intent_candidates(
+                source_text,
+                submitted_at=submitted_at,
+            ),
+            extract_grounded_nlp_candidates(source_text, raw_candidates),
         )
         if not candidates:
             return
         intent_id = f"source:{source_event_id}"
-        extracted_at = EventEnvelope.now_utc_iso()
+        # Replay must produce byte-identical event identities.  Never place a
+        # wall-clock retry time in an idempotent payload.
+        extracted_at = str(
+            event.get("recorded_at")
+            or event.get("occurred_at")
+            or datetime.fromtimestamp(
+                event["event_at_ms"] / 1000, timezone.utc
+            ).isoformat()
+        )
         extraction_event_id = await ctx.event_sink.write(
             EventEnvelope(
                 event_at_ms=event["event_at_ms"],
@@ -304,7 +354,7 @@ class NoiseFilteringPipeline:
                     "intent_id": intent_id,
                     "source_event_id": source_event_id,
                     "skill_call_event_id": None,
-                    "extractor_id": EXTRACTOR_ID,
+                    "extractor_id": f"{EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}",
                     "language": None,
                     "candidates": [
                         candidate.feature_payload() for candidate in candidates
@@ -330,7 +380,7 @@ class NoiseFilteringPipeline:
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
                 schema_version=2,
-                occurred_at=EventEnvelope.now_utc_iso(),
+                occurred_at=extracted_at,
                 source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
                 owner_scope=owner_scope,

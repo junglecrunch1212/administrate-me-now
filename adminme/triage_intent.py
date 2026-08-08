@@ -17,6 +17,7 @@ from adminme.events.schemas.triage import TriageTargetKind
 
 
 EXTRACTOR_ID = "deterministic-intent-features-v1"
+GROUNDED_NLP_EXTRACTOR_ID = "grounded-nlp-intent-features-v1"
 
 CANDIDATE_FIELD_ALLOWLISTS: dict[str, frozenset[str]] = {
     "task": frozenset({"description", "due", "energy", "effort_min"}),
@@ -304,9 +305,185 @@ def extract_intent_candidates(
     return candidates
 
 
+def extract_grounded_nlp_candidates(
+    text: str,
+    raw_candidates: Any,
+) -> list[IntentCandidate]:
+    """Admit bounded model-extracted evidence into deterministic Triage.
+
+    The model may interpret language, but it cannot choose authority or create
+    household truth.  Fixed code requires an exact, contiguous source quote,
+    an allowlisted target kind, and allowlisted JSON-scalar fields.  The exact
+    quote becomes the review title so a generated paraphrase cannot be
+    mistaken for source evidence.  Confidence remains display-only and never
+    controls eligibility.
+    """
+
+    if not isinstance(raw_candidates, list):
+        return []
+    supported = {
+        "task",
+        "commitment",
+        "calendar_event",
+        "reminder",
+        "list",
+        "list_item",
+        "recurrence",
+        "party_identifier",
+    }
+    candidates: list[IntentCandidate] = []
+    for index, raw in enumerate(raw_candidates[:10], start=1):
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("target_kind") or "")
+        quote = raw.get("evidence_quote")
+        if kind not in supported or not isinstance(quote, str):
+            continue
+        quote = quote.strip()
+        if not quote or len(quote) > 1000:
+            continue
+        start = text.find(quote)
+        if start < 0:
+            continue
+        end = start + len(quote)
+        supplied_fields = raw.get("candidate")
+        fields: dict[str, Any] = {}
+        if isinstance(supplied_fields, dict):
+            allowlist = CANDIDATE_FIELD_ALLOWLISTS[kind]
+            fields = {
+                str(key): value
+                for key, value in supplied_fields.items()
+                if key in allowlist
+                and (
+                    value is None
+                    or isinstance(value, (str, bool, int, float))
+                    or (
+                        isinstance(value, list)
+                        and len(value) <= 20
+                        and all(
+                            item is None or isinstance(item, (str, bool, int, float))
+                            for item in value
+                        )
+                    )
+                )
+            }
+        # These human-readable fields must always remain verbatim source
+        # evidence.  Structured dates/recurrence hints remain reviewable
+        # suggestions until confirmation.
+        if kind == "task":
+            fields["description"] = quote
+        elif kind == "commitment":
+            commitment_kind = str(fields.get("kind") or "other")
+            fields["kind"] = (
+                commitment_kind
+                if commitment_kind
+                in {
+                    "reply",
+                    "task",
+                    "appointment",
+                    "payment",
+                    "document_return",
+                    "visit",
+                    "other",
+                }
+                else "other"
+            )
+            urgency = fields.get("urgency")
+            if urgency not in {"today", "this_week", "this_month", "no_rush"}:
+                fields.pop("urgency", None)
+            fields["source_message_preview"] = quote[:240]
+        elif kind == "reminder":
+            fields["notes"] = quote
+        elif kind in {"list", "list_item"}:
+            fields["notes"] = quote
+        elif kind == "recurrence":
+            fields["notes"] = quote
+
+        confidence = raw.get("confidence")
+        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+            confidence = None
+        elif not 0.0 <= float(confidence) <= 1.0:
+            confidence = None
+        reasons = [
+            str(reason)[:500]
+            for reason in raw.get("reasons") or []
+            if isinstance(reason, str)
+        ][:18]
+        candidates.append(
+            IntentCandidate(
+                candidate_key=f"nlp-candidate-{index}",
+                target_kind=kind,  # type: ignore[arg-type]
+                title=quote,
+                fields=fields,
+                evidence_spans=[{"field": "title", "start": start, "end": end}],
+                confidence=float(confidence) if confidence is not None else None,
+                reasons=["exact_source_quote_grounded_v1", *reasons],
+                eligibility_rule_ids=[
+                    "private_member_message_v1",
+                    "exact_source_quote_grounded_v1",
+                    f"candidate_fields_{kind}_v1",
+                ],
+            )
+        )
+    return candidates
+
+
+def merge_intent_candidates(
+    deterministic: list[IntentCandidate],
+    grounded_nlp: list[IntentCandidate],
+) -> list[IntentCandidate]:
+    """Merge two bounded evidence sets without confidence ranking.
+
+    Overlapping candidates of the same kind describe one review decision.
+    The grounded NLP candidate is retained because it can carry normalized
+    dates or recurrence hints; the deterministic rule IDs are preserved as
+    additional audit evidence.
+    """
+
+    merged = list(deterministic)
+    for candidate in grounded_nlp:
+        overlapping_index: int | None = None
+        candidate_span = candidate.evidence_spans[0]
+        for index, existing in enumerate(merged):
+            if existing.target_kind != candidate.target_kind:
+                continue
+            existing_span = existing.evidence_spans[0]
+            if (
+                candidate_span["start"] < existing_span["end"]
+                and existing_span["start"] < candidate_span["end"]
+            ):
+                overlapping_index = index
+                break
+        if overlapping_index is None:
+            merged.append(candidate)
+            continue
+        existing = merged[overlapping_index]
+        merged[overlapping_index] = IntentCandidate(
+            candidate_key=existing.candidate_key,
+            target_kind=candidate.target_kind,
+            title=candidate.title,
+            fields={**existing.fields, **candidate.fields},
+            evidence_spans=candidate.evidence_spans,
+            confidence=candidate.confidence,
+            reasons=list(dict.fromkeys([*existing.reasons, *candidate.reasons]))[:20],
+            eligibility_rule_ids=list(
+                dict.fromkeys(
+                    [
+                        *existing.eligibility_rule_ids,
+                        *candidate.eligibility_rule_ids,
+                    ]
+                )
+            )[:20],
+        )
+    return merged[:10]
+
+
 __all__ = [
     "CANDIDATE_FIELD_ALLOWLISTS",
     "EXTRACTOR_ID",
+    "GROUNDED_NLP_EXTRACTOR_ID",
     "IntentCandidate",
     "extract_intent_candidates",
+    "extract_grounded_nlp_candidates",
+    "merge_intent_candidates",
 ]

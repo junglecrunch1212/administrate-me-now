@@ -17,6 +17,15 @@
       "type": "string",
       "description": "Sender's address — email, phone number, or handle."
     },
+    "counterparty_identifier": {
+      "type": "string",
+      "description": "The other participant address used for direction-aware extraction."
+    },
+    "message_direction": {
+      "type": "string",
+      "enum": ["inbound", "outbound"],
+      "description": "Derived from the immutable event type or provider SENT label."
+    },
     "subject": {
       "type": "string",
       "description": "Email subject. Absent for SMS / iMessage."
