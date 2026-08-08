@@ -43,6 +43,34 @@ class ExternalWriteRequestedV1(BaseModel):
     requested_at: datetime
 
 
+class ExternalWriteRequestedV2(ExternalWriteRequestedV1):
+    model_config = {"extra": "forbid"}
+
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    openclaw_approval_event_id: str = Field(min_length=1, max_length=240)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    privacy_guard_version: str = Field(min_length=1, max_length=120)
+    origin_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+
+class MemberProviderActionConfirmedV1(BaseModel):
+    """Member-domain approval stored before an external command may exist."""
+
+    model_config = {"extra": "forbid"}
+
+    action_id: str = Field(min_length=1, max_length=240)
+    member_id: str = Field(min_length=1, max_length=240)
+    provider: ExternalProvider
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    operation: str = Field(min_length=1, max_length=120)
+    target_external_id: str | None = Field(default=None, max_length=1000)
+    expected_provider_revision: str | None = Field(default=None, max_length=1000)
+    command_payload: dict[str, Any] = Field(default_factory=dict)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirmed_at: datetime
+    origin_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+
 class ExternalWriteCompletedV1(BaseModel):
     model_config = {"extra": "forbid"}
     command_id: str = Field(min_length=1, max_length=240)
@@ -54,6 +82,17 @@ class ExternalWriteCompletedV1(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
     completed_at: datetime
     suppressed: bool = False
+
+
+class ExternalWriteCompletedV2(ExternalWriteCompletedV1):
+    model_config = {"extra": "forbid"}
+    command_event_id: str = Field(min_length=1, max_length=240)
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    openclaw_approval_event_id: str = Field(min_length=1, max_length=240)
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_called: bool
+    origin_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
 
 
 class ExternalWriteFailedV1(BaseModel):
@@ -75,14 +114,35 @@ class ExternalWriteFailedV1(BaseModel):
     failed_at: datetime
 
 
+class ExternalWriteFailedV2(ExternalWriteFailedV1):
+    model_config = {"extra": "forbid"}
+    command_event_id: str = Field(min_length=1, max_length=240)
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    openclaw_approval_event_id: str = Field(min_length=1, max_length=240)
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_called: bool
+    origin_proposal_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+
 registry.register("external_sync.write_requested", 1, ExternalWriteRequestedV1)
+registry.register("external_sync.write_requested", 2, ExternalWriteRequestedV2)
 registry.register("external_sync.write_completed", 1, ExternalWriteCompletedV1)
+registry.register("external_sync.write_completed", 2, ExternalWriteCompletedV2)
 registry.register("external_sync.write_failed", 1, ExternalWriteFailedV1)
+registry.register("external_sync.write_failed", 2, ExternalWriteFailedV2)
+registry.register(
+    "member.provider_action.confirmed", 1, MemberProviderActionConfirmedV1
+)
 
 
 __all__ = [
     "ExternalProvider",
     "ExternalWriteCompletedV1",
+    "ExternalWriteCompletedV2",
     "ExternalWriteFailedV1",
+    "ExternalWriteFailedV2",
     "ExternalWriteRequestedV1",
+    "ExternalWriteRequestedV2",
+    "MemberProviderActionConfirmedV1",
 ]

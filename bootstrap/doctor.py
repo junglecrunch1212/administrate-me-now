@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -10,6 +11,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,8 @@ import yaml
 from fastapi.testclient import TestClient
 
 from adminme.demo import FIXTURE_MEMBER_ID
+from adminme.openclaw_approvals import sign_approval_receipt
+from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 from bootstrap.contracts import (
     ADAPTER_CATEGORIES,
@@ -115,6 +119,9 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             fixture_member_id=FIXTURE_MEMBER_ID,
             openclaw_enabled=True,
             openclaw_shared_secret="doctor-openclaw-secret-32-characters",
+            openclaw_actor_identities={
+                "doctor|fixture-account|doctor-actor": FIXTURE_MEMBER_ID
+            },
             openclaw_model_configured=True,
             member_chat_enabled_members=frozenset({FIXTURE_MEMBER_ID}),
             deterministic_member_chat_fixture=True,
@@ -150,19 +157,88 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
                 item.get("id") == commitment_id for item in dashboard["items"]
             )
             before = client.get("/api/core/v1/what-now", headers=headers).json()
-            approved_response = client.post(
-                f"/api/comms/v1/commitments/{commitment_id}/approve",
-                headers=headers,
+            review_params = {
+                "request_id": "doctor-approve",
+                "action": "approve",
+                "commitment_id": commitment_id,
+                "expected_last_event_id": proposal["last_event_id"],
+                "send_acknowledgement": True,
+            }
+            request_fingerprint = hashlib.sha256(
+                json.dumps(
+                    review_params, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            issued_at_ms = int(time.time() * 1000)
+            expires_at_ms = issued_at_ms + 120_000
+            receipt_id = "doctor-openclaw-allow-once"
+            shared_secret = "doctor-openclaw-secret-32-characters"
+            signature = sign_approval_receipt(
+                shared_secret,
+                receipt_id=receipt_id,
+                tool_name="administrateme_review",
+                request_fingerprint=request_fingerprint,
+                issued_at_ms=issued_at_ms,
+                expires_at_ms=expires_at_ms,
+                openclaw_version=OPENCLAW_VERSION,
+                openclaw_commit=OPENCLAW_COMMIT,
+            )
+            openclaw_headers = {"Authorization": f"Bearer {shared_secret}"}
+            resolved_receipt = client.post(
+                "/api/openclaw/v1/approvals/resolve",
+                headers=openclaw_headers,
                 json={
-                    "request_id": "doctor-approve",
-                    "expected_last_event_id": proposal["last_event_id"],
-                    "send_acknowledgement": True,
-                    "openclaw_approved": True,
+                    "receipt_id": receipt_id,
+                    "tool_name": "administrateme_review",
+                    "request_fingerprint": request_fingerprint,
+                    "issued_at_ms": issued_at_ms,
+                    "expires_at_ms": expires_at_ms,
+                    "decision": "allow-once",
+                    "openclaw_version": OPENCLAW_VERSION,
+                    "openclaw_commit": OPENCLAW_COMMIT,
+                    "signature": signature,
+                },
+            )
+            if resolved_receipt.status_code != 200:
+                raise RuntimeError("OpenClaw approval receipt fixture failed")
+            approved_response = client.post(
+                "/api/openclaw/v1/tools/review",
+                headers=openclaw_headers,
+                json={
+                    "provenance": {
+                        "actor_id": "doctor-actor",
+                        "agent_id": "doctor-agent",
+                        "session_key": "adminme:doctor:fixture",
+                        "session_id": "doctor-session",
+                        "channel_id": "doctor",
+                        "account_id": "fixture-account",
+                        "message_id": "doctor-message-approval",
+                        "thread_id": "doctor-thread",
+                        "correlation_id": "doctor:openclaw-approval",
+                        "call_kind": "tool",
+                        "openclaw_version": OPENCLAW_VERSION,
+                        "openclaw_commit": OPENCLAW_COMMIT,
+                    },
+                    **review_params,
+                    "openclaw_approval_receipt_id": receipt_id,
                 },
             )
             if approved_response.status_code != 200:
                 raise RuntimeError("canonical review fixture failed")
             approved = approved_response.json()
+            command_id = f"commitment-ack:{commitment_id}:doctor-approve"
+            terminal = None
+            for _ in range(100):
+                terminal = client.portal.call(
+                    app.state.runtime.event_log.get_by_idempotency,
+                    app.state.runtime.settings.instance.tenant_id,
+                    f"external-sync-result:{command_id}",
+                )
+                if terminal is not None:
+                    break
+                time.sleep(0.01)
+            if terminal is None:
+                raise RuntimeError("canonical provider outcome fixture failed")
             after_approval = client.get("/api/core/v1/what-now", headers=headers).json()
             completion_response = client.post(
                 f"/api/core/v1/commitments/{commitment_id}/complete",
@@ -200,8 +276,9 @@ def synthetic_round_trip(root: Path | None = None) -> dict[str, Any]:
             return {
                 "message_state": message.json()["output"]["state"],
                 "dashboard_review_visible": dashboard_visible,
-                "review_suppressed_by_observation": approved["delivery"]
-                == {"delivered": False, "suppressed": True},
+                "review_suppressed_by_observation": bool(
+                    terminal["payload"].get("suppressed")
+                ),
                 "what_now_changed_on_approval": before != after_approval,
                 "what_now_recalculated_on_completion": completed["what_now"]
                 != after_approval,

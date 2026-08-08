@@ -41,20 +41,22 @@ export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompa
 export const TOOL_NAMES = [
   "administrateme_state",
   "administrateme_what_now",
-  "administrateme_action",
+  "administrateme_add_for_review",
   "administrateme_review",
   "administrateme_lifecycle",
   "administrateme_correct",
+  "administrateme_execute_pending_provider_action",
   "administrateme_skill",
   "administrateme_notification_result",
   "administrateme_standing_order",
 ] as const;
 
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([
-  "administrateme_action",
+  "administrateme_add_for_review",
   "administrateme_review",
   "administrateme_lifecycle",
   "administrateme_correct",
+  "administrateme_execute_pending_provider_action",
   "administrateme_skill",
   "administrateme_standing_order",
 ]);

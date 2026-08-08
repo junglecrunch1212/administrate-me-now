@@ -392,6 +392,8 @@ class AdapterSupervisor:
                 "last_error": native_status.get("last_error")
                 or supervisor_status.get("last_error"),
                 "restart_count": supervisor_status.get("restart_count", 0),
+                "next_backoff_s": supervisor_status.get("next_backoff_s"),
+                "extra": dict(native_status.get("extra") or {}),
                 # This is the adapter's reviewed code ceiling, not proof that
                 # an external provider granted the corresponding scopes.
                 "write_capabilities": list(
@@ -561,6 +563,7 @@ def _status_to_dict(status: AdapterStatus) -> dict[str, Any]:
         else None,
         "restart_count": status.restart_count,
         "next_backoff_s": status.next_backoff_s,
+        "extra": dict(status.extra),
     }
 
 

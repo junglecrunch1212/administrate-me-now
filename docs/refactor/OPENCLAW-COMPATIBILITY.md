@@ -10,8 +10,8 @@ a floating dependency.
 |---|---|---|---|
 | Manifest/package | `openclaw.plugin.json`; `openclaw.extensions` and `runtimeExtensions`; `compat.pluginApi`; `build.openclawVersion/pluginSdkVersion` | Strict manifest, exact peer/API/gateway/build version and source commit | `npm run contract`, `npm run build`, `npm pack --dry-run` |
 | Runtime lifecycle | `definePluginEntry`; full/setup/snapshot registration modes; service start/stop | Side-effect-free non-full discovery; full mode registers one health service | TypeScript fixture test |
-| Typed tools | Manifest `contracts.tools`; runtime factory context; optional tool metadata | Nine `administrateme_*` tools; seven side-effect/standing-order tools are optional | Manifest/registration and request/response tests |
-| Approval | `before_tool_call.requireApproval`; plugin approval routing; optional exposure | Side effects request `allow-once` or deny; AdministrateMe role/scope/domain approval remains independent | Approval hook fixture plus process retry proof |
+| Typed tools | Manifest `contracts.tools`; runtime factory context; optional tool metadata | Ten `administrateme_*` tools, including exact-text Add for review and pending-provider execution; side-effect/standing-order tools are optional | Manifest/registration and request/response tests |
+| Approval | `before_tool_call.requireApproval`; plugin approval routing; optional exposure | Side effects request `allow-once` or deny; the plugin resolves a signed, exact-body, expiring receipt and AdministrateMe consumes it independently after domain approval | Approval hook, forgery/change/expiry/replay tests, and process retry proof |
 | Dashboard | Manifest data/action binding metadata; authenticated Gateway client; `operator.read`/`operator.write` registration | All ten domain reads plus health; review/lifecycle writes; calls without `authenticatedUserId` denied | Dashboard fixture and child/operator process tests |
 | Actor provenance | Tool requester, agent/session, channel/account/delivery/thread; command sender; message hook context | Full metadata audit plus exact `channel|account|actor` mapping. Gate 7 additionally derives portal actor/channel/account only from a valid HMAC-signed isolated session; Python independently recomputes it. Operator scope and `senderIsOwner` remain insufficient. | Fixture and process denial tests |
 | Skills/model routing | OpenClaw skills workspace and one `llm-task` tool invocation | OpenClaw-format skill instructs the typed wrapper; wrapper makes one routed call and records actual `skill.call.recorded` provenance | Python wrapper unit and Gate 4 process tests |
@@ -19,10 +19,10 @@ a floating dependency.
 | Standing orders | OpenClaw standing orders/automations plus agent workspace instructions | Five derived automation declarations call one typed trigger; no Python scheduler | Contract validation and process event proof |
 | Conversation hooks | Typed `message_received`; sanitized `model_call_started/ended` | Explicit consent/channel/event allowlist; no generic mirroring; metadata-only tracked model calls; no `llm_input/output` | Allowlist and privileged exclusion tests |
 | Transport/failure | Local plugin config schema and Gateway lifecycle | HTTP loopback only, secret environment reference, bounded timeout, durable degraded/incompatible state | Transport unit and outage/restart process tests |
-| Member chat | Gateway protocol v4 `connect.challenge`/`connect`, `chat.send`, `chat.history`, `chat.abort`, `chat` status/delta/final/aborted/error events | Loopback-only bounded WebSocket relay pinned to version `2026.7.2`; per-member signed session; rendered text only; browser cannot select provider/model or receive service/provider credentials | Python contract/acceptance tests and rendered chat/degraded Edge evidence |
+| Member chat | Gateway protocol v4 `connect.challenge`/`connect`, `chat.send`, `chat.history`, `chat.abort`, `chat` status/delta/final/aborted/error events | Loopback-only bounded WebSocket relay pinned to version `2026.7.2`; per-member signed session; rendered text only; least-privileged sends omit admin-only `systemInputProvenance`, `systemProvenanceReceipt`, and `suppressCommandInterpretation`; browser cannot select provider/model or receive service/provider credentials | Exact-commit source audit, Python protocol contract/acceptance tests, and rendered chat/degraded evidence |
 
 The native package version is `2.0.0-gate7`. It registers ten dashboard read
-bindings (ten domain views plus health), two dashboard write bindings, nine
+bindings (ten domain views plus health), two dashboard write bindings, ten
 typed tools, seven slash commands, and the existing five standing orders. No
 generic portal or member operator method was added.
 

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from adminme.demo import FIXTURE_MEMBER_ID
+from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -78,6 +82,47 @@ def _post(
     response = client.post(path, json=body, headers=OPENCLAW_HEADERS)
     assert response.status_code == status, response.text
     return response.json()
+
+
+def _allow_once(
+    client: TestClient,
+    *,
+    receipt_id: str,
+    tool_name: str,
+    params: dict[str, Any],
+) -> str:
+    fingerprint = hashlib.sha256(
+        json.dumps(params, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    issued_at_ms = int(time.time() * 1000)
+    expires_at_ms = issued_at_ms + 120_000
+    signature = sign_approval_receipt(
+        SECRET,
+        receipt_id=receipt_id,
+        tool_name=tool_name,
+        request_fingerprint=fingerprint,
+        issued_at_ms=issued_at_ms,
+        expires_at_ms=expires_at_ms,
+        openclaw_version=OPENCLAW_VERSION,
+        openclaw_commit=OPENCLAW_COMMIT,
+    )
+    result = _post(
+        client,
+        "/api/openclaw/v1/approvals/resolve",
+        {
+            "receipt_id": receipt_id,
+            "tool_name": tool_name,
+            "request_fingerprint": fingerprint,
+            "issued_at_ms": issued_at_ms,
+            "expires_at_ms": expires_at_ms,
+            "decision": "allow-once",
+            "openclaw_version": OPENCLAW_VERSION,
+            "openclaw_commit": OPENCLAW_COMMIT,
+            "signature": signature,
+        },
+    )
+    assert result["receipt_id"] == receipt_id
+    return receipt_id
 
 
 def _seed_slice(client: TestClient, request_id: str) -> dict[str, Any]:
@@ -391,14 +436,23 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
             )
             .fetchone()
         )
-        review_body = {
-            "provenance": _provenance("approval-once"),
+        review_params = {
             "request_id": "approve-through-openclaw",
             "action": "approve",
             "commitment_id": output["commitment_id"],
             "expected_last_event_id": commitment_row["last_event_id"],
             "send_acknowledgement": True,
-            "openclaw_approved": True,
+        }
+        receipt_id = _allow_once(
+            client,
+            receipt_id="ocapr-gate4-review",
+            tool_name="administrateme_review",
+            params=review_params,
+        )
+        review_body = {
+            "provenance": _provenance("approval-once"),
+            **review_params,
+            "openclaw_approval_receipt_id": receipt_id,
         }
         approved = _post(client, "/api/openclaw/v1/tools/review", review_body)
         review_retry_body = {

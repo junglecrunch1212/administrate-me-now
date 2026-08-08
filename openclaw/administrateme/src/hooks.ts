@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { PLUGIN_ID, SIDE_EFFECT_TOOL_NAMES, type BridgeEventKind } from "./contract.js";
 import { provenanceFromMessage } from "./provenance.js";
+import { prepareApproval } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
 
 type BridgeMarker = {
@@ -20,7 +21,10 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
     "before_tool_call",
     async (event) => {
       if (!SIDE_EFFECT_TOOL_NAMES.has(event.toolName)) return;
+      if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
+      const approval = prepareApproval(runtime, event.toolName, event.params);
       return {
+        params: approval.params,
         requireApproval: {
           title: "Run AdministrateMe action",
           description: `Allow one ${event.toolName} call. AdministrateMe will apply its own household authorization separately.`,
@@ -28,6 +32,7 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
           allowedDecisions: ["allow-once", "deny"],
           timeoutMs: 120_000,
           pluginId: PLUGIN_ID,
+          onResolution: approval.resolve,
         },
       };
     },

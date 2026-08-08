@@ -3,19 +3,62 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO006_LIVE_FINANCE_ACTIVATED
-verified_local_date: 2026-08-07
+gate_result: CO007_PHASE_A_CANDIDATE_PASS_LIVE_NOT_DEPLOYED
+verified_local_date: 2026-08-08
 verified_github_date: 2026-08-07
 branch: codex/administrateme-v2-runtime
-candidate_commit_resolution: 33c5622d4953b01263914ae77a7de0cdac9aa65e
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/285
+candidate_commit_resolution: pending_reviewed_commit
+pull_request_url: null
 openclaw_version: 2026.7.2
 openclaw_commit: 944cf08f94c334cff2b0fdf7e01187a9efa42715
 openclaw_archive_sha256: a0f1800a64ef495062da6c65e0e9a2b9a6ca0e51c3bc6197918db4eddc7292b8
-next_phase: live_plaid_consent_and_member_bridge_activation
+next_phase: independent_review_then_phase_b_activation
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-007 trustworthy capture, Triage, and SSOT candidate
+
+CO-007 is approved and implemented on the candidate branch in Phase A only. It
+**PRESERVES** the encrypted append-only event log, distinct domain models,
+deterministic projections, Triage human gate, provider authority, observation,
+member privacy, and the one pinned OpenClaw routing seam. It **MODERNIZES** the
+shared member shell with exact-text Add for review, deterministic multi-intent
+extraction, explicit interpretation/details/ready/recent lanes, source and
+pipeline freshness, durable Gmail accounting, chronological confirmation and
+materialization receipts, signed independent OpenClaw approval, and linked
+terminal provider outcomes. It **SUPERSEDES** browser approval booleans,
+direct generic capture, confidence-based disappearance, whole-batch in-memory
+Gmail cursoring, config-as-health, and the admin-only chat parameter that made
+least-privileged `chat.send` fail.
+
+The pinned OpenClaw source at commit `944cf08` proves that
+`suppressCommandInterpretation` is an `operator.admin`-only chat field. The
+member relay now sends only `sessionKey`, `message`, `deliver=false`, and an
+idempotency key under operator read/write scope. Provider effects require a
+content-bound, signed, 120-second, single-use allow-once receipt. The same
+binding may resume an interrupted idempotent command, but a changed tool,
+content, member, receipt id, signature, or expired receipt fails before an
+adapter.
+
+Credential-free browser verification captured natural dictation as four
+separate calendar, reminder, recurrence, and commitment proposals, placed them
+in the correct Triage lanes, and confirmed a local recurrence only after the
+human gate. No household provider was written, no live Gmail mutation was
+performed, observation remained active, and no family-Mac deployment occurred.
+Exact candidate evidence and remaining activation boundaries are in
+`evidence/co-007-capture-triage-ssot.md`.
+
+Candidate validation passed 1,467/1,467 root/bridge/pack Python tests and
+33/33 strict acceptance tests, Ruff over 203 production source files, mypy,
+the invariant and architecture-negative scripts, and the exact-pinned Node
+24.19 plugin contract/build/dry-run package with 14/14 tests. Desktop and
+390×844 in-app browser exercises produced four
+natural-dictation proposals, showed the expected Triage lanes and immutable
+local outcome, had zero browser-console errors, and had no horizontal overflow.
+The production npm dependency audit is clean. The full dev-tree audit retains
+one transitive `nanoid@3.3.16` advisory under Vitest/Vite/PostCSS; it is not
+runtime reachable and is not silently rewritten as part of CO-007.
 
 ## 2026-08-07 CO-006 Finance workbook and cash-flow activation
 

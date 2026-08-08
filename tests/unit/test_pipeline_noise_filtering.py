@@ -290,7 +290,12 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
             ],
         )
 
-    event = _messaging_received_event()
+    event = _messaging_received_event(
+        body_text=(
+            "Appointment on 2034-03-02T16:00:00-05:00 until "
+            "2034-03-02T17:00:00-05:00"
+        )
+    )
     event["owner_scope"] = "private:member-fixture"
     event["visibility_scope"] = "private:member-fixture"
     event["payload"]["member_id"] = "member-fixture"
@@ -299,16 +304,21 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
     assert [call.envelope.type for call in log.calls] == [
         "messaging.classified",
         "messaging.semantic_features_extracted",
+        "triage.intent.features_extracted",
         "triage.item.proposed",
     ]
-    proposal = log.calls[2].envelope.payload
+    proposal = log.calls[3].envelope.payload
     assert proposal["target_kind"] == "calendar_event"
     assert proposal["route"] == {"member_id": "member-fixture"}
     assert proposal["source_event_id"] == "trigger-eid-001"
     assert proposal["candidate"] == {
         "start": "2034-03-02T16:00:00-05:00",
         "end": "2034-03-02T17:00:00-05:00",
+        "event_type": "busy",
     }
+    assert proposal["confidence"] is None
+    assert log.calls[3].envelope.schema_version == 2
+    assert log.calls[3].causation_id == "fake-event-id-3"
 
 
 @pytest.mark.asyncio

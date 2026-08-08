@@ -55,6 +55,25 @@ class ObservationSuppressedV1(BaseModel):
     observation_mode_active: bool = True
 
 
+class OutboundAuditEvidenceV2(BaseModel):
+    """Immutable command lineage shared by every v2 terminal outbound fact."""
+
+    model_config = {"extra": "forbid"}
+    initiating_command_id: str = Field(min_length=1, max_length=240)
+    initiating_event_id: str = Field(min_length=1, max_length=240)
+    domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    openclaw_approval_event_id: str = Field(min_length=1, max_length=240)
+    provider: str = Field(min_length=1, max_length=120)
+    provider_account_id: str = Field(min_length=1, max_length=500)
+    operation: str = Field(min_length=1, max_length=120)
+    content_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_called: bool
+
+
+class ObservationSuppressedV2(ObservationSuppressedV1, OutboundAuditEvidenceV2):
+    model_config = {"extra": "forbid"}
+
+
 # ---------------------------------------------------------------------------
 # write.denied v1
 #
@@ -141,9 +160,15 @@ class ExternalSentV1(BaseModel):
     session_correlation_id: str | None = None
 
 
+class ExternalSentV2(ExternalSentV1, OutboundAuditEvidenceV2):
+    model_config = {"extra": "forbid"}
+
+
 registry.register("observation.suppressed", 1, ObservationSuppressedV1)
+registry.register("observation.suppressed", 2, ObservationSuppressedV2)
 registry.register("write.denied", 1, WriteDeniedV1)
 registry.register("review_request", 1, ReviewRequestV1)
 registry.register("observation.enabled", 1, ObservationEnabledV1)
 registry.register("observation.disabled", 1, ObservationDisabledV1)
 registry.register("external.sent", 1, ExternalSentV1)
+registry.register("external.sent", 2, ExternalSentV2)

@@ -25,7 +25,11 @@ from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
-from adminme.events.schemas.triage import TriageRouteV1, TriageTargetKind
+from adminme.events.schemas.triage import (
+    TriageRouteV1,
+    TriageSourceSurface,
+    TriageTargetKind,
+)
 from adminme.events.schemas.knowledge import KnowledgeGrantPermission
 from adminme.events.schemas.reminder_context import (
     ContextKind,
@@ -37,7 +41,7 @@ from adminme.events.schemas.calendar_policy import (
     CalendarSchedulePolicyConfiguredV1,
     ScheduleWindowV1,
 )
-from adminme.lib.scope import allowed_read
+from adminme.lib.scope import allowed_read, filter_one
 from adminme.lib.session import Session
 from adminme.member_chat import MemberChatError
 from adminme.products.auth import require_principal, session_from_request
@@ -93,6 +97,7 @@ from adminme.temporary_surfaces import (
     TemporarySurfaceError,
     TemporarySurfaceSpec,
 )
+from adminme.triage_intent import EXTRACTOR_ID, extract_intent_candidates
 
 
 router = APIRouter(tags=["member-portal"])
@@ -272,7 +277,6 @@ class CommsCommandRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     body: str | None = Field(default=None, max_length=20_000)
     snoozed_until: str | None = None
-    openclaw_approved: bool = False
 
 
 class ReminderCommandRequest(BaseModel):
@@ -305,7 +309,6 @@ class ReminderCommandRequest(BaseModel):
     expected_provider_revision: str | None = Field(default=None, max_length=1000)
     payload: dict[str, Any] = Field(default_factory=dict)
     request_id: str = Field(min_length=8, max_length=120)
-    openclaw_approved: bool = False
 
 
 class ReminderCueRequest(BaseModel):
@@ -342,6 +345,17 @@ class TriageDecisionRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1)
     reason: str | None = Field(default=None, max_length=500)
+
+
+class TriageIntentRequest(BaseModel):
+    """Zero-tax exact text capture; everything else is optional."""
+
+    model_config = {"extra": "forbid"}
+    text: str = Field(min_length=1, max_length=2000)
+    source_surface: TriageSourceSurface
+    kind_hint: TriageTargetKind | None = None
+    source_event_id: str | None = Field(default=None, min_length=1, max_length=240)
+    client_request_id: str = Field(min_length=8, max_length=120)
 
 
 class KnowledgeGrantRequest(BaseModel):
@@ -542,6 +556,66 @@ _REMINDER_PAYLOAD_FIELDS: dict[str, frozenset[str]] = {
 }
 
 
+async def _append_provider_action_confirmation(
+    runtime: Any,
+    session: Session,
+    *,
+    command_payload: dict[str, Any],
+    request_id: str,
+    request_fingerprint: str,
+    source_adapter: str,
+    sensitivity: Sensitivity,
+    causation_id: str | None,
+    origin_proposal_id: str | None = None,
+) -> tuple[str, bool]:
+    """Record the member decision without creating an external command."""
+
+    key = f"provider-action:{session.auth_member_id}:{request_id}"
+    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
+    if prior is not None:
+        if prior.get("raw_ref") != f"request-sha256:{request_fingerprint}":
+            raise HTTPException(
+                409, "request id conflicts with a prior provider action"
+            )
+        return str(prior["event_id"]), True
+    now = EventEnvelope.now_utc_iso()
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="member.provider_action.confirmed",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter=source_adapter,
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=sensitivity,
+            correlation_id=session.correlation_id,
+            causation_id=causation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=key,
+            raw_ref=f"request-sha256:{request_fingerprint}",
+            payload={
+                "action_id": request_id,
+                "member_id": session.auth_member_id,
+                "provider": command_payload["provider"],
+                "provider_account_id": command_payload["provider_account_id"],
+                "operation": command_payload["operation"],
+                "target_external_id": command_payload.get("target_external_id"),
+                "expected_provider_revision": command_payload.get(
+                    "expected_provider_revision"
+                ),
+                "command_payload": dict(command_payload.get("payload") or {}),
+                "request_fingerprint": request_fingerprint,
+                "confirmed_at": now,
+                "origin_proposal_id": origin_proposal_id,
+            },
+        )
+    )
+    return event_id, False
+
+
 def _owned_triage_item(
     runtime: Any, session: Session, proposal_id: str
 ) -> dict[str, Any]:
@@ -576,13 +650,14 @@ def _triage_event(
     request_fingerprint: str,
     causation_id: str,
     sensitivity: Sensitivity = "normal",
+    schema_version: int = 1,
 ) -> EventEnvelope:
     now = EventEnvelope.now_utc_iso()
     return EventEnvelope(
         event_at_ms=int(time.time() * 1000),
         tenant_id=session.tenant_id,
         type=event_type,
-        schema_version=1,
+        schema_version=schema_version,
         occurred_at=now,
         source_adapter="member-portal",
         source_account_id=session.auth_member_id,
@@ -618,6 +693,26 @@ def _triage_state_fingerprint(item: dict[str, Any]) -> str:
             "route": item.get("route"),
             "sensitivity": item.get("sensitivity") or "normal",
             "last_event_id": item["last_event_id"],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _triage_candidate_fingerprint(item: dict[str, Any]) -> str:
+    """Stable candidate identity that survives approval-state transitions."""
+
+    canonical = json.dumps(
+        {
+            "proposal_id": item["proposal_id"],
+            "target_kind": item["target_kind"],
+            "owner_member_id": item["owner_member_id"],
+            "title": item["title"],
+            "candidate": item.get("candidate") or {},
+            "route": item.get("route"),
+            "sensitivity": item.get("sensitivity") or "normal",
+            "source_event_id": item["source_event_id"],
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -864,6 +959,7 @@ def _materialization_envelopes(
     item: dict[str, Any],
     *,
     request_id: str,
+    causation_id: str | None = None,
 ) -> list[EventEnvelope]:
     """Translate a reviewed candidate through a closed, typed allowlist."""
 
@@ -874,7 +970,7 @@ def _materialization_envelopes(
         raise HTTPException(422, "a confirmed candidate requires a title")
     target_kind = item["target_kind"]
     target_member = _target_member(runtime, item)
-    common = {
+    common: dict[str, Any] = {
         "event_at_ms": int(time.time() * 1000),
         "tenant_id": session.tenant_id,
         "occurred_at": now,
@@ -884,9 +980,9 @@ def _materialization_envelopes(
         "visibility_scope": f"private:{target_member}",
         "sensitivity": item.get("sensitivity") or "normal",
         "correlation_id": session.correlation_id,
-        "causation_id": item["last_event_id"],
+        "causation_id": causation_id or item["last_event_id"],
         "actor_identity": session.auth_member_id,
-        "raw_ref": f"triage-state-sha256:{_triage_state_fingerprint(item)}",
+        "raw_ref": f"triage-candidate-sha256:{_triage_candidate_fingerprint(item)}",
     }
     if target_kind == "task":
         return [
@@ -1455,8 +1551,6 @@ async def reminder_command(
         raise HTTPException(
             403, "reminder actions are unavailable while viewing another member"
         )
-    if not body.openclaw_approved:
-        raise HTTPException(403, "independent OpenClaw action approval is required")
     runtime = _runtime(request)
     if runtime.projections is None or runtime.events is None:
         raise HTTPException(503, "reminder state is unavailable")
@@ -1484,7 +1578,6 @@ async def reminder_command(
                 "provider_fields_allowlisted": sorted(allowed_fields),
                 "source_scope": f"private:{session.auth_member_id}",
             },
-            "openclaw_approved": True,
         }
     )
     target_external_id = body.item_external_id or body.list_external_id
@@ -1513,46 +1606,25 @@ async def reminder_command(
             body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
         ).encode()
     ).hexdigest()
-    key = f"reminder-command:{session.auth_member_id}:{body.request_id}"
-    prior = await runtime.event_log.get_by_idempotency(session.tenant_id, key)
-    if prior is not None:
-        if prior.get("raw_ref") != f"request-sha256:{fingerprint}":
-            raise HTTPException(
-                409, "idempotency key conflicts with prior reminder action"
-            )
-        return {
-            "accepted": True,
-            "duplicate": True,
-            "command_id": body.request_id,
-            "event_id": prior["event_id"],
-        }
-    event_id = await runtime.events.write(
-        EventEnvelope(
-            event_at_ms=int(time.time() * 1000),
-            tenant_id=session.tenant_id,
-            type="external_sync.write_requested",
-            schema_version=1,
-            occurred_at=now,
-            source_adapter="member-reminders",
-            source_account_id=session.auth_member_id,
-            owner_scope=f"private:{session.auth_member_id}",
-            visibility_scope=f"private:{session.auth_member_id}",
-            sensitivity=cast(
-                Sensitivity, (target or {}).get("sensitivity") or "normal"
-            ),
-            correlation_id=decision.correlation_id,
-            causation_id=(target or {}).get("last_event_id"),
-            actor_identity=session.auth_member_id,
-            idempotency_key=key,
-            raw_ref=f"request-sha256:{fingerprint}",
-            payload=command_payload,
-        )
+    event_id, duplicate = await _append_provider_action_confirmation(
+        runtime,
+        session,
+        command_payload=command_payload,
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+        source_adapter="member-reminders",
+        sensitivity=cast(
+            Sensitivity, (target or {}).get("sensitivity") or "normal"
+        ),
+        causation_id=(target or {}).get("last_event_id"),
     )
     return {
         "accepted": True,
-        "duplicate": False,
+        "duplicate": duplicate,
         "command_id": body.request_id,
         "event_id": event_id,
+        "domain_approval_event_id": event_id,
+        "state": "awaiting_openclaw_approval",
         "observation_mode": runtime._observation_active,
     }
 
@@ -1621,6 +1693,220 @@ async def configure_reminder_cue(
     )
     await runtime.wait_for_projection("lists", event_id)
     return {"accepted": True, "event_id": event_id, "cue_id": body.cue_id}
+
+
+@router.post("/api/member/v1/triage/intents", status_code=202)
+async def submit_triage_intent(
+    body: TriageIntentRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """Durably hold exact member text before deterministic interpretation."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Add for review is unavailable in view-as mode")
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.event_log is None:
+        raise HTTPException(503, "Triage capture is unavailable")
+
+    source = None
+    sensitivity: Sensitivity = "normal"
+    if body.source_event_id is not None:
+        source = await runtime.event_log.get(body.source_event_id)
+        visible = filter_one(session, source)
+        if visible is None:
+            raise HTTPException(404, "linked source evidence is not visible")
+        sensitivity = cast(Sensitivity, source.get("sensitivity") or "normal")
+
+    request_values = body.model_dump(mode="json")
+    request_fingerprint = hashlib.sha256(
+        json.dumps(request_values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    intent_key = (
+        f"triage-intent:{session.auth_member_id}:{body.client_request_id}"
+    )
+    prior_intent = await runtime.event_log.get_by_idempotency(
+        session.tenant_id, intent_key
+    )
+    duplicate = prior_intent is not None
+    if prior_intent is not None:
+        if prior_intent.get("raw_ref") != f"request-sha256:{request_fingerprint}":
+            raise HTTPException(409, "capture request id conflicts with prior text")
+        intent_event_id = str(prior_intent["event_id"])
+        intent_id = str(prior_intent["payload"]["intent_id"])
+        submitted_at = datetime.fromisoformat(
+            str(prior_intent["payload"]["submitted_at"])
+        )
+    else:
+        intent_seed = (
+            f"{session.tenant_id}|{session.auth_member_id}|"
+            f"{body.client_request_id}"
+        )
+        intent_id = (
+            "intent_" + hashlib.sha256(intent_seed.encode()).hexdigest()[:28]
+        )
+        submitted_at = datetime.now(timezone.utc)
+        intent_payload = {
+            "intent_id": intent_id,
+            "member_id": session.auth_member_id,
+            "text": body.text,
+            "source_surface": body.source_surface,
+            "kind_hint": body.kind_hint,
+            "source_event_id": body.source_event_id,
+            "submitted_at": submitted_at.isoformat(),
+            "client_request_id": body.client_request_id,
+        }
+        await _guard_triage_write(
+            runtime, session, "triage.intent.submitted", intent_payload
+        )
+        intent_event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=session.tenant_id,
+                type="triage.intent.submitted",
+                schema_version=1,
+                occurred_at=submitted_at.isoformat(),
+                source_adapter=f"member-{body.source_surface}",
+                source_account_id=session.auth_member_id,
+                owner_scope=f"private:{session.auth_member_id}",
+                visibility_scope=f"private:{session.auth_member_id}",
+                sensitivity=sensitivity,
+                correlation_id=session.correlation_id,
+                causation_id=body.source_event_id,
+                actor_identity=session.auth_member_id,
+                idempotency_key=intent_key,
+                raw_ref=f"request-sha256:{request_fingerprint}",
+                payload=intent_payload,
+            )
+        )
+        # The holding state exists before any extraction result is recorded.
+        await runtime.wait_for_projection("triage", intent_event_id)
+
+    candidates = extract_intent_candidates(
+        body.text,
+        submitted_at=submitted_at,
+        kind_hint=body.kind_hint,
+    )
+    extracted_at = EventEnvelope.now_utc_iso()
+    feature_payload = {
+        "intent_id": intent_id,
+        "source_event_id": intent_event_id,
+        "skill_call_event_id": None,
+        "extractor_id": EXTRACTOR_ID,
+        "language": "en",
+        "candidates": [candidate.feature_payload() for candidate in candidates],
+        "extraction_state": "complete" if candidates else "defensive_default",
+        "extracted_at": extracted_at,
+    }
+    feature_fingerprint = hashlib.sha256(
+        json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    feature_key = f"triage-intent-features:{intent_event_id}:{EXTRACTOR_ID}"
+    prior_feature = await runtime.event_log.get_by_idempotency(
+        session.tenant_id, feature_key
+    )
+    if prior_feature is not None:
+        feature_event_id = str(prior_feature["event_id"])
+    else:
+        feature_event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=session.tenant_id,
+                type="triage.intent.features_extracted",
+                schema_version=1,
+                occurred_at=extracted_at,
+                source_adapter=EXTRACTOR_ID,
+                source_account_id=session.auth_member_id,
+                owner_scope=f"private:{session.auth_member_id}",
+                visibility_scope=f"private:{session.auth_member_id}",
+                sensitivity=sensitivity,
+                correlation_id=session.correlation_id,
+                causation_id=intent_event_id,
+                actor_identity=f"pipeline:{EXTRACTOR_ID}",
+                idempotency_key=feature_key,
+                raw_ref=f"features-sha256:{feature_fingerprint}",
+                payload=feature_payload,
+            )
+        )
+
+    proposal_event_ids: list[str] = []
+    proposal_ids: list[str] = []
+    for candidate in candidates:
+        candidate_values = candidate.feature_payload()
+        candidate_fingerprint = hashlib.sha256(
+            json.dumps(
+                candidate_values, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        proposal_seed = (
+            f"{session.tenant_id}|{intent_id}|{candidate.candidate_key}|"
+            f"{candidate.target_kind}|{candidate_fingerprint}"
+        )
+        proposal_id = (
+            "proposal_" + hashlib.sha256(proposal_seed.encode()).hexdigest()[:28]
+        )
+        proposal_ids.append(proposal_id)
+        proposal_payload = {
+            "proposal_id": proposal_id,
+            "target_kind": candidate.target_kind,
+            "owner_member_id": session.auth_member_id,
+            "title": candidate.title,
+            "candidate": candidate.fields,
+            "route": {"member_id": session.auth_member_id},
+            "source_event_id": intent_event_id,
+            "confidence": candidate.confidence,
+            "reasons": candidate.reasons,
+            "parent_intent_id": intent_id,
+            "candidate_key": candidate.candidate_key,
+            "extraction_event_id": feature_event_id,
+            "eligibility_rule_ids": candidate.eligibility_rule_ids,
+        }
+        proposal_key = f"triage-intent-proposal:{proposal_id}"
+        prior_proposal = await runtime.event_log.get_by_idempotency(
+            session.tenant_id, proposal_key
+        )
+        if prior_proposal is not None:
+            proposal_event_ids.append(str(prior_proposal["event_id"]))
+            continue
+        await _guard_triage_write(
+            runtime, session, "triage.item.proposed", proposal_payload
+        )
+        proposal_event_ids.append(
+            await runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(time.time() * 1000),
+                    tenant_id=session.tenant_id,
+                    type="triage.item.proposed",
+                    schema_version=2,
+                    occurred_at=extracted_at,
+                    source_adapter=EXTRACTOR_ID,
+                    source_account_id=session.auth_member_id,
+                    owner_scope=f"private:{session.auth_member_id}",
+                    visibility_scope=f"private:{session.auth_member_id}",
+                    sensitivity=sensitivity,
+                    correlation_id=session.correlation_id,
+                    causation_id=feature_event_id,
+                    actor_identity=f"pipeline:{EXTRACTOR_ID}",
+                    idempotency_key=proposal_key,
+                    raw_ref=f"candidate-sha256:{candidate_fingerprint}",
+                    payload=proposal_payload,
+                )
+            )
+        )
+    if proposal_event_ids:
+        await runtime.wait_for_projection("triage", proposal_event_ids[-1])
+    else:
+        await runtime.wait_for_projection("triage", intent_event_id)
+    return {
+        "accepted": True,
+        "duplicate": duplicate,
+        "intent_id": intent_id,
+        "intent_event_id": intent_event_id,
+        "feature_event_id": feature_event_id,
+        "proposal_ids": proposal_ids,
+        "proposal_event_ids": proposal_event_ids,
+        "state": "pending_review" if proposal_ids else "pending_interpretation",
+        "canonical_event_ids": [],
+    }
 
 
 @router.post("/api/member/v1/triage/{proposal_id}/enrich")
@@ -1750,7 +2036,6 @@ async def _approve_triage_item_locked(
                 request_id=body.request_id,
                 expected_last_event_id=body.expected_last_event_id,
                 send_acknowledgement=False,
-                openclaw_approved=False,
             ),
             request,
             session,
@@ -1768,17 +2053,112 @@ async def _approve_triage_item_locked(
     )
     if prior_confirmation is not None:
         await runtime.wait_for_projection("triage", prior_confirmation["event_id"])
-        return {
-            "event_id": prior_confirmation["event_id"],
-            "state": "confirmed",
-            "materialized_event_ids": prior_confirmation["payload"][
-                "materialized_event_ids"
-            ],
-            "duplicate": True,
+        if int(prior_confirmation.get("schema_version") or 1) == 1:
+            return {
+                "event_id": prior_confirmation["event_id"],
+                "state": "confirmed",
+                "materialized_event_ids": prior_confirmation["payload"][
+                    "materialized_event_ids"
+                ],
+                "duplicate": True,
+            }
+        prior_receipt = await _prior_triage_command(
+            runtime,
+            session,
+            event_type="triage.item.materialized",
+            request_id=body.request_id,
+            request_fingerprint=request_fingerprint,
+        )
+        if prior_receipt is not None:
+            await runtime.wait_for_projection("triage", prior_receipt["event_id"])
+            return {
+                "event_id": prior_receipt["event_id"],
+                "confirmation_event_id": prior_confirmation["event_id"],
+                "state": "confirmed",
+                "materialized_event_ids": prior_receipt["payload"][
+                    "materialized_event_ids"
+                ],
+                "duplicate": True,
+            }
+        if _triage_candidate_fingerprint(item) != prior_confirmation["payload"][
+            "candidate_fingerprint"
+        ]:
+            raise HTTPException(
+                409, "triage candidate changed after confirmation; run Doctor"
+            )
+        confirmation_event_id = str(prior_confirmation["event_id"])
+    else:
+        _require_current_triage(item, body.expected_last_event_id)
+        # Validate the full closed materializer before recording the decision.
+        _materialization_envelopes(
+            runtime, session, item, request_id=body.request_id
+        )
+        confirm_payload_for_gate = {
+            "proposal_id": proposal_id,
+            "confirmed_by_member_id": session.auth_member_id,
+            "target_kind": item["target_kind"],
         }
-    _require_current_triage(item, body.expected_last_event_id)
+        await _guard_triage_write(
+            runtime, session, "triage.item.confirmed", confirm_payload_for_gate
+        )
+        confirmed_at = EventEnvelope.now_utc_iso()
+        confirmation = _triage_event(
+            session,
+            event_type="triage.item.confirmed",
+            schema_version=2,
+            payload={
+                "proposal_id": proposal_id,
+                "confirmed_at": confirmed_at,
+                "confirmed_by_member_id": session.auth_member_id,
+                "expected_last_event_id": body.expected_last_event_id,
+                "candidate_fingerprint": _triage_candidate_fingerprint(item),
+            },
+            request_id=body.request_id,
+            request_fingerprint=request_fingerprint,
+            causation_id=item["last_event_id"],
+            sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+        )
+        confirmation_event_id = await runtime.events.write(confirmation)
+        await runtime.wait_for_projection("triage", confirmation_event_id)
+
+    if item["target_kind"] in {"calendar_event", "reminder", "list", "list_item"}:
+        [external_candidate] = _materialization_envelopes(
+            runtime,
+            session,
+            item,
+            request_id=body.request_id,
+            causation_id=confirmation_event_id,
+        )
+        pending_event_id, pending_duplicate = (
+            await _append_provider_action_confirmation(
+                runtime,
+                session,
+                command_payload=external_candidate.payload,
+                request_id=f"triage:{proposal_id}:{body.request_id}",
+                request_fingerprint=_triage_candidate_fingerprint(item),
+                source_adapter="member-triage",
+                sensitivity=cast(
+                    Sensitivity, item.get("sensitivity") or "normal"
+                ),
+                causation_id=confirmation_event_id,
+                origin_proposal_id=proposal_id,
+            )
+        )
+        return {
+            "event_id": confirmation_event_id,
+            "confirmation_event_id": confirmation_event_id,
+            "pending_provider_action_event_id": pending_event_id,
+            "state": "approved_awaiting_openclaw",
+            "materialized_event_ids": [],
+            "duplicate": prior_confirmation is not None and pending_duplicate,
+        }
+
     materializations = _materialization_envelopes(
-        runtime, session, item, request_id=body.request_id
+        runtime,
+        session,
+        item,
+        request_id=body.request_id,
+        causation_id=confirmation_event_id,
     )
     prior_materializations = [
         await runtime.event_log.get_by_idempotency(
@@ -1797,14 +2177,6 @@ async def _approve_triage_item_locked(
         raise HTTPException(
             409, "triage candidate changed after materialization; run Doctor"
         )
-    confirm_payload_for_gate = {
-        "proposal_id": proposal_id,
-        "confirmed_by_member_id": session.auth_member_id,
-        "target_kind": item["target_kind"],
-    }
-    await _guard_triage_write(
-        runtime, session, "triage.item.confirmed", confirm_payload_for_gate
-    )
     if all(prior_materializations):
         materialized_event_ids = [
             cast(dict[str, Any], prior)["event_id"] for prior in prior_materializations
@@ -1813,25 +2185,26 @@ async def _approve_triage_item_locked(
         for envelope in materializations:
             await _guard_triage_write(runtime, session, envelope.type, envelope.payload)
         materialized_event_ids = await runtime.events.write_batch(materializations)
-    confirmed_at = EventEnvelope.now_utc_iso()
-    confirm = _triage_event(
+    materialized_at = EventEnvelope.now_utc_iso()
+    receipt = _triage_event(
         session,
-        event_type="triage.item.confirmed",
+        event_type="triage.item.materialized",
         payload={
             "proposal_id": proposal_id,
-            "confirmed_at": confirmed_at,
-            "confirmed_by_member_id": session.auth_member_id,
+            "confirmation_event_id": confirmation_event_id,
             "materialized_event_ids": materialized_event_ids,
+            "materialized_at": materialized_at,
         },
         request_id=body.request_id,
         request_fingerprint=request_fingerprint,
         causation_id=materialized_event_ids[-1],
         sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
     )
-    event_id = await runtime.events.write(confirm)
+    event_id = await runtime.events.write(receipt)
     await runtime.wait_for_projection("triage", event_id)
     return {
         "event_id": event_id,
+        "confirmation_event_id": confirmation_event_id,
         "state": "confirmed",
         "materialized_event_ids": materialized_event_ids,
     }
@@ -2539,20 +2912,22 @@ async def surface(
     calendar_date: date | None = Query(default=None, alias="date"),
     view: Literal["day", "week", "month", "agenda", "find", "rules"] = "week",
 ) -> dict[str, Any]:
+    runtime = _runtime(request)
+    await runtime._refresh_capability_registry()
     if surface == "inbox":
         return {
-            **build_surface(_runtime(request), session, "triage"),
+            **build_surface(runtime, session, "triage"),
             "deprecated_alias": "inbox",
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
     if surface == "knowledge":
         return {
-            **build_surface(_runtime(request), session, "notes"),
+            **build_surface(runtime, session, "notes"),
             "deprecated_alias": "knowledge",
             "canonical_path": "/api/member/v1/surfaces/notes",
         }
     return build_surface(
-        _runtime(request),
+        runtime,
         session,
         surface,
         calendar_anchor=calendar_date,
@@ -3538,8 +3913,6 @@ async def _communication_command_locked(
             account.get("write_access_remedy")
             or "the provider does not support this action",
         )
-    if not body.openclaw_approved:
-        raise HTTPException(403, "independent OpenClaw delivery approval is required")
     if body.operation == "reply" and not (body.body or "").strip():
         raise HTTPException(422, "reply body cannot be empty")
     if body.operation not in _COMMS_EXTERNAL_OPERATIONS.get(provider, set()):
@@ -3587,7 +3960,6 @@ async def _communication_command_locked(
             "subject": interaction.get("subject"),
             "rfc_message_id": interaction.get("rfc_message_id"),
             "workspace": interaction.get("workspace") or "personal",
-            "openclaw_approved": True,
             "content_privacy_guard": content_privacy_guard,
         },
         "requested_at": now,
@@ -3603,30 +3975,29 @@ async def _communication_command_locked(
                 "correlation_id": decision.correlation_id,
             },
         )
-    event_id = await runtime.events.write(
-        EventEnvelope(
-            event_at_ms=int(time.time() * 1000),
-            tenant_id=session.tenant_id,
-            type="external_sync.write_requested",
-            schema_version=1,
-            occurred_at=now,
-            source_adapter="member-portal",
-            source_account_id=session.auth_member_id,
-            owner_scope=f"private:{session.auth_member_id}",
-            visibility_scope=f"private:{session.auth_member_id}",
-            sensitivity=interaction.get("sensitivity") or "normal",
-            correlation_id=decision.correlation_id,
-            actor_identity=session.auth_member_id,
-            idempotency_key=f"communication-command:{session.auth_member_id}:{body.request_id}",
-            payload=command_payload,
-        )
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    event_id, duplicate = await _append_provider_action_confirmation(
+        runtime,
+        session,
+        command_payload=command_payload,
+        request_id=body.request_id,
+        request_fingerprint=fingerprint,
+        source_adapter="member-portal",
+        sensitivity=cast(Sensitivity, interaction.get("sensitivity") or "normal"),
+        causation_id=body.expected_last_event_id,
     )
-    await runtime.wait_for_projection("interactions", event_id)
     return {
         "accepted": True,
         "local": False,
         "command_id": body.request_id,
         "event_id": event_id,
+        "domain_approval_event_id": event_id,
+        "state": "awaiting_openclaw_approval",
+        "duplicate": duplicate,
         "observation_mode": runtime._observation_active,
     }
 
@@ -3808,6 +4179,11 @@ async def chat_history(
             session_key=session_key, limit=min(max(limit, 1), 50)
         )
     except MemberChatError as exc:
+        runtime.member_chat_last_failure = {
+            "code": exc.code,
+            "retryable": exc.retryable,
+        }
+        await runtime._refresh_capability_registry()
         raise HTTPException(
             503, _safe_error(exc, session.correlation_id or str(uuid.uuid4()))
         ) from exc
@@ -3840,6 +4216,7 @@ async def chat_stream(
                     message=body.message,
                     idempotency_key=f"member:{session.auth_member_id}:{body.request_id}",
                 ):
+                    runtime.member_chat_last_failure = None
                     public = chunk.public()
                     public["correlation_id"] = correlation_id
                     yield _sse(public)
@@ -3850,6 +4227,11 @@ async def chat_stream(
             await runtime.member_chat.abort(session_key=session_key)
             raise
         except MemberChatError as exc:
+            runtime.member_chat_last_failure = {
+                "code": exc.code,
+                "retryable": exc.retryable,
+            }
+            await runtime._refresh_capability_registry()
             yield _sse(_safe_error(exc, correlation_id))
 
     return StreamingResponse(

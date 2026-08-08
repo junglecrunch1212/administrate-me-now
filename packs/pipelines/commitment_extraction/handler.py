@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ from adminme.pipelines.base import (
     skill_output,
 )
 from adminme.projections.parties.queries import find_party_by_identifier
+from adminme.triage_intent import extract_intent_candidates
 
 _log = logging.getLogger(__name__)
 
@@ -165,6 +167,24 @@ class CommitmentExtractionPipeline:
         config = self._config_override or _load_config(self._PACK_ROOT)
         payload = event.get("payload") or {}
         source_event_id = str(event.get("event_id", ""))
+        message_text = str(payload.get("body_text") or "")
+        try:
+            submitted_at = datetime.fromisoformat(
+                str(event["occurred_at"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            submitted_at = datetime.now(timezone.utc)
+        if any(
+            candidate.target_kind == "commitment"
+            for candidate in extract_intent_candidates(
+                message_text,
+                submitted_at=submitted_at,
+            )
+        ):
+            # Explicit commitment language is owned by the shared deterministic
+            # candidate service.  This richer legacy pipeline must not race it
+            # into a second Triage proposal for the same source text.
+            return
         prior_by_causation = getattr(ctx.event_log, "get_by_causation", None)
         if prior_by_causation is not None:
             prior = await prior_by_causation(source_event_id)
@@ -285,7 +305,6 @@ class CommitmentExtractionPipeline:
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
         )
-        message_text = str(payload.get("body_text") or "")
         classify_inputs: dict[str, Any] = {
             "message_text": message_text,
             "sender_party_id": str(sender_party["party_id"]),

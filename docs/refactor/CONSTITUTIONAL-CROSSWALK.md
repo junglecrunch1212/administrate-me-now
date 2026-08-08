@@ -1,5 +1,20 @@
 # Constitutional crosswalk
 
+CO-007 amendment (2026-08-08): C001/C002/C003/C009/C010/C011/C012/C013,
+C035/C044/C045, and C048–C058 are **PRESERVED/HARDENED** by exact-text member
+intent facts, deterministic typed candidate eligibility, confirmation-before-
+effect chronology, scoped materialization receipts, durable source accounting,
+and capability truth derived from checkpoints/watermarks rather than config.
+The model may emit bounded semantic features only; fixed code owns candidate
+eligibility, routing, authorization, health, and state transitions. Independent
+OpenClaw approval is now a signed, content-bound, expiring allow-once receipt;
+browser booleans and ambiguous direct capture are **SUPERSEDED**. The exact
+pinned Gateway source also classifies `suppressCommandInterpretation` as
+admin-only, so the member relay omits it instead of broadening operator scope.
+Tasks, commitments, calendar events, reminders, lists, recurrences, scheduler
+jobs, and relationship facts remain distinct. Real provider activation and
+family-Mac deployment remain outside this Phase-A candidate.
+
 Runtime-Keychain amendment (2026-08-07): C046/C050/C080/C086 are
 **PRESERVED/HARDENED** across the authorized Python boundary. Original
 interpreter-bound Keychain items remain untouched for rollback; candidate-bound

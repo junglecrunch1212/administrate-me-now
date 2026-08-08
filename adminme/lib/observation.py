@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -42,6 +43,34 @@ if TYPE_CHECKING:
     from adminme.lib.session import Session
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class OutboundAuditContext:
+    initiating_command_id: str
+    initiating_event_id: str
+    domain_approval_event_id: str
+    openclaw_approval_event_id: str
+    provider: str
+    provider_account_id: str
+    operation: str
+    content_fingerprint: str
+    owner_scope: str
+    visibility_scope: str
+    sensitivity: str
+
+
+_OUTBOUND_AUDIT: ContextVar[OutboundAuditContext | None] = ContextVar(
+    "administrateme_outbound_audit", default=None
+)
+
+
+def set_outbound_audit_context(value: OutboundAuditContext) -> Token:
+    return _OUTBOUND_AUDIT.set(value)
+
+
+def reset_outbound_audit_context(token: Token) -> None:
+    _OUTBOUND_AUDIT.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -260,19 +289,43 @@ async def outbound(
     """
     is_active = await manager.is_active()
     now = EventEnvelope.now_utc_iso()
+    audit = _OUTBOUND_AUDIT.get()
+    owner_scope = audit.owner_scope if audit else f"private:{session.auth_member_id}"
+    visibility_scope = (
+        audit.visibility_scope if audit else f"private:{session.auth_member_id}"
+    )
+    sensitivity = audit.sensitivity if audit else "normal"
+    audit_payload = (
+        {
+            "initiating_command_id": audit.initiating_command_id,
+            "initiating_event_id": audit.initiating_event_id,
+            "domain_approval_event_id": audit.domain_approval_event_id,
+            "openclaw_approval_event_id": audit.openclaw_approval_event_id,
+            "provider": audit.provider,
+            "provider_account_id": audit.provider_account_id,
+            "operation": audit.operation,
+            "content_fingerprint": audit.content_fingerprint,
+        }
+        if audit
+        else {}
+    )
     if is_active:
         suppressed = EventEnvelope(
             event_at_ms=int(time.time() * 1000),
             tenant_id=session.tenant_id,
             type="observation.suppressed",
-            schema_version=1,
+            schema_version=2 if audit else 1,
             occurred_at=now,
             source_adapter="observation",
             source_account_id="system",
-            owner_scope="shared:household",
-            visibility_scope="shared:household",
-            sensitivity="normal",
+            owner_scope=owner_scope,
+            visibility_scope=visibility_scope,
+            sensitivity=sensitivity,  # type: ignore[arg-type]
+            causation_id=audit.initiating_event_id if audit else None,
             actor_identity=session.auth_member_id,
+            raw_ref=(
+                f"content-sha256:{audit.content_fingerprint}" if audit else None
+            ),
             payload={
                 "attempted_action": action,
                 "attempted_at": now,
@@ -282,6 +335,8 @@ async def outbound(
                 "reason": "observation_mode_active",
                 "session_correlation_id": session.correlation_id,
                 "observation_mode_active": True,
+                **audit_payload,
+                **({"provider_called": False} if audit else {}),
             },
         )
         await event_sink.write(suppressed, correlation_id=session.correlation_id)
@@ -292,14 +347,16 @@ async def outbound(
         event_at_ms=int(time.time() * 1000),
         tenant_id=session.tenant_id,
         type="external.sent",
-        schema_version=1,
+        schema_version=2 if audit else 1,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter="observation",
         source_account_id="system",
-        owner_scope="shared:household",
-        visibility_scope="shared:household",
-        sensitivity="normal",
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
+        sensitivity=sensitivity,  # type: ignore[arg-type]
+        causation_id=audit.initiating_event_id if audit else None,
         actor_identity=session.auth_member_id,
+        raw_ref=f"content-sha256:{audit.content_fingerprint}" if audit else None,
         payload={
             "action": action,
             "sent_at": EventEnvelope.now_utc_iso(),
@@ -307,6 +364,8 @@ async def outbound(
             "target_identifier": target_identifier,
             "payload": payload,
             "session_correlation_id": session.correlation_id,
+            **audit_payload,
+            **({"provider_called": True} if audit else {}),
         },
     )
     await event_sink.write(sent, correlation_id=session.correlation_id)
@@ -316,6 +375,9 @@ async def outbound(
 __all__ = [
     "ObservationManager",
     "ObservationState",
+    "OutboundAuditContext",
     "OutboundResult",
     "outbound",
+    "reset_outbound_audit_context",
+    "set_outbound_audit_context",
 ]

@@ -16,7 +16,6 @@ from adminme.demo import (
 )
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
-from adminme.lib.adapters import OutboundMessage
 from adminme.lib.scope import filter_rows
 from adminme.lib.session import Session
 from adminme.products.auth import require_principal, session_from_request
@@ -66,9 +65,6 @@ class EditRequest(CommandRequest):
 
 class ApproveRequest(CommandRequest):
     send_acknowledgement: bool = True
-    # Authenticated OpenClaw asserts its independent approval decision; the
-    # AdministrateMe command still applies domain governance separately.
-    openclaw_approved: bool = False
 
 
 class DismissRequest(CommandRequest):
@@ -297,36 +293,85 @@ async def approve_commitment(
         expected_last_event_id=body.expected_last_event_id,
     )
     delivery = None
-    if (
-        body.send_acknowledgement
-        and body.openclaw_approved
-        and not duplicate
-        and runtime.fixture_adapter is not None
-    ):
-        assert runtime.guarded_write is not None
-        gate = await runtime.guarded_write.check(
-            session,
-            "communication.send",
-            {"commitment_id": commitment_id, "recipient": FIXTURE_SENDER_EMAIL},
+    pending_provider_action_event_id = None
+    if body.send_acknowledgement:
+        command_payload = {
+            "command_id": f"commitment-ack:{commitment_id}:{body.request_id}",
+            "member_id": session.auth_member_id,
+            "provider": "fixture",
+            "provider_account_id": "fixture-cat-a",
+            "operation": "reply",
+            "target_external_id": row.get("source_interaction_id"),
+            "expected_provider_revision": None,
+            "payload": {
+                "interaction_id": row.get("source_interaction_id"),
+                "recipient": FIXTURE_SENDER_EMAIL,
+                "body": "Acknowledgement approved by the household principal.",
+                "commitment_id": commitment_id,
+                "content_privacy_guard": {
+                    "member_bound": True,
+                    "source_scope": f"private:{session.auth_member_id}",
+                    "template": "fixture-commitment-ack-v1",
+                },
+            },
+            "requested_at": now,
+        }
+        action_fingerprint = command_fingerprint(command_payload)
+        action_key = (
+            f"provider-action:{session.auth_member_id}:"
+            f"commitment-ack:{commitment_id}:{body.request_id}"
         )
-        if not gate.pass_:
-            raise HTTPException(403, "delivery intent denied by write policy")
-        result = await runtime.fixture_adapter.send_as(
-            session,
-            OutboundMessage(
-                channel="fixture-cat-a",
-                recipient=FIXTURE_SENDER_EMAIL,
-                body="Acknowledgement approved by the household principal.",
-                metadata={"commitment_id": commitment_id},
-            ),
+        prior_action = await runtime.event_log.get_by_idempotency(
+            session.tenant_id, action_key
         )
-        delivery = {"delivered": result.delivered, "suppressed": result.suppressed}
-    elif body.send_acknowledgement and not body.openclaw_approved:
+        if prior_action is not None:
+            if prior_action.get("raw_ref") != (
+                f"request-sha256:{action_fingerprint}"
+            ):
+                raise HTTPException(409, "acknowledgement request id conflict")
+            pending_provider_action_event_id = prior_action["event_id"]
+        else:
+            pending_provider_action_event_id = await runtime.events.write(
+                EventEnvelope(
+                    event_at_ms=int(datetime.now().timestamp() * 1000),
+                    tenant_id=session.tenant_id,
+                    type="member.provider_action.confirmed",
+                    schema_version=1,
+                    occurred_at=now,
+                    source_adapter="member-comms",
+                    source_account_id=session.auth_member_id,
+                    owner_scope=f"private:{session.auth_member_id}",
+                    visibility_scope=f"private:{session.auth_member_id}",
+                    sensitivity="normal",
+                    correlation_id=session.correlation_id,
+                    causation_id=event_id,
+                    actor_identity=session.auth_member_id,
+                    idempotency_key=action_key,
+                    raw_ref=f"request-sha256:{action_fingerprint}",
+                    payload={
+                        "action_id": command_payload["command_id"],
+                        "member_id": session.auth_member_id,
+                        "provider": command_payload["provider"],
+                        "provider_account_id": command_payload[
+                            "provider_account_id"
+                        ],
+                        "operation": command_payload["operation"],
+                        "target_external_id": command_payload[
+                            "target_external_id"
+                        ],
+                        "expected_provider_revision": None,
+                        "command_payload": command_payload["payload"],
+                        "request_fingerprint": action_fingerprint,
+                        "confirmed_at": now,
+                    },
+                )
+            )
         delivery = {
             "delivered": False,
             "suppressed": False,
             "held": True,
             "reason": "openclaw_approval_required",
+            "domain_approval_event_id": pending_provider_action_event_id,
         }
     if runtime.xlsx_projection is not None:
         await runtime.xlsx_projection.regenerate_now("adminme-ops.xlsx")
@@ -335,6 +380,7 @@ async def approve_commitment(
         "commitment": updated,
         "duplicate": duplicate,
         "delivery": delivery,
+        "pending_provider_action_event_id": pending_provider_action_event_id,
     }
 
 

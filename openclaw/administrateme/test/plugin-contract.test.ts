@@ -120,7 +120,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(9);
+    expect([...runtime.tools]).toHaveLength(10);
     expect([...runtime.commands]).toHaveLength(8);
     expect([...runtime.gateways]).toHaveLength(14);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
@@ -141,23 +141,22 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(9);
+    expect([...runtime.tools]).toHaveLength(10);
     expect(runtime.services).toHaveLength(0);
   });
 
   it("sends a typed tool request with full trusted provenance and no operator token body", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ state: "captured", event_id: "evt-1" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ state: "pending_review", intent_event_id: "evt-1" }));
     const runtime = fakeApi();
-    const factory = runtime.tools.get("administrateme_action");
+    const factory = runtime.tools.get("administrateme_add_for_review");
     const tool = factory?.(toolContext()) as AnyAgentTool;
     const result = await tool.execute("call-1", {
       request_id: "request-1",
-      mode: "capture",
-      kind: "task",
-      title: "Prepare the fixture",
+      text: "Prepare the fixture",
+      kind_hint: "task",
     });
     const body = requestBody(fetchMock);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3330/api/openclaw/v1/tools/action");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3330/api/openclaw/v1/tools/add-for-review");
     expect(body.provenance).toMatchObject({
       actor_id: "actor-a",
       agent_id: "agent-a",
@@ -171,7 +170,7 @@ describe("native OpenClaw contract fixture", () => {
       openclaw_commit: OPENCLAW_COMMIT,
     });
     expect(JSON.stringify(body)).not.toContain("fixture-secret");
-    expect(result.details).toEqual({ state: "captured", event_id: "evt-1" });
+    expect(result.details).toEqual({ state: "pending_review", intent_event_id: "evt-1" });
   });
 
   it("derives member-portal tool authority only from a valid signed isolated session", async () => {
@@ -245,21 +244,42 @@ describe("native OpenClaw contract fixture", () => {
     });
   });
 
-  it("derives outbound approval from the resolved tool gate rather than model input", async () => {
+  it("binds outbound approval to a signed allow-once resolution rather than model input", async () => {
     const runtime = fakeApi();
-    const factory = runtime.tools.get("administrateme_review");
-    const tool = factory?.(toolContext()) as AnyAgentTool;
-    await tool.execute("review-1", {
+    const params = {
       request_id: "review-1",
       action: "approve",
       commitment_id: "commitment-a",
       expected_last_event_id: "event-a",
       send_acknowledgement: true,
+    };
+    const hook = runtime.hooks.get("before_tool_call")?.[0]?.handler;
+    const gated = (await hook?.(
+      { toolName: "administrateme_review", params },
+      {},
+    )) as {
+      params: Record<string, unknown>;
+      requireApproval: { onResolution: (decision: "allow-once") => Promise<void> };
+    };
+    await gated.requireApproval.onResolution("allow-once");
+    const resolution = requestBody(fetchMock);
+    expect(resolution).toMatchObject({
+      tool_name: "administrateme_review",
+      decision: "allow-once",
+      openclaw_version: OPENCLAW_VERSION,
+      openclaw_commit: OPENCLAW_COMMIT,
     });
-    expect(requestBody(fetchMock)).toMatchObject({
+    expect(resolution.signature).toMatch(/^[0-9a-f]{64}$/);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ accepted: true }));
+    const factory = runtime.tools.get("administrateme_review");
+    const tool = factory?.(toolContext()) as AnyAgentTool;
+    await tool.execute("review-1", gated.params);
+    const reviewBody = requestBody(fetchMock, 1);
+    expect(reviewBody).toMatchObject({
       send_acknowledgement: true,
-      openclaw_approved: true,
+      openclaw_approval_receipt_id: resolution.receipt_id,
     });
+    expect(reviewBody).not.toHaveProperty("openclaw_approved");
   });
 
   it("does not let an operator scope substitute for dashboard member identity", async () => {
@@ -304,8 +324,8 @@ describe("native OpenClaw contract fixture", () => {
     });
     expect(requestBody(fetchMock)).toMatchObject({
       send_acknowledgement: false,
-      openclaw_approved: false,
     });
+    expect(requestBody(fetchMock)).not.toHaveProperty("openclaw_approved");
   });
 
   it("registers authorized slash dispatch and rejects an untrusted sender before transport", async () => {

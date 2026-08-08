@@ -600,6 +600,14 @@ def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
     route = item.get("route") or {}
     target = str(item.get("target_kind") or "")
     missing: list[str] = []
+    if item.get("state") == "pending_interpretation" or not target:
+        return {
+            "contract": "triage-review-state-v2",
+            "state": "needs_interpretation",
+            "missing": ["kind"],
+            "human_gate_required": True,
+            "approval_authorized": False,
+        }
     if not str(item.get("title") or "").strip():
         missing.append("title")
     if not route.get("member_id"):
@@ -646,7 +654,7 @@ def _triage_review_state(item: dict[str, Any]) -> dict[str, Any]:
         if target != "list" and not route.get("container_external_id"):
             missing.append("destination")
     return {
-        "contract": "triage-review-state-v1",
+        "contract": "triage-review-state-v2",
         "state": "ready" if not missing else "needs_details",
         "missing": missing,
         "human_gate_required": True,
@@ -808,7 +816,14 @@ def build_surface(
         base["contract"] = {
             "facts_are_not_queued": True,
             "human_gate_required": True,
-            "states": ["pending_review", "confirmed", "dismissed"],
+            "states": [
+                "pending_interpretation",
+                "pending_review",
+                "approved",
+                "confirmed",
+                "dismissed",
+                "failed",
+            ],
         }
         calendar_conn = runtime.projections.connection("calendars")
         calendar_sources = list_sources(calendar_conn, session)
@@ -971,6 +986,21 @@ def build_surface(
                 container_ready = target == "list" or route_key in known_reminder_routes
                 if not account_writable or not container_ready:
                     _add_triage_requirement(item, "approved_reminder_destination")
+        triage_processing = runtime.capabilities.get("surface:triage-processing")
+        triage_projection = runtime.capabilities.get("projection:triage")
+        triage_details = (
+            triage_projection.details if triage_projection is not None else {}
+        )
+        base["processing_health"] = (
+            triage_processing.public()
+            if triage_processing is not None
+            else {
+                "name": "triage-processing",
+                "state": "degraded",
+                "reason": "Triage processing capability is unavailable",
+                "details": {},
+            }
+        )
         base["freshness"] = surface_freshness(
             generated_at=now,
             latest_source_at=_latest_time(
@@ -978,6 +1008,15 @@ def build_surface(
             ),
             stale_after_seconds=604800,
             row_count=len(items),
+            degraded_reason=(
+                triage_processing.reason
+                if triage_processing is not None
+                and triage_processing.state in {"degraded", "blocked"}
+                else None
+            ),
+            checkpoint_event_id=triage_details.get("checkpoint_event_id"),
+            checkpoint_required=True,
+            lag_count=triage_details.get("lag_count"),
         )
     elif surface == "comms":
         interactions_conn = runtime.projections.connection("interactions")
@@ -1008,12 +1047,50 @@ def build_surface(
             now=now,
         )
         base["connector_catalog"] = _connector_catalog()
+        interactions_capability = runtime.capabilities.get(
+            "projection:interactions"
+        )
+        interaction_details = (
+            interactions_capability.details
+            if interactions_capability is not None
+            else {}
+        )
+        messaging_failures = [
+            record
+            for key, record in runtime.capabilities.items()
+            if key.startswith("adapter:messaging-")
+            and record.state in {"degraded", "blocked"}
+        ]
+        comms_degraded_reason = (
+            "New provider messages may be missing because a messaging adapter is degraded"
+            if messaging_failures
+            else (
+                interactions_capability.reason
+                if interactions_capability is not None
+                and interactions_capability.state in {"degraded", "blocked"}
+                else None
+            )
+        )
+        base["processing_health"] = {
+            "state": "degraded" if comms_degraded_reason else "healthy",
+            "reason": comms_degraded_reason,
+            "adapter_states": [record.public() for record in messaging_failures],
+            "projection": (
+                interactions_capability.public()
+                if interactions_capability is not None
+                else None
+            ),
+        }
         base["freshness"] = surface_freshness(
             generated_at=now,
             latest_source_at=_latest_time(rows, "occurred_at"),
             stale_after_seconds=172800,
             row_count=len(rows),
             configured=bool(base["cockpit"]["accounts"]),
+            degraded_reason=comms_degraded_reason,
+            checkpoint_event_id=interaction_details.get("checkpoint_event_id"),
+            checkpoint_required=bool(base["cockpit"]["accounts"]),
+            lag_count=interaction_details.get("lag_count"),
         )
     elif surface == "reminders":
         lists_conn = runtime.projections.connection("lists")

@@ -22,7 +22,9 @@ SDKs.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
@@ -35,6 +37,7 @@ from adminme.lib.skill_runner import (
     SkillOutputInvalid,
 )
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
+from adminme.triage_intent import EXTRACTOR_ID, extract_intent_candidates
 
 _log = logging.getLogger(__name__)
 
@@ -42,29 +45,6 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "3.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_CANDIDATE_KINDS = {
-    "task",
-    "calendar_event",
-    "reminder",
-    "list",
-    "list_item",
-    "party_identifier",
-}
-_CANDIDATE_FIELDS = {
-    "task": {"description", "due", "energy", "effort_min"},
-    "calendar_event": {"start", "end", "all_day", "event_type", "location"},
-    "reminder": {"due", "notes", "priority"},
-    "list": {"notes"},
-    "list_item": {"due", "notes", "priority"},
-    "party_identifier": {
-        "surviving_party_id",
-        "candidate_kind",
-        "candidate_value",
-        "candidate_value_normalized",
-    },
-}
-
-
 def _extract_text_and_inputs(
     event_type: str, payload: dict[str, Any]
 ) -> tuple[str, dict[str, Any]] | None:
@@ -115,7 +95,7 @@ class NoiseFilteringPipeline:
         prepared = _extract_text_and_inputs(event_type, payload)
         if prepared is None:
             return
-        _, inputs = prepared
+        source_text, inputs = prepared
 
         source_event_id = event.get("event_id", "")
         skill_ctx = SkillContext(
@@ -156,6 +136,7 @@ class NoiseFilteringPipeline:
                     "deadline": None,
                     "candidates": [],
                 },
+                source_text=source_text,
             )
             return
 
@@ -165,6 +146,7 @@ class NoiseFilteringPipeline:
             ctx=ctx,
             source_event_id=source_event_id,
             output=output,
+            source_text=source_text,
         )
 
     async def _emit_results(
@@ -174,6 +156,7 @@ class NoiseFilteringPipeline:
         ctx: PipelineContext,
         source_event_id: str,
         output: dict[str, Any],
+        source_text: str,
     ) -> None:
         await self._emit_classified(
             event=event,
@@ -192,7 +175,7 @@ class NoiseFilteringPipeline:
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
-            candidates=output.get("candidates"),
+            source_text=source_text,
         )
 
     async def _emit_classified(
@@ -276,7 +259,7 @@ class NoiseFilteringPipeline:
         event: dict[str, Any],
         ctx: PipelineContext,
         source_event_id: str,
-        candidates: Any,
+        source_text: str,
     ) -> None:
         payload = event.get("payload") or {}
         owner_scope = str(event.get("owner_scope") or "")
@@ -286,52 +269,91 @@ class NoiseFilteringPipeline:
         payload_member = payload.get("member_id")
         if payload_member is not None and payload_member != member_id:
             return
-        if not member_id or not isinstance(candidates, list):
+        if not member_id:
             return
-        for index, candidate in enumerate(candidates[:10]):
-            if not isinstance(candidate, dict):
-                continue
-            target_kind = str(candidate.get("target_kind") or "")
-            confidence = float(candidate.get("confidence") or 0.0)
-            title = str(candidate.get("title") or "").strip()
-            if target_kind not in _CANDIDATE_KINDS or confidence < 0.65 or not title:
-                continue
-            raw_candidate = candidate.get("candidate")
-            candidate_fields = raw_candidate if isinstance(raw_candidate, dict) else {}
-            sanitized_candidate = {
-                key: value
-                for key, value in candidate_fields.items()
-                if key in _CANDIDATE_FIELDS[target_kind]
-            }
-            proposal_id = f"triage:message:{source_event_id}:{index}:{target_kind}"
+        try:
+            submitted_at = datetime.fromisoformat(
+                str(event["occurred_at"]).replace("Z", "+00:00")
+            )
+        except (KeyError, TypeError, ValueError):
+            submitted_at = datetime.now(timezone.utc)
+        candidates = extract_intent_candidates(
+            source_text,
+            submitted_at=submitted_at,
+        )
+        if not candidates:
+            return
+        intent_id = f"source:{source_event_id}"
+        extracted_at = EventEnvelope.now_utc_iso()
+        extraction_event_id = await ctx.event_sink.write(
+            EventEnvelope(
+                event_at_ms=event["event_at_ms"],
+                tenant_id=event["tenant_id"],
+                type="triage.intent.features_extracted",
+                schema_version=1,
+                occurred_at=extracted_at,
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=owner_scope,
+                visibility_scope=event["visibility_scope"],
+                sensitivity=event.get("sensitivity", "normal"),
+                idempotency_key=f"triage:message-features:{source_event_id}",
+                payload={
+                    "intent_id": intent_id,
+                    "source_event_id": source_event_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": EXTRACTOR_ID,
+                    "language": None,
+                    "candidates": [candidate.feature_payload() for candidate in candidates],
+                    "extraction_state": "complete",
+                    "extracted_at": extracted_at,
+                },
+            ),
+            correlation_id=ctx.correlation_id,
+            causation_id=ctx.triggering_event_id,
+        )
+        for candidate in candidates:
+            target_kind = candidate.target_kind
+            fingerprint = hashlib.sha256(
+                (
+                    f"{source_event_id}:{candidate.candidate_key}:"
+                    f"{target_kind}:{candidate.title}"
+                ).encode()
+            ).hexdigest()[:24]
+            proposal_id = f"triage:message:{fingerprint}"
             envelope = EventEnvelope(
                 event_at_ms=event["event_at_ms"],
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
-                schema_version=1,
+                schema_version=2,
                 occurred_at=EventEnvelope.now_utc_iso(),
-                source_adapter="noise_filtering",
+                source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
                 owner_scope=owner_scope,
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=f"triage:message-candidate:{source_event_id}:{index}",
+                idempotency_key=(
+                    f"triage:message-candidate:{source_event_id}:"
+                    f"{candidate.candidate_key}:{target_kind}"
+                ),
                 payload={
                     "proposal_id": proposal_id,
                     "target_kind": target_kind,
                     "owner_member_id": member_id,
-                    "title": title[:1000],
-                    "candidate": sanitized_candidate,
+                    "title": candidate.title,
+                    "candidate": candidate.fields,
                     "route": {"member_id": member_id},
                     "source_event_id": source_event_id,
-                    "confidence": round(confidence, 4),
-                    "reasons": [str(value) for value in candidate.get("reasons") or []][
-                        :20
-                    ],
+                    "parent_intent_id": None,
+                    "candidate_key": candidate.candidate_key,
+                    "extraction_event_id": extraction_event_id,
+                    "eligibility_rule_ids": candidate.eligibility_rule_ids,
+                    "confidence": candidate.confidence,
+                    "reasons": candidate.reasons,
                 },
             )
             await ctx.event_sink.write(
                 envelope,
                 correlation_id=ctx.correlation_id,
-                causation_id=ctx.triggering_event_id,
+                causation_id=extraction_event_id,
             )

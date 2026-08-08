@@ -81,6 +81,21 @@ class AdapterCursorAdvancedV1(BaseModel):
     advanced_at: str = Field(min_length=1)
 
 
+class AdapterRecordQuarantinedV1(BaseModel):
+    """One provider record was durably accounted for without ingestion."""
+
+    model_config = {"extra": "forbid"}
+    adapter_name: str = Field(min_length=1, max_length=240)
+    adapter_family: str = Field(min_length=1, max_length=120)
+    external_id: str = Field(min_length=1, max_length=1000)
+    content_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    error_kind: Literal["api_changed", "validation", "malformed"]
+    error_message: str = Field(min_length=1, max_length=2000)
+    quarantined_at: str = Field(min_length=1)
+    provider_watermark: str | None = Field(default=None, max_length=1000)
+
+
 registry.register("adapter.error", 1, AdapterErrorV1)
 registry.register("adapter.authenticated", 1, AdapterAuthenticatedV1)
 registry.register("adapter.cursor_advanced", 1, AdapterCursorAdvancedV1)
+registry.register("adapter.record.quarantined", 1, AdapterRecordQuarantinedV1)
