@@ -97,6 +97,11 @@ read-only, advances a durable per-item cursor only after every detailed event
 and summary receipt is accepted, and emits explicit removals instead of
 silently deleting history.
 
+The generated workbook and every reverse-diff sidecar are owner-only files
+(`0600`), and each workbook-specific sidecar directory is owner-only (`0700`).
+Atomic regeneration applies those modes to the temporary file before replace,
+so a save cannot silently reintroduce broader local-account read access.
+
 There is no Plaid writeback. Workbook bidirectionality ends at AdministrateMe
 planning and classification events. Future payment, transfer, lending, or
 account-management capability would require its own provider contract,
