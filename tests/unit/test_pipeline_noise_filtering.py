@@ -47,6 +47,7 @@ NoiseFilteringPipeline = _handler.NoiseFilteringPipeline
 
 @dataclass
 class _RecordedAppend:
+    event_id: str
     envelope: EventEnvelope
     correlation_id: str | None
     causation_id: str | None
@@ -64,15 +65,43 @@ class _FakeEventLog:
         correlation_id: str | None = None,
         causation_id: str | None = None,
     ) -> str:
+        self._next_id += 1
+        event_id = f"fake-event-id-{self._next_id}"
         self.calls.append(
             _RecordedAppend(
+                event_id=event_id,
                 envelope=envelope,
                 correlation_id=correlation_id,
                 causation_id=causation_id,
             )
         )
-        self._next_id += 1
-        return f"fake-event-id-{self._next_id}"
+        return event_id
+
+    async def get_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        for call in self.calls:
+            if (
+                call.envelope.tenant_id == tenant_id
+                and call.envelope.idempotency_key == idempotency_key
+            ):
+                return {
+                    **call.envelope.model_dump(mode="json"),
+                    "event_id": call.event_id,
+                    "causation_id": call.causation_id,
+                }
+        return None
+
+    async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                **call.envelope.model_dump(mode="json"),
+                "event_id": call.event_id,
+                "causation_id": call.causation_id,
+            }
+            for call in self.calls
+            if call.causation_id == causation_id
+        ]
 
 
 def _make_ctx(event_log: Any, run_skill_fn: Any) -> PipelineContext:
@@ -433,3 +462,54 @@ async def test_unexpected_language_seam_runtime_error_cannot_poison_ingestion() 
         "triage.item.proposed",
     ]
     assert log.calls[-1].envelope.payload["target_kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() -> None:
+    log = _FakeEventLog()
+    event = _messaging_received_event(body_text="Pay the electric bill by Friday.")
+    event["owner_scope"] = "private:member-fixture"
+    event["visibility_scope"] = "private:member-fixture"
+    event["occurred_at"] = "2026-08-08T12:00:00Z"
+    event["payload"]["member_id"] = "member-fixture"
+
+    async def unavailable(*args: Any, **kwargs: Any) -> SkillResult:
+        raise OpenClawTimeout("initial language seam timeout")
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, unavailable))
+
+    async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "evidence_quote": "Pay the electric bill by Friday.",
+                    "candidate": {},
+                    "confidence": 0.95,
+                },
+                {
+                    "target_kind": "recurrence",
+                    "evidence_quote": "Pay the electric bill by Friday.",
+                    "candidate": {
+                        "recurrence_text": "monthly",
+                        "rrule": "FREQ=MONTHLY",
+                        "kind": "bill_payment",
+                        "trackable": True,
+                    },
+                    "confidence": 0.9,
+                },
+            ]
+        )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, recovered))
+
+    proposals = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+    ]
+    assert [proposal.payload["target_kind"] for proposal in proposals] == [
+        "task",
+        "recurrence",
+    ]
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v4:")

@@ -265,7 +265,9 @@ that acknowledgment is bounded to the plugin inside the exact reviewed release
 archive. Lab and production OpenClaw state are isolated beneath their respective
 instance roots, so the rehearsal cannot leave a plugin/config path in the real
 instance. The installer writes and validates the explicit local Gateway mode
-required by the pinned build before it starts services. On a resume or upgrade,
+required by the pinned build, enables and additively allows the pinned bundled
+`llm-task` tool, and proves that tool registered before it starts services. It
+preserves unrelated OpenClaw tool-policy entries. On a resume or upgrade,
 it removes stale plugin registration metadata while preserving every immutable
 release directory, then links only the current reviewed release. It must not ask
 for a household or model-provider credential.
@@ -281,8 +283,10 @@ Check and stop the lab:
 
 Expected Doctor result: top-level `"status": "healthy"`, ten complete
 sections, thirteen healthy projection stores/checkpoints, observation mode,
-`plugin_compatibility.evidence.discovered: true`, five reconciled OpenClaw cron
-jobs, and no live-provider claim. Expected stop result: both services `stopped`.
+`plugin_compatibility.evidence.discovered: true`,
+`plugin_compatibility.evidence.required_llm_tool.ok: true`, five reconciled
+OpenClaw cron jobs, and no live-provider claim. Expected stop result: both
+services `stopped`.
 
 If this fails, stop. The family instance is still untouched. Use the
 troubleshooting section at the end of this guide.
@@ -403,6 +407,8 @@ you intend to test. The activation command then:
 
 - pins and verifies OpenClaw `2026.7.2`;
 - points OpenClaw at the compiled per-instance AdministrateMe workspace;
+- enables the pinned bundled `llm-task`, adds it without removing unrelated
+  tool-policy entries, and verifies runtime registration;
 - validates OpenClaw configuration;
 - runs `openclaw models status --probe`;
 - reconciles exactly five owned `administrateme-*` cron jobs in the household
@@ -737,6 +743,7 @@ These commands preserve data, backups, Keychain items, and enrollment state.
 | `no_model`, `missing_credential`, auth, billing, or rate-limit probe | Provider setup is incomplete or unavailable | Return to `./bootstrap/activate-openclaw.sh`; fix only in OpenClaw/provider UI, then probe again |
 | Plugin compatibility mismatch | OpenClaw was upgraded or a wrong plugin is linked | Do not use `latest`. Restore the reviewed pin through the installer or rollback |
 | Doctor says plugin `discovered: false` or cron reports non-JSON output | The plugin did not register its declared dashboard RPCs during pinned-runtime discovery | Stop services, preserve the diagnostic, and reinstall the reviewed release containing the discovery-registration repair; do not hand-edit `.openclaw` |
+| Doctor says required `llm-task` is disabled, not allowed, or not registered | The pinned bundled language tool was not reconciled, so message NLP cannot run even if the Gateway is healthy | Preserve the diagnostic and rerun only the reviewed installer/updater; never hand-edit OpenClaw JSON or broaden the global tool allowlist |
 | Tailscale URL gives 502/unavailable | Runtime is stopped or Serve points to the wrong backend | Run status/Doctor; verify Serve targets only `127.0.0.1:3330` |
 | Portal says missing/unknown Tailscale identity | Wrong login was entered, direct LAN access, or requesting device is tagged | Use the private Serve URL from a user-owned Tailscale device and compare the exact login; do not spoof the header |
 | One member sees another member’s data | Identity/scope failure | Immediately reset Serve and stop services. Preserve the diagnostic and treat it as a release-blocking security incident |
@@ -758,8 +765,9 @@ Read each line and check it only after you have seen the stated evidence:
 - [ ] `./bootstrap/status.sh` reports both central user services running.
 - [ ] `./bootstrap/doctor.sh` is healthy, or its only expected incomplete state
   is a member bridge you deliberately staged and will finalize/revoke.
-- [ ] OpenClaw's model probe passed and no floating/latest OpenClaw install was
-  added.
+- [ ] OpenClaw's model probe passed, Doctor reports the required `llm-task`
+  enabled/allowed/runtime-registered, and no floating/latest OpenClaw install
+  was added.
 - [ ] `tailscale serve status --json` points only to
   `http://127.0.0.1:3330`, and Funnel is absent.
 - [ ] Both principals tested the private portal from their own

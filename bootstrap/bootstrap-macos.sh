@@ -195,6 +195,13 @@ if ((DRY_RUN == 0)); then
   # The local path is the plugin inside the exact reviewed release archived above.
   openclaw plugins install --link --force "$release_dir/openclaw/administrateme"
   openclaw config set gateway.mode local
+  (
+    cd "$release_dir"
+    ADMINME_INSTANCE_ROOT="$INSTANCE_ROOT" \
+      ADMINME_REPOSITORY_ROOT="$release_dir" \
+      "$release_dir/.venv/bin/python" -m bootstrap.openclaw_tools \
+        --instance-root "$INSTANCE_ROOT"
+  )
   openclaw config validate
   openclaw plugins inspect administrateme --runtime --json >/dev/null
 fi

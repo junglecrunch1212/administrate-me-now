@@ -6,6 +6,15 @@ official docs and current source on 2026-07-30 because Prompt 4 requires the
 current native dashboard binding and authenticated actor contracts. It is not
 a floating dependency.
 
+Phase-B language-seam amendment (2026-08-08): the pinned host includes
+`@openclaw/llm-task` as a bundled optional plugin that is disabled by default.
+AdministrateMe bootstrap and upgrade explicitly enable that exact bundled tool,
+preserve unrelated tool-policy entries while adding `llm-task`, validate with
+OpenClaw's own writer, and require Doctor runtime-registration evidence. The
+central Python composition injects the Keychain-resolved Gateway bearer token
+into the skill runtime; it never depends on an ambient token for an explicitly
+constructed production dependency bundle.
+
 | Surface | Pinned contract used | AdministrateMe implementation | Evidence |
 |---|---|---|---|
 | Manifest/package | `openclaw.plugin.json`; `openclaw.extensions` and `runtimeExtensions`; `compat.pluginApi`; `build.openclawVersion/pluginSdkVersion` | Strict manifest, exact peer/API/gateway/build version and source commit | `npm run contract`, `npm run build`, `npm pack --dry-run` |
@@ -14,7 +23,7 @@ a floating dependency.
 | Approval | `before_tool_call.requireApproval`; plugin approval routing; optional exposure | Side effects request `allow-once` or deny; the plugin resolves a signed, exact-body, expiring receipt and AdministrateMe consumes it independently after domain approval | Approval hook, forgery/change/expiry/replay tests, and process retry proof |
 | Dashboard | Manifest data/action binding metadata; authenticated Gateway client; `operator.read`/`operator.write` registration | All ten domain reads plus health; review/lifecycle writes; calls without `authenticatedUserId` denied | Dashboard fixture and child/operator process tests |
 | Actor provenance | Tool requester, agent/session, channel/account/delivery/thread; command sender; message hook context | Full metadata audit plus exact `channel|account|actor` mapping. Gate 7 additionally derives portal actor/channel/account only from a valid HMAC-signed isolated session; Python independently recomputes it. Operator scope and `senderIsOwner` remain insufficient. | Fixture and process denial tests |
-| Skills/model routing | OpenClaw skills workspace and one `llm-task` tool invocation | OpenClaw-format skill instructs the typed wrapper; wrapper makes one routed call and records actual `skill.call.recorded` provenance | Python wrapper unit and Gate 4 process tests |
+| Skills/model routing | OpenClaw skills workspace and one bundled, explicitly enabled/allowed `llm-task` tool invocation | OpenClaw-format skill instructs the typed wrapper; the composition injects the Keychain-resolved bearer token; wrapper makes one routed call and records actual `skill.call.recorded` provenance; Doctor rejects configured-but-unregistered tool state | Python wrapper and production-composition tests, bootstrap required-tool/Doctor tests, authenticated Phase-B probe |
 | Slash commands | Native command definition, required auth, command context | Seven commands dispatch only to typed loopback endpoints | TypeScript fixture test |
 | Standing orders | OpenClaw standing orders/automations plus agent workspace instructions | Five derived automation declarations call one typed trigger; no Python scheduler | Contract validation and process event proof |
 | Conversation hooks | Typed `message_received`; sanitized `model_call_started/ended` | Explicit consent/channel/event allowlist; no generic mirroring; metadata-only tracked model calls; no `llm_input/output` | Allowlist and privileged exclusion tests |

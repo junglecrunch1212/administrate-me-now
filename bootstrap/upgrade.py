@@ -20,6 +20,7 @@ from bootstrap.contracts import (
 )
 from bootstrap.doctor import Doctor
 from bootstrap.keychain_probe import configured_keychain_references
+from bootstrap.openclaw_tools import configure_required_llm_tool
 from bootstrap.services import ServiceManager
 from bootstrap.wizard import install_launch_agents, service_environment_path
 
@@ -316,6 +317,7 @@ class UpgradeManager:
             ).encode("utf-8"),
         )
         try:
+            configure_required_llm_tool(self.paths, test_mode=self.test_mode)
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
             result = self._post_switch_doctor(release)

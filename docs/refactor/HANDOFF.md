@@ -3,10 +3,10 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_EXTRACTION_REPAIR_CANDIDATE
+gate_result: TRIAGE_NLP_RUNTIME_REPAIR_CANDIDATE
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-07
-branch: codex/repair-triage-extraction
+branch: codex/repair-openclaw-skill-auth
 candidate_commit_resolution: pending_reviewed_commit
 pull_request_url: null
 openclaw_version: 2026.7.2
@@ -17,7 +17,7 @@ next_phase: independent_review_then_phase_b_activation
 
 # Release handoff
 
-## 2026-08-08 live Triage extraction incident and repair candidate
+## 2026-08-08 live Triage extraction incident and runtime follow-up
 
 The live Gmail adapter had durably accepted 82 private message facts, but
 `pipeline:pipeline:noise_filtering` failed before its first delivery because
@@ -50,13 +50,31 @@ and exact first-person promises in outbound mail can therefore reach Triage
 while remaining unofficial until member confirmation. Gmail now preserves the
 provider `SENT` direction as `messaging.sent`; historical v3 facts retain the
 same label for direction-aware replay, and inbound promises are never assigned
-to the member. `noise_filtering` v3 and `identity_resolution` v2 are the reviewed
-replay boundaries. Live replay and candidate counts remain Phase-B evidence
-until this candidate is independently reviewed, merged, and guardedly deployed.
+to the member. `noise_filtering` v3 and `identity_resolution` v2 were the first
+reviewed replay boundaries. PR #289 merged and deployed as `fc258ec`; replay
+completed at zero lag with 51 exact-source, human-gated proposals from 31
+messages and no confirmation, canonical creation, or external-write request.
+
+The live replay also proved that the deterministic fallback was masking a
+second composition defect: 105 `classify_message_nature` calls returned 401
+because the explicit skill runtime did not receive the Keychain-backed Gateway
+token. Once supplied in an isolated synthetic probe, the authenticated Gateway
+truthfully returned `llm-task` unavailable. The pinned build ships that tool as
+a bundled optional plugin which must be explicitly enabled and added to
+`tools.alsoAllow`; the prior Doctor checked only AdministrateMe plugin discovery.
+
+This follow-up injects the secret with `repr=False`, reconciles only the pinned
+bundled `llm-task` configuration through OpenClaw's own validated writer, and
+requires Doctor evidence for enabled, allowed, runtime-registered tool state.
+`noise_filtering` v4 is the reviewed language-recovery boundary. It appends
+changed classification/semantic facts under a new idempotency generation and
+adds only candidate kind/key pairs absent from the earlier deterministic
+fallback, so it neither rewrites append-only evidence nor duplicates the 51
+pending proposals.
 Credential-free release evidence is recorded in
-`evidence/triage-extraction-repair.md`: 36 strict acceptance tests, 1,625 root
+`evidence/triage-extraction-repair.md`: 36 strict acceptance tests, 1,631 root
 and pack tests, 60 bridge tests, 15 pinned plugin tests, both type checkers,
-lint, dependency audits, performance, architecture negatives, clean install,
+lint across 225 production sources, dependency audits, performance, architecture negatives, clean install,
 tenant isolation, backup/restore, build, and package all pass under Python
 3.14.6 and the reviewed Node 24.19.0 path.
 

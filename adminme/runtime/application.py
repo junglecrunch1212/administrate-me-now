@@ -547,6 +547,7 @@ class AdministrateMeRuntime:
                     event_sink=self.events,
                     event_log=self.event_log,
                     raw_events_dir=self.settings.instance.raw_events_dir,
+                    gateway_token=self.settings.openclaw_gateway_token,
                 )
             )
             self.run_skill_fn = partial(run_skill, _runtime=skill_runtime)

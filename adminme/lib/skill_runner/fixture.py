@@ -123,6 +123,7 @@ def build_fixture_runtime(
         raw_events_dir=raw_events_dir,
         httpx_client_factory=lambda: client,
         gateway_url="http://fixture.invalid/tools/invoke",
+        gateway_token="fixture-gateway-token",
     )
 
 

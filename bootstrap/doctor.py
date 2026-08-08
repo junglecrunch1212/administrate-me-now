@@ -38,6 +38,7 @@ from bootstrap.contracts import (
 from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import reviewed_source_status
+from bootstrap.openclaw_tools import required_llm_tool_status
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
 
@@ -630,19 +631,22 @@ class Doctor:
             plugin_evidence["discovered"] = bool(
                 discovery_output and "administrateme" in discovery_output
             )
+            llm_tool = required_llm_tool_status(self.paths, test_mode=self.test_mode)
+            plugin_evidence["required_llm_tool"] = llm_tool
             plugin_ok = (
                 compat.get("pluginApi") == versions["openclaw"]["plugin_api"]
                 and build.get("openclawCommit") == versions["openclaw"]["commit"]
                 and plugin_evidence["discovered"]
+                and llm_tool["ok"]
             )
         checks.append(
             DoctorCheck(
                 "openclaw_compatibility_and_plugin_discovery",
                 plugin_ok,
-                "manifest and exact compatibility contract agree"
+                "manifest, plugin discovery, and required llm-task registration agree"
                 if plugin_ok
-                else "plugin compatibility mismatch",
-                "Do not upgrade OpenClaw; restore the tested exact package/commit.",
+                else "plugin compatibility or required llm-task registration mismatch",
+                "Restore the tested exact OpenClaw build and reconcile its reviewed llm-task configuration.",
                 plugin_evidence,
             )
         )

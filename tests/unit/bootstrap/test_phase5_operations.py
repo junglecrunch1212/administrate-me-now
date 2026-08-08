@@ -43,6 +43,10 @@ import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
 from bootstrap.openclaw_activation import activate, model_provider_configured
 from bootstrap.openclaw_install import reviewed_source_status, source_receipt_path
+from bootstrap.openclaw_tools import (
+    configure_required_llm_tool,
+    required_llm_tool_status,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ENTRYPOINTS = (
@@ -131,6 +135,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'openclaw plugins install --link --force "$release_dir/' in installer
     assert "openclaw plugins uninstall administrateme --force --keep-files" in installer
     assert "openclaw config set gateway.mode local" in installer
+    assert "bootstrap.openclaw_tools" in installer
     assert "openclaw config validate" in installer
     assert "outside >=6,<7" in installer
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
@@ -147,6 +152,8 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         in updater
     )
     assert 'upgrade "$candidate" "$approve_flag"' in updater
+    upgrade_source = (REPO_ROOT / "bootstrap" / "upgrade.py").read_text("utf-8")
+    assert "configure_required_llm_tool" in upgrade_source
     source_installer = (
         REPO_ROOT / "bootstrap" / "install-openclaw-source.sh"
     ).read_text("utf-8")
@@ -170,6 +177,127 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
     )
     assert 'cd "$ACTIVE_RELEASE_ROOT"' in common
+
+
+def test_required_llm_tool_status_proves_config_and_runtime_registration(
+    test_paths: DeploymentPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {"entries": {"llm-task": {"enabled": True}}},
+                "tools": {"alsoAllow": ["existing-tool", "llm-task"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
+        lambda paths: "/reviewed/openclaw",
+    )
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "plugin": {
+                        "status": "active",
+                        "toolNames": ["llm-task"],
+                        "origin": "bundled",
+                        "packageName": "@openclaw/llm-task",
+                        "packageVersion": "2026.7.2",
+                    }
+                }
+            ),
+            stderr="",
+        ),
+    )
+
+    status = required_llm_tool_status(test_paths)
+
+    assert status == {
+        "ok": True,
+        "plugin_enabled": True,
+        "tool_allowed": True,
+        "runtime_registered": True,
+        "bundled_origin": True,
+        "version_matches": True,
+        "tool": "llm-task",
+    }
+
+
+def test_required_llm_tool_configuration_preserves_existing_allow_entries(
+    test_paths: DeploymentPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "plugins": {"entries": {"llm-task": {"enabled": True}}},
+                "tools": {"alsoAllow": ["existing-tool", "llm-task"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
+        lambda paths: "/reviewed/openclaw",
+    )
+
+    def run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        commands.append(command)
+        if command[1:4] == ["plugins", "inspect", "llm-task"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "plugin": {
+                            "status": "active",
+                            "toolNames": ["llm-task"],
+                            "origin": "bundled",
+                            "packageName": "@openclaw/llm-task",
+                            "packageVersion": "2026.7.2",
+                        }
+                    }
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("bootstrap.openclaw_tools.subprocess.run", run)
+
+    status = configure_required_llm_tool(test_paths)
+
+    assert status["ok"] is True
+    allow_command = next(
+        command for command in commands if "tools.alsoAllow" in command
+    )
+    assert json.loads(allow_command[4]) == ["existing-tool", "llm-task"]
+    assert allow_command[-1] == "--replace"
+
+
+def test_required_llm_tool_status_fails_closed_on_malformed_config_nodes(
+    test_paths: DeploymentPaths,
+) -> None:
+    config_path = test_paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"plugins": [], "tools": "not-a-mapping"}), encoding="utf-8"
+    )
+
+    status = required_llm_tool_status(test_paths)
+
+    assert status["ok"] is False
+    assert status["plugin_enabled"] is False
+    assert status["tool_allowed"] is False
+    assert status["runtime_registered"] is False
+    assert status["bundled_origin"] is False
+    assert status["version_matches"] is False
 
 
 def test_macos_installer_dispatches_without_optional_passthrough_args(
