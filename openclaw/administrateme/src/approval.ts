@@ -2,13 +2,42 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "./contract.js";
 import type { PluginRuntime } from "./runtime.js";
 
+function pythonJsonString(value: string): string {
+  // Python's approval verifier uses json.dumps() with ensure_ascii=True.
+  // Escape every non-ASCII UTF-16 code unit so both runtimes hash the same
+  // bytes, including surrogate pairs for emoji.
+  return JSON.stringify(value).replace(
+    /[\u0080-\uffff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function pythonJsonNumber(value: number): string {
+  const magnitude = Math.abs(value);
+  const serialized =
+    magnitude !== 0 && magnitude >= 1e-6 && magnitude < 1e-4
+      ? value.toExponential()
+      : JSON.stringify(value);
+  if (serialized === undefined) throw new Error("approval parameters are not JSON serializable");
+  // Python pads single-digit JSON exponents (1e-07); JavaScript does not.
+  return serialized.replace(/e([+-]?)(\d+)$/i, (_match, sign: string, exponent: string) => {
+    return `e${sign || "+"}${exponent.padStart(2, "0")}`;
+  });
+}
+
 function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (value === null) return "null";
+  if (typeof value === "string") return pythonJsonString(value);
+  if (typeof value === "number") return pythonJsonNumber(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value !== "object") {
+    throw new Error("approval parameters are not JSON serializable");
+  }
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+    .map((key) => `${pythonJsonString(key)}:${canonical(record[key])}`)
     .join(",")}}`;
 }
 

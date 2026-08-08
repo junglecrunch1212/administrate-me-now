@@ -12,6 +12,7 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import plugin from "../src/index.js";
+import { approvalRequestFingerprint } from "../src/approval.js";
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
@@ -100,6 +101,20 @@ function toolContext(overrides: Partial<OpenClawPluginToolContext> = {}): OpenCl
 }
 
 describe("native OpenClaw contract fixture", () => {
+  it("matches Python approval fingerprints for Unicode and exponent values", () => {
+    expect(approvalRequestFingerprint({ text: "Laura’s café ☕" })).toBe(
+      "0bd47ff5a452c7769bc25c29e33b1f3cfa8c3b966e58caa91c856b66f3d9a02e",
+    );
+    expect(approvalRequestFingerprint({ text: "emoji 😀" })).toBe(
+      "b63e44cf7a757490e5fc318b0140a209ebc306955926e0f608d86c612f7ec2d8",
+    );
+    expect(approvalRequestFingerprint({ value: 1e-7 })).toBe(
+      "aece37dfda4992947222ea73b79996bba4aa181345a1fbb7f8c2b56b3fbd6a44",
+    );
+    expect(approvalRequestFingerprint({ value: 1e-6 })).toBe(
+      "40eb230f5af7b02c83c7be700ea8d95c3f2862ff1cbac50d0da498597e9cfaad",
+    );
+  });
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
