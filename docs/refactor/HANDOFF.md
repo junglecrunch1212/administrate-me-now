@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_LLM_EXECUTION_REPAIR_CANDIDATE
+gate_result: TRIAGE_STARTUP_REPLAY_REPAIR_CANDIDATE
 verified_local_date: 2026-08-08
-verified_github_date: 2026-08-07
-branch: codex/repair-openclaw-agent-session
+verified_github_date: 2026-08-08
+branch: codex/repair-triage-startup-replay
 candidate_commit_resolution: independent_review_pending
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/292
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/293
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -16,6 +16,30 @@ next_phase: independent_review_then_phase_b_activation
 ---
 
 # Release handoff
+
+## 2026-08-08 Gateway-first startup and Triage v6 replay repair
+
+PR #292 merged as `c96dbf8`, but two guarded activation attempts correctly
+rolled back before acceptance. The first candidate-controller invocation omitted
+the instance-local executable directory and Doctor could not resolve the exact
+OpenClaw selector. The corrected invocation reached the new source, but the
+existing service manager launched the AdministrateMe runtime before OpenClaw.
+The runtime immediately began the reviewed Triage replay while its only language
+seam was unavailable, durably auditing transport failures and advancing through
+defensive deterministic results. The post-switch process/readiness check rejected
+the release; both attempts restored release `b23c6b1`, exact OpenClaw source
+`944cf08f`, healthy observation mode, and produced encrypted backups.
+
+This follow-up **HARDENS** the central composition without changing model
+authority. Service activation now starts the exact pinned OpenClaw Gateway,
+proves its credential-free loopback `/health` response within a bounded window,
+and only then starts the AdministrateMe runtime and its reactive replay. Runtime
+liveness and full readiness retain separate bounded checks. The reviewed replay
+boundary advances to `classify_message_nature` 4.0.2 and `noise_filtering` 6.0.0,
+so the immutable message facts can be interpreted after the failed-start audit
+facts while cross-generation candidate deduplication still appends only absent
+target-kind/candidate-key pairs. Observation mode and human confirmation remain
+mandatory; this repair performs no provider write.
 
 ## 2026-08-08 pinned llm-task execution and Triage v5 repair
 

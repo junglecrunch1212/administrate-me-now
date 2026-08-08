@@ -32,6 +32,7 @@ from bootstrap.keychain_runtime_migration import (
 from bootstrap.preflight import PreflightFailure, run_preflight
 from bootstrap.secrets import MacOSKeychainStore, secret_store
 from bootstrap.services import (
+    OPENCLAW_LIVENESS_TIMEOUT_SECONDS,
     RUNTIME_LIVENESS_TIMEOUT_SECONDS,
     ServiceManager,
     ServiceStatus,
@@ -933,7 +934,7 @@ def test_start_stop_restart_crash_recovery_states_are_truthful(
     assert manager.stop().status == "stopped"
 
 
-def test_live_services_start_runtime_before_openclaw(
+def test_live_services_start_openclaw_before_runtime_replay(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -948,6 +949,7 @@ def test_live_services_start_runtime_before_openclaw(
     monkeypatch.setattr(
         manager, "_launchctl_definition_matches", lambda _label, _path: True
     )
+    monkeypatch.setattr(manager, "_openclaw_liveness", lambda: True)
     monkeypatch.setattr(manager, "_runtime_liveness", lambda: True)
     monkeypatch.setattr(manager, "status", lambda: healthy)
 
@@ -957,11 +959,46 @@ def test_live_services_start_runtime_before_openclaw(
 
     monkeypatch.setattr("bootstrap.services.subprocess.run", run)
     assert manager.start() == healthy
-    kickstarts = [command[-1] for command in commands if "kickstart" in command]
-    assert kickstarts == [
+    bootouts = [command[-1] for command in commands if "bootout" in command]
+    assert bootouts == [
         f"gui/{os.getuid()}/com.administrateme.runtime",
         f"gui/{os.getuid()}/com.administrateme.openclaw",
     ]
+    kickstarts = [command[-1] for command in commands if "kickstart" in command]
+    assert kickstarts == [
+        f"gui/{os.getuid()}/com.administrateme.openclaw",
+        f"gui/{os.getuid()}/com.administrateme.runtime",
+    ]
+
+
+def test_openclaw_launch_probe_uses_local_health_endpoint(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b'{"ok":true,"status":"live"}'
+
+    def urlopen(url: str, *, timeout: int):
+        observed.update(url=url, timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr("bootstrap.services.urllib.request.urlopen", urlopen)
+    manager = ServiceManager(test_paths)
+
+    assert manager._openclaw_liveness() is True
+    assert str(observed["url"]).endswith(":18789/health")
+    assert observed["timeout"] == 5
+    assert OPENCLAW_LIVENESS_TIMEOUT_SECONDS == 120
 
 
 def test_runtime_launch_probe_uses_lightweight_live_endpoint(

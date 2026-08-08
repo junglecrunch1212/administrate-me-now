@@ -1,5 +1,15 @@
 # Constitutional crosswalk
 
+Gateway-first replay amendment (2026-08-08): C001/C002/C007/C035/C046/C050/
+C055/C071/C076 are **PRESERVED/HARDENED** after guarded activation proved that
+the prior runtime-first launch order allowed the deterministic bus to begin NLP
+replay before its pinned OpenClaw seam was reachable. The exact Gateway now
+reaches a bounded credential-free loopback health state before the Python
+runtime and reactive pipelines start. A v6/4.0.2 append-only replay retains
+transport-failure audit facts, reinterprets immutable source messages, and
+deduplicates every previously proposed kind/key. Model output still cannot
+choose eligibility, scope, route, authority, truth, or a provider write.
+
 Pinned `llm-task` execution amendment (2026-08-08): C001/C002/C007/C035/
 C046/C050/C055/C071/C076 are **PRESERVED/HARDENED** after authenticated live
 execution proved the former exact OpenClaw snapshot's bundled tool was

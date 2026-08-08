@@ -168,6 +168,9 @@ developer checkout merely because the operator invoked the wrapper there.
 Upgrade/start waits for the previous launchd definition to unload and verifies
 the newly loaded program, working directory, and repository-root environment
 against the candidate plist before accepting health. Post-switch validation
+starts the exact OpenClaw Gateway and proves its local health response before
+starting the Python runtime, because reactive language replay begins during
+runtime startup. It
 may retry only the bounded projection/Gateway/plugin/cron/listener startup
 checks; it then requires the complete Doctor, including the canonical
 synthetic round trip. Every other failed check causes immediate rollback.
