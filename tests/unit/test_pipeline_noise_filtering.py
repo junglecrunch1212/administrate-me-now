@@ -129,12 +129,13 @@ def _messaging_received_event(
         "type": "messaging.received",
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
-        "owner_scope": "shared:household",
-        "visibility_scope": "shared:household",
+        "owner_scope": "private:member-fixture",
+        "visibility_scope": "private:member-fixture",
         "payload": {
             "source_channel": "gmail",
             "from_identifier": "ada@example.com",
             "to_identifier": "me@example.com",
+            "member_id": "member-fixture",
             "body_text": body_text,
             "received_at": EventEnvelope.now_utc_iso(),
         },
@@ -147,13 +148,14 @@ def _telephony_sms_event(*, body: str = "your code is 123456") -> dict[str, Any]
         "type": "telephony.sms_received",
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
-        "owner_scope": "shared:household",
-        "visibility_scope": "shared:household",
+        "owner_scope": "private:member-fixture",
+        "visibility_scope": "private:member-fixture",
         "payload": {
             "from_number": "+15551234567",
             "to_number": "+15559999999",
             "body": body,
             "received_at": EventEnvelope.now_utc_iso(),
+            "member_id": "member-fixture",
         },
     }
 
@@ -241,7 +243,7 @@ async def test_skill_success_emits_classified() -> None:
         assert skill_id == "skill:classify_message_nature"
         assert skill_ctx.invocation_idempotency_key is not None
         assert skill_ctx.invocation_idempotency_key.startswith("message-nature:")
-        assert ":v8:" not in skill_ctx.invocation_idempotency_key
+        assert ":v9:" not in skill_ctx.invocation_idempotency_key
         assert skill_ctx.retry_prior_failure is True
         assert inputs["body_text"] == "Hello from a real friend!"
         assert inputs["source_channel"] == "gmail"
@@ -262,7 +264,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "4.0.3"
+    assert envelope.payload["skill_version"] == "4.0.4"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -286,7 +288,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "4.0.3"
+    assert envelope.payload["skill_version"] == "4.0.4"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -434,8 +436,10 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
 @pytest.mark.asyncio
 async def test_candidates_require_an_exact_private_member_scope() -> None:
     log = _FakeEventLog()
+    calls: list[Any] = []
 
     async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
         return _make_skill_result(
             candidates=[
                 {
@@ -455,11 +459,10 @@ async def test_candidates_require_an_exact_private_member_scope() -> None:
     await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
 
     assert [call.envelope.type for call in log.calls] == [
-        "messaging.classified",
-        "messaging.semantic_features_extracted",
         "triage.intent.features_extracted",
     ]
     assert log.calls[-1].envelope.payload["assessment_outcome"] == "quarantined"
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -532,11 +535,11 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v8:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v9:")
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_uses_v8_after_prior_generations() -> None:
+async def test_reviewed_replay_uses_v9_after_prior_generations() -> None:
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -558,6 +561,9 @@ async def test_reviewed_replay_uses_v8_after_prior_generations() -> None:
     async def source_assurance_recovered(*args: Any, **kwargs: Any) -> SkillResult:
         return _make_skill_result(classification="personal", confidence=0.5)
 
+    async def throughput_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(classification="professional", confidence=0.55)
+
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(event, _make_ctx(log, first))
     await pipeline.handle(event, _make_ctx(log, unavailable))
@@ -565,6 +571,7 @@ async def test_reviewed_replay_uses_v8_after_prior_generations() -> None:
     await pipeline.handle(event, _make_ctx(log, startup_order_recovered))
     await pipeline.handle(event, _make_ctx(log, explicit_replay_recovered))
     await pipeline.handle(event, _make_ctx(log, source_assurance_recovered))
+    await pipeline.handle(event, _make_ctx(log, throughput_recovered))
 
     classified_keys = [
         call.envelope.idempotency_key
@@ -578,6 +585,7 @@ async def test_reviewed_replay_uses_v8_after_prior_generations() -> None:
         "messaging:classified:v6:trigger-eid-001",
         "messaging:classified:v7:trigger-eid-001",
         "messaging:classified:v8:trigger-eid-001",
+        "messaging:classified:v9:trigger-eid-001",
     ]
 
 
@@ -641,14 +649,14 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v8:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v9:")
         for proposal in proposals
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("member_decided", [False, True])
-async def test_v8_retires_only_untouched_generic_action_verb_proposals(
+async def test_v9_retires_only_untouched_generic_action_verb_proposals(
     member_decided: bool,
 ) -> None:
     log = _FakeEventLog()

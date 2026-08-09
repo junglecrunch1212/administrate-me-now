@@ -26,6 +26,7 @@ RUNTIME_LIVENESS_POLL_SECONDS = 1
 OPENCLAW_LIVENESS_TIMEOUT_SECONDS = 120
 OPENCLAW_LIVENESS_POLL_SECONDS = 1
 SERVICE_READINESS_TIMEOUT_SECONDS = 120
+RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS = 30
 SOURCE_ASSURANCE_COUNT_NAMES = (
     "source_facts",
     "obligations",
@@ -352,6 +353,11 @@ class ServiceManager:
             return False
         return data.get("status") == "alive" and data.get("runtime_started") is True
 
+    def runtime_is_live(self) -> bool:
+        """Expose the cheap content-free runtime liveness proof to upgrades."""
+
+        return self._runtime_liveness()
+
     def _runtime_health(self) -> str:
         data = self.runtime_diagnostics()
         if not data:
@@ -402,7 +408,7 @@ class ServiceManager:
         try:
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/api/system/ready",
-                timeout=5,
+                timeout=RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
             ) as response:
                 data = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError):

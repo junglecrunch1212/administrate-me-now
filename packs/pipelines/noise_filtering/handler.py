@@ -54,9 +54,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "4.0.3"
+SKILL_VERSION = "4.0.4"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 8
+_REPLAY_GENERATION = 9
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -153,7 +153,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "8.0.0"
+    version: str = "9.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -183,6 +183,39 @@ class NoiseFilteringPipeline:
             return
 
         payload = event.get("payload") or {}
+        owner_scope = str(event.get("owner_scope") or "")
+        if not owner_scope.startswith("private:"):
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["source_scope_is_not_private_member"],
+            )
+            return
+        member_id = owner_scope.removeprefix("private:")
+        payload_member = payload.get("member_id")
+        if payload_member is not None and payload_member != member_id:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["payload_member_scope_mismatch"],
+            )
+            return
+        if not member_id:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["source_member_missing"],
+            )
+            return
         prepared = _extract_text_and_inputs(event_type, payload)
         if prepared is None:
             await self._emit_triage_assessment(
@@ -421,40 +454,8 @@ class NoiseFilteringPipeline:
         message_direction: str,
         assessment_failure_reason: str | None,
     ) -> None:
-        payload = event.get("payload") or {}
         owner_scope = str(event.get("owner_scope") or "")
-        if not owner_scope.startswith("private:"):
-            await self._emit_triage_assessment(
-                event=event,
-                ctx=ctx,
-                source_event_id=source_event_id,
-                candidates=[],
-                outcome="quarantined",
-                reason_codes=["source_scope_is_not_private_member"],
-            )
-            return
         member_id = owner_scope.removeprefix("private:")
-        payload_member = payload.get("member_id")
-        if payload_member is not None and payload_member != member_id:
-            await self._emit_triage_assessment(
-                event=event,
-                ctx=ctx,
-                source_event_id=source_event_id,
-                candidates=[],
-                outcome="quarantined",
-                reason_codes=["payload_member_scope_mismatch"],
-            )
-            return
-        if not member_id:
-            await self._emit_triage_assessment(
-                event=event,
-                ctx=ctx,
-                source_event_id=source_event_id,
-                candidates=[],
-                outcome="quarantined",
-                reason_codes=["source_member_missing"],
-            )
-            return
         try:
             submitted_at = datetime.fromisoformat(
                 str(event["occurred_at"]).replace("Z", "+00:00")

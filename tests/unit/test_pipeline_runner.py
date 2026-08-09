@@ -221,6 +221,30 @@ async def test_status_returns_per_pack_entry(rig: dict[str, Any]) -> None:
     assert entry["version"] == pack.version
     assert entry["subscriber_id"] == f"pipeline:{pack.pack_id}"
     assert entry["subscriber_status"] is not None
+    assert entry["subscriber_status"]["delivery_concurrency"] == 1
+
+
+async def test_runner_passes_reviewed_delivery_concurrency_to_bus(
+    rig: dict[str, Any],
+) -> None:
+    runner: PipelineRunner = rig["runner"]
+    pack: LoadedPipelinePack = rig["pack"]
+    pack = LoadedPipelinePack(
+        pack_id=pack.pack_id,
+        version=pack.version,
+        manifest=pack.manifest,
+        triggers=pack.triggers,
+        events_emitted=pack.events_emitted,
+        instance=pack.instance,
+        pack_root=pack.pack_root,
+        replay_on_version_change=pack.replay_on_version_change,
+        delivery_concurrency=3,
+    )
+    runner.register(pack)
+    await runner.start()
+
+    status = await rig["bus"].subscriber_status(f"pipeline:{pack.pack_id}")
+    assert status["delivery_concurrency"] == 3
 
 
 # ---------------------------------------------------------------------------

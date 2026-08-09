@@ -1,5 +1,18 @@
 # Migration map
 
+CO-008 source-throughput repair (2026-08-08): `noise_filtering` v9 is
+**HARDENED** so privacy/member routing precedes NLP and its reviewed,
+idempotent historical replay uses eight-way bounded delivery. The event bus
+still provides at-least-once semantics and persists only the contiguous
+successful prefix; it does not acknowledge around a failure. The
+`classify_message_nature` 4.0.4 timeout changes from eight to 30 seconds to
+match the pinned OpenClaw completion envelope without changing model routing or
+authority. The 39 legacy household-shared Gmail facts remain immutable and are
+explicitly quarantined; 316 private-member facts remain eligible for v9
+assessment. Readiness-probe tolerance is **HARDENED** only while cheap runtime
+liveness is true. No projection, truth store, provider permission, or
+observation-mode policy changes.
+
 CO-008 deployment repair (2026-08-08): runtime source accounting is
 **HARDENED** from per-readiness synchronous invalidation to a mandatory initial
 audit plus a 30-second, single-flight background refresh. This changes no event

@@ -1,5 +1,15 @@
 # Release acceptance contract
 
+CO-008 source-throughput amendment (2026-08-08): AC-34 requires privacy and
+member-route refusal before any language call. A language-bound replay may opt
+into bounded concurrency only when the consumer is idempotent and the durable
+bus advances through the contiguous successful source prefix; a failure cannot
+skip its source even when later callbacks completed. Delivery concurrency must
+be explicit, bounded, and visible in subscriber diagnostics. The updater may
+tolerate a slow readiness document only while the separate content-free
+liveness endpoint remains true; it may not reinterpret liveness as source
+settlement or waive the final terminal predicate.
+
 CO-008 deployment-repair amendment (2026-08-08): AC-34 additionally requires
 readiness to remain bounded while one source-assurance refresh is in flight;
 refresh failures must be visible without exposing source content. Doctor must

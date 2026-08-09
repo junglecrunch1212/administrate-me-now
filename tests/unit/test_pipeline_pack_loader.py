@@ -36,6 +36,7 @@ def test_load_echo_logger_happy_path() -> None:
     assert pack.triggers["events"] == ["messaging.received"]
     assert pack.events_emitted == []
     assert pack.replay_on_version_change is False
+    assert pack.delivery_concurrency == 1
     assert pack.instance.pack_id == "pipeline:echo_logger"
     assert pack.instance.version == "1.0.0"
 
@@ -167,5 +168,36 @@ def test_invalid_replay_mode_raises(tmp_path: Path) -> None:
     with pytest.raises(
         PipelinePackLoadError,
         match="replay.on_version_change must be 'none' or 'full'",
+    ):
+        load_pipeline_pack(tmp_path)
+
+
+@pytest.mark.parametrize("value", [0, 17, True, "many"])
+def test_invalid_delivery_concurrency_raises(tmp_path: Path, value: object) -> None:
+    (tmp_path / "pipeline.yaml").write_text(
+        "pack:\n"
+        "  id: pipeline:bad_delivery\n"
+        "  version: 1.0.0\n"
+        "  kind: pipeline\n"
+        "runtime:\n"
+        "  language: python\n"
+        "  entrypoint: handler.py\n"
+        "  class: BadDeliveryPipeline\n"
+        "triggers:\n"
+        "  events: [messaging.received]\n"
+        "delivery:\n"
+        f"  concurrency: {str(value).lower()}\n"
+    )
+    (tmp_path / "handler.py").write_text(
+        "class BadDeliveryPipeline:\n"
+        "    pack_id = 'pipeline:bad_delivery'\n"
+        "    version = '1.0.0'\n"
+        "    triggers = {'events': ['messaging.received']}\n"
+        "    async def handle(self, event, ctx):\n"
+        "        pass\n"
+    )
+    with pytest.raises(
+        PipelinePackLoadError,
+        match="delivery.concurrency must be an integer between 1 and 16",
     ):
         load_pipeline_pack(tmp_path)

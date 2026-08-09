@@ -3,19 +3,53 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_REPLAY_SETTLEMENT_REPAIR
+gate_result: SOURCE_ASSURANCE_THROUGHPUT_REPAIR
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
-branch: codex/source-assurance-replay-settlement
-candidate_commit_resolution: pr_297_merged_second_activation_rolled_back_settlement_repair_pending
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/297
+branch: codex/source-assurance-throughput
+candidate_commit_resolution: pr_298_merged_third_activation_rolled_back_throughput_repair_pending
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: replay_settlement_review_merge_and_guarded_reactivation
+next_phase: throughput_repair_review_merge_and_guarded_reactivation
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-008 source-throughput repair
+
+PR #298 passed Constitution sync and the Apple-silicon rehearsal, merged as
+`5c85b05`, and entered guarded activation after encrypted backup
+`administrateme-20260809T033417Z.ambackup`. Doctor again rejected incomplete
+source settlement and the updater restored `c484f0a`; the active runtime,
+Gateway, launch definitions, and loopback health are live. Observation mode
+remained active and no member decision or provider write was performed.
+
+Retained content-free evidence exposed two distinct executable defects rather
+than a longer replay window. Of 355 immutable Gmail facts, 316 are correctly
+private-member scoped and 39 legacy facts are household-shared. Only 18 v8
+assessments were retained: 16 explicit scope quarantines and two explicit
+empty-text outcomes. The next shared-scope source still entered the language
+seam because scope refusal occurred after NLP. The bus also delivered this
+language-bound consumer serially, while the service probe treated one slow
+readiness document as proof that replay was not advancing.
+
+The reviewed repair moves every scope/member refusal ahead of the model,
+introduces opt-in bounded delivery concurrency with ordered-prefix durable
+checkpointing, and raises the classification skill's bounded timeout to match
+the observed pinned-Gateway completion envelope. `noise_filtering` v9 uses
+eight-way delivery only for its idempotent source assessor. A failed callback
+never advances past the failed source; later completed callbacks are safely
+redelivered. The updater tolerates a slow readiness document only while the
+cheap runtime liveness endpoint remains true and retains the same settlement
+deadline, terminal equality, full Doctor, synthetic proof, and rollback.
+Focused failure-path tests pass. The exact release matrix passes with 37 strict
+acceptance tests, 1,681 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw
+plugin tests, plus lint, types, invariants, performance, dependencies, builds,
+clean install, tenant isolation, backup/restore, package/audit, shell, and diff
+gates under Python 3.14 and Node 24. Review, merge, and guarded reactivation
+remain pending.
 
 ## 2026-08-08 CO-008 replay-settlement repair
 
