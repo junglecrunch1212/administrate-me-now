@@ -460,3 +460,11 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Producers | Pipeline packs, adapter packs/supervisor, governance, observation, skills, bridge ingestion, and xlsx paths use the injected event sink; synchronous capability probes are removed. | End-to-end product semantics remain Phase 3+. |
 | Product topology | Core, Comms, Capture, Automation, Bridge, and System are namespaces inside one FastAPI application with truthful liveness/readiness. | Full UX and authorization behavior remains AC-08/18/19. |
 | Portability | Xlsx locking supports Windows and POSIX; scaffold templates use portable filenames; bridge task shutdown is bounded. | Clean macOS installation/rehearsal remains AC-01/21. |
+
+## CO-010 exact plugin-selection live delta
+
+| Subsystem | Before PR #309 | Deployed result | Classification |
+|---|---|---|---|
+| OpenClaw local plugin selection | Same-version discovery could continue loading a reviewed but stale immutable release after an otherwise successful upgrade. | The updater reconciles the bounded AdministrateMe registration while stopped; Doctor requires the registered path and loaded module to resolve in the selected release. Live release `e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a` satisfies both. | HARDEN |
+| Startup health | The new retry implementation could exist only in the inactive candidate tree, leaving successful startup dependent on an operator health request. | A controlled Gateway-before-runtime restart used the active plugin's bounded automatic retry and reached healthy Doctor without a manual POST. | MODERNIZE |
+| Source-to-Triage proof | Source retention and subscriber checkpoints previously allowed a false-empty member queue. | The settled proof accounts for 61,335/61,335 obligations with 31 candidate-bearing facts and zero pending, missing, or failed outcomes; authenticated Triage renders 77 needs-details and 13 ready items. | SUPERSEDE |

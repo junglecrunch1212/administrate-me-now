@@ -1,5 +1,17 @@
 # Release acceptance contract
 
+CO-010 live evidence (2026-08-09): PR #309 passed both hosted gates, merged as
+`e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a`, and deployed through the
+attested updater after encrypted backup
+`administrateme-20260809T185921Z.ambackup`. Exact OpenClaw install and loaded-
+module paths resolve inside that immutable release. A controlled
+Gateway-before-runtime restart converged via automatic plugin retry without a
+manual health request. Full Doctor passed; source assurance is settled at
+61,335/61,335 with 31 candidate-bearing facts and no pending, missing, or
+failed outcomes. Authenticated Triage rendered 77 needs-details items and 13
+ready items without browser warnings or errors. Observation remained active,
+and no candidate decision or provider effect was performed.
+
 Immutable plugin-selection amendment (2026-08-09): AC-12, AC-14, and AC-21
 require OpenClaw's registered local AdministrateMe plugin, install source, and
 loaded runtime module to resolve inside the same immutable release selected by

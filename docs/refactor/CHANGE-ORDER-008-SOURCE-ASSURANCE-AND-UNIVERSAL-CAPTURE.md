@@ -478,3 +478,14 @@ module resolve inside the selected release. Candidate failure restores the
 previous executable, plugin registration, pointer, and launch definitions
 before restart. Doctor reports only booleans for these paths; no instance path,
 credential, response body, or household content becomes diagnostic evidence.
+
+PR #309 passed both hosted gates, merged as
+`e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a`, and deployed after encrypted
+backup `administrateme-20260809T185921Z.ambackup`. OpenClaw's registered source
+and loaded module now resolve inside that release, and a controlled restart
+converged through automatic plugin retry without an operator POST. Final Doctor
+accepted a current settled 61,335/61,335 proof with 31 candidate-bearing facts
+and zero pending, missing, or failed dispositions. Authenticated Triage
+rendered 77 needs-details and 13 ready items with no browser warnings or
+errors. Observation remained active; no member decision or provider effect was
+performed. This closes the false-empty source-assurance activation defect.

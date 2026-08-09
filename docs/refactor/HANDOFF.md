@@ -3,19 +3,48 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_010_DEPLOYED_STALE_PLUGIN_SELECTION_REPAIR_IN_REVIEW
+gate_result: CO_010_DEPLOYED_AND_LIVE_VERIFIED
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_308_merged_and_deployed_43cd565_stale_plugin_selection_candidate
+candidate_commit_resolution: pr_309_merged_and_deployed_e908ee5_exact_plugin_selection_verified
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/309
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: review_merge_deploy_exact_plugin_then_verify_reboot_and_triage
+next_phase: observation_soak_and_member_candidate_review
 ---
 
 # Release handoff
+
+## 2026-08-09 CO-010 deployed and live verified
+
+PR #309 passed both hosted gates, merged as
+`e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a`, and deployed through the
+attested updater after encrypted backup
+`administrateme-20260809T185921Z.ambackup`. The updater retained rollback and
+observation mode. OpenClaw inspection proves the registered install source and
+loaded runtime module both resolve inside that exact immutable release; all
+Doctor plugin identity booleans are true.
+
+A controlled stop/start proved automatic Gateway-before-runtime convergence.
+The native plugin first reported the runtime unavailable, retried after one
+second, and became ready without an operator POST. Settled idle sampling used
+0.09 CPU-second over 30 seconds (approximately 0.3% of one core) with stable
+RSS. A final full Doctor is healthy: 14/14 projections, 8/8 required pipelines,
+5/5 managed OpenClaw jobs, authenticated `llm-task`, and the canonical
+synthetic round trip all pass with zero external effects.
+
+Source assurance is current and settled at 61,335/61,335 obligations: 31
+source facts have candidates, 306 have an explicit no-candidate disposition,
+39 are quarantined, and pending, missing, and failed are all zero. Authenticated
+member-browser proof renders Triage with 77 items needing details and 13 ready
+for confirmation and no console warnings or errors. The visible queue includes
+payment/billing changes and requested actions, closing the original false-empty
+failure. It also includes lower-value automated engineering notices; that is a
+signal-ranking and member-review concern, not missing extraction. No candidate
+was confirmed or dismissed and no provider write was authorized. Observation
+soak and member review are the next gate.
 
 ## 2026-08-09 immutable OpenClaw plugin-selection candidate
 
