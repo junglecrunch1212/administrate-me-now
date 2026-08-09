@@ -60,6 +60,7 @@ def test_plugin_status_rejects_a_loaded_stale_release(
         "ok": False,
         "discovered": True,
         "loaded": True,
+        "release_root_valid": True,
         "release_path_current": False,
         "runtime_source_current": False,
     }
@@ -110,3 +111,16 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         str(plugin.resolve()),
     ] in commands
     assert ["/reviewed/openclaw", "config", "validate"] in commands
+
+
+def test_reconcile_rejects_a_plugin_path_outside_the_release(tmp_path: Path) -> None:
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    release = tmp_path / "releases" / "candidate"
+    plugin = release / "openclaw" / "administrateme"
+    outside = tmp_path / "outside-plugin"
+    outside.mkdir()
+    plugin.parent.mkdir(parents=True)
+    plugin.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="escapes"):
+        reconcile_administrateme_plugin(paths, release)

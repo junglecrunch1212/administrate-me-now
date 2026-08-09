@@ -47,10 +47,20 @@ def administrateme_plugin_status(
             "ok": True,
             "discovered": True,
             "loaded": True,
+            "release_root_valid": True,
             "release_path_current": True,
             "runtime_source_current": True,
         }
-    expected = (release / "openclaw" / "administrateme").resolve()
+    candidate_plugin = release / "openclaw" / "administrateme"
+    try:
+        expected = candidate_plugin.resolve()
+        release_root_valid = (
+            not candidate_plugin.is_symlink()
+            and expected.is_relative_to(release.resolve())
+        )
+    except (OSError, RuntimeError):
+        expected = candidate_plugin.absolute()
+        release_root_valid = False
     try:
         completed = subprocess.run(
             [
@@ -86,7 +96,7 @@ def administrateme_plugin_status(
             return False
         try:
             return Path(value).resolve() == expected
-        except OSError:
+        except (OSError, RuntimeError):
             return False
 
     source = plugin.get("source")
@@ -94,17 +104,22 @@ def administrateme_plugin_status(
         runtime_source_current = isinstance(source, str) and Path(
             source
         ).resolve().is_relative_to(expected)
-    except OSError:
+    except (OSError, RuntimeError):
         runtime_source_current = False
     release_path_current = exact_path(install.get("sourcePath")) and exact_path(
         install.get("installPath")
     )
     return {
         "ok": (
-            discovered and loaded and release_path_current and runtime_source_current
+            discovered
+            and loaded
+            and release_path_current
+            and runtime_source_current
+            and release_root_valid
         ),
         "discovered": discovered,
         "loaded": loaded,
+        "release_root_valid": release_root_valid,
         "release_path_current": release_path_current,
         "runtime_source_current": runtime_source_current,
     }
@@ -120,10 +135,17 @@ def reconcile_administrateme_plugin(
 
     if test_mode:
         return administrateme_plugin_status(paths, release, test_mode=True)
-    plugin = (release / "openclaw" / "administrateme").resolve()
+    candidate_plugin = release / "openclaw" / "administrateme"
+    plugin = candidate_plugin.resolve()
+    if candidate_plugin.is_symlink() or not plugin.is_relative_to(release.resolve()):
+        raise RuntimeError("reviewed AdministrateMe plugin path escapes the release")
+    manifest = plugin / "openclaw.plugin.json"
+    entrypoint = plugin / "dist" / "index.js"
     if (
-        not (plugin / "openclaw.plugin.json").is_file()
-        or not (plugin / "dist" / "index.js").is_file()
+        not manifest.is_file()
+        or manifest.is_symlink()
+        or not entrypoint.is_file()
+        or entrypoint.is_symlink()
     ):
         raise RuntimeError("reviewed AdministrateMe plugin build is incomplete")
     executable = resolve_reviewed_openclaw(paths)

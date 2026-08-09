@@ -1517,6 +1517,7 @@ def test_doctor_rejects_plugin_loaded_from_a_stale_release(
             "ok": False,
             "discovered": True,
             "loaded": True,
+            "release_root_valid": True,
             "release_path_current": False,
             "runtime_source_current": False,
         },

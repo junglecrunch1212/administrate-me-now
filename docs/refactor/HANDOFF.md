@@ -40,7 +40,7 @@ validates config, and requires install path plus runtime source to resolve in
 the selected immutable release. Rollback symmetrically restores the previous
 plugin link with its executable, pointer, and launch definitions. Focused unit
 and production-composition tests pass. The complete candidate matrix also
-passes: 46 strict acceptance tests, 1,724 root/pack tests, 60 isolated bridge
+passes: 46 strict acceptance tests, 1,725 root/pack tests, 60 isolated bridge
 tests, 17 native plugin tests, lint/types/security/invariants, performance,
 build/package, clean install, isolation, and encrypted backup/restore. Review,
 merge, attested deployment, exact runtime-source proof, controlled full
