@@ -78,6 +78,13 @@ def _version_parts(value: str) -> tuple[int, int, int]:
     return tuple((numbers + [0, 0, 0])[:3])  # type: ignore[return-value]
 
 
+def _diagnostic_count(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _event_log_check(path: Path, key: bytes) -> tuple[bool, dict[str, Any]]:
     if not path.is_file():
         return False, {"reason": "event log is missing"}
@@ -740,9 +747,8 @@ class Doctor:
                 launchd[label] = data.get("Label") == label
             except Exception:
                 launchd[label] = False
-        service_status = (
-            ServiceManager(self.paths, test_mode=self.test_mode).status().public()
-        )
+        service_manager = ServiceManager(self.paths, test_mode=self.test_mode)
+        service_status = service_manager.status().public()
         checks.append(
             DoctorCheck(
                 "launchd_and_process_state",
@@ -750,6 +756,72 @@ class Doctor:
                 service_status["status"],
                 "Run bootstrap/start.sh, then inspect the named service log.",
                 {"definitions": launchd, "services": service_status},
+            )
+        )
+        runtime_diagnostics = service_manager.runtime_diagnostics() or {}
+        assurance_capability = (runtime_diagnostics.get("capabilities") or {}).get(
+            "policy:source-assurance"
+        ) or {}
+        assurance_details = assurance_capability.get("details") or {}
+        raw_assurance_counts = assurance_details.get("counts") or {}
+        assurance_count_names = (
+            "source_facts",
+            "obligations",
+            "accounted",
+            "pending",
+            "missing",
+            "eligible_candidates",
+            "no_candidate",
+            "quarantined",
+            "failed",
+        )
+        assurance_counts = {
+            name: _diagnostic_count(raw_assurance_counts.get(name))
+            for name in assurance_count_names
+        }
+        assurance_freshness = assurance_details.get("freshness") or {}
+        assurance_ok = (
+            assurance_capability.get("state") == "healthy"
+            and assurance_details.get("state") == "healthy"
+            and assurance_counts["pending"] == 0
+            and assurance_counts["missing"] == 0
+            and assurance_counts["failed"] == 0
+            and assurance_counts["accounted"] == assurance_counts["obligations"]
+            and _diagnostic_count(assurance_details.get("declared_obligations")) > 0
+            and assurance_details.get("content_exposed") is False
+            and assurance_freshness.get("state") == "fresh"
+            and assurance_freshness.get("refresh_error_type") is None
+        )
+        checks.append(
+            DoctorCheck(
+                "source_assurance_terminal_dispositions",
+                assurance_ok,
+                (
+                    "every source obligation has a fresh audited terminal disposition"
+                    if assurance_ok
+                    else "source accounting is pending, stale, failed, or incomplete"
+                ),
+                "Keep observation active; repair or replay the named source assessor before deployment.",
+                {
+                    "contract": assurance_details.get("contract"),
+                    "state": assurance_details.get("state"),
+                    "counts": assurance_counts,
+                    "declared_source_event_types": assurance_details.get(
+                        "declared_source_event_types"
+                    ),
+                    "declared_obligations": assurance_details.get(
+                        "declared_obligations"
+                    ),
+                    "content_exposed": assurance_details.get("content_exposed"),
+                    "freshness": {
+                        "state": assurance_freshness.get("state"),
+                        "refreshed_at": assurance_freshness.get("refreshed_at"),
+                        "stale_seconds": assurance_freshness.get("stale_seconds"),
+                        "refresh_error_type": assurance_freshness.get(
+                            "refresh_error_type"
+                        ),
+                    },
+                },
             )
         )
         host = "127.0.0.1"

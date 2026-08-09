@@ -1485,12 +1485,51 @@ def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
     result = Doctor(test_paths, root=REPO_ROOT, test_mode=True).export(destination)
     assert result["status"] == "healthy"
     assert result["safe_to_attach"] is True
+    assurance = next(
+        check
+        for check in result["checks"]
+        if check["name"] == "source_assurance_terminal_dispositions"
+    )
+    assert assurance["ok"] is True
+    assert assurance["evidence"]["counts"]["accounted"] == 1
+    assert assurance["evidence"]["counts"]["pending"] == 0
+    assert assurance["evidence"]["content_exposed"] is False
     rendered = destination.read_bytes()
     store = secret_store(test_paths, test_mode=True)
     for reference in state["secret_references"].values():
         value = store.get(reference)
         assert value not in rendered
         assert value.hex().encode() not in rendered
+
+
+def test_doctor_fails_when_source_obligations_are_not_terminal(
+    test_paths: DeploymentPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _wizard(test_paths).run()
+    ServiceManager(test_paths, test_mode=True).start()
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    assurance = diagnostics["capabilities"]["policy:source-assurance"]
+    assurance["state"] = "degraded"
+    assurance["details"]["state"] = "degraded"
+    assurance["details"]["counts"]["accounted"] = 0
+    assurance["details"]["counts"]["pending"] = 1
+    monkeypatch.setattr(
+        "bootstrap.services.ServiceManager.runtime_diagnostics",
+        lambda _self: diagnostics,
+    )
+
+    report = Doctor(test_paths, root=REPO_ROOT, test_mode=True).run(
+        include_synthetic_proof=False
+    )
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "source_assurance_terminal_dispositions"
+    )
+    assert check["ok"] is False
+    assert check["evidence"]["counts"]["pending"] == 1
+    assert report["status"] == "failed"
 
 
 def test_observation_cannot_be_trusted_before_briefing_and_period(

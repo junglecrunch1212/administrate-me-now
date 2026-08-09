@@ -8,10 +8,10 @@ import hmac
 import json
 import os
 import time
-from functools import partial
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
@@ -395,6 +395,8 @@ class CapabilityRecord:
 class AdministrateMeRuntime:
     """Own all central resources and their ordered startup/shutdown."""
 
+    SOURCE_ASSURANCE_REFRESH_SECONDS = 30.0
+
     PRODUCT_NAMES = (
         "core",
         "comms",
@@ -445,9 +447,13 @@ class AdministrateMeRuntime:
             settings.instance.config_dir / "temporary-surfaces.json"
         )
         self.capabilities: dict[str, CapabilityRecord] = {}
-        self._source_assurance_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = (
-            None
-        )
+        self._source_assurance_cache: dict[str, Any] | None = None
+        self._source_assurance_refreshed_at: str | None = None
+        self._source_assurance_refreshed_monotonic = 0.0
+        self._source_assurance_last_attempt_monotonic = 0.0
+        self._source_assurance_revision: tuple[Any, ...] | None = None
+        self._source_assurance_refresh_task: asyncio.Task[None] | None = None
+        self._source_assurance_refresh_error: str | None = None
         self.standing_orders: dict[str, dict[str, Any]] = {}
         self.started = False
         self.stopping = False
@@ -663,6 +669,11 @@ class AdministrateMeRuntime:
             return
         self.stopping = True
         try:
+            if self._source_assurance_refresh_task is not None:
+                self._source_assurance_refresh_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._source_assurance_refresh_task
+                self._source_assurance_refresh_task = None
             if self.xlsx_reverse is not None:
                 await self.xlsx_reverse.stop()
                 self.xlsx_reverse = None
@@ -1388,43 +1399,7 @@ class AdministrateMeRuntime:
                         ],
                     }
                 )
-        assert self.event_log is not None
-        latest_event_id = await self.event_log.latest_event_id()
-        source_capability_signature = tuple(
-            sorted(
-                (
-                    key,
-                    record.state,
-                    record.details.get("checkpoint_event_id"),
-                    record.details.get("consecutive_failures"),
-                    record.details.get("poison_event_id"),
-                )
-                for key, record in self.capabilities.items()
-                if key.startswith(("pipeline:", "projection:"))
-            )
-        )
-        # The minute bucket lets in-flight obligations age into overdue/missing
-        # even when no new event or checkpoint arrives.
-        assurance_cache_key = (
-            latest_event_id,
-            source_capability_signature,
-            int(time.time() // 60),
-        )
-        if (
-            self._source_assurance_cache is not None
-            and self._source_assurance_cache[0] == assurance_cache_key
-        ):
-            source_assurance = self._source_assurance_cache[1]
-        else:
-            source_assurance = await audit_source_assurance(
-                self.event_log,
-                repository_root=self.settings.repository_root,
-                capabilities=self.capabilities,
-            )
-            self._source_assurance_cache = (
-                assurance_cache_key,
-                source_assurance,
-            )
+        source_assurance = await self._source_assurance_status()
         source_assurance_state: CapabilityState = (
             "degraded" if source_assurance["state"] == "degraded" else "healthy"
         )
@@ -1433,7 +1408,9 @@ class AdministrateMeRuntime:
             kind="source_disposition_policy",
             state=source_assurance_state,
             reason=(
-                "one or more source facts lack their required terminal disposition"
+                "source-assurance refresh failed"
+                if source_assurance["freshness"]["state"] == "failed"
+                else "one or more source facts lack their required terminal disposition"
                 if source_assurance_state == "degraded"
                 else None
             ),
@@ -1502,6 +1479,7 @@ class AdministrateMeRuntime:
                 "source_assurance": source_assurance,
             },
         )
+
         for product in self.PRODUCT_NAMES:
             product_degraded = product == "member" and triage_degraded
             self.capabilities[f"product:{product}"] = CapabilityRecord(
@@ -1580,6 +1558,123 @@ class AdministrateMeRuntime:
                 "last_method_failure": self.member_chat_last_failure,
             },
         )
+
+    def _source_assurance_capability_snapshot(self) -> dict[str, Any]:
+        """Freeze the relevant public state for one asynchronous audit."""
+
+        return {
+            key: record.public()
+            for key, record in self.capabilities.items()
+            if key.startswith(("pipeline:", "projection:"))
+        }
+
+    async def _run_source_assurance_refresh(
+        self,
+        capabilities: dict[str, Any],
+        revision: tuple[Any, ...],
+        *,
+        initial: bool = False,
+    ) -> None:
+        assert self.event_log is not None
+        self._source_assurance_last_attempt_monotonic = time.monotonic()
+        try:
+            result = await audit_source_assurance(
+                self.event_log,
+                repository_root=self.settings.repository_root,
+                capabilities=capabilities,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._source_assurance_refresh_error = type(exc).__name__
+            if initial:
+                raise
+        else:
+            self._source_assurance_cache = result
+            self._source_assurance_refreshed_at = EventEnvelope.now_utc_iso()
+            self._source_assurance_refreshed_monotonic = time.monotonic()
+            self._source_assurance_revision = revision
+            self._source_assurance_refresh_error = None
+        finally:
+            if (
+                not initial
+                and self._source_assurance_refresh_task is asyncio.current_task()
+            ):
+                self._source_assurance_refresh_task = None
+
+    async def _source_assurance_status(self) -> dict[str, Any]:
+        """Serve bounded cached proof while one background refresh catches up.
+
+        The first audit remains a startup invariant. Later event appends and
+        checkpoint advances never make readiness decrypt and scan the entire
+        event log synchronously. A failed refresh is visible and degraded; a
+        running refresh is explicitly stale but still serves the last proof.
+        """
+
+        capabilities = self._source_assurance_capability_snapshot()
+        assert self.event_log is not None
+        latest_event_id = await self.event_log.latest_event_id()
+        capability_revision = tuple(
+            sorted(
+                (
+                    key,
+                    capability.get("state"),
+                    (capability.get("details") or {}).get("checkpoint_event_id"),
+                    (capability.get("details") or {}).get("consecutive_failures"),
+                    (capability.get("details") or {}).get("poison_event_id"),
+                )
+                for key, capability in capabilities.items()
+            )
+        )
+        revision = (latest_event_id, capability_revision)
+        if self._source_assurance_cache is None:
+            await self._run_source_assurance_refresh(
+                capabilities, revision, initial=True
+            )
+
+        age_seconds = max(
+            0.0, time.monotonic() - self._source_assurance_refreshed_monotonic
+        )
+        retry_age_seconds = max(
+            0.0, time.monotonic() - self._source_assurance_last_attempt_monotonic
+        )
+        refresh_due = (
+            revision != self._source_assurance_revision
+            or age_seconds >= self.SOURCE_ASSURANCE_REFRESH_SECONDS
+        )
+        retry_allowed = (
+            self._source_assurance_refresh_error is None
+            or retry_age_seconds >= self.SOURCE_ASSURANCE_REFRESH_SECONDS
+        )
+        if (
+            refresh_due
+            and retry_allowed
+            and self._source_assurance_refresh_task is None
+        ):
+            self._source_assurance_refresh_task = asyncio.create_task(
+                self._run_source_assurance_refresh(capabilities, revision),
+                name="source-assurance-refresh",
+            )
+
+        assert self._source_assurance_cache is not None
+        refresh_state = (
+            "failed"
+            if self._source_assurance_refresh_error
+            else "refreshing"
+            if self._source_assurance_refresh_task is not None
+            else "fresh"
+        )
+        result = dict(self._source_assurance_cache)
+        result["freshness"] = {
+            "state": refresh_state,
+            "refreshed_at": self._source_assurance_refreshed_at,
+            "stale_seconds": round(age_seconds, 3),
+            "refresh_interval_seconds": self.SOURCE_ASSURANCE_REFRESH_SECONDS,
+            "refresh_error_type": self._source_assurance_refresh_error,
+        }
+        if self._source_assurance_refresh_error:
+            result["state"] = "degraded"
+        return result
 
     def overall_state(
         self,

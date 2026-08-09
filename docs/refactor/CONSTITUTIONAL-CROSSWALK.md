@@ -1,5 +1,18 @@
 # Constitutional crosswalk
 
+CO-008 deployment-repair amendment (2026-08-08): C001/C002/C007/C009/C010/
+C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
+**PRESERVED/HARDENED** after guarded activation proved that correct source
+accounting can still create false service failure when health recomputes an
+unbounded encrypted-log scan synchronously. The first audit remains a startup
+gate; later audits are one-at-a-time background refreshes with explicit
+freshness and content-free failure type. Doctor, not queue appearance, requires
+fresh equality between accounted and total obligations and zero pending,
+missing, or failed dispositions before activation completes. Reviewed language
+retry is now an explicit capability: prior success is reused, one older causal
+failure may be retried, and the retry generation's terminal failure is itself
+idempotent. A versioned key by itself is not executable retry evidence.
+
 CO-008 source-assurance amendment (2026-08-08): C001/C002/C004/C007/C009/
 C010/C012/C014-C017/C035/C044-C046/C048/C050/C053/C055/C056/C071/C076 and
 C101 are **PRESERVED/HARDENED**. Every declared adapter or member source now

@@ -107,6 +107,7 @@ class SkillContext:
     dry_run: bool = False
     triggering_event_id: str | None = None
     invocation_idempotency_key: str | None = None
+    retry_prior_failure: bool = False
     owner_scope: str = "shared:household"
     visibility_scope: str = "shared:household"
     sensitivity: str = "normal"
@@ -282,9 +283,10 @@ async def _emit_failed(
         visibility_scope=ctx.visibility_scope,
         sensitivity=ctx.sensitivity,
     )
-    if ctx.triggering_event_id:
+    invocation_identity = ctx.invocation_idempotency_key or ctx.triggering_event_id
+    if invocation_identity:
         envelope.idempotency_key = (
-            f"skill:failed:{ctx.triggering_event_id}:{pack_id_str}:"
+            f"skill:failed:{invocation_identity}:{pack_id_str}:"
             f"{pack_version}:{failure_class}"
         )
     await runtime.event_sink.write(
@@ -657,6 +659,16 @@ async def run_skill(
                     cost_usd=None,
                     duration_ms=0,
                 )
+            retry_failure_prefix = (
+                f"skill:failed:{invocation_identity}:{pack_id_str}:{pack_version}:"
+            )
+            already_retried_this_generation = str(
+                prior_terminal.get("idempotency_key") or ""
+            ).startswith(retry_failure_prefix)
+            if ctx.retry_prior_failure and not already_retried_this_generation:
+                prior_terminal = None
+        if prior_terminal is not None:
+            payload = prior_terminal["payload"]
             failure_class = str(payload.get("failure_class") or "")
             error_detail = str(payload.get("error_detail") or failure_class)
             error_type: type[Exception] = {

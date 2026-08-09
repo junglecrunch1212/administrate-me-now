@@ -146,8 +146,19 @@ def test_every_source_reaches_an_audited_disposition_in_production_composition(
         )
         client.portal.call(runtime.wait_for_projection, "lists", list_event_id)
 
-        diagnostics = client.get("/api/system/ready").json()
-        capability = diagnostics["capabilities"]["policy:source-assurance"]
+        capability = None
+        for _ in range(200):
+            diagnostics = client.get("/api/system/ready").json()
+            capability = diagnostics["capabilities"]["policy:source-assurance"]
+            counts = capability["details"]["counts"]
+            if (
+                capability["details"]["freshness"]["state"] == "fresh"
+                and counts["pending"] == 0
+                and counts["accounted"] == counts["obligations"]
+            ):
+                break
+            time.sleep(0.01)
+        assert capability is not None
         counts = capability["details"]["counts"]
         assert capability["state"] == "healthy"
         assert counts["missing"] == 0

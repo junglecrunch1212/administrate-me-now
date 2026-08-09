@@ -3,19 +3,50 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_CANDIDATE
+gate_result: SOURCE_ASSURANCE_DEPLOYMENT_REPAIR
 verified_local_date: 2026-08-08
-verified_github_date: pending
-branch: codex/source-assurance-contract
-candidate_commit_resolution: pending_review_merge_and_live_replay
-pull_request_url: pending
+verified_github_date: 2026-08-08
+branch: codex/source-assurance-deployment-repair
+candidate_commit_resolution: pr_296_merged_activation_rolled_back_repair_pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/296
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: source_assurance_review_merge_and_live_replay
+next_phase: deployment_repair_review_merge_and_guarded_reactivation
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-008 guarded activation rollback and repair
+
+PR #296 passed GitHub Constitution sync and Apple-silicon rehearsal and merged
+as `1d2b64a`. Guarded activation created encrypted backup
+`administrateme-20260809T021351Z.ambackup`, built the immutable release, and
+started both candidate services. Post-switch Doctor then rejected
+`launchd_and_process_state`; the updater automatically restored the prior
+`c484f0a` pointer and launch agents. The restored runtime and exact OpenClaw
+health endpoint are live. The append-only replay/audit facts created during the
+attempt were retained; no source fact or member decision was removed.
+
+Investigation proved that `/api/system/ready` synchronously rescanned the live
+encrypted log whenever replay appended an event or advanced a checkpoint. That
+unbounded audit exceeded the service probe's five-second timeout despite a live
+runtime. It also proved that the v8 invocation-key change did not bypass the
+skill wrapper's separately cached causal terminal failures, and that bootstrap
+Doctor lacked the named source-disposition check claimed by acceptance prose.
+
+The repair candidate makes later source audits stale-while-revalidate with one
+background task, visible freshness/error state, and cancellation before event
+log shutdown. The mandatory initial audit still fails startup closed. It adds
+an explicit one-generation prior-failure retry that preserves successful
+exact-fingerprint reuse and prevents repeat calls after the reviewed retry
+fails. Doctor now requires fresh, content-free accounting with zero pending,
+missing, or failed obligations; this named check is a bounded post-switch
+transient while replay settles. The exact release matrix passes with 37 strict
+acceptance tests, 1,666 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw
+plugin tests, plus lint, types, invariants, performance, dependency, build,
+clean-install, isolation, backup/restore, package, shell, and diff gates under
+Python 3.14 and Node 24. Review, merge, and guarded reactivation remain pending.
 
 ## 2026-08-08 CO-008 source-assurance candidate
 

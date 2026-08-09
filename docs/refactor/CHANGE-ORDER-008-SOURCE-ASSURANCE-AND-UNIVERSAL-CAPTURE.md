@@ -1,6 +1,6 @@
 # CO-008 — Source assurance and universal member capture
 
-Status: **APPROVED; CANDIDATE IMPLEMENTED — REVIEW, MERGE, AND LIVE REPLAY PENDING**
+Status: **APPROVED; MERGED — GUARDED ACTIVATION ROLLED BACK; DEPLOYMENT REPAIR IN REVIEW**
 
 Date: 2026-08-08
 
@@ -131,9 +131,12 @@ separate high-signal fallback:
 - never infer member ownership from an inbound sender's promise;
 - never create canonical truth or a provider command.
 
-The reviewed v8 Gmail replay has its own exact-input invocation generation so
-prior cached transport failures are retried after recovery while exact private
-duplicate observations still share one result. Untouched legacy proposals
+The reviewed v8 Gmail replay reuses any prior successful exact-input
+interpretation. A separate explicit retry-generation flag permits one retry of
+a causal terminal failure; that retry receives a fingerprint-qualified failed
+terminal so later replay cannot call the model repeatedly. Changing a success
+idempotency key alone does not bypass a prior causal failure. Exact private
+duplicate observations still share one successful result. Untouched legacy proposals
 whose only semantic admission rule was `explicit_action_verb_v1` are appended
 as `triage.item.superseded@v2` with `eligibility_rule_replaced`. Any proposal a
 member enriched, confirmed, materialized, dismissed, or already superseded is
@@ -204,6 +207,12 @@ The following are release requirements:
     superseded;
 11. the full Python, bridge, invariant, acceptance, plugin, browser, and clean
     macOS gates remain green.
+12. readiness serves the most recent content-free source proof in bounded time
+    while at most one background refresh decrypts and scans the log;
+13. Doctor fails deployment until accounting is fresh and every obligation is
+    terminal, with zero pending, missing, or failed dispositions; and
+14. a reviewed retry generation reuses prior success, retries an older causal
+    failure exactly once, and reuses its own terminal failure on redelivery.
 
 `tests/acceptance/test_source_assurance_vertical_slice.py` is the process-level
 composition proof. Unit tests cover missing-vs-empty accounting, all terminal
@@ -234,3 +243,33 @@ replay, zero subscriber lag, source-assurance reconciliation, full Doctor, and
 portal verification. Observation mode remains active. The replay may propose
 or supersede review items; it may not confirm, materialize, send, or mutate any
 provider.
+
+### 10.1 First guarded activation outcome
+
+PR #296 merged as `1d2b64a`. The updater built and selected that immutable
+candidate only after creating encrypted backup
+`administrateme-20260809T021351Z.ambackup`. Both launch agents started, but the
+post-switch Doctor rejected `launchd_and_process_state`; the updater restored
+the prior `c484f0a` release and its service definitions successfully. No source
+fact was removed, and all replay/audit appends remain immutable.
+
+The rejected candidate exposed two implementation defects and one missing
+release proof:
+
+1. each readiness call invalidated source accounting on the latest event and
+   every replay checkpoint, synchronously rescanning the live encrypted log;
+   the five-second service probe timed out even though the runtime was live;
+2. the v8 invocation key could not bypass the wrapper's separately cached
+   causal failure, so the four historical transport failures were not actually
+   eligible for retry; and
+3. acceptance exercised runtime diagnostics but bootstrap Doctor had no named
+   source-disposition check.
+
+The deployment repair uses a mandatory initial audit followed by a
+30-second stale-while-revalidate cache with one cancellable background refresh.
+Freshness and exception type are content-free health evidence; a refresh
+failure degrades the capability. Doctor now requires fresh accounting,
+`accounted == obligations`, and zero pending, missing, or failed outcomes. The
+updater retries only its named post-switch transients for a bounded two-minute
+window. Structural failures still abort immediately and automatic rollback
+remains unchanged.

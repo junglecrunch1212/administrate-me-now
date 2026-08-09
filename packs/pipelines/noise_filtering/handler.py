@@ -222,13 +222,12 @@ class NoiseFilteringPipeline:
             session=ctx.session,
             correlation_id=ctx.correlation_id,
             triggering_event_id=str(source_event_id),
-            # Candidate eligibility changed at replay generation 8.  A new,
-            # reviewed invocation generation is required so historical
-            # terminal skill failures do not remain permanently cached while
-            # exact duplicate source observations still deduplicate.
-            invocation_idempotency_key=(
-                f"message-nature:v{_REPLAY_GENERATION}:{invocation_fingerprint}"
-            ),
+            # Preserve any successful exact-fingerprint interpretation from
+            # an earlier replay while permitting one reviewed retry of an old
+            # terminal failure. The wrapper records that retry against this
+            # fingerprint, so replay cannot turn it into repeated model work.
+            invocation_idempotency_key=f"message-nature:{invocation_fingerprint}",
+            retry_prior_failure=True,
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),

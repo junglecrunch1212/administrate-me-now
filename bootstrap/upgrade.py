@@ -36,6 +36,7 @@ _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
         "openclaw_cron_reconciliation",
         "launchd_and_process_state",
         "ports_and_loopback_binding",
+        "source_assurance_terminal_dispositions",
     }
 )
 
@@ -157,7 +158,11 @@ class UpgradeManager:
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
-        attempts = 1 if self.test_mode else 6
+        # Historical source replay includes bounded OpenClaw calls and a
+        # background accounting pass. Give only the explicitly transient
+        # checks enough time to settle; structural failures still return on
+        # their first observation.
+        attempts = 1 if self.test_mode else 60
         last: dict[str, Any] = {}
         for attempt in range(attempts):
             last = self._run_release_doctor(release, include_synthetic_proof=False)

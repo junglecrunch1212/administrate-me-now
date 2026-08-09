@@ -1,5 +1,32 @@
 # Gate 8 final validation report
 
+## 2026-08-08 CO-008 deployment-repair amendment
+
+The first guarded activation of merged PR #296 rolled back automatically after
+the synchronous source-assurance scan made the five-second readiness probe time
+out during replay. The prior release and both launch agents were restored. The
+repair makes the mandatory initial audit blocking but all later refreshes
+single-flight and stale-while-revalidate, with freshness and exception class
+visible but no source content exposed. A process test holds the audit open for
+500 ms and proves two readiness requests return immediately while only one
+refresh runs.
+
+The repair also replaces the ineffective v8-only invocation key with explicit
+reviewed failure-retry semantics: prior successful exact fingerprints are
+reused, an older causal terminal failure is attempted once, and a terminal
+failure from the current fingerprint generation is reused on redelivery.
+Bootstrap Doctor now has a named source-assurance check and requires fresh
+accounting, equality of accounted and total obligations, and zero pending,
+missing, or failed outcomes. Focused evidence is 98 passing runtime, bootstrap,
+skill-runner, message-pipeline, and source-assurance tests. The exact aggregate
+passes 37 strict acceptance tests, 1,666 root/pack tests, 60 bridge tests, and
+15 pinned OpenClaw plugin tests, plus Ruff/format, mypy, Pyright, invariants,
+performance budgets, dependency audits, root/bridge builds, clean install,
+tenant isolation, backup/restore, plugin build/package/audit, shell validation,
+and diff hygiene under Python 3.14 and Node 24. Review, merge, and live
+reactivation remain pending and must replace this paragraph before the repair
+is called deployed.
+
 ## 2026-08-08 CO-008 source-assurance amendment
 
 The candidate adds AC-34 and closes the source-to-disposition class of failure

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -150,6 +152,91 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
         )
         assert ingest.status_code == 202, ingest.text
         assert ingest.json()["owner_scope"] == "private:member-a"
+
+
+def test_source_assurance_refresh_never_blocks_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        assert runtime._source_assurance_cache is not None
+        cached = dict(runtime._source_assurance_cache)
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
+        )
+        refresh_calls = 0
+
+        async def slow_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            await asyncio.sleep(0.5)
+            return cached
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", slow_refresh
+        )
+
+        started = time.perf_counter()
+        first = client.get("/api/system/ready")
+        elapsed = time.perf_counter() - started
+        second = client.get("/api/system/ready")
+
+        assert elapsed < 0.2
+        assert (
+            first.json()["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["state"]
+            == "refreshing"
+        )
+        assert second.status_code == first.status_code
+        assert refresh_calls == 1
+
+        client.portal.call(asyncio.sleep, 0.55)
+        refreshed = client.get("/api/system/ready").json()
+        assert (
+            refreshed["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["state"]
+            == "fresh"
+        )
+
+
+def test_failed_source_assurance_refresh_degrades_without_retry_storm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
+        )
+        refresh_calls = 0
+
+        async def failed_refresh(
+            *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            raise RuntimeError("content-free fixture failure")
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", failed_refresh
+        )
+
+        client.get("/api/system/ready")
+        client.portal.call(asyncio.sleep, 0.01)
+        first_failed = client.get("/api/system/ready").json()
+        second_failed = client.get("/api/system/ready").json()
+
+        assert refresh_calls == 1
+        for diagnostics in (first_failed, second_failed):
+            capability = diagnostics["capabilities"]["policy:source-assurance"]
+            assert capability["state"] == "degraded"
+            assert capability["details"]["freshness"]["state"] == "failed"
+            assert capability["details"]["freshness"]["refresh_error_type"] == (
+                "RuntimeError"
+            )
 
 
 def test_production_composition_injects_skill_gateway_auth_without_ambient_env(

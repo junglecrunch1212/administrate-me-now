@@ -1,5 +1,15 @@
 # Release acceptance contract
 
+CO-008 deployment-repair amendment (2026-08-08): AC-34 additionally requires
+readiness to remain bounded while one source-assurance refresh is in flight;
+refresh failures must be visible without exposing source content. Doctor must
+fail activation until the proof is fresh, `accounted == obligations`, and
+pending, missing, and failed are all zero. Reviewed language recovery must
+reuse a prior successful exact fingerprint, retry an older causal failure no
+more than once, and reuse its own terminal retry failure on redelivery. A
+changed version or idempotency key without executable causal-failure handling
+does not satisfy AC-34.
+
 CO-008 amendment (2026-08-08): AC-34 makes source disposition a release gate.
 Every current or future adapter source must declare its terminal contract; the
 production runtime accounts for each fact without exposing content; and
