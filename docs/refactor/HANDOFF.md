@@ -42,7 +42,7 @@ workbook emits the same Goal lifecycle events as the portal instead of
 overwriting status. Optional providers remain truthful and unconfigured.
 
 Phase A release evidence is complete on the required Python 3.14 / Node 24
-candidate path: 46 strict acceptance tests, 1,715 root/pack tests, 60 bridge
+candidate path: 46 strict acceptance tests, 1,716 root/pack tests, 60 bridge
 tests, static analysis, audits, builds, clean install, tenant isolation,
 encrypted backup/restore, OpenClaw contract/build/tests, and shell checks all
 passed. The rendered Gate 7 harness passed 223 assertions with zero recorded

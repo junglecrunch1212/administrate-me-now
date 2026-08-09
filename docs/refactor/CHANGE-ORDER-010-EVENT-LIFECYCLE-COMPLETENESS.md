@@ -352,7 +352,7 @@ current-state inventory.
 The catalog being complete does not itself authorize Phase B. Release still
 requires review of the final diff, merge, immutable candidate upgrade, Doctor,
 and observation-mode live replay. The full candidate command passed on the
-required Python 3.14 / Node 24 test path: 46 strict acceptance tests, 1,715
+required Python 3.14 / Node 24 test path: 46 strict acceptance tests, 1,716
 root/pack tests, 60 isolated bridge tests, static analysis, dependency audits,
 builds, clean install, tenant isolation, encrypted backup/restore, OpenClaw
 contract/build/tests, and shell checks. The deterministic Gate 7 browser

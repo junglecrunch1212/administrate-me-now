@@ -416,6 +416,50 @@ async def test_opt_in_delivery_concurrency_is_bounded_and_checkpoints_batch(
     await log.close()
 
 
+async def test_subscriber_status_retries_until_checkpoint_and_lag_are_consistent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    bus = EventBus(log, tmp_path / "bus.db")
+    event_ids = [await log.append(_event(i)) for i in range(2)]
+
+    async def callback(_event: dict) -> None:
+        return None
+
+    bus.subscribe("status-race", "*", callback)
+    state = bus._subscribers["status-race"]
+    entered_count = asyncio.Event()
+    release_count = asyncio.Event()
+    original_count_since = log.count_since
+    call_count = 0
+
+    async def controlled_count_since(
+        cursor: str | None,
+        *,
+        types: list[str] | None = None,
+    ) -> int:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            entered_count.set()
+            await release_count.wait()
+        return await original_count_since(cursor, types=types)
+
+    monkeypatch.setattr(log, "count_since", controlled_count_since)
+    status_task = asyncio.create_task(bus.subscriber_status("status-race"))
+    await entered_count.wait()
+    state.checkpoint = event_ids[-1]
+    release_count.set()
+    status = await status_task
+
+    assert call_count == 2
+    assert status["checkpoint_event_id"] == event_ids[-1]
+    assert status["lag_count"] == 0
+    await bus.stop()
+    await log.close()
+
+
 async def test_concurrent_failure_advances_only_successful_ordered_prefix(
     tmp_path: Path,
 ) -> None:
