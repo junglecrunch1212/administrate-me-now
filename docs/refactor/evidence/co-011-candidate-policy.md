@@ -9,11 +9,11 @@ control, observation mode, no provider credentials or provider effects.
 ## Process evidence
 
 - Focused candidate policy, Triage context, message/Notes pipeline, lifecycle
-  catalog, Settings, and Triage acceptance: 55 passed.
+  catalog, Settings, and Triage acceptance: 56 passed.
 - Strict acceptance with expected-failure release gates enabled: 46 passed.
 - Complete release root/pack Python suite: 1,740 passed.
 - Isolated member bridge suite: 60 passed.
-- Ruff, mypy (209 source files), constitutional invariants, native OpenClaw
+- Ruff, mypy (231 source files), constitutional invariants, native OpenClaw
   TypeScript contract, and 17 plugin tests passed.
 - The full release-candidate script passed under Python 3.14.6 and the reviewed
   Node 24 candidate path, including Pyright, dependency audits, performance,
@@ -58,8 +58,27 @@ column, source facts stacked without breaking the sender identifier, and source
 context remained visible. The viewport override was reset. Browser warning and
 error logs were empty.
 
-## Pending release boundary
+## Live release boundary
 
-Hosted checks, PR review, merge, guarded deployment, final Doctor,
-terminal source settlement, and authenticated live Tailscale browser proof must
-be appended after they occur. This file makes no live-deployment claim.
+PR #311 passed both hosted checks and merged as
+`cd49c60d608c1acf3e0baf9aa5f000c982382a66`. The attested same-runtime updater
+created encrypted backup `administrateme-20260809T204055Z.ambackup`, retained
+rollback, switched the active pointer, reconciled the pinned plugin and
+LaunchAgents, and left observation active.
+
+The replay generation advanced the live message, Notes, and structured-source
+candidate engines to 11.0.0, 5.0.0, and 2.0.0. Message replay drained from 256
+events of lag to zero with no consecutive failure. Source assurance then
+settled current at 61,335/61,335 obligations: 28 candidate-bearing facts, 309
+explicit no-candidate dispositions, 39 quarantined, and zero pending, missing,
+or failed. Final Doctor is healthy and the canonical round trip records zero
+external effects.
+
+The authenticated live Settings page renders 33 current/future policy rows and
+all eleven candidate kinds. Live Triage renders 100 visible records, including
+billing/payment actions sourced from Gmail. One selected candidate visibly
+shows source channel/direction, adapter/account provenance, sender, subject,
+observed time, possible Task meaning, literal evidence, and deterministic
+method badges. Browser warning and error logs are empty. The proof did not
+confirm, dismiss, enrich, or route a candidate and did not authorize a provider
+write.
