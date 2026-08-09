@@ -106,6 +106,63 @@ async def test_checkpointed_source_without_assessment_is_missing_not_empty(
 
 
 @pytest.mark.asyncio
+async def test_audit_uses_a_fixed_event_watermark(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "watermark.db", b"w" * 32)
+    try:
+        source_id = await log.append(_message("tenant-watermark"))
+        await log.append(
+            EventEnvelope(
+                event_at_ms=1_786_100_000_001,
+                tenant_id="tenant-watermark",
+                type="triage.intent.features_extracted",
+                schema_version=2,
+                occurred_at="2026-08-07T12:00:01Z",
+                source_adapter="pipeline:noise_filtering",
+                source_account_id="pipeline",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                causation_id=source_id,
+                idempotency_key="watermark-assessment",
+                payload={
+                    "intent_id": f"source:{source_id}",
+                    "source_event_id": source_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": "fixture-source-assessor",
+                    "language": "en",
+                    "candidates": [],
+                    "extraction_state": "complete",
+                    "extracted_at": "2026-08-07T12:00:01Z",
+                    "assessment_outcome": "no_candidate",
+                    "reason_codes": ["language_assessment_completed"],
+                },
+            )
+        )
+        capabilities = {
+            "pipeline:pipeline:noise_filtering": {
+                "state": "healthy",
+                "details": {"checkpoint_event_id": source_id},
+            }
+        }
+
+        bounded = await audit_source_assurance(
+            log,
+            repository_root=REPO_ROOT,
+            capabilities=capabilities,
+            through_event_id=source_id,
+        )
+        current = await audit_source_assurance(
+            log, repository_root=REPO_ROOT, capabilities=capabilities
+        )
+
+        assert bounded["watermark_event_id"] == source_id
+        assert bounded["counts"]["missing"] == 1
+        assert current["counts"]["no_candidate"] == 1
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_unavailable_assessment_is_failed_not_no_candidate(
     tmp_path: Path,
 ) -> None:

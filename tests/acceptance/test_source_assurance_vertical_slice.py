@@ -182,6 +182,7 @@ def test_every_source_reaches_an_audited_disposition_in_production_composition(
             counts = capability["details"]["counts"]
             if (
                 capability["details"]["freshness"]["state"] == "fresh"
+                and capability["details"]["freshness"]["revision_current"] is True
                 and counts["pending"] == 0
                 and counts["accounted"] == counts["obligations"]
             ):

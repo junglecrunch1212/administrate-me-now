@@ -189,7 +189,13 @@ def test_source_assurance_refresh_never_blocks_readiness(
             first.json()["capabilities"]["policy:source-assurance"]["details"][
                 "freshness"
             ]["state"]
-            == "refreshing"
+            == "fresh"
+        )
+        assert (
+            first.json()["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["refresh_in_progress"]
+            is True
         )
         assert second.status_code == first.status_code
         assert refresh_calls == 1
@@ -202,6 +208,37 @@ def test_source_assurance_refresh_never_blocks_readiness(
             ]["state"]
             == "fresh"
         )
+        assert (
+            refreshed["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["refresh_in_progress"]
+            is False
+        )
+
+
+def test_over_age_source_assurance_proof_degrades_during_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_MAX_STALE_SECONDS - 1
+        )
+
+        async def hung_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+            await asyncio.sleep(60)
+            return {}
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", hung_refresh
+        )
+
+        response = client.get("/api/system/ready").json()
+        capability = response["capabilities"]["policy:source-assurance"]
+        assert capability["state"] == "degraded"
+        assert capability["details"]["freshness"]["state"] == "stale"
+        assert capability["details"]["freshness"]["refresh_in_progress"] is True
 
 
 def test_failed_source_assurance_refresh_degrades_without_retry_storm(

@@ -396,6 +396,7 @@ class AdministrateMeRuntime:
     """Own all central resources and their ordered startup/shutdown."""
 
     SOURCE_ASSURANCE_REFRESH_SECONDS = 30.0
+    SOURCE_ASSURANCE_MAX_STALE_SECONDS = 300.0
 
     PRODUCT_NAMES = (
         "core",
@@ -1582,6 +1583,7 @@ class AdministrateMeRuntime:
                 self.event_log,
                 repository_root=self.settings.repository_root,
                 capabilities=capabilities,
+                through_event_id=revision[0],
             )
         except asyncio.CancelledError:
             raise
@@ -1607,8 +1609,9 @@ class AdministrateMeRuntime:
 
         The first audit remains a startup invariant. Later event appends and
         checkpoint advances never make readiness decrypt and scan the entire
-        event log synchronously. A failed refresh is visible and degraded; a
-        running refresh is explicitly stale but still serves the last proof.
+        event log synchronously. A successful fixed-watermark proof remains
+        fresh for a bounded interval while one refresh runs. Failure or an
+        over-age proof degrades health; refresh activity alone does not.
         """
 
         capabilities = self._source_assurance_capability_snapshot()
@@ -1657,11 +1660,12 @@ class AdministrateMeRuntime:
             )
 
         assert self._source_assurance_cache is not None
+        refresh_in_progress = self._source_assurance_refresh_task is not None
         refresh_state = (
             "failed"
             if self._source_assurance_refresh_error
-            else "refreshing"
-            if self._source_assurance_refresh_task is not None
+            else "stale"
+            if age_seconds > self.SOURCE_ASSURANCE_MAX_STALE_SECONDS
             else "fresh"
         )
         result = dict(self._source_assurance_cache)
@@ -1670,9 +1674,12 @@ class AdministrateMeRuntime:
             "refreshed_at": self._source_assurance_refreshed_at,
             "stale_seconds": round(age_seconds, 3),
             "refresh_interval_seconds": self.SOURCE_ASSURANCE_REFRESH_SECONDS,
+            "max_stale_seconds": self.SOURCE_ASSURANCE_MAX_STALE_SECONDS,
+            "refresh_in_progress": refresh_in_progress,
+            "revision_current": revision == self._source_assurance_revision,
             "refresh_error_type": self._source_assurance_refresh_error,
         }
-        if self._source_assurance_refresh_error:
+        if refresh_state in {"failed", "stale"}:
             result["state"] = "degraded"
         return result
 

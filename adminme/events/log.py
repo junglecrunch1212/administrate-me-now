@@ -482,6 +482,59 @@ class EventLog:
             if len(rows) < batch_size:
                 return
 
+    async def read_metadata_since(
+        self,
+        cursor: str | None = None,
+        *,
+        through: str | None = None,
+        limit: int = 5000,
+        types: list[str] | None = None,
+        include_payload_for: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Read a bounded event metadata slice without materializing envelopes.
+
+        Health and reconciliation policies usually need ordering, type, and
+        timestamps but not the potentially large provider payload on every
+        source fact. ``include_payload_for`` selectively includes payloads for
+        the terminal event types whose typed result fields are required. A
+        fixed ``through`` watermark makes one audit deterministic while new
+        events continue to append.
+        """
+
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if cursor is not None:
+            exists = await self._run_locked(self._event_exists, cursor)
+            if not exists:
+                raise CursorNotFound(cursor)
+
+        batch_size = max(limit, 500)
+        last = cursor
+        payload_types = tuple(include_payload_for or ())
+        while True:
+            rows = await self._run_locked(
+                self._read_metadata_page,
+                last,
+                through,
+                batch_size,
+                tuple(types) if types else None,
+                payload_types,
+            )
+            if not rows:
+                return
+            for row in rows:
+                payload = row["payload"]
+                yield {
+                    "event_id": row["event_id"],
+                    "type": row["type"],
+                    "occurred_at": row["occurred_at"],
+                    "recorded_at": row["recorded_at"],
+                    "payload": json.loads(payload) if payload is not None else None,
+                }
+            last = rows[-1]["event_id"]
+            if len(rows) < batch_size:
+                return
+
     def _event_exists(self, event_id: str) -> bool:
         cur = self._conn.cursor()
         cur.execute("SELECT 1 FROM events WHERE event_id = ? LIMIT 1", (event_id,))
@@ -507,6 +560,50 @@ class EventLog:
             where.append(f"type IN ({placeholders})")
             params.extend(types)
         sql = _SELECT_COLUMNS + " FROM events"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY event_id ASC LIMIT ?"
+        params.append(limit)
+        cur = self._conn.cursor()
+        return list(cur.execute(sql, params))
+
+    def _read_metadata_page(
+        self,
+        after_id: str | None,
+        through: str | None,
+        limit: int,
+        types: tuple[str, ...] | None,
+        payload_types: tuple[str, ...],
+    ) -> list[sqlcipher3.Row]:
+        where: list[str] = []
+        where_params: list[Any] = []
+        if after_id is not None:
+            where.append("event_id > ?")
+            where_params.append(after_id)
+        if through is not None:
+            where.append("event_id <= ?")
+            where_params.append(through)
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            where.append(f"type IN ({placeholders})")
+            where_params.extend(types)
+
+        if payload_types:
+            payload_placeholders = ",".join("?" for _ in payload_types)
+            payload_column = (
+                f"CASE WHEN type IN ({payload_placeholders}) "
+                "THEN payload ELSE NULL END AS payload"
+            )
+            params: list[Any] = [*payload_types, *where_params]
+        else:
+            payload_column = "NULL AS payload"
+            params = where_params
+
+        sql = (
+            "SELECT event_id, type, occurred_at, recorded_at, "
+            + payload_column
+            + " FROM events"
+        )
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY event_id ASC LIMIT ?"

@@ -364,3 +364,39 @@ The authenticated portal renders 53 unconfirmed rows, split into 20 Ready and
 active. No member decision or provider write occurred. Historical unreviewed
 noise remains auditably visible and is an observation-feedback input, not a
 reason to rewrite or silently dismiss immutable proposal history.
+
+### 10.5 CO-010 scale correction: fixed watermark and bounded freshness
+
+CO-010 merged in PR #305 and deployed as `9591e01`. Its reviewed replay
+settled 61,333 of 61,333 source obligations with zero pending, missing, or
+failed outcomes and identified 30 eligible candidate-bearing source facts.
+The complete Doctor nevertheless failed intermittently because the audit
+spent minutes materializing full provider payloads for every fact and called
+the last successful proof `refreshing` for the entire scan. On a moving event
+head, the 30-second invalidation rule could also keep the audit continuously
+busy. This was an operational truth defect, not evidence of incomplete source
+processing.
+
+The correction **SUPERSEDES** only that scan/freshness implementation:
+
+- each audit captures one immutable upper event-ID watermark;
+- the Event Log returns event ID, type, and timestamps for source facts and
+  decrypts/parses payload JSON only for the terminal types whose typed outcome
+  fields are required;
+- readiness continues to serve the last successful content-free proof while
+  at most one metadata-only refresh runs;
+- refresh activity is reported independently as `refresh_in_progress`; an
+  age-only refresh can retain a healthy current proof, while Doctor rejects a
+  proof whose event/checkpoint revision has advanced until refresh closes;
+- the proof remains `fresh` for at most five minutes; an exception fails
+  immediately and an over-age proof becomes `stale`, degrades the capability,
+  and fails Doctor; and
+- the public proof reports its watermark, age, maximum age, and whether the
+  current head/revision has advanced. It never claims the moving head was part
+  of an earlier snapshot.
+
+Doctor still requires a healthy, current-revision proof with
+`accounted == obligations` and zero pending, missing, or failed dispositions.
+The change bounds what one proof attests and makes the bound explicit; it does
+not weaken terminal accounting, privacy, replay, observation, or deployment
+rollback.

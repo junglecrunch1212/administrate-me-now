@@ -1,10 +1,13 @@
 # CO-010 — Whole-life event lifecycle completeness
 
-Status: **CANDIDATE VERIFIED; AWAITING REVIEW, MERGE, AND DEPLOYMENT**
+Status: **MERGED AND DEPLOYED; LIVE SOURCE-ASSURANCE CORRECTION IN REVIEW**
 
 Date: 2026-08-09
 
-Target branch: `codex/event-lifecycle-completeness`, based on current `main`
+Merged implementation: PR #305, commit `9591e01`
+
+Live correction branch: `codex/source-assurance-watermark`, based on current
+`main`
 
 Affected architecture: event schemas, source assurance, candidate extraction,
 Triage, domain commands, projections, Today, Comms, Reminders, Calendar,
@@ -359,3 +362,31 @@ contract/build/tests, and shell checks. The deterministic Gate 7 browser
 harness separately passed 223 assertions with zero recorded failures. Optional
 adapters remain unavailable until separately installed, configured,
 permissioned, and proven healthy.
+
+### 11.5 First live activation and bounded-watermark correction
+
+PR #305 passed both hosted gates, merged as `9591e01`, and was selected by the
+attested upgrade controller after encrypted backup
+`administrateme-20260809T162955Z.ambackup`. The central Python runtime and exact
+pinned OpenClaw Gateway both run from immutable reviewed releases;
+observation mode remained active and no provider write occurred.
+
+Live source accounting settled 61,333 of 61,333 obligations with zero pending,
+missing, or failed outcomes: 30 source facts contained eligible candidates,
+305 were explicit no-candidate outcomes, and 39 were quarantined by policy.
+That directly closes the original false-empty Triage defect. Independent full
+Doctor runs then exposed a scale defect in the health proof itself: a full
+payload scan took longer than the refresh interval and `refreshing` was treated
+as unhealthy even while a complete last-known proof existed.
+
+The follow-up correction uses a fixed event-ID watermark and a metadata-only
+Event Log read, selectively parsing only terminal result payloads. It separates
+`refresh_in_progress` from freshness, retains a successful proof for a maximum
+of five minutes, and fails closed on any refresh exception or over-age proof.
+Doctor additionally requires the proof revision to match the current event and
+checkpoint head; the bounded cache cannot certify newly appended source facts.
+Unit/integration coverage proves watermark exclusion, selective payload reads,
+nonblocking refresh, bounded staleness, immediate failure degradation, and the
+unchanged Doctor terminal-count predicate. Final release evidence requires the
+same full matrix, reviewed merge, attested upgrade, Doctor, and authenticated
+portal verification as §8.

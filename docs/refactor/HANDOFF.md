@@ -3,19 +3,45 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_009_DEPLOYED_LIVE_VERIFIED_OBSERVATION
+gate_result: CO_010_DEPLOYED_SOURCE_ASSURANCE_CORRECTION_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_303_merged_and_deployed_6d2d6e58_live_restart_verified
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/303
+candidate_commit_resolution: pr_305_merged_and_deployed_9591e01_followup_candidate
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/305
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: observation_soak_member_triage_review_and_false_positive_feedback
+next_phase: merge_deploy_verify_bounded_watermark_assurance_then_member_triage_review
 ---
 
 # Release handoff
+
+## 2026-08-09 CO-010 live activation and source-assurance correction
+
+PR #305 passed the full local and Apple-silicon release gates, merged as
+`9591e01`, and deployed through the attested candidate-owned updater after
+encrypted backup `administrateme-20260809T162955Z.ambackup`. The live replay
+accounted for 61,333 of 61,333 source obligations with zero pending, missing,
+or failed outcomes. It classified 30 source facts as candidate-bearing, 305 as
+explicit no-candidate, and 39 as quarantined. The central runtime and pinned
+OpenClaw Gateway are running from reviewed immutable releases in observation
+mode; no provider write was authorized.
+
+Independent full Doctor verification found one intermittent operational
+failure after that successful settlement. Source assurance decrypted and
+materialized every full provider payload on each refresh; the 61,000-event
+scan took longer than its 30-second interval, and the runtime treated refresh
+activity itself as stale. The correction candidate keeps the mandatory initial
+audit and unchanged terminal-count predicate, but closes each later audit at a
+fixed event-ID watermark, reads metadata for ordinary source facts, parses only
+required terminal payloads, and separates `refresh_in_progress` from bounded
+freshness. Refresh exception degrades immediately; a successful proof older
+than five minutes degrades as stale. Doctor also requires the audited revision
+to equal the current event/checkpoint head, so cached evidence cannot certify
+new facts. Review, merge, attested upgrade, full Doctor, and authenticated
+Triage browser proof remain required before this handoff can advance to
+observation soak.
 
 ## 2026-08-09 CO-010 lifecycle-completeness candidate
 
