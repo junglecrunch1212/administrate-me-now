@@ -3,19 +3,48 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_DEPLOYMENT_REPAIR
+gate_result: SOURCE_ASSURANCE_REPLAY_SETTLEMENT_REPAIR
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
-branch: codex/source-assurance-deployment-repair
-candidate_commit_resolution: pr_296_merged_activation_rolled_back_repair_pending
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/296
+branch: codex/source-assurance-replay-settlement
+candidate_commit_resolution: pr_297_merged_second_activation_rolled_back_settlement_repair_pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/297
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: deployment_repair_review_merge_and_guarded_reactivation
+next_phase: replay_settlement_review_merge_and_guarded_reactivation
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-008 replay-settlement repair
+
+PR #297 passed Constitution sync and the 14-minute Apple-silicon rehearsal,
+merged as `4c81ac4`, and entered guarded activation after encrypted backup
+`administrateme-20260809T030105Z.ambackup`. The candidate runtime and Gateway
+started, but the two-minute transient window ended with
+`source_assurance_terminal_dispositions` incomplete. Automatic rollback
+restored `c484f0a`; its runtime, Gateway, launch definitions, and loopback
+health are live.
+
+The retained content-free accounting evidence is 54,125 obligations, 53,839
+accounted, 286 missing historical message assessments, zero pending, and zero
+failed. The v8 consumer must traverse the historical encrypted stream before
+it can append every terminal message assessment. Rollback correctly restores
+the active v7 operational cursor, so a later v8 activation restarts rather than
+secretly preserving candidate cursor state.
+
+The repair centralizes Doctor's content-free terminal predicate and changes
+post-switch behavior from repeated heavyweight Doctor execution to one initial
+Doctor, a two-second lightweight readiness poll bounded at 30 minutes, and one
+final full Doctor plus synthetic proof after settlement. Structural failures
+still return immediately; a missed deadline still rolls back. Focused
+bootstrap/runtime acceptance is green. The exact release matrix passes with 37
+strict acceptance tests, 1,668 root/pack tests, 60 bridge tests, and 15 pinned
+OpenClaw plugin tests, plus lint, types, invariants, performance, dependencies,
+builds, clean install, tenant isolation, backup/restore, package/audit, shell,
+and diff gates under Python 3.14 and Node 24. Review, merge, and guarded
+activation remain pending.
 
 ## 2026-08-08 CO-008 guarded activation rollback and repair
 
@@ -46,7 +75,8 @@ transient while replay settles. The exact release matrix passes with 37 strict
 acceptance tests, 1,666 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw
 plugin tests, plus lint, types, invariants, performance, dependency, build,
 clean-install, isolation, backup/restore, package, shell, and diff gates under
-Python 3.14 and Node 24. Review, merge, and guarded reactivation remain pending.
+Python 3.14 and Node 24. PR #297 subsequently merged; its activation outcome is
+recorded above.
 
 ## 2026-08-08 CO-008 source-assurance candidate
 

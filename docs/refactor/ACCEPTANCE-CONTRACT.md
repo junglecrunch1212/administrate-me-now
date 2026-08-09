@@ -9,6 +9,12 @@ reuse a prior successful exact fingerprint, retry an older causal failure no
 more than once, and reuse its own terminal retry failure on redelivery. A
 changed version or idempotency key without executable causal-failure handling
 does not satisfy AC-34.
+AC-34 also requires the rollback-aware updater to distinguish an advancing
+reviewed full replay from a structural failure. It may poll only the
+content-free readiness settlement contract for a bounded 30-minute window; it
+must not rerun heavyweight Doctor continuously, persist a candidate cursor
+across rollback, waive terminal equality, or skip the final full Doctor and
+synthetic proof.
 
 CO-008 amendment (2026-08-08): AC-34 makes source disposition a release gate.
 Every current or future adapter source must declare its terminal contract; the

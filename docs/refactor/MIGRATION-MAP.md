@@ -11,6 +11,12 @@ fingerprint-qualified and therefore idempotent. Bootstrap Doctor adds a named
 fresh/terminal source check; it does not inspect content. The updater's bounded
 wait widens only for named replay/health transients and preserves immediate
 rejection of structural failures and automatic rollback.
+After live evidence showed that two minutes cannot complete the v7-to-v8
+historical cursor reset, post-switch settlement is **HARDENED** to a 30-minute
+content-free readiness poll followed by one full Doctor. Candidate cursor state
+is not migrated into the rollback release; immutable output/audit events remain
+in the log, while the operational consumer cursor continues to follow the
+active version.
 
 CO-008 update (2026-08-08): source ingestion is **HARDENED IN THE REVIEWED
 CANDIDATE** by additive manifest `source_assurance` rules,

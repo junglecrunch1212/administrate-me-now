@@ -21,7 +21,7 @@ from bootstrap.contracts import (
 from bootstrap.doctor import Doctor
 from bootstrap.keychain_probe import configured_keychain_references
 from bootstrap.openclaw_tools import configure_required_llm_tool
-from bootstrap.services import ServiceManager
+from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 from bootstrap.wizard import install_launch_agents, service_environment_path
 
 
@@ -39,6 +39,8 @@ _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
         "source_assurance_terminal_dispositions",
     }
 )
+POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 30 * 60
+POST_SWITCH_POLL_SECONDS = 2
 
 
 def validate_candidate(
@@ -158,14 +160,17 @@ class UpgradeManager:
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
-        # Historical source replay includes bounded OpenClaw calls and a
-        # background accounting pass. Give only the explicitly transient
-        # checks enough time to settle; structural failures still return on
-        # their first observation.
-        attempts = 1 if self.test_mode else 60
-        last: dict[str, Any] = {}
-        for attempt in range(attempts):
-            last = self._run_release_doctor(release, include_synthetic_proof=False)
+        # Historical source replay may walk tens of thousands of encrypted
+        # facts before its candidate-bearing source prefix. Repeating full
+        # Doctor during that work competes for the same log and proves nothing
+        # new. Poll only the content-free readiness document until source
+        # settlement, then rerun the complete proof. Structural failures still
+        # return on their first observation.
+        deadline = time.monotonic() + (
+            0 if self.test_mode else POST_SWITCH_REPLAY_SETTLEMENT_SECONDS
+        )
+        last = self._run_release_doctor(release, include_synthetic_proof=False)
+        while True:
             if last.get("status") == "healthy":
                 last = self._run_release_doctor(release, include_synthetic_proof=True)
                 if last.get("status") == "healthy":
@@ -173,9 +178,31 @@ class UpgradeManager:
             failed = self._failed_check_names(last)
             if not failed or not failed.issubset(_TRANSIENT_POST_SWITCH_CHECKS):
                 return last
-            if attempt + 1 < attempts:
-                time.sleep(2)
-        return last
+            if self.test_mode:
+                return last
+
+            if "source_assurance_terminal_dispositions" in failed:
+                diagnostics = self.services.runtime_diagnostics()
+                if diagnostics is None:
+                    # ServiceManager already exhausted its bounded liveness and
+                    # readiness windows before post-switch Doctor. An absent
+                    # document here is not evidence of advancing replay.
+                    return last
+                settled, _evidence = source_assurance_terminal_evidence(diagnostics)
+                if not settled and time.monotonic() < deadline:
+                    time.sleep(POST_SWITCH_POLL_SECONDS)
+                    continue
+
+            if time.monotonic() >= deadline:
+                final = self._run_release_doctor(release, include_synthetic_proof=False)
+                if final.get("status") == "healthy":
+                    return self._run_release_doctor(
+                        release, include_synthetic_proof=True
+                    )
+                return final
+
+            time.sleep(POST_SWITCH_POLL_SECONDS)
+            last = self._run_release_doctor(release, include_synthetic_proof=False)
 
     def _run_release_doctor(
         self, release: Path, *, include_synthetic_proof: bool

@@ -1,5 +1,15 @@
 # Constitutional crosswalk
 
+CO-008 replay-settlement amendment (2026-08-08): C001/C002/C007/C009/C010/
+C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
+**PRESERVED/HARDENED** after live evidence distinguished incomplete historical
+replay from failed source interpretation. Rollback continues to restore the
+active version's operational cursor and never removes immutable replay output.
+The updater may wait longer only by polling Doctor's same content-free terminal
+predicate; it cannot preserve candidate process state, waive equality, or skip
+the final full Doctor and synthetic proof. Heavyweight diagnostics no longer
+compete continuously with the replay they are measuring.
+
 CO-008 deployment-repair amendment (2026-08-08): C001/C002/C007/C009/C010/
 C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
 **PRESERVED/HARDENED** after guarded activation proved that correct source

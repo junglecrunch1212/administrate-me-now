@@ -1710,6 +1710,82 @@ def test_upgrade_waits_only_for_known_post_switch_transients(
     assert include_synthetic == [False, False, False, True]
 
 
+def test_upgrade_polls_lightweight_source_settlement_before_full_doctor(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [
+            {"name": "source_assurance_terminal_dispositions", "ok": False},
+            {"name": "launchd_and_process_state", "ok": False},
+        ],
+    }
+    healthy = {"status": "healthy", "checks": []}
+    reports = [transient, healthy, healthy]
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return reports.pop(0)
+
+    unsettled = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert unsettled is not None
+    unsettled = copy.deepcopy(unsettled)
+    capability = unsettled["capabilities"]["policy:source-assurance"]
+    capability["state"] = "degraded"
+    capability["details"]["state"] = "degraded"
+    capability["details"]["counts"]["accounted"] = 0
+    capability["details"]["counts"]["pending"] = 1
+    settled = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    diagnostics = iter((unsettled, unsettled, settled))
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(
+        manager.services, "runtime_diagnostics", lambda: next(diagnostics)
+    )
+
+    result = manager._post_switch_doctor(REPO_ROOT)
+    assert result["status"] == "healthy"
+    assert include_synthetic == [False, False, True]
+
+
+def test_upgrade_does_not_treat_absent_readiness_as_advancing_replay(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [
+            {"name": "source_assurance_terminal_dispositions", "ok": False},
+            {"name": "launchd_and_process_state", "ok": False},
+        ],
+    }
+    calls = 0
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            nonlocal calls
+            calls += 1
+            return transient
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: None)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == transient
+    assert calls == 1
+
+
 def test_upgrade_does_not_retry_a_structural_doctor_failure(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
