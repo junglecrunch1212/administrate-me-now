@@ -106,6 +106,7 @@ class SkillContext:
     observation_mode_active: bool = False
     dry_run: bool = False
     triggering_event_id: str | None = None
+    invocation_idempotency_key: str | None = None
     owner_scope: str = "shared:household"
     visibility_scope: str = "shared:household"
     sensitivity: str = "normal"
@@ -368,9 +369,10 @@ async def _emit_recorded(
         visibility_scope=ctx.visibility_scope,
         sensitivity=ctx.sensitivity,
     )
+    invocation_identity = ctx.invocation_idempotency_key or ctx.triggering_event_id
     envelope.idempotency_key = (
-        f"skill:{ctx.triggering_event_id}:{pack_id_str}:{pack_version}"
-        if ctx.triggering_event_id
+        f"skill:{invocation_identity}:{pack_id_str}:{pack_version}"
+        if invocation_identity
         else None
     )
     await runtime.event_sink.write(
@@ -608,9 +610,10 @@ async def run_skill(
     pack_version = pack.version
     fm = pack.skill_frontmatter
 
+    invocation_identity = ctx.invocation_idempotency_key or ctx.triggering_event_id
     idempotency_key = (
-        f"skill:{ctx.triggering_event_id}:{pack_id_str}:{pack_version}"
-        if ctx.triggering_event_id
+        f"skill:{invocation_identity}:{pack_id_str}:{pack_version}"
+        if invocation_identity
         else None
     )
     if idempotency_key and runtime.event_log is not None:

@@ -133,6 +133,7 @@ class EventBus:
         callback: EventCallback,
         *,
         consumer_version: str | None = None,
+        replay_on_version_change: bool = False,
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -167,7 +168,26 @@ class EventBus:
             last_fail = row["last_failure_at_ms"]
             poison_event_id = row["poison_event_id"]
             stored_version = row["consumer_version"]
-            if (
+            if stored_version != consumer_version and replay_on_version_change:
+                # Full replay is opt-in because only consumers with reviewed,
+                # versioned idempotency contracts can safely rebuild derived
+                # event generations.  Source facts and prior outputs remain
+                # append-only; only this operational cursor is reset.
+                checkpoint = None
+                degraded = False
+                failures = 0
+                last_ok = None
+                last_fail = None
+                poison_event_id = None
+                self._ckpt_conn.execute(
+                    "UPDATE bus_consumer_offsets "
+                    "SET checkpoint_event_id=NULL, degraded=0, "
+                    "consecutive_failures=0, poison_event_id=NULL, "
+                    "last_success_at_ms=NULL, last_failure_at_ms=NULL, "
+                    "consumer_version=? WHERE subscriber_id=?",
+                    (consumer_version, subscriber_id),
+                )
+            elif (
                 consumer_version is not None
                 and stored_version != consumer_version
                 and degraded

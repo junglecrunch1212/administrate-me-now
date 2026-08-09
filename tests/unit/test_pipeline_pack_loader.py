@@ -35,6 +35,7 @@ def test_load_echo_logger_happy_path() -> None:
     assert pack.version == "1.0.0"
     assert pack.triggers["events"] == ["messaging.received"]
     assert pack.events_emitted == []
+    assert pack.replay_on_version_change is False
     assert pack.instance.pack_id == "pipeline:echo_logger"
     assert pack.instance.version == "1.0.0"
 
@@ -137,4 +138,34 @@ def test_wrong_kind_raises(tmp_path: Path) -> None:
         "  class: WhateverPipeline\n"
     )
     with pytest.raises(PipelinePackLoadError, match="pack.kind must be 'pipeline'"):
+        load_pipeline_pack(tmp_path)
+
+
+def test_invalid_replay_mode_raises(tmp_path: Path) -> None:
+    (tmp_path / "pipeline.yaml").write_text(
+        "pack:\n"
+        "  id: pipeline:bad_replay\n"
+        "  version: 1.0.0\n"
+        "  kind: pipeline\n"
+        "runtime:\n"
+        "  language: python\n"
+        "  entrypoint: handler.py\n"
+        "  class: BadReplayPipeline\n"
+        "triggers:\n"
+        "  events: [messaging.received]\n"
+        "replay:\n"
+        "  on_version_change: recent\n"
+    )
+    (tmp_path / "handler.py").write_text(
+        "class BadReplayPipeline:\n"
+        "    pack_id = 'pipeline:bad_replay'\n"
+        "    version = '1.0.0'\n"
+        "    triggers = {'events': ['messaging.received']}\n"
+        "    async def handle(self, event, ctx):\n"
+        "        pass\n"
+    )
+    with pytest.raises(
+        PipelinePackLoadError,
+        match="replay.on_version_change must be 'none' or 'full'",
+    ):
         load_pipeline_pack(tmp_path)

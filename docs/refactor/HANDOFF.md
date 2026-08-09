@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_STARTUP_REPLAY_REPAIR_CANDIDATE
+gate_result: TRIAGE_EXPLICIT_REPLAY_CONTRACT_CANDIDATE
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
-branch: codex/repair-triage-startup-replay
+branch: codex/repair-triage-replay-contract
 candidate_commit_resolution: independent_review_pending
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/293
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -16,6 +16,29 @@ next_phase: independent_review_then_phase_b_activation
 ---
 
 # Release handoff
+
+## 2026-08-08 explicit pipeline replay contract and Triage v7
+
+PR #293 merged and deployed successfully as `ec36783`; the exact OpenClaw
+successor, authenticated Doctor probe, Gateway-first startup, runtime, and
+observation mode are healthy. The post-deployment aggregate audit then proved
+that `noise_filtering` v6 reported zero lag without re-reading healthy historical
+messages. The durable bus previously used a version change only to recover a
+poisoned subscriber from its last good checkpoint. A healthy subscriber merely
+stored the new version and retained its terminal checkpoint, so documentation
+calling v5/v6 a full replay boundary was stronger than executable behavior.
+
+This repair **HARDENS** the durable bus with an explicit opt-in full-replay
+contract. Only a reviewed pipeline manifest may request `replay.on_version_change:
+full`; all other consumers retain the existing checkpoint behavior. The bus
+then resets only that operational cursor and health counters while preserving
+the encrypted append-only source log and every prior output/audit fact.
+`noise_filtering` 7.0.0 and `classify_message_nature` 4.0.3 are the first live
+consumer of the contract. A privacy-scoped SHA-256 identity reuses one recorded
+model result across byte-equivalent duplicate message observations, while
+causation remains attached to a real source event. Candidate generation v7
+deduplicates against baseline/v4/v5/v6 proposal kind/key history. The result is
+still proposal-only under observation and the Triage human gate.
 
 ## 2026-08-08 Gateway-first startup and Triage v6 replay repair
 

@@ -254,7 +254,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "4.0.2"
+    assert envelope.payload["skill_version"] == "4.0.3"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -274,7 +274,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "4.0.2"
+    assert envelope.payload["skill_version"] == "4.0.3"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
 
 
@@ -512,11 +512,11 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v6:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v7:")
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_uses_v6_after_prior_generations() -> None:
+async def test_reviewed_replay_uses_v7_after_prior_generations() -> None:
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -532,11 +532,15 @@ async def test_reviewed_replay_uses_v6_after_prior_generations() -> None:
     async def startup_order_recovered(*args: Any, **kwargs: Any) -> SkillResult:
         return _make_skill_result(classification="personal", confidence=0.7)
 
+    async def explicit_replay_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(classification="transactional", confidence=0.6)
+
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(event, _make_ctx(log, first))
     await pipeline.handle(event, _make_ctx(log, unavailable))
     await pipeline.handle(event, _make_ctx(log, recovered))
     await pipeline.handle(event, _make_ctx(log, startup_order_recovered))
+    await pipeline.handle(event, _make_ctx(log, explicit_replay_recovered))
 
     classified_keys = [
         call.envelope.idempotency_key
@@ -548,4 +552,70 @@ async def test_reviewed_replay_uses_v6_after_prior_generations() -> None:
         "messaging:classified:v4:trigger-eid-001",
         "messaging:classified:v5:trigger-eid-001",
         "messaging:classified:v6:trigger-eid-001",
+        "messaging:classified:v7:trigger-eid-001",
     ]
+
+
+@pytest.mark.asyncio
+async def test_exact_duplicate_source_observations_propose_each_candidate_once() -> (
+    None
+):
+    log = _FakeEventLog()
+    received_at = "2026-08-08T12:00:00Z"
+
+    async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "evidence_quote": "Pay the electric bill by Friday.",
+                    "candidate": {},
+                    "confidence": 0.95,
+                },
+                {
+                    "target_kind": "recurrence",
+                    "evidence_quote": "Pay the electric bill by Friday.",
+                    "candidate": {
+                        "recurrence_text": "monthly",
+                        "rrule": "FREQ=MONTHLY",
+                        "kind": "bill_payment",
+                        "trackable": True,
+                    },
+                    "confidence": 0.9,
+                },
+            ]
+        )
+
+    first = _messaging_received_event(body_text="Pay the electric bill by Friday.")
+    first.update(
+        {
+            "event_id": "duplicate-source-1",
+            "owner_scope": "private:member-fixture",
+            "visibility_scope": "private:member-fixture",
+            "occurred_at": received_at,
+        }
+    )
+    first["payload"].update({"member_id": "member-fixture", "received_at": received_at})
+    second = {
+        **first,
+        "event_id": "duplicate-source-2",
+        "payload": dict(first["payload"]),
+    }
+
+    pipeline = NoiseFilteringPipeline()
+    await pipeline.handle(first, _make_ctx(log, recovered))
+    await pipeline.handle(second, _make_ctx(log, recovered))
+
+    proposals = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+    ]
+    assert [proposal.payload["target_kind"] for proposal in proposals] == [
+        "task",
+        "recurrence",
+    ]
+    assert all(
+        proposal.idempotency_key.startswith("triage:message-candidate:v7:")
+        for proposal in proposals
+    )

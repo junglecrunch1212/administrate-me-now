@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -62,6 +63,22 @@ def _provenance() -> dict[str, object]:
     }
 
 
+async def _message_proposals_for_source(
+    event_log: Any, source_event_id: str
+) -> list[dict[str, Any]]:
+    direct = await event_log.get_by_causation(source_event_id)
+    proposals: list[dict[str, Any]] = []
+    for event in direct:
+        if event["type"] != "triage.intent.features_extracted":
+            continue
+        proposals.extend(
+            proposal
+            for proposal in await event_log.get_by_causation(event["event_id"])
+            if proposal["type"] == "triage.item.proposed"
+        )
+    return proposals
+
+
 def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -114,16 +131,16 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
             "pipeline:pipeline:noise_filtering",
             source_event_id,
         )
-        task_proposal = client.portal.call(
-            runtime.event_log.get_by_idempotency,
-            runtime.settings.instance.tenant_id,
-            f"triage:message-candidate:{source_event_id}:nlp-candidate-1:task",
+        proposals = client.portal.call(
+            _message_proposals_for_source,
+            runtime.event_log,
+            source_event_id,
         )
-        recurrence_proposal = client.portal.call(
-            runtime.event_log.get_by_idempotency,
-            runtime.settings.instance.tenant_id,
-            f"triage:message-candidate:{source_event_id}:candidate-1:recurrence",
-        )
+        proposals_by_kind = {
+            proposal["payload"]["target_kind"]: proposal for proposal in proposals
+        }
+        task_proposal = proposals_by_kind.get("task")
+        recurrence_proposal = proposals_by_kind.get("recurrence")
         assert task_proposal is not None
         assert recurrence_proposal is not None
         client.portal.call(

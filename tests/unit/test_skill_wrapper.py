@@ -125,6 +125,7 @@ def _runtime_for(
 
     return _Runtime(
         event_sink=EventWriter(event_log, _NoopBus()),  # type: ignore[arg-type]
+        event_log=event_log,
         raw_events_dir=raw_dir,
         httpx_client_factory=client_factory,
         gateway_token=gateway_token,
@@ -670,3 +671,31 @@ async def test_missing_tokens_in_response_records_none(
     recorded = [e for e in events if e["type"] == "skill.call.recorded"]
     assert recorded[0]["payload"]["input_tokens"] is None
     assert recorded[0]["payload"]["cost_usd"] is None
+
+
+async def test_reviewed_invocation_identity_reuses_exact_duplicate_result(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    transport = _MockTransport(_ok_responder({"is_thing": True, "confidence": 0.9}))
+    runtime = _runtime_for(event_log, tmp_path, transport=transport)
+    _set_runtime_for_tests(runtime)
+    try:
+        first = SkillContext(
+            session=_session(),
+            triggering_event_id="source-event-1",
+            invocation_idempotency_key="message-fingerprint-1",
+        )
+        second = SkillContext(
+            session=_session(),
+            triggering_event_id="source-event-2",
+            invocation_idempotency_key="message-fingerprint-1",
+        )
+        first_result = await run_skill("classify_test", {"text": "same"}, first)
+        second_result = await run_skill("classify_test", {"text": "same"}, second)
+    finally:
+        _set_runtime_for_tests(None)
+
+    assert first_result == second_result
+    assert len(transport.requests) == 1
+    events = await _read_all_events(event_log)
+    assert [event["type"] for event in events] == ["skill.call.recorded"]

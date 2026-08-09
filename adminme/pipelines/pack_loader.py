@@ -47,6 +47,7 @@ class LoadedPipelinePack:
     events_emitted: list[str]
     instance: Pipeline
     pack_root: Path
+    replay_on_version_change: bool = False
 
 
 _cache: dict[tuple[str, str], LoadedPipelinePack] = {}
@@ -170,6 +171,15 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
         raise PipelinePackLoadError("pipeline.yaml: events_emitted must be a list")
     events_emitted = [str(x) for x in events_emitted_raw]
 
+    replay_block = manifest.get("replay") or {}
+    if not isinstance(replay_block, dict):
+        raise PipelinePackLoadError("pipeline.yaml: replay must be a mapping")
+    replay_mode = replay_block.get("on_version_change", "none")
+    if replay_mode not in {"none", "full"}:
+        raise PipelinePackLoadError(
+            "pipeline.yaml: replay.on_version_change must be 'none' or 'full'"
+        )
+
     loaded = LoadedPipelinePack(
         pack_id=pack_id,
         version=version,
@@ -178,6 +188,7 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
         events_emitted=events_emitted,
         instance=instance,
         pack_root=pack_root,
+        replay_on_version_change=replay_mode == "full",
     )
     _cache[cache_key] = loaded
     return loaded
