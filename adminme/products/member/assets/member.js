@@ -367,6 +367,48 @@ async function saveTriageForm(item, form, { reload = true } = {}) {
   }
 }
 
+function triageSourceContext(item) {
+  const context = item.source_context || {};
+  const section = document.createElement("section"); section.className = "triage-source-context";
+  section.append(text("p", "SOURCE & MEANING", "eyebrow"));
+  if (context.state !== "available") {
+    section.append(text("p", context.state === "withheld" ? "Source context is outside this member view." : "The immutable source is unavailable. Do not confirm until its evidence can be reviewed.", "review-state"));
+    return section;
+  }
+  const heading = document.createElement("div"); heading.className = "triage-source-heading";
+  const channel = [context.channel && titleCase(context.channel), context.direction && titleCase(context.direction)].filter(Boolean).join(" · ");
+  heading.append(text("strong", channel || titleCase(context.source_event_type || "Source")));
+  heading.append(text("span", context.adapter ? `${context.adapter}${context.account ? ` · ${context.account}` : ""}` : "Immutable source event", "meta"));
+  section.append(heading);
+  const facts = document.createElement("dl"); facts.className = "triage-source-facts";
+  for (const [label, value] of [[context.direction === "outbound" ? "Counterparty" : "Sender", context.sender], ["Subject / source title", context.subject], ["Observed", context.occurred_at ? new Date(context.occurred_at).toLocaleString() : null]]) {
+    if (value) facts.append(text("dt", label), text("dd", value));
+  }
+  section.append(facts);
+  const meaning = context.meaning || {};
+  const meaningBox = document.createElement("div"); meaningBox.className = "triage-meaning-box";
+  meaningBox.append(text("strong", `AdministrateMe found a possible ${titleCase(meaning.target_kind || item.target_kind || "item")}`), text("p", meaning.summary || item.title));
+  if (meaning.extracted_fields?.length) {
+    const values = document.createElement("dl"); values.className = "triage-extracted-fields";
+    for (const entry of meaning.extracted_fields) values.append(text("dt", entry.label), text("dd", Array.isArray(entry.value) ? entry.value.join(", ") : String(entry.value)));
+    meaningBox.append(values);
+  }
+  section.append(meaningBox);
+  const evidence = context.evidence || {};
+  if (evidence.quote) {
+    const quote = document.createElement("blockquote"); quote.className = "triage-evidence-quote"; quote.textContent = evidence.quote;
+    section.append(text("strong", "Exact source evidence"), quote);
+  } else {
+    section.append(text("p", "No exact text span applies to this structured provider rule. Review the source facts before confirming.", "state-note"));
+  }
+  if (context.methods?.length) {
+    const methods = document.createElement("div"); methods.className = "triage-methods";
+    for (const method of context.methods) { const badge = text("span", method.label, "pill pill-lavender"); badge.title = method.detail; methods.append(badge); }
+    section.append(methods);
+  }
+  return section;
+}
+
 function triageDetail(item, data, readOnly = false) {
   const section = document.createElement("section"); section.className = "card triage-detail";
   if (!item) {
@@ -375,6 +417,7 @@ function triageDetail(item, data, readOnly = false) {
   }
   section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", item.title));
   if (item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
+  section.append(triageSourceContext(item));
   if (readOnly) {
     const outcome = item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
     section.append(text("p", `${outcome} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
@@ -538,7 +581,8 @@ function triageSurface(data) {
   const list = document.createElement("ul"); list.className = "triage-master-list";
   for (const item of visible) {
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
-    button.append(text("strong", item.title), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}`));
+    const source = item.source_context?.state === "available" ? [item.source_context.channel && titleCase(item.source_context.channel), item.source_context.sender].filter(Boolean).join(" · ") : null;
+    button.append(text("strong", item.title), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}${source ? ` · ${source}` : ""}`));
     button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;
@@ -2743,6 +2787,7 @@ const SETTINGS_SECTIONS = [
   ["account", "My account"],
   ["behavior", "CoS behavior"],
   ["connections", "Connections"],
+  ["candidate-identification", "Candidate identification"],
   ["bridges", "Bridges & devices"],
   ["registry", "Places, assets & accounts"],
   ["privacy", "Household & privacy"],
@@ -2820,6 +2865,64 @@ function renderConnections(data) {
   if (!data.control.connections.length) fragment.append(text("p", "No reviewed provider connection is configured for this member.", "empty card"));
   else { const grid = document.createElement("div"); grid.className = "settings-card-grid"; for (const connection of data.control.connections) grid.append(connectionCard(connection, data)); fragment.append(grid); }
   const add = document.createElement("section"); add.className = "card settings-add-provider"; add.append(text("h2", "Add a provider"), text("p", "Only reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.")); const list = document.createElement("div"); list.className = "provider-roadmap"; for (const value of ["Google account · reviewed central adapter", "Apple apps · requires a member bridge", "Outlook, Twilio and BlueBubbles · adapter not installed"]) list.append(text("span", value, "pill pill-lavender")); add.append(list); fragment.append(add); return fragment;
+}
+
+const CANDIDATE_MODE_COPY = {
+  review: "Identify supported candidates and place only eligible proposals in Triage.",
+  manual: "Retain and account for source facts, but extract candidates only when you request it.",
+  quiet: "Retain and account for source facts without proposing candidates.",
+};
+
+function candidatePolicyCard(source, data) {
+  const policy = source.policy || {};
+  const locked = Boolean(source.locked) || !data.control.identity.can_mutate;
+  const form = document.createElement("form"); form.className = "card candidate-policy-card";
+  const head = document.createElement("div"); head.className = "candidate-policy-heading";
+  const copy = document.createElement("div"); copy.append(text("p", `${source.projection} · ${source.channel_type}`, "eyebrow"), text("h3", source.label));
+  const status = source.availability === "planned" ? "Planned" : source.availability === "configured" || source.availability === "available" ? "Available" : "Not configured";
+  head.append(copy, text("span", status, `pill state-label state-${source.availability === "planned" ? "unknown" : source.availability === "available_not_configured" ? "degraded" : "healthy"}`)); form.append(head);
+  const signals = document.createElement("div"); signals.className = "candidate-policy-signals";
+  for (const value of source.signals || []) signals.append(text("span", value, "pill pill-lavender"));
+  form.append(signals);
+
+  const mode = document.createElement("select"); mode.name = "mode"; mode.disabled = locked;
+  for (const [value, label] of [["review", "Review automatically"], ["manual", "Only when I ask"], ["quiet", "Do not propose"]]) { const option = text("option", label); option.value = value; option.selected = policy.mode === value; mode.append(option); }
+  const modeNote = text("small", CANDIDATE_MODE_COPY[policy.mode] || CANDIDATE_MODE_COPY.review, "candidate-mode-copy");
+  mode.addEventListener("change", () => { modeNote.textContent = CANDIDATE_MODE_COPY[mode.value]; });
+  form.append(field("Candidate admission", mode), modeNote);
+
+  const languageRow = document.createElement("label"); languageRow.className = "candidate-language-toggle";
+  const language = document.createElement("input"); language.type = "checkbox"; language.name = "language_enabled"; language.checked = Boolean(policy.language_enabled); language.disabled = locked || !source.language_available;
+  const languageCopy = document.createElement("span"); languageCopy.append(text("strong", "Use grounded language extraction"), text("small", "May contribute typed fields only when backed by exact source evidence. It cannot admit, route, confirm, or write an item.")); languageRow.append(language, languageCopy); form.append(languageRow);
+
+  const kinds = document.createElement("fieldset"); kinds.className = "candidate-kind-grid"; kinds.disabled = locked; kinds.append(text("legend", "Candidate types"));
+  for (const value of source.candidate_kinds || []) { const label = document.createElement("label"); const input = document.createElement("input"); input.type = "checkbox"; input.value = value; input.checked = (policy.candidate_kinds || []).includes(value); label.append(input, document.createTextNode(` ${titleCase(value)}`)); kinds.append(label); }
+  form.append(kinds);
+
+  const layers = document.createElement("details"); layers.className = "settings-technical"; layers.append(text("summary", "Signals and extraction layers")); const facts = document.createElement("dl"); facts.className = "settings-facts"; facts.append(text("dt", "Layers"), text("dd", (source.extraction_layers || []).join(" → ")), text("dt", "Source state"), text("dd", `${titleCase(source.implementation)} · ${titleCase(source.availability)}`), text("dt", "Candidate engine"), text("dd", source.policy_execution === "current" ? "Implemented" : "Planned · preference saved ahead of activation")); layers.append(facts); form.append(layers);
+  if (source.locked) form.append(text("p", "Explicit member requests always remain eligible for Triage review. This safety path cannot be disabled.", "state-note"));
+  else {
+    const save = text("button", source.implementation === "planned" || source.policy_execution === "planned" ? "Save future preference" : "Save source settings", "button button-primary"); save.type = "submit"; save.disabled = !data.control.identity.can_mutate; form.append(save);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault(); const selected = [...kinds.querySelectorAll("input:checked")].map((input) => input.value);
+      if (!selected.length) { setBanner("Select at least one candidate type. Nothing was changed."); return; }
+      save.disabled = true; setBanner(`Saving candidate identification settings for ${source.label}…`);
+      try {
+        await api(`/api/member/v1/settings/candidate-policies/${encodeURIComponent(source.id)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ expected_revision: data.control.revision, request_id: crypto.randomUUID(), mode: mode.value, language_enabled: language.checked, candidate_kinds: selected }) });
+        setBanner(`${source.label} settings saved. Source retention, privacy, routing, confirmation, and provider-write gates were unchanged.`); await reloadActiveSurface();
+      } catch (error) { setBanner(`${error.message} Candidate identification settings were not changed.`); save.disabled = false; }
+    });
+  }
+  return form;
+}
+
+function candidateIdentificationSettings(data) {
+  const fragment = document.createDocumentFragment(); const matrix = data.control.candidate_identification || { sources: [], non_configurable: [] };
+  const intro = document.createElement("section"); intro.className = "hero-card candidate-policy-intro"; intro.append(text("p", "DETERMINISTIC INBOUND POLICY", "eyebrow"), text("h2", "Choose what deserves a human look."), text("p", "Provider facts are normalized first, versioned rules identify explicit signals second, and optional grounded language extraction can fill typed fields from exact evidence. Only code-owned eligibility puts a proposal in Triage; only you make it official.")); fragment.append(intro);
+  const invariants = document.createElement("section"); invariants.className = "card candidate-policy-invariants"; invariants.append(text("h2", "These protections never switch off")); const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const value of matrix.non_configurable || []) list.append(text("li", titleCase(value))); invariants.append(list); fragment.append(invariants);
+  const groups = new Map(); for (const source of matrix.sources || []) { if (!groups.has(source.group)) groups.set(source.group, []); groups.get(source.group).push(source); }
+  for (const [group, sources] of groups) { const section = document.createElement("details"); section.className = "candidate-policy-group"; section.open = group === "Messages and conversations"; const reviewCount = sources.filter((source) => source.policy?.mode === "review").length; section.append(text("summary", `${group} · ${reviewCount} of ${sources.length} reviewing automatically`)); const grid = document.createElement("div"); grid.className = "candidate-policy-grid"; for (const source of sources) grid.append(candidatePolicyCard(source, data)); section.append(grid); fragment.append(section); }
+  const timing = document.createElement("section"); timing.className = "state-card"; timing.append(text("strong", "Settings apply prospectively."), text("p", "New or changed source facts use the saved policy when that source's candidate engine is implemented. Planned preferences are retained ahead of activation. Existing Triage proposals keep their recorded evidence and decision history; a quiet setting never deletes or rewrites them.")); fragment.append(timing); return fragment;
 }
 
 function defaultPreferenceValue(key, data) {
@@ -2917,10 +3020,11 @@ function accountSettings(data) {
 function renderSettings(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic control plane";
   root.append(settingsHero(data), settingsNav()); const content = document.createElement("div"); content.className = "settings-content";
-  if (state.settingsSection === "overview") { const layout = document.createElement("div"); layout.className = "settings-overview-grid"; layout.append(attentionCard(data.control.needs_attention), identitySummary(data.control.identity, true)); content.append(layout); const summaries = document.createElement("div"); summaries.className = "settings-summary-grid"; for (const [title, value, copy, target] of [["Connections", data.control.connections.length, "Provider accounts with separate setup, runtime, permission, and safety state.", "connections"], ["Bridges", data.control.bridges.length, "Per-member device sources with explicit enrollment and consent.", "bridges"], ["CoS profile", data.control.behavior.profiles.find((item) => item.id === data.control.behavior.active_profile_id)?.label || "Not selected", "Validated behavior defaults; no authority or model-routing changes.", "behavior"]]) { const cardNode = document.createElement("button"); cardNode.type = "button"; cardNode.className = "card settings-summary-card"; cardNode.append(text("span", title, "eyebrow"), text("strong", value), text("small", copy)); cardNode.addEventListener("click", () => { state.settingsSection = target; replaceQuery({ section: target }); renderSettings(state.surface); }); summaries.append(cardNode); } content.append(summaries); }
+  if (state.settingsSection === "overview") { const layout = document.createElement("div"); layout.className = "settings-overview-grid"; layout.append(attentionCard(data.control.needs_attention), identitySummary(data.control.identity, true)); content.append(layout); const sources = data.control.candidate_identification?.sources || []; const summaries = document.createElement("div"); summaries.className = "settings-summary-grid"; for (const [title, value, copy, target] of [["Connections", data.control.connections.length, "Provider accounts with separate setup, runtime, permission, and safety state.", "connections"], ["Candidate identification", sources.filter((item) => item.policy?.mode === "review").length, `Sources reviewing automatically out of ${sources.length} current and planned source paths.`, "candidate-identification"], ["Bridges", data.control.bridges.length, "Per-member device sources with explicit enrollment and consent.", "bridges"], ["CoS profile", data.control.behavior.profiles.find((item) => item.id === data.control.behavior.active_profile_id)?.label || "Not selected", "Validated behavior defaults; no authority or model-routing changes.", "behavior"]]) { const cardNode = document.createElement("button"); cardNode.type = "button"; cardNode.className = "card settings-summary-card"; cardNode.append(text("span", title, "eyebrow"), text("strong", value), text("small", copy)); cardNode.addEventListener("click", () => { state.settingsSection = target; replaceQuery({ section: target }); renderSettings(state.surface); }); summaries.append(cardNode); } content.append(summaries); }
   else if (state.settingsSection === "account") content.append(accountSettings(data));
   else if (state.settingsSection === "behavior") content.append(behaviorSettings(data));
   else if (state.settingsSection === "connections") content.append(renderConnections(data));
+  else if (state.settingsSection === "candidate-identification") content.append(candidateIdentificationSettings(data));
   else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
   else if (state.settingsSection === "registry") content.append(registrySettings(data));
   else if (state.settingsSection === "privacy") content.append(privacySettings(data));

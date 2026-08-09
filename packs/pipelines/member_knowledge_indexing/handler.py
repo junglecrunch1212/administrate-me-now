@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from adminme.candidate_policy import default_policy, source_id_for_event
 from adminme.domain_search import (
     DOMAIN_VECTOR_DIMENSIONS,
     DOMAIN_VECTOR_MODEL,
@@ -35,7 +36,7 @@ _CANDIDATE_FIELDS = CANDIDATE_FIELD_ALLOWLISTS
 
 class MemberKnowledgeIndexingPipeline:
     pack_id = "pipeline:member_knowledge_indexing"
-    version = "4.0.0"
+    version = "5.0.0"
     triggers: Triggers = {
         "events": [
             "member_knowledge.note_added",
@@ -316,6 +317,30 @@ class MemberKnowledgeIndexingPipeline:
                 reason_codes=["payload_member_scope_mismatch"],
             )
             return
+        policy_source_id = source_id_for_event(event) or "adapter:apple_notes"
+        policy = (
+            ctx.candidate_policy_fn(member_id, policy_source_id)
+            if ctx.candidate_policy_fn is not None
+            else default_policy(policy_source_id)
+        )
+        if policy.get("mode") != "review" or not policy.get("language_enabled"):
+            reason = (
+                "candidate_policy_manual_only"
+                if policy.get("mode") == "manual"
+                else "candidate_policy_quiet"
+                if policy.get("mode") == "quiet"
+                else "candidate_language_disabled"
+            )
+            await self._emit_assessment(
+                event,
+                ctx,
+                knowledge_id=knowledge_id,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=[reason, f"candidate_policy_source:{policy_source_id}"],
+            )
+            return
         inputs = {
             "title": payload.get("title"),
             "body_text": body[:50_000],
@@ -327,7 +352,7 @@ class MemberKnowledgeIndexingPipeline:
             session=ctx.session,
             correlation_id=ctx.correlation_id,
             triggering_event_id=source_event_id,
-            invocation_idempotency_key=f"note-semantics:v4:{source_event_id}",
+            invocation_idempotency_key=f"note-semantics:v5:{source_event_id}",
             owner_scope=str(event["owner_scope"]),
             visibility_scope=str(event["visibility_scope"]),
             sensitivity=event.get("sensitivity", "normal"),
@@ -373,6 +398,7 @@ class MemberKnowledgeIndexingPipeline:
             f"{event['tenant_id']}:{knowledge_id}".encode()
         ).hexdigest()[:20]
         eligible: list[dict[str, Any]] = []
+        allowed_kinds = set(policy.get("candidate_kinds") or [])
         for index, candidate in enumerate(candidates[:20]):
             if not isinstance(candidate, dict):
                 continue
@@ -389,6 +415,7 @@ class MemberKnowledgeIndexingPipeline:
             quote = str(candidate.get("evidence_quote") or "").strip()
             if (
                 target_kind not in _CANDIDATE_FIELDS
+                or target_kind not in allowed_kinds
                 or not title
                 or not quote
                 or quote not in body
@@ -461,7 +488,7 @@ class MemberKnowledgeIndexingPipeline:
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
                 idempotency_key=(
-                    f"triage:note-candidate:v3:{source_event_id}:"
+                    f"triage:note-candidate:v4:{source_event_id}:"
                     f"{candidate['candidate_key']}"
                 ),
                 payload={
@@ -479,6 +506,7 @@ class MemberKnowledgeIndexingPipeline:
                         "private_member_note_v1",
                         "exact_source_quote_grounded_v1",
                         f"candidate_fields_{candidate['target_kind']}_v1",
+                        f"candidate_policy_v1:{policy_source_id}:review",
                     ],
                     "confidence": candidate["confidence"],
                     "reasons": candidate["reasons"],
@@ -532,12 +560,12 @@ class MemberKnowledgeIndexingPipeline:
                 owner_scope=str(event["owner_scope"]),
                 visibility_scope=str(event["visibility_scope"]),
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=f"triage:note-features:v4:{source_event_id}",
+                idempotency_key=f"triage:note-features:v5:{source_event_id}",
                 payload={
                     "intent_id": f"source:{source_event_id}",
                     "source_event_id": source_event_id,
                     "skill_call_event_id": None,
-                    "extractor_id": "grounded-note-intent-features-v4",
+                    "extractor_id": "grounded-note-intent-features-v5",
                     "language": None,
                     "candidates": feature_candidates,
                     "extraction_state": (

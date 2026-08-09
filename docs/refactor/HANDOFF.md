@@ -3,19 +3,46 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_010_DEPLOYED_AND_LIVE_VERIFIED
+gate_result: CO_011_CANDIDATE_IDENTIFICATION_REVIEW_PENDING
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
-branch: main
-candidate_commit_resolution: pr_309_merged_and_deployed_e908ee5_exact_plugin_selection_verified
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/309
+branch: codex/candidate-identification-controls
+candidate_commit_resolution: local_candidate_under_validation
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: observation_soak_and_member_candidate_review
+next_phase: review_merge_guarded_deploy_and_authenticated_browser_proof
 ---
 
 # Release handoff
+
+## 2026-08-09 CO-011 candidate identification and Triage context candidate
+
+`CHANGE-ORDER-011-CANDIDATE-IDENTIFICATION-AND-TRIAGE-CONTEXT.md` now governs
+the member-facing candidate source policy and decision context. The candidate
+adds an executable catalog for every stable member entry, OpenClaw Add for
+review, current adapters, and reviewed future source families. Settings stores
+only revisioned member/source mode, grounded-language boolean, and supported
+kind subset; explicit member entry remains locked on and all source, privacy,
+routing, confirmation, governance, observation, and provider-effect rules are
+non-configurable.
+
+Message, Notes, Finance, and reviewed context pipelines receive effective
+policy through the production composition root. Quiet/manual/language-disabled
+paths remain terminally assessed. Triage now composes authorized read-time
+source identity, direction, sender/counterparty, subject, time, allowlisted
+fields, literal evidence, extraction methods, and policy snapshot from the
+immutable source event. It never presents a generated paraphrase as evidence.
+
+Local evidence passes: 1,740 root/pack Python tests, 60 isolated bridge tests,
+46 strict acceptance tests, Ruff, mypy, invariants, native OpenClaw contract
+and 17 plugin tests. A disposable authenticated browser saved/reloaded/restored
+Gmail policy, rendered exact message context in Triage, reflowed Settings and
+Triage without horizontal overflow at 390×844, and reported no browser errors.
+PR review, hosted checks, merge, guarded deployment, final Doctor,
+source settlement, and authenticated live proof remain pending. No live runtime
+or provider state has changed.
 
 ## 2026-08-09 CO-010 deployed and live verified
 

@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 213,
-    "technical_event_types": 183,
+    "technical_event_schemas": 214,
+    "technical_event_types": 184,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -18794,6 +18794,97 @@
         "state",
         "revision",
         "requested_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.candidate_policy_changed",
+      "family": "settings",
+      "properties": {
+        "candidate_kinds": {
+          "items": {
+            "enum": [
+              "task",
+              "commitment",
+              "calendar_event",
+              "reminder",
+              "list",
+              "list_item",
+              "recurrence",
+              "party_identifier",
+              "party_candidate",
+              "party_relationship",
+              "relationship_fact"
+            ],
+            "type": "string"
+          },
+          "maxItems": 11,
+          "minItems": 1,
+          "title": "Candidate Kinds",
+          "type": "array"
+        },
+        "changed_at": {
+          "minLength": 1,
+          "title": "Changed At",
+          "type": "string"
+        },
+        "changed_by_member_id": {
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "language_enabled": {
+          "title": "Language Enabled",
+          "type": "boolean"
+        },
+        "member_id": {
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "review",
+            "manual",
+            "quiet"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "routing_authority_changed": {
+          "const": false,
+          "default": false,
+          "title": "Routing Authority Changed",
+          "type": "boolean"
+        },
+        "source_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_retention_changed": {
+          "const": false,
+          "default": false,
+          "title": "Source Retention Changed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "member_id",
+        "source_id",
+        "mode",
+        "language_enabled",
+        "candidate_kinds",
+        "revision",
+        "changed_by_member_id",
+        "changed_at"
       ],
       "schema_version": 1
     },

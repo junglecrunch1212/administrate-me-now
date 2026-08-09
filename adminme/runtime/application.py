@@ -573,6 +573,7 @@ class AdministrateMeRuntime:
                 run_skill_fn=self.run_skill_fn,
                 profile_loader=self.extensions.profile_for,
                 persona_loader=self.extensions.active_persona,
+                candidate_policy_fn=self.settings_control.effective_candidate_policy,
             )
             await self.pipelines.discover(
                 builtin_root=self.settings.repository_root / "packs" / "pipelines",

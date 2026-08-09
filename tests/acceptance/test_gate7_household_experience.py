@@ -2539,6 +2539,18 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
         assert connection["runtime"] != "healthy"
         assert connection["permissions"]["credential_reference_present"] is True
         assert connection["safety"]["observation_only"] is True
+        candidate_matrix = settings["control"]["candidate_identification"]
+        gmail_source = next(
+            source
+            for source in candidate_matrix["sources"]
+            if source["id"] == "adapter:gmail"
+        )
+        assert gmail_source["availability"] == "configured"
+        assert gmail_source["policy"]["mode"] == "review"
+        assert (
+            "deterministic eligibility and routing"
+            in candidate_matrix["non_configurable"]
+        )
         rendered = json.dumps(settings)
         assert "keychain://" not in rendered
         assert "oauth_credentials_ref" not in rendered
@@ -2698,6 +2710,55 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
         )
         assert stale.status_code == 409
 
+        candidate_policy = client.post(
+            "/api/member/v1/settings/candidate-policies/adapter:gmail",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 3,
+                "request_id": "ac31-gmail-candidate-policy",
+                "mode": "quiet",
+                "language_enabled": False,
+                "candidate_kinds": ["task", "calendar_event", "recurrence"],
+            },
+        )
+        assert candidate_policy.status_code == 202, candidate_policy.text
+        assert candidate_policy.json()["revision"] == 4
+        assert candidate_policy.json()["policy"]["mode"] == "quiet"
+        replayed_candidate_policy = client.post(
+            "/api/member/v1/settings/candidate-policies/adapter:gmail",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 3,
+                "request_id": "ac31-gmail-candidate-policy",
+                "mode": "quiet",
+                "language_enabled": False,
+                "candidate_kinds": ["task", "calendar_event", "recurrence"],
+            },
+        )
+        assert replayed_candidate_policy.status_code == 202
+        assert replayed_candidate_policy.json()["idempotent"] is True
+        after_policy = client.get(
+            "/api/member/v1/surfaces/settings", headers=HEADERS[PRINCIPAL]
+        ).json()
+        configured_gmail = next(
+            source
+            for source in after_policy["control"]["candidate_identification"]["sources"]
+            if source["id"] == "adapter:gmail"
+        )
+        assert configured_gmail["policy"]["mode"] == "quiet"
+        locked_entry = client.post(
+            "/api/member/v1/settings/candidate-policies/surface:today",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "expected_revision": 4,
+                "request_id": "ac31-disable-explicit-entry",
+                "mode": "quiet",
+                "language_enabled": False,
+                "candidate_kinds": ["task"],
+            },
+        )
+        assert locked_entry.status_code == 422
+
         archived = client.post(
             "/api/member/v1/registry/account/gate7-household-utility/lifecycle",
             headers=HEADERS[PRINCIPAL],
@@ -2731,10 +2792,12 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
             "settings.preferences_changed",
             "settings.bridge_enrollment_requested",
             "settings.connection_lifecycle_changed",
+            "settings.candidate_policy_changed",
         )
         assert {event["type"] for event in events} == {
             "settings.profile_changed",
             "settings.preferences_changed",
             "settings.bridge_enrollment_requested",
             "settings.connection_lifecycle_changed",
+            "settings.candidate_policy_changed",
         }

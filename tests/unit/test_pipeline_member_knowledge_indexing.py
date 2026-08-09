@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -81,6 +81,12 @@ def _context(log: _FakeLog, run_skill: Any) -> PipelineContext:
     )
 
 
+def _context_with_policy(
+    log: _FakeLog, run_skill: Any, candidate_policy_fn: Any
+) -> PipelineContext:
+    return replace(_context(log, run_skill), candidate_policy_fn=candidate_policy_fn)
+
+
 def _note_event(
     *,
     event_id: str = "note-event-1",
@@ -131,7 +137,7 @@ async def test_exact_evidence_candidate_is_sanitized_and_sent_only_to_triage() -
         assert skill_id == "skill:extract_note_semantics"
         assert inputs["body_text"] == "Please return the school form by Friday."
         assert skill_ctx.owner_scope == "private:member-a"
-        assert skill_ctx.invocation_idempotency_key == "note-semantics:v4:note-event-1"
+        assert skill_ctx.invocation_idempotency_key == "note-semantics:v5:note-event-1"
         return {
             "candidates": [
                 {
@@ -195,6 +201,36 @@ async def test_privileged_note_revokes_index_and_never_reaches_model() -> None:
     ]
     assert log.calls[0].envelope.payload["reason"] == "privileged_content"
     assert log.calls[-1].envelope.payload["assessment_outcome"] == "quarantined"
+
+
+@pytest.mark.asyncio
+async def test_manual_note_policy_indexes_but_does_not_call_language_or_propose() -> (
+    None
+):
+    log = _FakeLog()
+
+    async def forbidden(*_: Any, **__: Any) -> dict[str, Any]:
+        raise AssertionError("manual-only note reached the language seam")
+
+    def policy(member_id: str, source_id: str) -> dict[str, Any]:
+        assert (member_id, source_id) == ("member-a", "adapter:fathom")
+        return {
+            "source_id": source_id,
+            "mode": "manual",
+            "language_enabled": True,
+            "candidate_kinds": ["task"],
+        }
+
+    await MemberKnowledgeIndexingPipeline().handle(
+        _note_event(), _context_with_policy(log, forbidden, policy)
+    )
+    assert [call.envelope.type for call in log.calls] == [
+        "embedding.generated",
+        "triage.intent.features_extracted",
+    ]
+    assert (
+        "candidate_policy_manual_only" in log.calls[-1].envelope.payload["reason_codes"]
+    )
 
 
 @pytest.mark.asyncio

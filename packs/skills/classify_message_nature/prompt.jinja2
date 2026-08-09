@@ -7,6 +7,13 @@ Counterparty: {{ counterparty_identifier | default(from_identifier) }}
 {% if subject %}Subject: {{ subject }}{% endif %}
 {% if from_party_known %}Sender is a known contact (party already resolved).{% endif %}
 
+Candidate policy: {{ candidate_mode | default("review") }}.
+Allowed candidate kinds: {{ candidate_kinds | default([]) | join(", ") }}.
+Grounded language candidates enabled: {{ candidate_language_enabled | default(true) }}.
+If candidate mode is not `review`, or grounded language candidates are disabled,
+return an empty `candidates` array while still returning classification and
+semantic features. Never substitute a different candidate kind.
+
 Body:
 {{ body_text | truncate(2000) }}
 

@@ -86,6 +86,7 @@ class PipelineContext:
     triggering_event_id: str
     correlation_id: str | None
     parties_conn_factory: Callable[[], "sqlcipher3.Connection"] | None = None
+    candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None
 
 
 def skill_output(result: Any) -> dict[str, Any]:

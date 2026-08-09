@@ -155,6 +155,19 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
         assert all(item["review_state"]["human_gate_required"] for item in items)
         grounded_source = f"Subject: Monthly utility payment due\n\n{body}"
         assert all(item["title"] in grounded_source for item in items)
+        assert all(item["source_context"]["state"] == "available" for item in items)
+        for item in items:
+            context = item["source_context"]
+            assert context["source_id"] == "adapter:gmail"
+            assert context["channel"] == "gmail"
+            assert context["direction"] == "inbound"
+            assert context["sender"] == "billing@example.invalid"
+            assert context["subject"] == "Monthly utility payment due"
+            assert context["evidence"]["exactly_grounded"] is True
+            assert context["evidence"]["quote"] in grounded_source
+            assert context["policy_rule"] == (
+                "candidate_policy_v1:adapter:gmail:review"
+            )
         assert (
             runtime.projections.connection("tasks")
             .execute("SELECT COUNT(*) FROM tasks")

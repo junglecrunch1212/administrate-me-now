@@ -62,6 +62,35 @@ class SettingsBridgeEnrollmentRequestedV1(BaseModel):
     requested_at: str = Field(min_length=1)
 
 
+class SettingsCandidatePolicyChangedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    member_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1, max_length=160)
+    mode: Literal["review", "manual", "quiet"]
+    language_enabled: bool
+    candidate_kinds: list[
+        Literal[
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "list",
+            "list_item",
+            "recurrence",
+            "party_identifier",
+            "party_candidate",
+            "party_relationship",
+            "relationship_fact",
+        ]
+    ] = Field(min_length=1, max_length=11)
+    revision: int = Field(ge=1)
+    changed_by_member_id: str = Field(min_length=1)
+    changed_at: str = Field(min_length=1)
+    source_retention_changed: Literal[False] = False
+    routing_authority_changed: Literal[False] = False
+
+
 registry.register("settings.profile_changed", 1, SettingsProfileChangedV1)
 registry.register("settings.preferences_changed", 1, SettingsPreferencesChangedV1)
 registry.register(
@@ -69,6 +98,9 @@ registry.register(
 )
 registry.register(
     "settings.bridge_enrollment_requested", 1, SettingsBridgeEnrollmentRequestedV1
+)
+registry.register(
+    "settings.candidate_policy_changed", 1, SettingsCandidatePolicyChangedV1
 )
 
 

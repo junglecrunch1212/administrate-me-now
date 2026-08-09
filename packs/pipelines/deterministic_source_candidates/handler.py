@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from dateutil.relativedelta import relativedelta
 
+from adminme.candidate_policy import default_policy, source_id_for_event
 from adminme.events.envelope import EventEnvelope
 from adminme.events.schemas.triage import TriageTargetKind
 from adminme.pipelines.base import PipelineContext, Triggers
@@ -153,7 +154,7 @@ def _rule_matches(rule: dict[str, Any], payload: dict[str, Any]) -> bool:
 
 class DeterministicSourceCandidatesPipeline:
     pack_id = "pipeline:deterministic_source_candidates"
-    version = "1.0.0"
+    version = "2.0.0"
     triggers: Triggers = {"events": [*_FINANCIAL_EVENTS, "context.signal.observed"]}
 
     async def _recurring_payment_candidate(
@@ -308,7 +309,7 @@ class DeterministicSourceCandidatesPipeline:
             owner_scope=str(event["owner_scope"]),
             visibility_scope=str(event["visibility_scope"]),
             sensitivity=event.get("sensitivity", "normal"),
-            idempotency_key=f"triage:structured-source:v1:{source_event_id}",
+            idempotency_key=f"triage:structured-source:v2:{source_event_id}",
             payload={
                 "intent_id": f"source:{source_event_id}",
                 "source_event_id": source_event_id,
@@ -340,6 +341,16 @@ class DeterministicSourceCandidatesPipeline:
                 event, ctx, [], reason_code="source_member_scope_mismatch"
             )
             return
+        policy_source_id = source_id_for_event(event) or (
+            "adapter:home_assistant"
+            if event_type == "context.signal.observed"
+            else "adapter:plaid"
+        )
+        policy = (
+            ctx.candidate_policy_fn(member_id, policy_source_id)
+            if ctx.candidate_policy_fn is not None
+            else default_policy(policy_source_id)
+        )
 
         candidates: list[StructuredCandidate]
         if event_type == "money_flow.provider_observed":
@@ -361,6 +372,21 @@ class DeterministicSourceCandidatesPipeline:
             candidates = []
             reason = "canonical_financial_fact_requires_no_candidate"
 
+        if policy.get("mode") != "review":
+            candidates = []
+            reason = (
+                "candidate_policy_manual_only"
+                if policy.get("mode") == "manual"
+                else "candidate_policy_quiet"
+            )
+        else:
+            allowed_kinds = set(policy.get("candidate_kinds") or [])
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.target_kind in allowed_kinds
+            ]
+
         extraction_event_id = await self._emit_assessment(
             event, ctx, candidates, reason_code=reason
         )
@@ -379,7 +405,7 @@ class DeterministicSourceCandidatesPipeline:
                 owner_scope=str(event["owner_scope"]),
                 visibility_scope=str(event["visibility_scope"]),
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=f"triage:structured-candidate:v1:{stable_hash}",
+                idempotency_key=f"triage:structured-candidate:v2:{stable_hash}",
                 payload={
                     "proposal_id": proposal_id,
                     "target_kind": candidate.target_kind,
@@ -389,11 +415,17 @@ class DeterministicSourceCandidatesPipeline:
                     "route": {"member_id": member_id},
                     "source_event_id": str(event["event_id"]),
                     "confidence": 1.0,
-                    "reasons": [candidate.reason],
+                    "reasons": [
+                        candidate.reason,
+                        f"candidate_policy_v1:{policy_source_id}:review",
+                    ],
                     "parent_intent_id": None,
                     "candidate_key": candidate.key,
                     "extraction_event_id": extraction_event_id,
-                    "eligibility_rule_ids": [candidate.rule_id],
+                    "eligibility_rule_ids": [
+                        candidate.rule_id,
+                        f"candidate_policy_v1:{policy_source_id}:review",
+                    ],
                 },
             )
             await ctx.event_sink.write(

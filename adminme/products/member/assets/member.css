@@ -143,6 +143,16 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .triage-master-button { width: 100%; display: grid; gap: .22rem; border: 1px solid var(--line); border-radius: var(--radius); padding: .72rem; background: #fbf8f2; color: var(--ink); text-align: left; }
 .triage-master-button[aria-current="true"] { border-color: var(--teal); box-shadow: inset 3px 0 0 var(--teal); background: #edf6f3; }
 .triage-master-button small { color: var(--muted); }
+.triage-source-context { display: grid; gap: .7rem; margin: .85rem 0; padding: .85rem; border: 1px solid var(--line); border-radius: var(--radius-lg); background: #fbf8f2; }
+.triage-source-heading { display: flex; align-items: start; justify-content: space-between; gap: .65rem; }
+.triage-source-heading > * { min-width: 0; overflow-wrap: anywhere; }
+.triage-source-facts, .triage-extracted-fields { display: grid; grid-template-columns: minmax(7rem, .38fr) minmax(0, 1fr); gap: .35rem .65rem; margin: 0; }
+.triage-source-facts dt, .triage-extracted-fields dt { color: var(--muted); font-size: .7rem; }
+.triage-source-facts dd, .triage-extracted-fields dd { margin: 0; overflow-wrap: anywhere; }
+.triage-meaning-box { display: grid; gap: .3rem; padding: .7rem; border-left: 3px solid var(--teal); border-radius: var(--radius); background: #edf6f3; }
+.triage-meaning-box p { margin: 0; }
+.triage-evidence-quote { margin: 0; padding: .65rem .75rem; border-left: 3px solid #c9942c; background: #fff8e6; overflow-wrap: anywhere; }
+.triage-methods, .candidate-policy-signals { display: flex; flex-wrap: wrap; gap: .35rem; }
 .triage-review-form { display: grid; gap: .75rem; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
 .field { display: grid; gap: .3rem; color: var(--muted); font-size: .72rem; }
@@ -524,6 +534,22 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
 .settings-technical summary, .settings-advanced > summary { cursor: pointer; font-weight: 800; }
 .settings-add-provider { display: grid; gap: .35rem; }
 .provider-roadmap { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .45rem; }
+.candidate-policy-intro h2 { max-width: 25ch; }
+.candidate-policy-invariants { border-left: 4px solid var(--teal); }
+.candidate-policy-group { border: 1px solid var(--line); border-radius: var(--radius-lg); background: rgb(255 253 248 / .72); }
+.candidate-policy-group > summary { cursor: pointer; padding: .9rem 1rem; font-weight: 800; }
+.candidate-policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 0 1rem 1rem; }
+.candidate-policy-card { display: grid; gap: .75rem; box-shadow: none; }
+.candidate-policy-heading { display: flex; justify-content: space-between; align-items: start; gap: .6rem; }
+.candidate-policy-heading > div { min-width: 0; }
+.candidate-policy-heading h3 { overflow-wrap: anywhere; }
+.candidate-mode-copy { display: block; margin-top: -.35rem; color: var(--muted); }
+.candidate-language-toggle { display: flex; gap: .55rem; align-items: start; padding: .7rem; border: 1px solid var(--line); border-radius: var(--radius); background: #f4efe6; }
+.candidate-language-toggle input { flex: none; width: 1rem; height: 1rem; margin-top: .15rem; }
+.candidate-language-toggle span { display: grid; gap: .2rem; min-width: 0; }
+.candidate-kind-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; margin: 0; padding: .7rem; border: 1px solid var(--line); border-radius: var(--radius); }
+.candidate-kind-grid legend { padding: 0 .3rem; font-weight: 800; }
+.candidate-kind-grid label { min-width: 0; overflow-wrap: anywhere; font-size: .78rem; }
 .profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .5rem; margin-top: .85rem; }
 .profile-choice { display: flex; gap: .55rem; align-items: start; padding: .75rem; border: 1px solid var(--line); border-radius: var(--radius); background: #fbf8f2; }
 .profile-choice:has(input:checked) { border-color: var(--teal); box-shadow: inset 3px 0 0 var(--teal); background: #edf6f3; }
@@ -633,6 +659,9 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .view-button { flex: 1; }
   .brief-grid { grid-template-columns: 1fr; }
   .triage-workspace { grid-template-columns: 1fr; }
+  .triage-source-heading { flex-direction: column; }
+  .triage-source-facts, .triage-extracted-fields { grid-template-columns: 1fr; }
+  .triage-source-facts dd, .triage-extracted-fields dd { margin-bottom: .3rem; }
   .field-grid { grid-template-columns: 1fr; }
   .field-span { grid-column: auto; }
   .comms-workspace { grid-template-columns: 1fr; }
@@ -671,6 +700,7 @@ dialog::backdrop { background: rgb(28 29 27 / .38); backdrop-filter: blur(2px); 
   .evidence-grid dd { margin-bottom: .5rem; }
   .member-chip { max-width: 9.5rem; padding: .34rem .6rem; }
   .settings-overview-grid, .settings-summary-grid, .settings-card-grid { grid-template-columns: 1fr; }
+  .candidate-policy-grid { grid-template-columns: 1fr; }
   .connection-axes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .permission-grid, .preference-grid { grid-template-columns: 1fr; }
   .settings-facts { grid-template-columns: 1fr; }
