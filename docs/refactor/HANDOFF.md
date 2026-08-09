@@ -8,7 +8,7 @@ verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
 candidate_commit_resolution: pr_308_merged_and_deployed_43cd565_stale_plugin_selection_candidate
-pull_request_url: pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/309
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -34,7 +34,7 @@ selected only the OpenClaw executable and launch definitions. Name-only Doctor
 discovery allowed the same-version old plugin to pass, so PR #308's health retry
 was not actually running.
 
-This repair stops services, removes only bounded stale AdministrateMe
+PR #309 stops services, removes only bounded stale AdministrateMe
 registrations, links the candidate plugin through the reviewed OpenClaw CLI,
 validates config, and requires install path plus runtime source to resolve in
 the selected immutable release. Rollback symmetrically restores the previous
