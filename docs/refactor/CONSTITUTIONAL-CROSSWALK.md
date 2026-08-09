@@ -1,5 +1,14 @@
 # Constitutional crosswalk
 
+CO-008 upgrade-controller amendment (2026-08-08): C080-C082/C086 are
+**PRESERVED/HARDENED** and the active-controller assumption in ADR-0006 is
+**SUPERSEDED**. A reviewed candidate now supplies its attested upgrade policy
+for both same-baseline and approved runtime-migration paths. Same-baseline
+policy executes on the active runtime, so candidate code cannot opportunistically
+select a new Python or Node boundary. Exact commit/source provenance,
+compatibility, encrypted backup, immutable prior release, full Doctor,
+synthetic proof, and automatic rollback remain independent gates.
+
 CO-008 source-throughput amendment (2026-08-08): C001/C002/C007/C009/C010/
 C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
 **PRESERVED/HARDENED** after retained live evidence showed that correct

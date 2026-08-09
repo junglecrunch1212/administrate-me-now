@@ -1,6 +1,6 @@
 # ADR-0006 — Runtime baseline and reviewed cutover
 
-Status: **ACCEPTED; LIVE CUTOVER AUTHORIZED, KEYCHAIN-BRIDGED RETRY PENDING**
+Status: **ACCEPTED; LIVE BASELINE CUTOVER COMPLETE; UPGRADE-CONTROLLER BOUNDARY HARDENED**
 
 Date: 2026-08-07
 
@@ -42,7 +42,8 @@ the active release's venv, changes the global Node link, or restarts a service
 during candidate preparation.
 
 An upgrade compares the candidate manifest to the manifest of the release
-named by `current-release.json`. A Python or Node baseline change fails before
+named by `current-release.json`. A change to the Python or Node compatibility
+range, preferred version, or Homebrew formula fails before
 service replacement unless `--approve-runtime-migration` is supplied. That
 flag is valid only after the candidate passes the full release suite on 3.14/
 24, a clean isolated bootstrap, encrypted backup/restore and projection replay,
@@ -50,13 +51,25 @@ the pinned OpenClaw build/registration tests, browser simulation, and a staged
 rollback rehearsal. The actual family instance then still requires a separate
 operator decision.
 
-The explicit migration launcher requires a clean reviewed Git checkout and
-resolves its commit before execution. Because the older active release cannot
-self-host code that requires a newer interpreter, this path creates a separate
-candidate-version controller venv under instance tooling, synchronizes it with
-Poetry kept outside that venv, and invokes the candidate upgrade manager from
-there. The ordinary same-runtime updater continues to execute the active
-release's trusted controller. Neither path mutates the active application venv.
+Every upgrade launcher requires a clean reviewed Git checkout, resolves its
+commit before execution, and self-hosts that candidate's controller in a
+commit-versioned tooling venv. A same-baseline update builds the controller on
+the active release's Python and Node runtime; an explicitly approved baseline
+migration builds it on the side-by-side candidate runtime. Poetry remains
+outside the environment it synchronizes. Immediately before execution the
+launcher rechecks commit and worktree cleanliness, proves that
+`bootstrap.upgrade` resolves from the candidate checkout, and passes the exact
+commit as an independently verified controller receipt. The upgrade manager
+refuses a missing or mismatched receipt and refuses to run if its own source is
+not the reviewed candidate source.
+
+This **SUPERSEDES** the ordinary-updater rule that treated the active release's
+controller as the only trusted policy. That rule made repairs to post-switch
+settlement impossible to deploy: the old controller continued applying its old
+deadline and rolled back a healthy advancing candidate. Candidate code is
+already the reviewed object being authorized; executing its attested policy on
+the active runtime removes that circular dependency without mutating the active
+application venv or weakening compatibility, backup, Doctor, or rollback.
 
 macOS Keychain items retain both an application allowlist and an application
 partition bound to the creating interpreter. A login-Keychain password reset or
@@ -146,16 +159,16 @@ release gate.
 - Node 24 can be installed without relinking Node 22, so the live Gateway and
   runtime are unchanged while the candidate is tested.
 - D10 remains historical evidence and is superseded by D30.
-- The 3.11/22 live instance remains healthy until the separately authorized
-  migration completes; its original Keychain items remain a rollback asset.
+- The live instance now runs the reviewed 3.14/24 baseline. Original
+  interpreter-bound Keychain items and older immutable releases remain rollback
+  assets until the retention gate expires.
 
 ## Classification
 
 - **PRESERVE:** topology, encrypted truth, exact OpenClaw pin, SQLCipher
   boundary, release-local environments, backup, rollback, and observation.
 - **MODERNIZE:** Python, Node, npm, Poetry, manifests, CI, and installer paths.
-- **SUPERSEDE:** D10 as the future runtime baseline and implicit same-runtime
-  upgrade assumptions.
-- **DEFER:** only completion of the already authorized live cutover; the
-  candidate architecture, rehearsal, and executable migration gate are
-  complete.
+- **SUPERSEDE:** D10 as the future runtime baseline, implicit same-runtime
+  upgrade assumptions, and active-controller ownership of candidate policy.
+- **DEFER:** no runtime-baseline or controller-boundary requirement. Provider
+  consent and member-bridge activation retain their separate gates.

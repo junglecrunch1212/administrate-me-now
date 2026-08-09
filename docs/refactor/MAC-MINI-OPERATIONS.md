@@ -229,9 +229,16 @@ is instead:
 ./bootstrap/update.sh --approve-runtime-migration /absolute/path/to/clean-reviewed-candidate
 ```
 
-The migration form refuses a dirty or non-Git candidate and self-hosts the
-candidate controller in a separate versioned tooling venv. It does not run the
-new controller inside, or synchronize, the active release's venv.
+Both forms refuse a dirty or non-Git candidate and self-host the reviewed
+candidate controller in a commit-versioned tooling venv. A same-baseline update
+uses the active release's Python and Node only as the controller runtime; a
+separately approved baseline migration uses the side-by-side candidate runtime.
+Neither form runs the new controller inside, or synchronizes, the active
+release's venv. The launcher rechecks the candidate commit and clean worktree
+after dependency preparation, attests that the loaded upgrade module is the
+candidate file, and passes that exact commit to the manager. A missing,
+mismatched, or active-release controller fails before backup, service stop, or
+pointer mutation.
 
 Do not reset the login Keychain or select **Allow all applications** when a
 Python-boundary migration encounters an access prompt. The explicit migration
@@ -250,12 +257,15 @@ prompt remains. An older rollback release ignores the alias map and keeps using
 the original untouched items.
 
 Compatibility validation happens before backup, service stop, release copy,
-or pointer replacement. A different OpenClaw version, commit, or plugin API is
-refused. A compatible candidate receives an isolated Python environment and
-native-plugin build before service replacement, then a pre-upgrade encrypted
-backup, atomic release pointer switch, launchd reconciliation, restart, and
-Doctor. Failure restores both the previous pointer and its launchd
-definitions. The lower-level rollback command is:
+or pointer replacement. The same-runtime shell gate independently refuses a
+Python/Node compatibility range, preferred version, or formula change before
+executing candidate code. A different
+OpenClaw version, undeclared successor commit, or plugin API is refused. A
+compatible candidate receives an isolated Python environment and native-plugin
+build before service replacement, then a pre-upgrade encrypted backup, atomic
+release pointer switch, launchd reconciliation, restart, and Doctor. Failure
+restores both the previous pointer and its launchd definitions. The lower-level
+rollback command is:
 
 For central services and post-switch Doctor, the candidate manifest's
 formula-specific Node bin precedes `/opt/homebrew/bin`; this keeps an older

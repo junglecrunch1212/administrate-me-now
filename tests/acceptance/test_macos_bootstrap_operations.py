@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from bootstrap.contracts import DeploymentPaths
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
+from bootstrap.upgrade import UpgradeManager
 from bootstrap.wizard import BootstrapWizard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -101,6 +103,46 @@ def test_credential_free_bootstrap_doctor_backup_restore_round_trip(
     for reference in references.values():
         secret = store.get(reference)
         assert secret not in backup_bytes
+
+
+def test_reviewed_candidate_controller_completes_guarded_upgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-upgrade")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+
+    result = UpgradeManager(
+        paths,
+        root=REPO_ROOT,
+        test_mode=True,
+    ).activate(REPO_ROOT)
+
+    assert result["status"] == "upgraded"
+    assert result["commit"] == commit
+    assert result["upgrade_controller_attested"] is True
+    pointer = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
+    assert pointer["commit"] == commit
+    assert Path(pointer["path"]).is_dir()
 
 
 def test_doctor_fails_when_required_triage_pipeline_is_poisoned(

@@ -1,6 +1,6 @@
 # CO-008 — Source assurance and universal member capture
 
-Status: **APPROVED; MERGED — THREE GUARDED ACTIVATIONS ROLLED BACK; SOURCE-THROUGHPUT REPAIR IN REVIEW**
+Status: **APPROVED; SOURCE REPAIR MERGED — FOUR GUARDED ACTIVATIONS ROLLED BACK; CONTROLLER-BOUNDARY REPAIR IN REVIEW**
 
 Date: 2026-08-08
 
@@ -226,6 +226,9 @@ The following are release requirements:
     terminal, with zero pending, missing, or failed dispositions; and
 14. a reviewed retry generation reuses prior success, retries an older causal
     failure exactly once, and reuses its own terminal failure on redelivery.
+15. every updater path executes the clean reviewed candidate's attested policy
+    from a commit-versioned controller while preserving the explicit runtime-
+    migration gate and active runtime for same-baseline updates.
 
 `tests/acceptance/test_source_assurance_vertical_slice.py` is the process-level
 composition proof. Unit tests cover missing-vs-empty accounting, all terminal
@@ -243,7 +246,8 @@ supersession, retry generations, and exact-source preservation.
 - **SUPERSEDE:** silent pipeline returns, v1 failure-as-empty inference,
   confidence admission thresholds, broad email action-verb fallback,
   registration/checkpoint-only health, and Cat-D future-projection carve-outs
-  for required functionality that has already shipped.
+  for required functionality that has already shipped, plus active-release
+  ownership of reviewed candidate upgrade policy.
 - **DEFER:** only unimplemented provider adapters named in §7. No required
   source disposition, privacy invariant, product function, or acceptance proof
   is deferred.
@@ -251,7 +255,7 @@ supersession, retry generations, and exact-source preservation.
 ## 10. Deployment boundary
 
 Merge requires full release gates and review. Activation requires an encrypted
-backup, immutable release publication, v8 message and v3 Notes reviewed full
+backup, immutable release publication, v9 message and v3 Notes reviewed full
 replay, zero subscriber lag, source-assurance reconciliation, full Doctor, and
 portal verification. Observation mode remains active. The replay may propose
 or supersede review items; it may not confirm, materialize, send, or mutate any
@@ -312,3 +316,34 @@ while replay advances, without repeatedly reading the database and probing all
 subsystems. Once source accounting is fresh and terminal, it runs the complete
 Doctor and synthetic proof once. Structural failures still return immediately;
 deadline failure still rolls back.
+
+### 10.3 Third guarded activation and source-throughput repair
+
+PR #298 merged as `5c85b05`; its guarded activation again restored `c484f0a`
+after the short active controller rejected incomplete source settlement.
+Retained evidence identified 316 private-member Gmail facts and 39 legacy
+household-shared facts. Scope refusal was still downstream of NLP, and the
+language-bound consumer was serial. PR #299 moved privacy/member refusal before
+the model, added explicit eight-way idempotent delivery with ordered-successful-
+prefix checkpointing, and aligned the bounded skill timeout with the pinned
+Gateway envelope. It passed the complete local and hosted release gates and
+merged as `d5dd805`.
+
+### 10.4 Fourth guarded activation and controller-boundary repair
+
+The merged PR #299 runtime reached 49 eligible-candidate assessments, seven
+explicit no-candidate assessments, 39 quarantines, and zero failures while its
+content-free accounting advanced through 56,919 obligations. It therefore
+proved the Gmail path and v9 throughput repair were functioning. It was still
+rolled back safely because the command entered through `c484f0a`'s updater;
+that ordinary path ran the active release's old two-minute upgrade manager and
+could not execute PR #299's reviewed 30-minute settlement policy.
+
+The controller-boundary repair **SUPERSEDES** that circular assumption. Every
+upgrade now requires an unchanged clean Git commit, builds the candidate policy
+in a commit-versioned controller, rechecks the checkout, attests the imported
+module and commit, and makes the candidate manager verify the receipt before
+any live mutation. A same-baseline controller still runs on the active Python
+and Node runtime; only the separately approved migration form may select the
+candidate runtime. Backup, final Doctor, synthetic proof, prior-release
+retention, and automatic rollback remain unchanged.

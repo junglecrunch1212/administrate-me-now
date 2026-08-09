@@ -91,13 +91,23 @@ def validate_candidate(
         raise UpgradeError(
             "candidate plugin package contradicts its compatibility manifest"
         )
+    runtime_coordinates = ("compatible", "preferred", "formula")
     runtime_changes = {
         component: {
-            "from": active[component]["compatible"],
-            "to": incoming[component]["compatible"],
+            "from": {
+                coordinate: active[component][coordinate]
+                for coordinate in runtime_coordinates
+            },
+            "to": {
+                coordinate: incoming[component][coordinate]
+                for coordinate in runtime_coordinates
+            },
         }
         for component in ("python", "node")
-        if incoming[component]["compatible"] != active[component]["compatible"]
+        if any(
+            incoming[component][coordinate] != active[component][coordinate]
+            for coordinate in runtime_coordinates
+        )
     }
     if runtime_changes and not approve_runtime_migration:
         raise UpgradeError(
@@ -148,6 +158,27 @@ class UpgradeManager:
             json.JSONDecodeError,
         ) as exc:
             raise UpgradeError("active-release pointer is invalid") from exc
+
+    def _attest_controller_provenance(self, candidate: Path, commit: str) -> None:
+        """Require production upgrades to execute the reviewed candidate policy."""
+
+        attested_commit = os.environ.get("ADMINME_UPGRADE_CONTROLLER_COMMIT")
+        if self.test_mode and attested_commit is None:
+            return
+        if attested_commit is None:
+            raise UpgradeError(
+                "upgrade controller provenance is missing; use bootstrap/update.sh"
+            )
+        if attested_commit != commit:
+            raise UpgradeError(
+                "upgrade controller commit does not match the reviewed candidate"
+            )
+        controller_source = Path(__file__).resolve()
+        candidate_source = (candidate / "bootstrap" / "upgrade.py").resolve()
+        if controller_source != candidate_source:
+            raise UpgradeError(
+                "upgrade controller did not load from the reviewed candidate"
+            )
 
     @staticmethod
     def _failed_check_names(result: dict[str, Any]) -> set[str]:
@@ -322,13 +353,14 @@ class UpgradeManager:
                 )
 
     def activate(self, candidate: Path) -> dict[str, Any]:
+        candidate = candidate.resolve()
+        commit = self._candidate_commit(candidate)
+        self._attest_controller_provenance(candidate, commit)
         evidence = validate_candidate(
             candidate,
             active_root=self._active_release_root(),
             approve_runtime_migration=self.approve_runtime_migration,
         )
-        candidate = candidate.resolve()
-        commit = self._candidate_commit(candidate)
         release = self.paths.app_dir / "releases" / commit
         ensure_within(release, self.paths.app_dir / "releases")
         self._preflight_keychain_access(candidate)
@@ -427,6 +459,7 @@ class UpgradeManager:
             "commit": commit,
             "backup": backup["path"],
             "compatibility": evidence,
+            "upgrade_controller_attested": True,
             "rollback_available": previous is not None,
         }
 
