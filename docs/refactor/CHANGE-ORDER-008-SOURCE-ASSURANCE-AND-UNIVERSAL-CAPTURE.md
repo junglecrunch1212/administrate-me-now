@@ -1,6 +1,6 @@
 # CO-008 — Source assurance and universal member capture
 
-Status: **APPROVED; MERGED — GUARDED ACTIVATION ROLLED BACK; DEPLOYMENT REPAIR IN REVIEW**
+Status: **APPROVED; MERGED — TWO GUARDED ACTIVATIONS ROLLED BACK; REPLAY-SETTLEMENT REPAIR IN REVIEW**
 
 Date: 2026-08-08
 
@@ -273,3 +273,29 @@ failure degrades the capability. Doctor now requires fresh accounting,
 updater retries only its named post-switch transients for a bounded two-minute
 window. Structural failures still abort immediately and automatic rollback
 remains unchanged.
+
+### 10.2 Second guarded activation outcome
+
+PR #297 passed both hosted gates and merged as `4c81ac4`. Its guarded
+activation built the immutable release and created another encrypted backup,
+but the two-minute post-switch window ended before the reviewed v8 full replay
+reached the historical message prefix. Doctor correctly rejected
+`source_assurance_terminal_dispositions` and the updater restored `c484f0a`.
+The restored runtime and pinned OpenClaw Gateway are healthy.
+
+A content-free offline audit of the retained event log showed 54,125 total
+obligations: 53,839 accounted, 286 historical `messaging.received` assessments
+missing, zero pending, and zero failed. This is progress, not a semantic or
+transport failure. Rollback necessarily returns the one operational pipeline
+cursor to v7; the next version change therefore starts the reviewed v8 replay
+from the beginning and cannot accumulate cursor progress across repeated short
+activation attempts.
+
+The next repair does not weaken Doctor or preserve a candidate cursor across
+rollback. It centralizes the same content-free terminal predicate used by
+Doctor and updater. After one full post-switch Doctor identifies only named
+transients, the updater polls the cheap readiness document for up to 30 minutes
+while replay advances, without repeatedly reading the database and probing all
+subsystems. Once source accounting is fresh and terminal, it runs the complete
+Doctor and synthetic proof once. Structural failures still return immediately;
+deadline failure still rolls back.

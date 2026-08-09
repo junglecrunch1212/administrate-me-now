@@ -117,12 +117,13 @@ def _wait_for_causation(
     client: TestClient,
     log: Any,
     causation_id: str,
+    expected_types: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + 8
     derived: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
         derived = client.portal.call(log.get_by_causation, causation_id)
-        if derived:
+        if [event["type"] for event in derived] == list(expected_types):
             return derived
         time.sleep(0.03)
     raise AssertionError(f"timed out waiting for causation {causation_id}")
@@ -249,6 +250,11 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             client_a,
             runtime_a.event_log,
             event_ids[1],
+            (
+                "embedding.revoked",
+                "member_knowledge.index_skipped",
+                "triage.intent.features_extracted",
+            ),
         )
         assert [event["type"] for event in derived] == [
             "embedding.revoked",
@@ -374,6 +380,11 @@ def test_member_bridge_knowledge_is_private_searchable_and_replayable(
             client_a,
             runtime_a.event_log,
             correction_ids[0],
+            (
+                "embedding.generated",
+                "skill.call.failed",
+                "triage.intent.features_extracted",
+            ),
         )
         assert [event["type"] for event in corrected_derivatives] == [
             "embedding.generated",

@@ -1,5 +1,28 @@
 # Gate 8 final validation report
 
+## 2026-08-08 CO-008 replay-settlement amendment
+
+The second guarded activation created an encrypted backup, selected merged
+`4c81ac4`, and started both services, but correctly rolled back when the
+two-minute transient window ended before v8 historical replay settled.
+Content-free retained evidence showed 53,839 of 54,125 obligations accounted,
+286 historical message assessments missing, and zero failed assessments. The
+active `c484f0a` runtime and pinned Gateway were restored healthy.
+
+The follow-up uses the same shared terminal-evidence predicate in Doctor and
+updater. It runs full Doctor once, polls only `/api/system/ready` every two
+seconds for at most 30 minutes while source replay advances, then runs the full
+Doctor and synthetic proof once after settlement. It neither carries a
+candidate cursor into rollback nor weakens terminal equality. Structural
+failure remains immediate and deadline failure remains rollback-triggering.
+Focused evidence is 64 passing bootstrap, runtime, and source vertical-slice
+tests plus Ruff and mypy. The exact aggregate passes 37 strict acceptance
+tests, 1,668 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw plugin
+tests, plus all lint/type, invariant, performance, dependency, build,
+clean-install, tenant-isolation, backup/restore, plugin package/audit, shell,
+and diff gates under Python 3.14 and Node 24. Review, merge, and live activation
+remain pending.
+
 ## 2026-08-08 CO-008 deployment-repair amendment
 
 The first guarded activation of merged PR #296 rolled back automatically after

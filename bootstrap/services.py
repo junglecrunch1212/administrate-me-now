@@ -26,6 +26,69 @@ RUNTIME_LIVENESS_POLL_SECONDS = 1
 OPENCLAW_LIVENESS_TIMEOUT_SECONDS = 120
 OPENCLAW_LIVENESS_POLL_SECONDS = 1
 SERVICE_READINESS_TIMEOUT_SECONDS = 120
+SOURCE_ASSURANCE_COUNT_NAMES = (
+    "source_facts",
+    "obligations",
+    "accounted",
+    "pending",
+    "missing",
+    "eligible_candidates",
+    "no_candidate",
+    "quarantined",
+    "failed",
+)
+
+
+def _diagnostic_count(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def source_assurance_terminal_evidence(
+    diagnostics: dict[str, Any] | None,
+) -> tuple[bool, dict[str, Any]]:
+    """Extract the one content-free source settlement contract."""
+
+    document = diagnostics or {}
+    capability = (document.get("capabilities") or {}).get(
+        "policy:source-assurance"
+    ) or {}
+    details = capability.get("details") or {}
+    raw_counts = details.get("counts") or {}
+    counts = {
+        name: _diagnostic_count(raw_counts.get(name))
+        for name in SOURCE_ASSURANCE_COUNT_NAMES
+    }
+    freshness = details.get("freshness") or {}
+    evidence = {
+        "contract": details.get("contract"),
+        "state": details.get("state"),
+        "counts": counts,
+        "declared_source_event_types": details.get("declared_source_event_types"),
+        "declared_obligations": details.get("declared_obligations"),
+        "content_exposed": details.get("content_exposed"),
+        "freshness": {
+            "state": freshness.get("state"),
+            "refreshed_at": freshness.get("refreshed_at"),
+            "stale_seconds": freshness.get("stale_seconds"),
+            "refresh_error_type": freshness.get("refresh_error_type"),
+        },
+    }
+    ok = (
+        capability.get("state") == "healthy"
+        and details.get("state") == "healthy"
+        and counts["pending"] == 0
+        and counts["missing"] == 0
+        and counts["failed"] == 0
+        and counts["accounted"] == counts["obligations"]
+        and _diagnostic_count(details.get("declared_obligations")) > 0
+        and details.get("content_exposed") is False
+        and freshness.get("state") == "fresh"
+        and freshness.get("refresh_error_type") is None
+    )
+    return ok, evidence
 
 
 @dataclass(frozen=True)
