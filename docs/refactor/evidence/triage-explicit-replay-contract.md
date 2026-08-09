@@ -40,3 +40,33 @@ retained checkpoint, but had not replayed historical source messages.
 
 Observation mode remains active. Replay can add pending proposals only; it
 cannot confirm, materialize, dispatch, or write to a provider.
+
+## Live activation evidence
+
+PR #294 passed both required GitHub checks, merged as
+`c484f0a308b5dfcbf599db221304170555806fef`, and deployed with rollback backup
+`administrateme-20260809T002636Z.ambackup`.
+
+- `noise_filtering` 7.0.0 began at 342 pending source messages and reached zero
+  lag with zero consecutive failures and no poison event.
+- 354 immutable message facts produced 83 audited 4.0.3 successes and four
+  fail-closed `openclaw_unreachable` terminals; duplicates reused successful
+  recorded results.
+- v7 appended 26 grounded proposals from 19 source facts: nine tasks, twelve
+  reminders, three calendar events, and two party identifiers.
+- The final projection contains 86 pending proposals across 50 source facts:
+  65 tasks, 13 reminders, three calendar events, two recurrences, two party
+  identifiers, and one relationship fact.
+- The refreshed private portal exposes all 86: 19 need details and 67 are
+  ready. Browser console error count was zero.
+- Full Doctor is healthy, including exact source, authenticated `llm-task`,
+  fourteen projections, six required subscribers, loopback services, cron,
+  and the canonical synthetic round trip.
+- Human-gate outcomes and provider/external-write events remain zero.
+
+Signal-quality limitation: 60 proposals predate v7, and 56 of those use the
+broad deterministic `explicit_action_verb_v1` rule. Live review proved that
+this set contains boilerplate and marketing noise. The records remain pending
+rather than being silently dismissed. A follow-up reviewed rule and projection
+change is required to supersede broad inbound eligibility while retaining the
+26 grounded v7 proposals.

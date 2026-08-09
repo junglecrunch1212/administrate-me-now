@@ -10,6 +10,12 @@ consumer uses versioned idempotency plus a private-scope exact-message digest to
 reuse language output across duplicate observations, while fixed code still
 owns source grounding, candidate eligibility, deduplication, scope, route,
 authority, truth, and the no-write human gate.
+Live activation confirms the replay contract but does not validate every
+historical candidate: 56 pending pre-v7 proposals came from the overbroad
+`explicit_action_verb_v1` fallback and include boilerplate/marketing noise.
+C001/C002/C004/C045 therefore forbid treating queue presence or model output as
+semantic truth. The next rule revision must be deterministic, append-only, and
+reviewed; activation did not auto-dismiss or promote any member-owned proposal.
 
 Gateway-first replay amendment (2026-08-08): C001/C002/C007/C035/C046/C050/
 C055/C071/C076 are **PRESERVED/HARDENED** after guarded activation proved that

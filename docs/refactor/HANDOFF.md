@@ -3,19 +3,50 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_EXPLICIT_REPLAY_CONTRACT_CANDIDATE
+gate_result: TRIAGE_EXPLICIT_REPLAY_LIVE
 verified_local_date: 2026-08-08
-verified_github_date: 2026-08-08
-branch: codex/repair-triage-replay-contract
-candidate_commit_resolution: independent_review_pending
+verified_github_date: 2026-08-09
+branch: codex/record-triage-live-evidence
+candidate_commit_resolution: merged_and_deployed_c484f0a308b5dfcbf599db221304170555806fef
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/294
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: independent_review_then_phase_b_activation
+next_phase: triage_signal_quality_hardening
 ---
 
 # Release handoff
+
+## 2026-08-08 Triage v7 live activation
+
+PR #294 passed the constitutional cascade and clean macOS rehearsal, merged as
+`c484f0a`, and was activated with encrypted rollback backup
+`administrateme-20260809T002636Z.ambackup`. The active release receipt, launchd
+definitions, loopback services, exact OpenClaw source, authenticated
+`llm-task` execution, fourteen projections, six required pipeline subscribers,
+cron reconciliation, synthetic round trip, and observation mode all pass full
+Doctor.
+
+The live v7 consumer reset its healthy terminal cursor as declared, began with
+342 historical messages pending, and reached zero lag with zero consecutive
+failures and no poison event. Across 354 immutable message facts, the 4.0.3
+language seam recorded 83 successful calls and four fail-closed unreachable
+terminals. Exact duplicates reused successful results. Replay added 26 new
+grounded proposals from 19 source facts: nine tasks, twelve reminders, three
+calendar events, and two party identifiers. The resulting member Triage
+projection contains 86 pending records across 50 source facts: 65 tasks,
+13 reminders, three calendar events, two recurrences, two party identifiers,
+and one relationship fact. The refreshed private portal reports 19 needing
+details and 67 ready, with no console errors. No proposal was confirmed,
+dismissed, materialized, dispatched, or written to a provider.
+
+The live UI audit also found a distinct signal-quality defect that this replay
+repair does not conceal: 56 pre-v7 fallback proposals were admitted by the
+broad `explicit_action_verb_v1` rule, including message boilerplate and
+marketing calls to action. They remain pending because an activation must not
+silently impersonate the member's human gate. The next reviewed change must
+supersede that broad inbound eligibility rule, deterministically quarantine or
+rank legacy low-specificity proposals, and preserve the 26 grounded v7 results.
 
 ## 2026-08-08 explicit pipeline replay contract and Triage v7
 
