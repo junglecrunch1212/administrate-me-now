@@ -39,6 +39,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.registry import registry
 from adminme.events.schemas.ingest import CalendarEventAddedV1, CalendarEventV2
 from adminme.lib.adapters import (
@@ -97,12 +98,17 @@ class _FailingEventLog(_FakeEventLog):
         raise RuntimeError("event log unavailable")
 
 
-def _ctx(event_log: _FakeEventLog) -> AdapterContext:
+def _ctx(
+    event_log: _FakeEventLog,
+    *,
+    cursor_store: AdapterCursorStore | None = None,
+) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-gcal-test",
         now_factory=lambda: _FROZEN_NOW,
+        cursor_store=cursor_store,
     )
 
 
@@ -256,11 +262,16 @@ def _make_adapter(
     return adapter
 
 
-def _seed_ctx(adapter: Any, event_log: _FakeEventLog) -> AdapterContext:
+def _seed_ctx(
+    adapter: Any,
+    event_log: _FakeEventLog,
+    *,
+    cursor_store: AdapterCursorStore | None = None,
+) -> AdapterContext:
     """Attach an AdapterContext to the adapter — what
     :meth:`GoogleCalendarAdapter.start` does in production via
     ``self._ctx = ctx``."""
-    ctx = _ctx(event_log)
+    ctx = _ctx(event_log, cursor_store=cursor_store)
     adapter._ctx = ctx
     return ctx
 
@@ -793,6 +804,177 @@ async def test_discovery_syncs_each_calendar_and_observes_capabilities_once() ->
         "calendar-a",
         "calendar-b",
     }
+
+
+async def test_calendar_source_dedupe_survives_adapter_restart(
+    tmp_path: Path,
+) -> None:
+    entry = {
+        "id": "calendar-a",
+        "summary": "Personal",
+        "accessRole": "owner",
+        "primary": True,
+        "selected": True,
+    }
+    config = {
+        "oauth_credentials_ref": "keychain://calendar/account-a",
+        "calendar_id": "calendar-a",
+        "discover_calendars": True,
+        "member_id": "member-a",
+        "provider_account_id": "account-a",
+    }
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    first_service = _FakeCalendarService(
+        calendar_list_pages=[{"items": [entry]}], list_pages=[{"items": []}]
+    )
+    first = GoogleCalendarAdapter(config=config)
+    first.instance_name = "google-calendar-primary"
+    first._service = first_service
+    first_log = _FakeEventLog()
+
+    assert (
+        await first._poll_once(
+            ctx=_seed_ctx(first, first_log, cursor_store=cursor_store)
+        )
+        == 0
+    )
+    assert (
+        len(
+            [
+                call
+                for call in first_log.calls
+                if call["type"] == "calendar.source_observed"
+            ]
+        )
+        == 1
+    )
+    source_call = next(
+        call for call in first_log.calls if call["type"] == "calendar.source_observed"
+    )
+    assert source_call["idempotency_key"].startswith("google-calendar:calendar-source:")
+
+    restarted_service = _FakeCalendarService(
+        calendar_list_pages=[{"items": [entry]}],
+        list_pages=[{"items": []}],
+    )
+    restarted = GoogleCalendarAdapter(config=config)
+    restarted.instance_name = "google-calendar-primary"
+    restarted._service = restarted_service
+    restarted_log = _FakeEventLog()
+
+    assert (
+        await restarted._poll_once(
+            ctx=_seed_ctx(
+                restarted,
+                restarted_log,
+                cursor_store=cursor_store,
+            )
+        )
+        == 0
+    )
+    assert restarted.status().extra["durable_cursor"]["provider_watermark"] is None
+    assert not [
+        call
+        for call in restarted_log.calls
+        if call["type"] == "calendar.source_observed"
+    ]
+    cursor_store.close()
+
+
+async def test_initial_sync_does_not_backfill_elapsed_outcomes() -> None:
+    entry = {
+        "id": "calendar-a",
+        "summary": "Personal",
+        "accessRole": "owner",
+        "primary": True,
+        "selected": True,
+    }
+    past = _make_event(
+        event_id="past-event",
+        summary="Already elapsed before observation",
+        start={"dateTime": "2026-05-18T09:00:00Z"},
+        end={"dateTime": "2026-05-18T10:00:00Z"},
+    )
+    service = _FakeCalendarService(
+        calendar_list_pages=[{"items": [entry]}, {"items": [entry]}],
+        list_pages=[
+            {"items": [past], "nextSyncToken": "sync-a"},
+            {"items": [], "nextSyncToken": "sync-b"},
+        ],
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "discover_calendars": True,
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter._service = service
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+
+    assert await adapter._poll_once(ctx=ctx) == 1
+    assert await adapter._poll_once(ctx=ctx) == 0
+    assert not [
+        call
+        for call in event_log.calls
+        if call["type"] == "calendar.event_outcome_recorded"
+    ]
+
+
+async def test_future_event_emits_one_deterministic_elapsed_outcome() -> None:
+    entry = {
+        "id": "calendar-a",
+        "summary": "Personal",
+        "accessRole": "owner",
+        "primary": True,
+        "selected": True,
+    }
+    future = _make_event(
+        event_id="future-event",
+        summary="Becomes elapsed after observation",
+        start={"dateTime": "2026-05-18T12:30:00Z"},
+        end={"dateTime": "2026-05-18T13:00:00Z"},
+    )
+    service = _FakeCalendarService(
+        calendar_list_pages=[{"items": [entry]}, {"items": [entry]}],
+        list_pages=[
+            {"items": [future], "nextSyncToken": "sync-a"},
+            {"items": [], "nextSyncToken": "sync-b"},
+        ],
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://calendar/account-a",
+            "calendar_id": "calendar-a",
+            "discover_calendars": True,
+            "member_id": "member-a",
+            "provider_account_id": "account-a",
+        }
+    )
+    adapter._service = service
+    event_log = _FakeEventLog()
+    clock = [_FROZEN_NOW]
+    ctx = AdapterContext(
+        event_sink=event_log,  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "corr-gcal-elapsed",
+        now_factory=lambda: clock[0],
+    )
+
+    assert await adapter._poll_once(ctx=ctx) == 1
+    clock[0] = datetime(2026, 5, 18, 14, 0, 0, tzinfo=timezone.utc)
+    assert await adapter._poll_once(ctx=ctx) == 1
+    outcomes = [
+        call
+        for call in event_log.calls
+        if call["type"] == "calendar.event_outcome_recorded"
+    ]
+    assert len(outcomes) == 1
+    assert outcomes[0]["payload"]["recorded_at"] == "2026-05-18T13:00:00Z"
+    assert outcomes[0]["idempotency_key"].startswith("google-calendar:event-outcome:")
 
 
 async def test_provider_revision_idempotency_survives_adapter_restart() -> None:

@@ -7,8 +7,8 @@ gate_result: SOURCE_ASSURANCE_DEPLOYED_OBSERVATION
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-08
 branch: main
-candidate_commit_resolution: pr_300_merged_and_deployed_dc99208
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/300
+candidate_commit_resolution: pr_302_merged_and_deployed_3ab4b783_with_followup_candidate_verified
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/302
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -18,6 +18,30 @@ next_phase: observation_soak_member_triage_review_and_false_positive_feedback
 # Release handoff
 
 ## 2026-08-09 CO-009 cross-surface Task lifecycle (candidate verified)
+
+PR #302 merged as `3ab4b7839b0ad867eed326b34c576fd1ffc150cb` and the
+attested upgrade controller deployed it with a compatible-runtime receipt,
+encrypted backup, immutable rollback release, and observation mode preserved.
+Live member-scoped API and browser proof showed both confirmed email-derived
+Tasks in the canonical Reminders union under their original Task IDs. The
+confirmation and projection path was correct; the remaining member-visible
+defect was receipt navigation, which selected the exact item but left Reminders
+on the incompatible default Now lens for Anytime work.
+
+The follow-up candidate makes receipt navigation select the exact Task and its
+deterministic activation lens while clearing only incompatible presentation
+filters. The same live deployment exposed a separate Google Calendar restart
+defect: unchanged calendar-source facts were re-appended, and initial sync put
+already-past history into in-memory elapsed tracking, causing large redundant
+outcome batches after each runtime restart. The candidate uses the shared
+durable adapter dedupe store for unchanged source observations, excludes
+already-elapsed history during initial discovery, and gives legitimate future
+elapsed/cancelled transitions stable idempotency. It does not persist a partial
+Google sync token or change provider authority. Focused adapter and lifecycle
+suites pass 46 tests, and rendered Gate 7 passes 222 assertions with 36
+screenshots and zero console, page, request, accessibility-name, overflow, or
+result failures. Follow-up review, merge, guarded deployment, and live receipt
+verification remain pending.
 
 The member-reported failure was reproduced: two confirmed Triage Task
 candidates had canonical `task.created` events and Tasks rows, but the

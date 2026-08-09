@@ -328,6 +328,7 @@ async function run() {
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
     let routedTaskBucket = "scheduled";
+    let routedTaskHref = "";
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "today") {
@@ -360,7 +361,9 @@ async function run() {
         record("Triage receipt is destination-readable before return", routedReminders.response.ok && materializedEvidence.response.ok && Boolean(routedTaskRecord), JSON.stringify({ recent: recentTaskDecision, evidence: materializedEvidence.value, reminders: routedReminders.value }));
         routedTaskBucket = routedTaskRecord.bucket;
         await principal.page.getByRole("button", { name: /^Recent/ }).click();
-        record("Recent decision retains destination receipt", await principal.page.locator(".triage-detail").getByRole("link", { name: "Open Reminders" }).count() === 1, await principal.page.locator(".triage-detail").textContent());
+        const destinationLink = principal.page.locator(".triage-detail").getByRole("link", { name: "Open Reminders" });
+        routedTaskHref = await destinationLink.getAttribute("href") || "";
+        record("Recent decision retains destination receipt", await destinationLink.count() === 1 && routedTaskHref.includes("item=task%3A"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-routed-recent-desktop.png");
         await principal.page.getByRole("button", { name: /^Needs details/ }).click();
         await principal.page.locator(".triage-master-button").filter({ hasText: "Renew the annual registration" }).click();
@@ -386,6 +389,9 @@ async function run() {
         record("Reminders receives the enriched Triage task", await routedTask.count() === 1 && (await principal.page.locator(".task-detail").textContent()).includes("Open the enrollment portal and attach the signed form"), await principal.page.locator("#surface").textContent());
         record("Reminders translates the internal task lifecycle into member language", (await principal.page.locator(".task-detail").textContent()).includes("StatusOpen") && !(await principal.page.locator(".task-detail").textContent()).includes("StatusInbox"), await principal.page.locator(".task-detail").textContent());
         await screenshot(principal.page, "surface-reminders-routed-task-desktop.png");
+        await principal.page.goto(`${server.baseUrl}${routedTaskHref}`);
+        await principal.page.locator(".task-detail").waitFor();
+        record("Triage receipt deep-link opens its exact Reminders task", (await principal.page.getByRole("button", { name: new RegExp(`^${routedLens}`) }).getAttribute("aria-pressed")) === "true" && (await principal.page.locator(".task-detail").textContent()).includes("Send the completed enrollment form"), principal.page.url());
         await principal.page.getByRole("button", { name: /^Now/ }).click();
         record("Reminders does not invent a writable provider", (await principal.page.locator(".reminder-quick-add").textContent()).includes("Connect a writable"), await principal.page.locator(".reminder-quick-add").textContent());
         await screenshot(principal.page, "surface-reminders-desktop.png");

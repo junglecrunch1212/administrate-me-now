@@ -545,9 +545,34 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         ).hexdigest()
         if self._seen_calendar_sources.get(calendar_id) == fingerprint:
             return
-        await self._append(
+        cursor_store = ctx.cursor_store
+        cursor_id = str(
+            getattr(self, "instance_name", None) or self._config.get("id") or self.name
+        )
+        source_external_id = (
+            "calendar-source:" + hashlib.sha256(calendar_id.encode("utf-8")).hexdigest()
+        )
+        if cursor_store is not None and cursor_store.dedupe_event(
+            cursor_id, source_external_id, fingerprint
+        ):
+            durable = cursor_store.get(cursor_id).public()
+            durable["provider_watermark"] = (
+                "present" if durable.get("provider_watermark") else None
+            )
+            self._status.extra["durable_cursor"] = durable
+            self._seen_calendar_sources[calendar_id] = fingerprint
+            return
+        event_id = await self._append(
             ctx=ctx,
             event_type="calendar.source_observed",
+            idempotency_key=(
+                "google-calendar:calendar-source:"
+                + hashlib.sha256(
+                    "\x1f".join((cursor_id, source_external_id, fingerprint)).encode(
+                        "utf-8"
+                    )
+                ).hexdigest()
+            ),
             payload={
                 "member_id": str(self._config["member_id"]),
                 "provider": "google_calendar",
@@ -563,6 +588,18 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 "observed_at": ctx.now_factory().isoformat(),
             },
         )
+        if cursor_store is not None:
+            cursor_store.record_success(
+                cursor_id,
+                external_id=source_external_id,
+                fingerprint=fingerprint,
+                event_id=event_id,
+            )
+            durable = cursor_store.get(cursor_id).public()
+            durable["provider_watermark"] = (
+                "present" if durable.get("provider_watermark") else None
+            )
+            self._status.extra["durable_cursor"] = durable
         self._seen_calendar_sources[calendar_id] = fingerprint
 
     async def _poll_calendar_once(
@@ -614,7 +651,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 )
                 if was_initial_sync_complete:
                     await self._emit_calendar_outcome(
-                        ctx=ctx, event_id=event_id, outcome="cancelled", source=event
+                        ctx=ctx,
+                        calendar_id=calendar_id,
+                        event_id=event_id,
+                        outcome="cancelled",
+                        source=event,
                     )
                     emitted += 1
                 self._known_events.pop(event_key, None)
@@ -634,7 +675,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     event=event,
                 )
                 private = (event.get("extendedProperties") or {}).get("private", {})
-                self._known_events[event_key] = {
+                known_event = {
                     "calendar_id": calendar_id,
                     "event_id": event_id,
                     "end": _extract_when(event.get("end")),
@@ -644,6 +685,13 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                         "adminme_completion_policy", "manual"
                     ),
                 }
+                end_at = _parse_google_when(known_event.get("end"))
+                if (
+                    was_initial_sync_complete
+                    or end_at is None
+                    or end_at > ctx.now_factory()
+                ):
+                    self._known_events[event_key] = known_event
             self._seen_inbound[event_key] = str(
                 event.get("etag") or event.get("updated") or ""
             )
@@ -661,6 +709,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 ):
                     await self._emit_calendar_outcome(
                         ctx=ctx,
+                        calendar_id=calendar_id,
                         event_id=str(known.get("event_id") or known_id),
                         outcome="elapsed",
                         source=known,
@@ -679,14 +728,37 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self,
         *,
         ctx: AdapterContext,
+        calendar_id: str,
         event_id: str,
         outcome: str,
         source: dict[str, Any],
     ) -> None:
         private = (source.get("extendedProperties") or {}).get("private", {})
+        recorded_at = str(
+            source.get("updated") or source.get("end") or ctx.now_factory().isoformat()
+        )
         await self._append(
             ctx=ctx,
             event_type="calendar.event_outcome_recorded",
+            idempotency_key=(
+                "google-calendar:event-outcome:"
+                + hashlib.sha256(
+                    "\x1f".join(
+                        (
+                            str(self._config.get("member_id") or ""),
+                            str(
+                                self._config.get("provider_account_id")
+                                or self._config.get("user_email")
+                                or ""
+                            ),
+                            calendar_id,
+                            event_id,
+                            outcome,
+                            recorded_at,
+                        )
+                    ).encode("utf-8")
+                ).hexdigest()
+            ),
             payload={
                 "member_id": str(self._config["member_id"]),
                 "provider": "google_calendar",
@@ -697,7 +769,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     "provider_status" if outcome == "cancelled" else "calendar_elapsed"
                 ),
                 "confidence": 1.0 if outcome == "cancelled" else 0.55,
-                "recorded_at": ctx.now_factory().isoformat(),
+                "recorded_at": recorded_at,
                 "linked_item_kind": source.get("linked_item_kind")
                 or private.get("adminme_linked_kind"),
                 "linked_item_id": source.get("linked_item_id")
@@ -1150,9 +1222,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         causation_id: str | None = None,
         schema_version: int = 1,
         idempotency_key: str | None = None,
-    ) -> None:
+    ) -> str:
         """[§7.3, D17] append to the event log; never write projections."""
-        await write_adapter_event(
+        return await write_adapter_event(
             ctx,
             adapter_name=self.name,
             sensitivity_floor=self.sensitivity_floor,

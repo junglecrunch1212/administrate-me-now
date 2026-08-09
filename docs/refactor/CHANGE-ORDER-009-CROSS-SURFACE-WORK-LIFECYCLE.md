@@ -1,6 +1,6 @@
 # CO-009 — Cross-surface work lifecycle and member-interface parity
 
-Status: **AUTHORIZED 2026-08-09 — LOCAL RELEASE CANDIDATE VERIFIED; REVIEW, MERGE, AND LIVE DEPLOYMENT PENDING**
+Status: **AUTHORIZED 2026-08-09 — CORE MERGED AND DEPLOYED IN PR #302; LIVE-FOUND DEEP-LINK AND CALENDAR RESTART HARDENING CANDIDATE VERIFIED**
 
 Affected surfaces: **Today, Triage, Comms, Reminders, Calendar, People, Notes,
 Finance, Scoreboard, Settings**
@@ -125,7 +125,9 @@ simulation prove:
    exposes the same ID in Reminders, Today, and Scoreboard.
 2. The same action does not create a provider item or Calendar event.
 3. Confirm/retry, Task create/update/lifecycle, projection rebuild, and deep-link
-   selection remain idempotent and member-isolated.
+   selection remain idempotent and member-isolated. An exact receipt opens its
+   Task in the correct deterministic activation lens and clears incompatible
+   presentation filters without authorizing a write.
 4. Every Triage target renders bounded type-specific controls with no raw ISO
    placeholder or free-text provider/member/container identifier.
 5. Apple/Google controls match the exact chosen route capability.
@@ -139,11 +141,20 @@ acceptance passed 39 tests; the complete Python/pack suite passed 1,691 tests;
 the bridge passed 60 tests; Ruff, format, mypy, Pyright, dependency audits,
 architecture negatives, clean install, tenant isolation, encrypted
 backup/restore, package builds, and the pinned OpenClaw contract/15 tests/build/
-pack passed. The rendered production-composition harness passed 221 assertions
+pack passed. The rendered production-composition harness passed 222 assertions
 and retained 36 screenshots across desktop, tablet, and 390-pixel layouts with
 no browser console, page, request, accessibility-name, or overflow failure.
 The candidate used Python 3.14.6 and the side-by-side Node 24.19.0 toolchain;
 the live Node 22 runtime was not changed.
 
-Until review, merge, guarded deployment, and live verification pass, this
-change order and the persistent user goal remain in progress.
+PR #302 merged as `3ab4b7839b0ad867eed326b34c576fd1ffc150cb` and its
+attested controller completed guarded activation. Live verification proved the
+two confirmed canonical Tasks are present in the member-scoped Reminders union,
+but also exposed two release-blocking follow-ups: the receipt retained the exact
+item while defaulting to the incompatible Now lens, and restart-time Calendar
+discovery re-emitted unchanged source observations and historical elapsed
+outcomes. The follow-up candidate corrects exact item/lens routing, durably
+deduplicates unchanged calendar-source observations, excludes already-past
+history from initial elapsed tracking, and assigns stable idempotency to future
+outcome transitions. Review, merge, guarded deployment, and live verification
+of that follow-up remain required before CO-009 is complete.
