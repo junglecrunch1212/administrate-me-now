@@ -453,3 +453,19 @@ previous immutable release. Process evidence proves the candidate controller
 invokes this seam; focused tests prove stale same-version refusal, relinking,
 runtime-source validation, and Doctor failure. No event, projection, candidate,
 member decision, provider authority, or runtime baseline changes.
+
+PR #309 passed both hosted gates, merged as
+`e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a`, and deployed through the
+attested updater after encrypted backup
+`administrateme-20260809T185921Z.ambackup`. Exact install-source and loaded-
+module inspection now prove the selected immutable release. A controlled
+Gateway-before-runtime restart converged through the plugin's automatic retry
+without an operator health request. Final Doctor passed with all projections,
+required pipelines, managed jobs, authenticated `llm-task`, and synthetic
+round trip healthy; observation remained active and the round trip produced
+zero external effects. The current settled proof accounts for 61,335/61,335
+source obligations with 31 candidate-bearing facts and no pending, missing, or
+failed outcomes. Authenticated Triage rendered 77 needs-details items and 13
+ready items with no browser warnings or errors. CO-010 is therefore deployed
+and live verified; candidate decisions and signal tuning remain observation-
+phase work.

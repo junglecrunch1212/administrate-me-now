@@ -444,3 +444,15 @@ The runtime/delivery rows in this crosswalk are now backed by `adminme/events/wr
 | MENTAL | system summary/layers/local-first/replay C024–C030; conflicts explicitly reconciled in ADR-0000 |
 | CLAW | install/discovery, plugins, skills, commands, cron, sessions C048–C055; floating details require exact host pin |
 | ARCH | later D17/D18/D22/D26 resolutions, 13 domain projections plus Triage, product ownership, profiles/personas, bootstrap C009–C024, C042–C055, C071–C080 |
+
+## CO-010 live closure
+
+PR #309 deployed as `e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a`
+and closed C050/C097/C106's active-release and false-empty activation boundary.
+Full Doctor proves exact OpenClaw install/loaded-module identity, authenticated
+`llm-task`, 14/14 projections, 8/8 required pipelines, 5/5 managed jobs, and a
+settled 61,335/61,335 source proof with 31 candidate-bearing facts and no
+pending, missing, or failed outcomes. Authenticated Triage renders 77 needs-
+details and 13 ready items without browser warnings or errors. Observation and
+human confirmation remain authoritative; no live provider effect was used as
+evidence.
