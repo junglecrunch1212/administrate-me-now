@@ -1,5 +1,34 @@
 # Gate 8 final validation report
 
+## 2026-08-08 CO-008 upgrade-controller amendment
+
+PR #299 passed both hosted gates and merged as `d5dd805`. During guarded
+activation its v9 runtime made the previously absent source work visible:
+56,919 content-free obligations, 56,634 accounted, 25 pending, 260 not yet
+assessed, 49 eligible-candidate assessments, seven explicit no-candidate
+assessments, 39 privacy quarantines, and zero failed assessments. The pipeline
+showed no failure or poison while its ordered replay prefix advanced. This is
+direct evidence that the mailbox was not empty and that the source-throughput
+repair produced review candidates without authorizing any member decision or
+provider write.
+
+The candidate nevertheless rolled back because the update was launched by
+`update.sh` from `c484f0a`. Its ordinary path imported that active release's
+old `bootstrap.upgrade`, so the old two-minute settlement policy—not PR #299's
+reviewed 30-minute policy—controlled the switch. Rollback restored the prior
+pointer and both services healthy. The amendment removes that circular
+self-update boundary: every path builds a candidate-owned controller, rechecks
+the clean commit after synchronization, attests its module source and commit,
+and independently refuses missing or mismatched provenance in the manager.
+Same-baseline execution remains on the active runtime; no runtime migration is
+implied. The exact local aggregate passes 38 strict acceptance tests, 1,687
+root/pack tests, 60 bridge tests, and 15 pinned OpenClaw plugin tests, plus
+Ruff/format, mypy, Pyright, invariants, performance, dependency audits,
+root/bridge packages, clean install, tenant isolation, encrypted backup/restore,
+plugin build/package/audit, Bash syntax, and diff hygiene under Python 3.14 and
+Node 24. Hosted review, merge, guarded reactivation, final terminal equality,
+and rendered Triage proof remain required before deployment is complete.
+
 ## 2026-08-08 CO-008 source-throughput amendment
 
 The third guarded activation selected merged `5c85b05` after encrypted backup

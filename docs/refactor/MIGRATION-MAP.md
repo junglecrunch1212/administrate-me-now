@@ -1,5 +1,16 @@
 # Migration map
 
+CO-008 upgrade-controller repair (2026-08-08): the ordinary updater's use of
+the active release controller is **SUPERSEDED**. Every reviewed candidate now
+self-hosts its upgrade policy in a commit-versioned controller. Same-baseline
+controllers run on the active Python/Node boundary; runtime migrations retain
+their explicit approval and side-by-side candidate runtime. Clean Git state,
+unchanged HEAD, loaded-module path, and commit receipt are independently
+attested before candidate policy can prepare or switch a release. Backup,
+compatibility, full Doctor, synthetic proof, and automatic rollback are
+unchanged. This repairs control-plane policy selection; it adds no event,
+projection, authority, provider permission, or truth store.
+
 CO-008 source-throughput repair (2026-08-08): `noise_filtering` v9 is
 **HARDENED** so privacy/member routing precedes NLP and its reviewed,
 idempotent historical replay uses eight-way bounded delivery. The event bus

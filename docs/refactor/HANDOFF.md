@@ -3,19 +3,53 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_THROUGHPUT_REPAIR
+gate_result: SOURCE_ASSURANCE_CANDIDATE_CONTROLLER_REPAIR
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
-branch: codex/source-assurance-throughput
-candidate_commit_resolution: pr_298_merged_third_activation_rolled_back_throughput_repair_pending
+branch: codex/candidate-upgrade-controller
+candidate_commit_resolution: pr_299_merged_fourth_activation_rolled_back_candidate_controller_repair_pending
 pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: throughput_repair_review_merge_and_guarded_reactivation
+next_phase: controller_repair_full_gate_review_merge_and_guarded_reactivation
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-008 candidate-controller repair
+
+PR #299 passed Constitution sync and the Apple-silicon rehearsal and merged as
+`d5dd805`. Its guarded activation supplied the first direct live proof that the
+Gmail/Triage repair works: the v9 runtime reported 49 eligible-candidate
+assessments, seven explicit no-candidate outcomes, 39 privacy quarantines, zero
+failed assessments, and an advancing ordered replay prefix. At the sampled
+instant 56,634 of 56,919 content-free source obligations were accounted, with
+25 in flight and 260 not yet reached. Observation mode remained active; no
+candidate was confirmed and no provider write occurred.
+
+The updater still rolled the candidate back and restored `c484f0a` healthy.
+The failure was not the candidate's 30-minute settlement contract: the command
+entered through the active release's `update.sh`, whose ordinary branch invoked
+the active release's old `bootstrap.upgrade` and its old two-minute deadline.
+Candidate changes to upgrade policy could therefore never govern the update
+that introduced them.
+
+This repair makes candidate-policy provenance executable. Every update now
+requires a clean reviewed Git checkout, creates a commit-versioned controller,
+synchronizes dependencies outside the active application venv, rechecks HEAD
+and cleanliness, attests the loaded module path, and passes the exact commit to
+an independent manager check. Same-baseline updates run candidate policy on the
+active Python/Node boundary; only the explicit, separately rehearsed migration
+path may use candidate runtimes. Compatibility, encrypted backup, final full
+Doctor and synthetic proof, immutable prior release, exact OpenClaw selection,
+and automatic rollback remain mandatory. The exact local release matrix passes
+with 38 strict acceptance tests, 1,687 root/pack tests, 60 bridge tests, and 15
+pinned OpenClaw plugin tests, plus Ruff/format, mypy, Pyright, invariants,
+performance, dependency audits, root/bridge packages, clean install, tenant
+isolation, encrypted backup/restore, plugin build/package/audit, Bash syntax,
+and diff hygiene under Python 3.14 and Node 24. Hosted review, merge, guarded
+activation, terminal source equality, and rendered Triage proof remain pending.
 
 ## 2026-08-08 CO-008 source-throughput repair
 
@@ -44,12 +78,13 @@ never advances past the failed source; later completed callbacks are safely
 redelivered. The updater tolerates a slow readiness document only while the
 cheap runtime liveness endpoint remains true and retains the same settlement
 deadline, terminal equality, full Doctor, synthetic proof, and rollback.
-Focused failure-path tests pass. The exact release matrix passes with 37 strict
+Focused failure-path tests pass. The exact release matrix passed with 37 strict
 acceptance tests, 1,681 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw
 plugin tests, plus lint, types, invariants, performance, dependencies, builds,
 clean install, tenant isolation, backup/restore, package/audit, shell, and diff
-gates under Python 3.14 and Node 24. Review, merge, and guarded reactivation
-remain pending.
+gates under Python 3.14 and Node 24. PR #299 passed both hosted gates and merged
+as `d5dd805`; its activation outcome and remaining controller repair are
+recorded above.
 
 ## 2026-08-08 CO-008 replay-settlement repair
 

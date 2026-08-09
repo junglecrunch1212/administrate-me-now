@@ -143,17 +143,20 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
     assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
     updater = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
-    assert "runtime migration requires a clean reviewed Git checkout" in updater
+    assert "upgrade requires a clean reviewed Git checkout" in updater
     assert (
         'controller="$ADMINME_INSTANCE_ROOT/app/tooling/upgrade-controller-' in updater
     )
     assert 'VIRTUAL_ENV="$controller"' in updater
     assert 'ADMINME_REPOSITORY_ROOT="$candidate"' in updater
+    assert 'ADMINME_UPGRADE_CONTROLLER_COMMIT="$candidate_commit"' in updater
+    assert "candidate upgrade-controller provenance attestation failed" in updater
+    assert "run_cli upgrade" not in updater
     assert (
         '"$active_python" "$candidate/bootstrap/keychain_runtime_migration.py"'
         in updater
     )
-    assert 'upgrade "$candidate" "$approve_flag"' in updater
+    assert 'upgrade_args=(upgrade "$candidate")' in updater
     upgrade_source = (REPO_ROOT / "bootstrap" / "upgrade.py").read_text("utf-8")
     assert "configure_required_llm_tool" in upgrade_source
     source_installer = (
@@ -1573,6 +1576,30 @@ def test_upgrade_incompatibility_is_detected_before_service_replacement(
     assert sentinel.read_text("utf-8") == "unchanged"
 
 
+def test_production_upgrade_controller_must_be_the_reviewed_candidate(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    monkeypatch.delenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", raising=False)
+    with pytest.raises(UpgradeError, match="provenance is missing"):
+        manager._attest_controller_provenance(REPO_ROOT, commit)
+
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", "0" * 40)
+    with pytest.raises(UpgradeError, match="does not match"):
+        manager._attest_controller_provenance(REPO_ROOT, commit)
+
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    manager._attest_controller_provenance(REPO_ROOT, commit)
+
+
 def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
     tmp_path: Path,
 ) -> None:
@@ -1608,9 +1635,72 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         approve_runtime_migration=True,
     )
     assert result["runtime_migration"] == {
-        "python": {"from": ">=3.11,<3.12", "to": ">=3.14,<3.15"},
-        "node": {"from": ">=22.22.3,<23", "to": ">=24.15,<25"},
+        "python": {
+            "from": {
+                "compatible": ">=3.11,<3.12",
+                "preferred": "3.14.6",
+                "formula": "python@3.14",
+            },
+            "to": {
+                "compatible": ">=3.14,<3.15",
+                "preferred": "3.14.6",
+                "formula": "python@3.14",
+            },
+        },
+        "node": {
+            "from": {
+                "compatible": ">=22.22.3,<23",
+                "preferred": "24.19.0",
+                "formula": "node@24",
+            },
+            "to": {
+                "compatible": ">=24.15,<25",
+                "preferred": "24.19.0",
+                "formula": "node@24",
+            },
+        },
     }
+
+
+@pytest.mark.parametrize(
+    "component,coordinate,value",
+    [
+        ("python", "preferred", "3.14.7"),
+        ("python", "formula", "python@3.15"),
+        ("node", "preferred", "24.20.0"),
+        ("node", "formula", "node@25"),
+    ],
+)
+def test_runtime_coordinate_change_requires_explicit_approval(
+    tmp_path: Path,
+    component: str,
+    coordinate: str,
+    value: str,
+) -> None:
+    active = tmp_path / "active"
+    candidate = tmp_path / "candidate"
+    (active / "bootstrap").mkdir(parents=True)
+    (candidate / "bootstrap").mkdir(parents=True)
+    (candidate / "openclaw" / "administrateme").mkdir(parents=True)
+    for source in (
+        REPO_ROOT / "poetry.lock",
+        REPO_ROOT / "bootstrap" / "versions.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "package.json",
+        REPO_ROOT / "openclaw" / "administrateme" / "openclaw.plugin.json",
+    ):
+        destination = candidate / source.relative_to(REPO_ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    active_versions = json.loads(
+        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+    )
+    active_versions[component][coordinate] = value
+    (active / "bootstrap" / "versions.json").write_text(
+        json.dumps(active_versions), encoding="utf-8"
+    )
+
+    with pytest.raises(UpgradeError, match="approve-runtime-migration"):
+        validate_candidate(candidate, active_root=active)
 
 
 def test_same_version_openclaw_repair_requires_declared_successor(
