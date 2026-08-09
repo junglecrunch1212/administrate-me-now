@@ -3,21 +3,21 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_CANDIDATE_CONTROLLER_REPAIR
+gate_result: SOURCE_ASSURANCE_DEPLOYED_OBSERVATION
 verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
-branch: codex/candidate-upgrade-controller
-candidate_commit_resolution: pr_299_merged_fourth_activation_rolled_back_candidate_controller_repair_pending
-pull_request_url: pending
+branch: main
+candidate_commit_resolution: pr_300_merged_and_deployed_dc99208
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/300
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: controller_repair_full_gate_review_merge_and_guarded_reactivation
+next_phase: observation_soak_member_triage_review_and_false_positive_feedback
 ---
 
 # Release handoff
 
-## 2026-08-08 CO-008 candidate-controller repair
+## 2026-08-08 CO-008 candidate-controller repair and live deployment
 
 PR #299 passed Constitution sync and the Apple-silicon rehearsal and merged as
 `d5dd805`. Its guarded activation supplied the first direct live proof that the
@@ -35,7 +35,7 @@ the active release's old `bootstrap.upgrade` and its old two-minute deadline.
 Candidate changes to upgrade policy could therefore never govern the update
 that introduced them.
 
-This repair makes candidate-policy provenance executable. Every update now
+PR #300 made candidate-policy provenance executable. Every update now
 requires a clean reviewed Git checkout, creates a commit-versioned controller,
 synchronizes dependencies outside the active application venv, rechecks HEAD
 and cleanliness, attests the loaded module path, and passes the exact commit to
@@ -43,13 +43,41 @@ an independent manager check. Same-baseline updates run candidate policy on the
 active Python/Node boundary; only the explicit, separately rehearsed migration
 path may use candidate runtimes. Compatibility, encrypted backup, final full
 Doctor and synthetic proof, immutable prior release, exact OpenClaw selection,
-and automatic rollback remain mandatory. The exact local release matrix passes
+and automatic rollback remain mandatory. The exact local release matrix passed
 with 38 strict acceptance tests, 1,687 root/pack tests, 60 bridge tests, and 15
 pinned OpenClaw plugin tests, plus Ruff/format, mypy, Pyright, invariants,
 performance, dependency audits, root/bridge packages, clean install, tenant
 isolation, encrypted backup/restore, plugin build/package/audit, Bash syntax,
-and diff hygiene under Python 3.14 and Node 24. Hosted review, merge, guarded
-activation, terminal source equality, and rendered Triage proof remain pending.
+and diff hygiene under Python 3.14 and Node 24. Constitution sync passed in five
+seconds and the Apple-silicon credential-free rehearsal passed in 10 minutes
+16 seconds. PR #300 merged as `dc99208`.
+
+The merged updater then built an attested `dc99208` controller on the existing
+3.14/24 runtime, prepared the immutable release, created encrypted backup
+`administrateme-20260809T044355Z.ambackup`, atomically selected both services,
+and completed the reviewed settlement window, full Doctor, authenticated
+OpenClaw synthetic proof, and rollback-retention check. Its receipt reported
+`upgrade_controller_attested: true`, no runtime migration, no OpenClaw
+migration, and `status: upgraded`.
+
+During activation, content-free accounting reached 58,344 of 58,344 source
+obligations with zero pending, missing, or failed; v9 reached zero lag with no
+failure or poison. The settled classification was 23 source facts with eligible
+candidates, 293 explicitly assessed with none, and 39 privacy quarantines.
+New adapter facts may subsequently appear as `pending` only inside the existing
+five-minute grace window; overdue work still becomes missing and degrades
+health. Both LaunchAgents and the active pointer resolve to `dc99208`, and the
+runtime is ready in observation mode.
+
+Authenticated rendered Triage proof shows Jimmy's private member identity,
+source accounting, 53 visible human-gated rows (20 Ready and 33 Needs details),
+and the complete eleven-kind Add-for-review dialog. The dialog states that an
+unclear thought remains Needs interpretation rather than being discarded. No
+row was confirmed, enriched, dismissed, materialized, or sent. Historical
+unreviewed marketing/CI noise remains visibly auditable for member feedback;
+it was not silently deleted or promoted to truth. CO-008 is deployed. The next
+step is the observation soak and member decisions, not another source-ingest
+repair.
 
 ## 2026-08-08 CO-008 source-throughput repair
 

@@ -1,6 +1,6 @@
 # Gate 8 final validation report
 
-## 2026-08-08 CO-008 upgrade-controller amendment
+## 2026-08-08 CO-008 upgrade-controller amendment and deployment
 
 PR #299 passed both hosted gates and merged as `d5dd805`. During guarded
 activation its v9 runtime made the previously absent source work visible:
@@ -21,13 +21,31 @@ self-update boundary: every path builds a candidate-owned controller, rechecks
 the clean commit after synchronization, attests its module source and commit,
 and independently refuses missing or mismatched provenance in the manager.
 Same-baseline execution remains on the active runtime; no runtime migration is
-implied. The exact local aggregate passes 38 strict acceptance tests, 1,687
+implied. The exact local aggregate passed 38 strict acceptance tests, 1,687
 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw plugin tests, plus
 Ruff/format, mypy, Pyright, invariants, performance, dependency audits,
 root/bridge packages, clean install, tenant isolation, encrypted backup/restore,
 plugin build/package/audit, Bash syntax, and diff hygiene under Python 3.14 and
-Node 24. Hosted review, merge, guarded reactivation, final terminal equality,
-and rendered Triage proof remain required before deployment is complete.
+Node 24. Constitution sync passed in five seconds and the Apple-silicon
+credential-free rehearsal passed in 10 minutes 16 seconds. PR #300 merged as
+`dc99208`.
+
+Guarded activation from the merged updater created encrypted backup
+`administrateme-20260809T044355Z.ambackup` and returned an attested successful
+upgrade receipt with rollback retained. Both LaunchAgents and the active pointer
+resolve to `dc99208`; runtime readiness is `observation_only`. A settled live
+snapshot showed 58,344/58,344 obligations accounted, zero pending/missing/
+failed, v9 lag zero, no poison, 23 eligible-candidate assessments, 293 explicit
+no-candidate assessments, and 39 quarantines. Full Doctor and the authenticated
+OpenClaw synthetic proof passed before the updater returned.
+
+Authenticated browser proof renders Jimmy's private Triage view, 53 visible
+unconfirmed rows (20 Ready, 33 Needs details), source-accounting status, and the
+complete eleven-kind Add-for-review dialog. No candidate decision or provider
+effect was performed. Historical unreviewed noise is still visible for member
+feedback rather than being silently deleted. The source-to-disposition and
+universal-capture deployment gate is complete; the observation soak remains an
+operational learning period, not missing implementation.
 
 ## 2026-08-08 CO-008 source-throughput amendment
 

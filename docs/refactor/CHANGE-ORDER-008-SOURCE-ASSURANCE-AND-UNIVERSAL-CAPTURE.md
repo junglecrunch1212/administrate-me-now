@@ -1,6 +1,6 @@
 # CO-008 — Source assurance and universal member capture
 
-Status: **APPROVED; SOURCE REPAIR MERGED — FOUR GUARDED ACTIVATIONS ROLLED BACK; CONTROLLER-BOUNDARY REPAIR IN REVIEW**
+Status: **APPROVED AND DEPLOYED IN OBSERVATION — SOURCE ASSURANCE LIVE**
 
 Date: 2026-08-08
 
@@ -347,3 +347,20 @@ any live mutation. A same-baseline controller still runs on the active Python
 and Node runtime; only the separately approved migration form may select the
 candidate runtime. Backup, final Doctor, synthetic proof, prior-release
 retention, and automatic rollback remain unchanged.
+
+PR #300 passed the full local matrix, Constitution sync, and the Apple-silicon
+credential-free rehearsal and merged as `dc99208`. Guarded activation through
+that merged updater created encrypted backup
+`administrateme-20260809T044355Z.ambackup`, attested the candidate controller,
+selected both immutable services, and returned `status: upgraded` only after
+full Doctor and synthetic proof. A settled live snapshot accounted for 58,344
+of 58,344 obligations with zero pending, missing, failed, lag, or poison; it
+contained 23 eligible-candidate assessments, 293 explicit no-candidate
+assessments, and 39 privacy quarantines. Later adapter arrivals remain subject
+to the existing in-flight grace/missing policy.
+
+The authenticated portal renders 53 unconfirmed rows, split into 20 Ready and
+33 Needs details, plus all eleven member capture hints. Observation remains
+active. No member decision or provider write occurred. Historical unreviewed
+noise remains auditably visible and is an observation-feedback input, not a
+reason to rewrite or silently dismiss immutable proposal history.

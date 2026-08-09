@@ -8,6 +8,10 @@ policy executes on the active runtime, so candidate code cannot opportunisticall
 select a new Python or Node boundary. Exact commit/source provenance,
 compatibility, encrypted backup, immutable prior release, full Doctor,
 synthetic proof, and automatic rollback remain independent gates.
+PR #300 merged as `dc99208`; its attested controller completed guarded
+activation and the live source-to-disposition and universal-capture proof in
+observation mode. C080-C082/C086 and C101 are **COMPLETE FOR THIS DEPLOYMENT**;
+member adjudication and the observation soak remain operational feedback.
 
 CO-008 source-throughput amendment (2026-08-08): C001/C002/C007/C009/C010/
 C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
