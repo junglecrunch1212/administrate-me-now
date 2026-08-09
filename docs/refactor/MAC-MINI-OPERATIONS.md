@@ -170,7 +170,9 @@ the newly loaded program, working directory, and repository-root environment
 against the candidate plist before accepting health. Post-switch validation
 starts the exact OpenClaw Gateway and proves its local health response before
 starting the Python runtime, because reactive language replay begins during
-runtime startup. It
+runtime startup. The native plugin's authenticated AdministrateMe health
+report therefore reconciles on bounded backoff until runtime readiness; a
+single expected startup refusal cannot require a manual health nudge. It
 may retry only the bounded projection/Gateway/plugin/cron/listener startup
 checks; it then requires the complete Doctor, including the canonical
 synthetic round trip. Every other failed check causes immediate rollback.

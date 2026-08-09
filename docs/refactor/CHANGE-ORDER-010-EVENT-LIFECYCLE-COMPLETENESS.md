@@ -414,3 +414,23 @@ refresh every 30 seconds and an unsettled proof fails stale after five minutes.
 Tests prove v1-through-v4 migration, index presence, selective payload reads,
 settled-idle behavior, revision invalidation, pending aging, failure, and
 Doctor's unchanged current-revision terminal predicate.
+
+### 11.7 Reboot-safe OpenClaw health convergence
+
+PR #307 merged and deployed as `cbc6cc9`; live source assurance settled at
+61,333/61,333 with 30 candidate-bearing facts and then remained idle. The
+post-deployment restart boundary revealed that OpenClaw's native plugin made a
+single health-report attempt before the Python runtime was listening. That
+could leave OpenClaw integration health stale even though both processes later
+became healthy, blocking Doctor and automated upgrades until an operator
+repeated the report.
+
+The follow-up keeps the required Gateway-before-runtime order and exact pinned
+compatibility refusal. Its plugin service performs a nonblocking, bounded-
+backoff reconciliation until the runtime accepts the exact version/commit, or
+until service shutdown cancels it. The retry transports no household content,
+cannot authorize work, and never treats Gateway configuration as domain
+health. Unit evidence covers the start-before-runtime race, exact pinned
+payload, successful convergence, and terminal unavailable report. Phase-B
+evidence additionally requires an attested upgrade and controlled service
+restart to reach healthy Doctor without a manual POST.

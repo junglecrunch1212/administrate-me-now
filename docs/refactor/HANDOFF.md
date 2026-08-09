@@ -3,19 +3,44 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_010_DEPLOYED_SETTLED_IDLE_ASSURANCE_FOLLOWUP_IN_REVIEW
+gate_result: CO_010_DEPLOYED_PLUGIN_HEALTH_RECONCILIATION_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_306_merged_and_deployed_d248c37_pr_307_settled_idle_candidate
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/307
+candidate_commit_resolution: pr_307_merged_and_deployed_cbc6cc9_plugin_health_candidate
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/308
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: merge_deploy_verify_settled_idle_assurance_then_member_triage_review
+next_phase: review_merge_deploy_verify_reboot_health_then_member_triage_review
 ---
 
 # Release handoff
+
+## 2026-08-09 OpenClaw startup-health reconciliation candidate
+
+PR #307 passed both hosted gates, merged as `cbc6cc9`, and deployed through
+the attested updater after encrypted backup
+`administrateme-20260809T174639Z.ambackup`. Doctor accepted the settled exact
+61,333/61,333 source proof with 30 candidate-bearing facts and zero pending,
+missing, or failed outcomes. Live process sampling confirmed that settled
+assurance now idles instead of continuously scanning SQLCipher.
+
+The deployment exposed a separate reboot-order defect: the Gateway must start
+before Python reactive replay, but its native plugin sent AdministrateMe's
+authenticated exact-pin health report only once. If Python was not yet
+listening, both services could later be healthy while integration state
+remained stale and the updater required a manual report.
+
+PR #308 preserves the required order and makes native-plugin startup
+nonblocking while reconciling health on capped 1/2/5/10/30-second backoff. It
+stops after success, cancels on shutdown, retains exact version/commit refusal,
+and logs no response content or secret. The complete candidate matrix passed:
+46 strict acceptance tests, 1,721 root/pack tests, 60 isolated bridge tests,
+all 17 native plugin tests, lint/type/security/invariant checks, performance,
+build/package, clean install, tenant isolation, and encrypted backup/restore.
+Reviewed merge, attested upgrade, controlled Gateway-before-runtime restart,
+Doctor, and authenticated Triage browser proof remain required.
 
 ## 2026-08-09 CO-010 settled-idle assurance follow-up
 

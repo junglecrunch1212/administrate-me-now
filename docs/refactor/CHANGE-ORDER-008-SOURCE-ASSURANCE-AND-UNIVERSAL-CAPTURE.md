@@ -430,3 +430,29 @@ This is not a relaxed health policy. With no changed fact, checkpoint, or
 pending clock transition, recomputing the same deterministic audit cannot
 produce new truth. Any relevant change invalidates the revision and reopens
 the bounded refresh path.
+
+### 10.7 Exact-pin plugin health reconciliation
+
+PR #307 merged as `cbc6cc9` and deployed after encrypted backup
+`administrateme-20260809T174639Z.ambackup`. The current-revision proof settled
+at 61,333/61,333, with 30 candidate-bearing facts and zero pending, missing,
+or failed outcomes. Once settled, the source-assurance worker became idle and
+the central runtime no longer consumed a full CPU core.
+
+The deployment exposed one independent startup-order defect. The exact pinned
+Gateway correctly starts before the Python runtime so reactive replay cannot
+race an unavailable model seam. Its native AdministrateMe plugin, however,
+attempted the authenticated version/commit health report only once during
+Gateway startup. If the runtime was not yet accepting requests, the plugin
+retained `unavailable` until an operator restarted it or manually repeated the
+report.
+
+The correction **PRESERVES** Gateway-first startup, exact-version and
+exact-commit validation, fail-closed domain health, observation, and the one
+pinned OpenClaw boundary. It **MODERNIZES** only the plugin service lifecycle:
+startup is nonblocking; a content-free health report retries on a bounded
+1/2/5/10/30-second backoff; the backoff remains capped; a successful report
+ends reconciliation; and shutdown cancels the timer before reporting
+`unavailable`. Logs contain only state, HTTP status, and delay—not response
+content, credentials, or household data. Release evidence requires an actual
+Gateway-before-runtime restart to converge without an operator health nudge.
