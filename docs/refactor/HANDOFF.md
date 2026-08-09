@@ -8,7 +8,7 @@ verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
 candidate_commit_resolution: pr_307_merged_and_deployed_cbc6cc9_plugin_health_candidate
-pull_request_url: pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/308
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -32,7 +32,7 @@ authenticated exact-pin health report only once. If Python was not yet
 listening, both services could later be healthy while integration state
 remained stale and the updater required a manual report.
 
-This candidate preserves the required order and makes native-plugin startup
+PR #308 preserves the required order and makes native-plugin startup
 nonblocking while reconciling health on capped 1/2/5/10/30-second backoff. It
 stops after success, cancels on shutdown, retains exact version/commit refusal,
 and logs no response content or secret. The complete candidate matrix passed:
