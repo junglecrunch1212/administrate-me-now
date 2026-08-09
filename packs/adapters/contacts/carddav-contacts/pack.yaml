@@ -23,3 +23,7 @@ sensitivity_default: normal
 sharing_model_discriminator: member_id
 observation_mode_required: true
 dedup_strategy: {kind: external_id}
+source_assurance:
+  - source_events: [contact.record.observed, contact.record.deleted, contact.group.observed]
+    mode: canonical_projection
+    projections: [parties]

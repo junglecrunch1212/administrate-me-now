@@ -13,6 +13,11 @@ capabilities:
     runtime: central
     event_families: [money_flow.plaid_synced]
 
+source_assurance:
+  - source_events: [money_flow.plaid_synced]
+    mode: canonical_projection
+    projections: [xlsx_workbooks]
+
 write_capabilities: []
 sensitivity_default: privileged
 observation_mode_required: false

@@ -1,7 +1,7 @@
 """``adminme adapters`` Typer subcommand group.
 
 Prompt 11-γ ships three subcommands here: ``list`` (discover installed
-packs), ``validate`` (wrap the 11-β six-check validator), and
+packs), ``validate`` (wrap the seven-check validator), and
 ``scaffold`` (generate a validator-clean skeleton under the [D20]
 three-layer developer-mode gate). Commit 1 of the four-commit cycle
 introduces ``adapters_app`` and the ``list`` subcommand; commit 2 adds
@@ -18,7 +18,7 @@ more than a clean table.
 
 The ``validate`` subcommand wraps
 :func:`adminme.lib.pack_registry.validator.validate_adapter_pack`
-(the 11-β six-check aggregator) and renders findings with
+(the seven-check aggregator) and renders findings with
 severity-coded color via rich.console. Exit codes are tiered per
 memo 05 §3.4: ``0`` when no error findings (warnings + advisories do
 NOT fail), ``1`` on any error finding, ``2`` when the manifest itself
@@ -358,7 +358,7 @@ def validate_command(
         help="Path to the adapter pack directory containing pack.yaml.",
     ),
 ) -> None:
-    """Validate an adapter pack against the install-time six-check validator.
+    """Validate an adapter pack against the install-time seven-check validator.
 
     Wraps :func:`adminme.lib.pack_registry.validator.validate_adapter_pack`
     and renders each finding with severity-coded color. The on-main

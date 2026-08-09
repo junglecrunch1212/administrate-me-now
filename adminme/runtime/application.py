@@ -77,6 +77,7 @@ from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRun
 from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.settings_control import SettingsControlStore
+from adminme.source_assurance import audit_source_assurance
 from adminme.temporary_surfaces import TemporarySurfaceStore
 
 CapabilityState = Literal[
@@ -444,6 +445,9 @@ class AdministrateMeRuntime:
             settings.instance.config_dir / "temporary-surfaces.json"
         )
         self.capabilities: dict[str, CapabilityRecord] = {}
+        self._source_assurance_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = (
+            None
+        )
         self.standing_orders: dict[str, dict[str, Any]] = {}
         self.started = False
         self.stopping = False
@@ -1384,6 +1388,57 @@ class AdministrateMeRuntime:
                         ],
                     }
                 )
+        assert self.event_log is not None
+        latest_event_id = await self.event_log.latest_event_id()
+        source_capability_signature = tuple(
+            sorted(
+                (
+                    key,
+                    record.state,
+                    record.details.get("checkpoint_event_id"),
+                    record.details.get("consecutive_failures"),
+                    record.details.get("poison_event_id"),
+                )
+                for key, record in self.capabilities.items()
+                if key.startswith(("pipeline:", "projection:"))
+            )
+        )
+        # The minute bucket lets in-flight obligations age into overdue/missing
+        # even when no new event or checkpoint arrives.
+        assurance_cache_key = (
+            latest_event_id,
+            source_capability_signature,
+            int(time.time() // 60),
+        )
+        if (
+            self._source_assurance_cache is not None
+            and self._source_assurance_cache[0] == assurance_cache_key
+        ):
+            source_assurance = self._source_assurance_cache[1]
+        else:
+            source_assurance = await audit_source_assurance(
+                self.event_log,
+                repository_root=self.settings.repository_root,
+                capabilities=self.capabilities,
+            )
+            self._source_assurance_cache = (
+                assurance_cache_key,
+                source_assurance,
+            )
+        source_assurance_state: CapabilityState = (
+            "degraded" if source_assurance["state"] == "degraded" else "healthy"
+        )
+        self.capabilities["policy:source-assurance"] = CapabilityRecord(
+            name="source-assurance",
+            kind="source_disposition_policy",
+            state=source_assurance_state,
+            reason=(
+                "one or more source facts lack their required terminal disposition"
+                if source_assurance_state == "degraded"
+                else None
+            ),
+            details=source_assurance,
+        )
         if not self.settings.openclaw_enabled:
             standing_state: CapabilityState = "blocked"
         elif self.openclaw_state == "healthy":
@@ -1410,16 +1465,21 @@ class AdministrateMeRuntime:
             )
         triage_projection = self.capabilities.get("projection:triage")
         extraction_pipeline = self.capabilities.get("pipeline:pipeline:noise_filtering")
+        assurance_capability = self.capabilities.get("policy:source-assurance")
         triage_degraded = any(
             record is not None and record.state in {"degraded", "blocked"}
-            for record in (triage_projection, extraction_pipeline)
+            for record in (
+                triage_projection,
+                extraction_pipeline,
+                assurance_capability,
+            )
         )
         self.capabilities["surface:triage-processing"] = CapabilityRecord(
             name="triage-processing",
             kind="member_surface_processing",
             state="degraded" if triage_degraded else "healthy",
             reason=(
-                "Triage projection or automatic message extraction is degraded"
+                "Triage projection, extraction, or source accounting is degraded"
                 if triage_degraded
                 else None
             ),
@@ -1439,6 +1499,7 @@ class AdministrateMeRuntime:
                     if extraction_pipeline is not None
                     else None
                 ),
+                "source_assurance": source_assurance,
             },
         )
         for product in self.PRODUCT_NAMES:

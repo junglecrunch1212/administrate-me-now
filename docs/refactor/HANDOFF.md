@@ -3,19 +3,52 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: TRIAGE_EXPLICIT_REPLAY_LIVE
+gate_result: SOURCE_ASSURANCE_CANDIDATE
 verified_local_date: 2026-08-08
-verified_github_date: 2026-08-09
-branch: codex/record-triage-live-evidence
-candidate_commit_resolution: merged_and_deployed_c484f0a308b5dfcbf599db221304170555806fef
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/294
+verified_github_date: pending
+branch: codex/source-assurance-contract
+candidate_commit_resolution: pending_review_merge_and_live_replay
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: triage_signal_quality_hardening
+next_phase: source_assurance_review_merge_and_live_replay
 ---
 
 # Release handoff
+
+## 2026-08-08 CO-008 source-assurance candidate
+
+The systemic repair requested after the live Gmail/Triage incident is
+implemented in Phase A. Every declared adapter and bridge source family now
+has a validated disposition contract. Candidate-bearing message and Notes
+pipelines append a terminal v2 assessment for eligible, explicitly empty,
+quarantined, and failed outcomes. Runtime source assurance compares source
+facts with assessments, named projection checkpoints, or terminal action
+results and degrades Triage/member health when processed work is absent. The
+adult shared-shell Add-for-review picker now exposes all eleven supported
+proposal kinds.
+
+Message replay generation v8 replaces the broad generic action-verb fallback
+with a bounded high-signal policy plus exact-quote schema-bound language
+interpretation. It appends supersession only for untouched legacy proposals
+whose semantic admission depended on the retired rule; any member enrichment,
+decision, materialization, or dismissal is preserved. Notes indexing v3
+removes confidence as authority, enforces privacy and exact-source grounding,
+and uses source-derived timestamps so replay and retry remain idempotent.
+
+Credential-free candidate evidence is 37 strict process acceptance tests,
+1,661 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw plugin tests.
+Ruff lint/format, mypy, Pyright, invariant and architecture-negative checks,
+performance budgets, dependency audits, root/bridge build and lock checks,
+clean install, tenant isolation, backup/restore, shell validation, plugin
+contract/build/package, and production npm audit pass under Python 3.14 and
+Node 24. A transient npm-registry timeout on the first aggregate run was
+retested successfully and did not change code; the exact final aggregate
+rerun passed. Independent review, merge, encrypted live backup, immutable
+activation, v8/v3 replay, zero-lag Doctor, source-account reconciliation, and
+portal verification remain mandatory before this candidate may be called
+deployed.
 
 ## 2026-08-08 Triage v7 live activation
 

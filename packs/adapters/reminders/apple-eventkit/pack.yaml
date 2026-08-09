@@ -129,3 +129,9 @@ sensitivity_default: normal
 sharing_model_discriminator: owner_member_id
 dedup_strategy:
   kind: calendar_item_identifier_last_modified
+source_assurance:
+  - source_events: [reminder.list_item.synced]
+    mode: canonical_observation
+  - source_events: [list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+    mode: canonical_projection
+    projections: [lists]

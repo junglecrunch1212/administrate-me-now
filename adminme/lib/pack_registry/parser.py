@@ -41,6 +41,7 @@ _EXTENSION_FIELDS: tuple[str, ...] = (
     "owner_scope_overridability_at_install",
     "sharing_model_discriminator",
     "dedup_strategy",
+    "source_assurance",
 )
 
 

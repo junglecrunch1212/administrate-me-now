@@ -46,3 +46,8 @@ observation_mode_required: true
 sharing_model_discriminator: owner_member_id
 dedup_strategy:
   kind: external_id
+source_assurance:
+  - source_events: [messaging.received, messaging.sent]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:noise_filtering

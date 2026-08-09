@@ -1,5 +1,17 @@
 # Migration map
 
+CO-008 update (2026-08-08): source ingestion is **HARDENED IN THE REVIEWED
+CANDIDATE** by additive manifest `source_assurance` rules,
+`triage.intent.features_extracted@v2`, and `triage.item.superseded@v2`.
+`noise_filtering` v8 and Notes indexing v3 explicitly opt into full replay.
+Replay preserves every immutable source and member decision, appends a terminal
+assessment for each candidate-bearing source, retries the new reviewed skill
+invocation generation, and retires only untouched proposals whose sole
+semantic admission was `explicit_action_verb_v1`. Runtime accounting adds no
+projection and persists no second truth store. Rollback ignores additive event
+versions but cannot remove their audit history. Adapter scaffolds and install
+validation now fail closed when a future source lacks a disposition.
+
 Explicit reactive replay contract (2026-08-08): the durable bus is **HARDENED**
 with an opt-in manifest declaration for full replay on a reviewed consumer
 version change. Healthy consumers otherwise retain their checkpoint; poisoned

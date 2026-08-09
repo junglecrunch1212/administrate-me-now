@@ -72,3 +72,7 @@ sharing_model_discriminator: owner_member_id
 observation_mode_required: true
 dedup_strategy:
   kind: provider_sync_token_etag
+source_assurance:
+  - source_events: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.source_observed]
+    mode: canonical_projection
+    projections: [calendars]

@@ -68,6 +68,17 @@ sensitivity_default: sensitive
 observation_mode_required: true
 owner_scope_overridability_at_install: false
 sharing_model_discriminator: owner_member_id
+source_assurance:
+  - source_events: [list_item.toggled]
+    mode: canonical_projection
+    projections: [list_items]
+  - source_events: [note.added]
+    mode: canonical_projection
+    projections: [notes]
+  - source_events: [note.added]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:member_knowledge_indexing
 """
 
 # A Cat-B (write-surface-bearing) adapter whose ``_apply_write_impl``
@@ -130,7 +141,7 @@ def test_multi_capability_pack_validates_cleanly_end_to_end(
     ``docs/05-architecture-amendment-personal-data-layer.md`` §2.2 — and
     the integration counterpart to 11-α's
     ``test_adapter_framework_contracts.py`` happy-path. The pack passes
-    every one of the six checks; the result is "ready to install."
+    every one of the seven checks; the result is "ready to install."
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
@@ -147,7 +158,13 @@ def test_multi_capability_pack_validates_cleanly_end_to_end(
 
     result = validate_adapter_pack(
         pack_dir,
-        registry=_FakeRegistry(_names=["note.added", "list_item.toggled"]),
+        registry=_FakeRegistry(
+            _names=[
+                "note.added",
+                "list_item.toggled",
+                "triage.intent.features_extracted",
+            ]
+        ),
         projections_dir=projections_dir,
     )
 
@@ -375,17 +392,14 @@ def test_cat_b_pack_missing_write_handler_yields_write_capabilities_error(
     assert "toggle_completion" in handler_errors[0].message
 
 
-def test_cat_d_pack_referencing_pending_projection_yields_advisory(
+def test_cat_d_source_cannot_defer_a_required_projection_or_assessment(
     tmp_path: Path,
 ) -> None:
-    """memo 05 §3.4: Cat-D pack referencing member_knowledge.* yields
-    ``advisory_pending_projection`` (not error) per the forward-compat
-    carve-out.
+    """Required Cat-D dispositions cannot use the retired forward carve-out.
 
-    11d ships ``member_knowledge`` projection; adapter packs landing
-    BEFORE 11d that reference ``member_knowledge.*`` families surface
-    an advisory only — the install proceeds, the supervisor flags
-    the gap, and 11d closes the loop later.
+    The member-knowledge projection has shipped. A new knowledge adapter now
+    fails closed if its named projection is unavailable or candidate-bearing
+    source facts lack assessment.
     """
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
@@ -399,6 +413,10 @@ def test_cat_d_pack_referencing_pending_projection_yields_advisory(
             "    runtime: bridge\n"
             "    event_families:\n"
             "      - member_knowledge.note_added\n"
+            "source_assurance:\n"
+            "  - source_events: [member_knowledge.note_added]\n"
+            "    mode: canonical_projection\n"
+            "    projections: [member_knowledge]\n"
             "owner_scope_overridability_at_install: false\n"
         ),
         adapter_py=(
@@ -415,14 +433,19 @@ def test_cat_d_pack_referencing_pending_projection_yields_advisory(
         projections_dir=projections_dir,
     )
 
-    assert not result.has_errors()
-    pending_advisories = [
-        f
-        for f in result.advisories()
-        if f.check == "projection_subscription_compatibility"
-        and "advisory_pending_projection" in f.message
-    ]
-    assert len(pending_advisories) == 1
+    assert result.has_errors()
+    assert any(
+        finding.check == "source_assurance_contract"
+        and "candidate_assessment or candidate_not_applicable" in finding.message
+        for finding in result.findings
+    )
+    assert any(
+        finding.check == "source_assurance_contract"
+        and "unknown projection" in finding.message
+        for finding in result.findings
+    )
+    # The legacy projection compatibility advisory may still be emitted for
+    # migration diagnostics, but source assurance independently blocks install.
 
 
 def test_aggregator_collects_findings_across_multiple_checks_simultaneously(

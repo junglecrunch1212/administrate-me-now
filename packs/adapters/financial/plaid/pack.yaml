@@ -83,3 +83,10 @@ sensitivity_default: privileged
 sharing_model_discriminator: owner_member_id
 dedup_strategy:
   kind: external_id
+source_assurance:
+  - source_events: [money_flow.provider_observed, money_flow.provider_removed, financial.account_observed]
+    mode: canonical_projection
+    projections: [money]
+  - source_events: [money_flow.plaid_synced]
+    mode: canonical_projection
+    projections: [xlsx_workbooks]

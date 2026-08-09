@@ -71,3 +71,11 @@ sensitivity_default: normal
 observation_mode_required: true
 dedup_strategy:
   kind: external_id
+source_assurance:
+  - source_events: [action.executed, action.failed]
+    mode: terminal_action
+  - source_events: [ha.state_changed]
+    mode: canonical_observation
+  - source_events: [context.signal.observed]
+    mode: canonical_projection
+    projections: [lists]

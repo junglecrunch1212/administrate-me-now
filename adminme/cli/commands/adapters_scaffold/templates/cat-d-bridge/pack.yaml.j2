@@ -13,6 +13,11 @@ capabilities:
     runtime: bridge
     event_families: []
 
+# Add a canonical_projection rule for every emitted source family and a
+# candidate_assessment rule for every non-delete knowledge source. Validation
+# fails closed as soon as event_families is populated without those rules.
+source_assurance: []
+
 write_capabilities: []
 sensitivity_default: privileged
 observation_mode_required: false

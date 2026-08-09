@@ -4,6 +4,39 @@
 
 **Why a sequence instead of one mega-prompt.** One prompt for the whole build fails predictably: context pressure, lost-in-the-middle attention, drift from earlier constraints, and a tendency to race to completion without stopping to verify. This sequence addresses all four by giving each prompt a narrow scope, a specific reading list, explicit deliverables, and a required stop for human review.
 
+## CO-008 source-assurance cascade (2026-08-08)
+
+The v2 constitutional reconciliation in `docs/refactor/` now governs new work
+over the historical prompt-era sequence below. Any prompt that creates or
+changes a member, adapter, bridge, or channel source must satisfy CO-008 and
+AC-34 before it can close:
+
+1. Every emitted source family declares a category-appropriate
+   `source_assurance` rule in its reviewed manifest or platform contract.
+2. Candidate-bearing communication/knowledge facts append one terminal
+   `triage.intent.features_extracted@v2` outcome: eligible candidates, explicit
+   no-candidate, quarantine, or visible failure. Cat-D metadata must explicitly
+   declare `candidate_not_applicable`; silence is not an exemption.
+3. Mirror facts reach a named deterministic projection; canonical observations
+   and action results are terminal facts; external-write requests reach a
+   completed or failed result. A configured adapter, advanced cursor, passed
+   checkpoint, or empty queue is not end-to-end proof.
+4. Doctor, Settings, and Triage expose the same content-free accounting and
+   degrade overdue, skipped, or failed dispositions.
+5. The LLM remains only a language interpreter. Fixed code owns exact-source
+   grounding, eligibility, scope, route, authority, idempotency, and truth;
+   confidence never admits a candidate.
+6. Adult member Add for review covers all eleven typed proposal kinds and
+   remains proposal-only behind the human Triage gate.
+
+This amendment cascades to the event-log/schema prompts (03-04), adapter
+framework and every Cat-A-E implementation prompt (11 through 12), Capture and
+member-surface prompts (13b and 14b), bootstrap/Doctor and CLI prompts (16-17),
+and final acceptance (18). The adapter install validator therefore has seven
+checks, with `source_assurance_contract` added to the original six. Historical
+execution notes remain evidence of their earlier boundary; they do not waive
+this gate for later packs or refactors.
+
 
 ---
 

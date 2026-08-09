@@ -1,5 +1,31 @@
 # Gate 8 final validation report
 
+## 2026-08-08 CO-008 source-assurance amendment
+
+The candidate adds AC-34 and closes the source-to-disposition class of failure
+exposed by the live Gmail/Triage incident. Production-composition acceptance
+proves explicit no-candidate and quarantine outcomes for Gmail, proposal-only
+capture for every one of the eleven domain kinds, a provider mirror reaching
+its named projection, and identical content-free source accounting in Doctor,
+Settings, and Triage. Unit and validator evidence covers missing-versus-empty,
+legacy failed assessment, privacy-before-language ordering, high-signal email
+fallback, exact-source grounding, reviewed retry generations, untouched-only
+legacy supersession, all five adapter categories, and fail-closed future pack
+scaffolds.
+
+The candidate command matrix is 37/37 strict acceptance tests, 1,661/1,661
+root and pack tests, 60/60 bridge tests, and 15/15 exact-pinned OpenClaw plugin
+tests. Ruff lint and format, mypy, Pyright, invariant checks, both dependency
+audits, performance budgets, root/bridge lock checks and packages,
+architecture-negative checks, clean install, tenant isolation, encrypted
+backup/restore, plugin contract/build/package, shellcheck, shell syntax, and
+diff hygiene pass under Python 3.14 and Node 24. The first aggregate run reached
+the final production npm audit and encountered an external registry timeout;
+the same audit then returned zero vulnerabilities, and the exact final
+aggregate rerun passed. GitHub checks, independent review, and the live
+deployment/replay evidence described in CO-008 remain release boundaries and
+must replace this candidate wording after activation.
+
 ## 2026-08-05 primary-surface and install-readiness amendment
 
 The release candidate now includes the complete supported bidirectional schema

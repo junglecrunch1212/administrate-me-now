@@ -21,6 +21,14 @@ pack:
   author: built-in
   license: Apache-2.0
 write_capabilities: [create_event, update_event, delete_event, move_event]
+capabilities:
+  - kind: Cat-B
+    runtime: bridge
+    event_families: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.source_observed]
+source_assurance:
+  - source_events: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.source_observed]
+    mode: canonical_projection
+    projections: [calendars]
 config:
   defaults:
     calendar_identifier: default

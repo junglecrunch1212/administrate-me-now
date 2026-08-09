@@ -6,7 +6,7 @@ supervisor instantiates the adapter — so wrong-shape pack manifests
 fail fast with field-named diagnostics, not opaquely at runtime when
 an adapter tries to call a non-existent method.
 
-This module is the **aggregator**. The six per-check modules
+This module is the **aggregator**. The seven per-check modules
 implement the rules:
 
 - :mod:`~.capability_runtime_coherence` (commit 1) — Cat-D⇒bridge,
@@ -27,8 +27,10 @@ implement the rules:
 - :mod:`~.observation_mode_wrapping` (commit 3) — Cat-A ``send`` and
   Cat-E ``execute_action`` route through
   :mod:`adminme.lib.observation`.
+- :mod:`~.source_assurance_contract` — every declared source fact names
+  its auditable terminal disposition.
 
-Commit-3 state: the aggregator wires all six checks. The aggregator
+The aggregator wires all seven checks. The aggregator
 does NOT short-circuit — every check runs and every finding is
 preserved on the returned :class:`ValidationResult`.
 
@@ -69,6 +71,9 @@ from adminme.lib.pack_registry.validator.result import (
     Severity,
     ValidationFinding,
     ValidationResult,
+)
+from adminme.lib.pack_registry.validator.source_assurance_contract import (
+    check_source_assurance_contract,
 )
 from adminme.lib.pack_registry.validator.write_capabilities_check import (
     check_write_capabilities,
@@ -144,6 +149,13 @@ def validate_adapter_pack(
             manifest, projections_dir=projections_dir
         )
     )
+    findings.extend(
+        check_source_assurance_contract(
+            manifest,
+            registry=registry,
+            projections_dir=projections_dir,
+        )
+    )
     findings.extend(check_base_class_conformance(pack_dir, manifest))
     findings.extend(check_write_capabilities(pack_dir, manifest))
     findings.extend(check_observation_mode_wrapping(pack_dir, manifest))
@@ -161,6 +173,7 @@ __all__ = [
     "check_event_schema_registration",
     "check_observation_mode_wrapping",
     "check_projection_subscription_compatibility",
+    "check_source_assurance_contract",
     "check_write_capabilities",
     "validate_adapter_pack",
 ]

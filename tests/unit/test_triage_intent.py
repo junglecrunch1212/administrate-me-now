@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from adminme.triage_intent import (
     extract_grounded_nlp_candidates,
     extract_intent_candidates,
+    extract_message_fallback_candidates,
+    is_inbound_reply_request,
     merge_intent_candidates,
 )
 
@@ -153,3 +155,74 @@ def test_model_fields_enrich_overlapping_deterministic_candidate_without_duplica
     assert merged.fields["notes"] == text
     assert "explicit_recurrence_language_v1" in merged.eligibility_rule_ids
     assert "exact_source_quote_grounded_v1" in merged.eligibility_rule_ids
+
+
+def test_message_fallback_admits_obligations_and_member_promises_only() -> None:
+    inbound = extract_message_fallback_candidates(
+        "Your insurance premium is due on 2026-08-15.",
+        submitted_at=NOW,
+        direction="inbound",
+    )
+    outbound = extract_message_fallback_candidates(
+        "I will send the signed form tomorrow.",
+        submitted_at=NOW,
+        direction="outbound",
+    )
+    assert [item.target_kind for item in inbound] == ["task"]
+    assert [item.target_kind for item in outbound] == ["commitment"]
+
+
+def test_message_fallback_rejects_marketing_chrome_and_generic_action_verbs() -> None:
+    for text in (
+        "Buy Again and save twenty percent",
+        "Shop now https://example.invalid/deal",
+        "Book your summer escape today",
+        "Call now for a free consultation",
+        "Review our latest summer collection",
+        "Manage preferences or unsubscribe",
+    ):
+        assert (
+            extract_message_fallback_candidates(
+                text,
+                submitted_at=NOW,
+                direction="inbound",
+            )
+            == []
+        )
+
+    for text in ("I can see why that happened.", "Let me know what you decide."):
+        assert (
+            extract_message_fallback_candidates(
+                text,
+                submitted_at=NOW,
+                direction="outbound",
+            )
+            == []
+        )
+
+
+def test_reply_request_is_owned_by_the_distinct_commitment_pipeline() -> None:
+    text = "Could you reply today with the household update?"
+    assert is_inbound_reply_request(text)
+    assert (
+        extract_message_fallback_candidates(
+            text,
+            submitted_at=NOW,
+            direction="inbound",
+        )
+        == []
+    )
+
+
+def test_message_fallback_persists_the_exact_original_source_span() -> None:
+    text = "Please   send the signed form by Friday."
+    [candidate] = extract_message_fallback_candidates(
+        text,
+        submitted_at=NOW,
+        direction="inbound",
+    )
+    [span] = candidate.evidence_spans
+    source_span = text[span["start"] : span["end"]]
+    assert candidate.title == source_span
+    assert candidate.fields["description"] == source_span
+    assert "   " in source_span

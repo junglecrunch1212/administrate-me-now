@@ -1,5 +1,20 @@
 # Constitutional crosswalk
 
+CO-008 source-assurance amendment (2026-08-08): C001/C002/C004/C007/C009/
+C010/C012/C014-C017/C035/C044-C046/C048/C050/C053/C055/C056/C071/C076 and
+C101 are **PRESERVED/HARDENED**. Every declared adapter or member source now
+names the only acceptable terminal disposition in its pack/platform contract;
+runtime accounting compares immutable facts with assessment events, projection
+checkpoints, and terminal action results. `no_candidate`, `quarantined`,
+`failed`, `pending`, and `missing` are different evidence states. Cat-A and
+candidate-bearing Cat-D sources cannot silently return; privileged/unroutable
+facts are rejected before the language seam. Fixed rules replace the broad
+email action-verb fallback, confidence no longer admits Notes candidates, and
+only untouched proposals admitted solely by the retired rule are superseded.
+All eleven adult member hints remain proposal-only. Queue presence, queue
+absence, adapter configuration, model output, and checkpoint passage are never
+canonical truth or complete health by themselves.
+
 Explicit replay amendment (2026-08-08): C001/C002/C004/C007/C035/C044/C045/
 C048/C050/C053/C055/C056/C071/C076/C101 are **PRESERVED/HARDENED** after live
 evidence proved a healthy versioned consumer retained its terminal checkpoint

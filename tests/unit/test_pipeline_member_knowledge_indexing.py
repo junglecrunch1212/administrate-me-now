@@ -131,6 +131,7 @@ async def test_exact_evidence_candidate_is_sanitized_and_sent_only_to_triage() -
         assert skill_id == "skill:extract_note_semantics"
         assert inputs["body_text"] == "Please return the school form by Friday."
         assert skill_ctx.owner_scope == "private:member-a"
+        assert skill_ctx.invocation_idempotency_key == "note-semantics:v3:note-event-1"
         return {
             "candidates": [
                 {
@@ -161,15 +162,20 @@ async def test_exact_evidence_candidate_is_sanitized_and_sent_only_to_triage() -
     )
     assert [call.envelope.type for call in log.calls] == [
         "embedding.generated",
+        "triage.intent.features_extracted",
         "triage.item.proposed",
     ]
     assert log.calls[0].envelope.idempotency_key == "knowledge-index:note-event-1"
-    proposal = log.calls[1].envelope.payload
+    assessment = log.calls[1].envelope.payload
+    assert assessment["assessment_outcome"] == "eligible_candidates"
+    proposal = log.calls[2].envelope.payload
+    assert log.calls[2].envelope.occurred_at == "2026-08-06T12:00:00Z"
     assert proposal["target_kind"] == "task"
     assert proposal["candidate"] == {"due": "2026-08-07", "energy": "low"}
     assert proposal["route"] == {"member_id": "member-a"}
     assert proposal["source_event_id"] == "note-event-1"
-    assert "return the school form by Friday" in proposal["reasons"][-1]
+    assert proposal["title"] == "return the school form by Friday"
+    assert proposal["extraction_event_id"] == "derived-2"
 
 
 @pytest.mark.asyncio
@@ -185,8 +191,32 @@ async def test_privileged_note_revokes_index_and_never_reaches_model() -> None:
     assert [call.envelope.type for call in log.calls] == [
         "embedding.revoked",
         "member_knowledge.index_skipped",
+        "triage.intent.features_extracted",
     ]
     assert log.calls[0].envelope.payload["reason"] == "privileged_content"
+    assert log.calls[-1].envelope.payload["assessment_outcome"] == "quarantined"
+
+
+@pytest.mark.asyncio
+async def test_unroutable_note_scope_is_quarantined_before_model_processing() -> None:
+    log = _FakeLog()
+
+    async def forbidden(*_: Any, **__: Any) -> dict[str, Any]:
+        raise AssertionError("unroutable shared content reached the skill seam")
+
+    event = _note_event()
+    event["owner_scope"] = "shared:household"
+    event["visibility_scope"] = "shared:household"
+    await MemberKnowledgeIndexingPipeline().handle(event, _context(log, forbidden))
+
+    assert [call.envelope.type for call in log.calls] == [
+        "embedding.generated",
+        "triage.intent.features_extracted",
+    ]
+    assert log.calls[-1].envelope.payload["assessment_outcome"] == "quarantined"
+    assert log.calls[-1].envelope.payload["reason_codes"] == [
+        "source_scope_is_not_private_member"
+    ]
 
 
 @pytest.mark.asyncio
