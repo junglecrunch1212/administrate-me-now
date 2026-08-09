@@ -82,3 +82,7 @@ sharing_model_discriminator: owner_member_id
 observation_mode_required: true
 dedup_strategy:
   kind: event_identifier_last_modified
+source_assurance:
+  - source_events: [calendar.event_added, calendar.event_updated, calendar.event_deleted, calendar.event_outcome_recorded]
+    mode: canonical_projection
+    projections: [calendars]

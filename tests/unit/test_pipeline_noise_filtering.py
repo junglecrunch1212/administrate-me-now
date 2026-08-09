@@ -212,7 +212,7 @@ def _make_skill_result(
 
 
 @pytest.mark.asyncio
-async def test_empty_body_returns_without_emit() -> None:
+async def test_empty_body_records_no_candidate_without_calling_model() -> None:
     log = _FakeEventLog()
     calls: list[Any] = []
 
@@ -224,7 +224,10 @@ async def test_empty_body_returns_without_emit() -> None:
     pipeline = NoiseFilteringPipeline()
     event = _messaging_received_event(body_text=None)
     await pipeline.handle(event, ctx)
-    assert log.calls == []
+    assert [call.envelope.type for call in log.calls] == [
+        "triage.intent.features_extracted"
+    ]
+    assert log.calls[0].envelope.payload["assessment_outcome"] == "no_candidate"
     assert calls == []  # skill must not have been called
 
 
@@ -248,6 +251,7 @@ async def test_skill_success_emits_classified() -> None:
     assert [call.envelope.type for call in log.calls] == [
         "messaging.classified",
         "messaging.semantic_features_extracted",
+        "triage.intent.features_extracted",
     ]
     envelope = log.calls[0].envelope
     assert envelope.type == "messaging.classified"
@@ -268,14 +272,19 @@ async def test_skill_failure_emits_defensive_default() -> None:
 
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()
-    await pipeline.handle(_messaging_received_event(), ctx)
-    assert len(log.calls) == 2
+    event = _messaging_received_event()
+    event["owner_scope"] = "private:member-fixture"
+    event["visibility_scope"] = "private:member-fixture"
+    event["payload"]["member_id"] = "member-fixture"
+    await pipeline.handle(event, ctx)
+    assert len(log.calls) == 3
     envelope = log.calls[0].envelope
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
     assert envelope.payload["skill_version"] == "4.0.3"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
+    assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -287,11 +296,16 @@ async def test_skill_input_invalid_emits_defensive_default() -> None:
 
     ctx = _make_ctx(log, stub_run_skill)
     pipeline = NoiseFilteringPipeline()
-    await pipeline.handle(_messaging_received_event(), ctx)
-    assert len(log.calls) == 2
+    event = _messaging_received_event()
+    event["owner_scope"] = "private:member-fixture"
+    event["visibility_scope"] = "private:member-fixture"
+    event["payload"]["member_id"] = "member-fixture"
+    await pipeline.handle(event, ctx)
+    assert len(log.calls) == 3
     envelope = log.calls[0].envelope
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
+    assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -311,7 +325,7 @@ async def test_telephony_sms_uses_body_field() -> None:
     assert captured["body_text"] == "STOP HEYBANK"
     assert captured["from_identifier"] == "+15551234567"
     assert captured["source_channel"] == "sms"
-    assert len(log.calls) == 2
+    assert len(log.calls) == 3
     assert log.calls[0].envelope.payload["classification"] == "noise"
 
 
@@ -439,7 +453,9 @@ async def test_candidates_require_an_exact_private_member_scope() -> None:
     assert [call.envelope.type for call in log.calls] == [
         "messaging.classified",
         "messaging.semantic_features_extracted",
+        "triage.intent.features_extracted",
     ]
+    assert log.calls[-1].envelope.payload["assessment_outcome"] == "quarantined"
 
 
 @pytest.mark.asyncio
@@ -512,11 +528,11 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v7:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v8:")
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_uses_v7_after_prior_generations() -> None:
+async def test_reviewed_replay_uses_v8_after_prior_generations() -> None:
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -535,12 +551,16 @@ async def test_reviewed_replay_uses_v7_after_prior_generations() -> None:
     async def explicit_replay_recovered(*args: Any, **kwargs: Any) -> SkillResult:
         return _make_skill_result(classification="transactional", confidence=0.6)
 
+    async def source_assurance_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(classification="personal", confidence=0.5)
+
     pipeline = NoiseFilteringPipeline()
     await pipeline.handle(event, _make_ctx(log, first))
     await pipeline.handle(event, _make_ctx(log, unavailable))
     await pipeline.handle(event, _make_ctx(log, recovered))
     await pipeline.handle(event, _make_ctx(log, startup_order_recovered))
     await pipeline.handle(event, _make_ctx(log, explicit_replay_recovered))
+    await pipeline.handle(event, _make_ctx(log, source_assurance_recovered))
 
     classified_keys = [
         call.envelope.idempotency_key
@@ -553,6 +573,7 @@ async def test_reviewed_replay_uses_v7_after_prior_generations() -> None:
         "messaging:classified:v5:trigger-eid-001",
         "messaging:classified:v6:trigger-eid-001",
         "messaging:classified:v7:trigger-eid-001",
+        "messaging:classified:v8:trigger-eid-001",
     ]
 
 
@@ -616,6 +637,101 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v7:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v8:")
         for proposal in proposals
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_decided", [False, True])
+async def test_v8_retires_only_untouched_generic_action_verb_proposals(
+    member_decided: bool,
+) -> None:
+    log = _FakeEventLog()
+    source_event_id = "trigger-eid-001"
+    feature_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.intent.features_extracted",
+            schema_version=1,
+            occurred_at="2026-08-08T12:00:00Z",
+            source_adapter="legacy-message-extractor",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key=f"triage:message-features:v7:{source_event_id}",
+            payload={},
+        ),
+        causation_id=source_event_id,
+    )
+    proposal_id = "legacy-action-verb-proposal"
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=2,
+            occurred_at="2026-08-08T12:00:01Z",
+            source_adapter="legacy-message-extractor",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-action-verb-candidate",
+            payload={
+                "proposal_id": proposal_id,
+                "target_kind": "task",
+                "candidate_key": "candidate-1",
+                "eligibility_rule_ids": [
+                    "explicit_action_verb_v1",
+                    "candidate_fields_task_v1",
+                ],
+            },
+        ),
+        causation_id=feature_id,
+    )
+    if member_decided:
+        await log.write(
+            EventEnvelope(
+                event_at_ms=1700000000002,
+                tenant_id="tenant-test",
+                type="triage.item.dismissed",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:02Z",
+                source_adapter="member-triage",
+                source_account_id="member-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                idempotency_key="legacy-action-verb-decision",
+                payload={"proposal_id": proposal_id},
+            ),
+            causation_id=proposal_event_id,
+        )
+
+    async def no_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    event = _messaging_received_event(body_text="A normal household update.")
+    event["owner_scope"] = "private:member-fixture"
+    event["visibility_scope"] = "private:member-fixture"
+    event["occurred_at"] = "2026-08-08T12:00:00Z"
+    event["payload"]["member_id"] = "member-fixture"
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, no_candidate))
+
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert bool(superseded) is not member_decided
+    if superseded:
+        assert superseded[0].schema_version == 2
+        assert superseded[0].payload == {
+            "proposal_id": proposal_id,
+            "superseded_at": "2026-08-08T12:00:00Z",
+            "replacement_source_event_id": source_event_id,
+            "reason": "eligibility_rule_replaced",
+        }

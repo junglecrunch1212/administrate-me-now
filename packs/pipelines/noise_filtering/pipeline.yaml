@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 7.0.0
+  version: 8.0.0
   kind: pipeline
 runtime:
   language: python
@@ -24,3 +24,4 @@ events_emitted:
   - messaging.semantic_features_extracted
   - triage.intent.features_extracted
   - triage.item.proposed
+  - triage.item.superseded

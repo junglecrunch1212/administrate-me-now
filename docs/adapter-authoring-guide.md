@@ -501,14 +501,26 @@ sensitivity_default: sensitive
 observation_mode_required: true
 owner_scope_overridability_at_install: false
 sharing_model_discriminator: owner_member_id
+source_assurance:
+  - source_events: [note.added]
+    mode: canonical_projection
+    projections: [notes]
+  - source_events: [note.added]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:member_knowledge_indexing
+  - source_events: [list_item.toggled]
+    mode: canonical_projection
+    projections: [list_items]
 ```
 
-The validator runs **all six checks** across both capability blocks:
+The validator runs **all seven checks** across both capability blocks:
 `base_class_conformance` checks for inheritance from the
 **broader** category's ABC (here `PersonalKnowledgeAdapter`, since
 Cat-D dominates the runtime placement), `write_capabilities` checks
 the Cat-B handlers, `event_schema_registration` checks both
-families, and so on.
+families, `source_assurance_contract` checks every emitted family has
+the correct assessor/projection/terminal disposition, and so on.
 
 ### 7.2 Home Assistant (Cat-C + Cat-E)
 
@@ -529,6 +541,11 @@ capabilities:
 write_capabilities:
   - turn_on_switch
   - turn_off_switch
+source_assurance:
+  - source_events: [iot.sensor_reading]
+    mode: canonical_observation
+  - source_events: [iot.action_dispatched]
+    mode: terminal_action
 observation_mode_required: true
 ```
 
@@ -578,7 +595,7 @@ The scaffold's output:
 - `tests/test_<name>_adapter_pack_internal.py` — pack-internal test
   file with the F-3 unique-basename rule (10c-iii precedent).
 
-The generated pack passes all six validator checks on first run —
+The generated pack passes all seven validator checks on first run —
 `adminme adapters validate <output>` exits 0 immediately after
 scaffold completes. Subsequent edits to `adapter.py` MUST preserve
 the ABC inheritance and the observation-mode wrapping; the validator

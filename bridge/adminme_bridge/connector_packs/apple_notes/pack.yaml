@@ -34,3 +34,16 @@ config:
   defaults:
     automation_mode: notes_scripting
     emit_schema_version: 2
+source_assurance:
+  - source_events: [member_knowledge.note_added, member_knowledge.note_updated]
+    mode: canonical_projection
+    projections: [member_knowledge]
+  - source_events: [member_knowledge.note_added, member_knowledge.note_updated]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:member_knowledge_indexing
+  - source_events: [member_knowledge.note_deleted, member_knowledge.folder_created, member_knowledge.folder_updated, member_knowledge.folder_deleted]
+    mode: canonical_projection
+    projections: [member_knowledge]
+  - source_events: [member_knowledge.folder_created, member_knowledge.folder_updated]
+    mode: candidate_not_applicable

@@ -13,6 +13,10 @@ capabilities:
     runtime: central
     event_families: []
 
+# Populate terminal_action rules with every emitted action result. Validation
+# fails closed as soon as event_families is populated without a disposition.
+source_assurance: []
+
 write_capabilities: []
 sensitivity_default: normal
 observation_mode_required: true

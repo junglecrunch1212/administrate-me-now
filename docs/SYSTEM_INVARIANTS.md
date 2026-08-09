@@ -4,6 +4,11 @@ _The constitutional reference for the build. Every subsequent prompt (02 through
 
 Version: 1.0 (produced by prompt 01c, 2026-04-23)
 
+CO-008 amendment (2026-08-08): source append is necessary but not sufficient.
+Every declared member/adapter source must prove one manifest-bound terminal
+disposition, and missing/failed processing must degrade health rather than
+render as an empty queue.
+
 Format: each invariant is numbered within its section, stated in one sentence (or at most two), and cites its source. Citation shorthand:
 
 - `[arch §N]` → `docs/architecture-summary.md` section N
@@ -31,6 +36,7 @@ The event log at L2 is the single source of truth for AdministrateMe; every othe
 8. Events are **immutable but correctable** — a bad classification is fixed by emitting a new corrective event (e.g. `classification.corrected`) with `causation_id` pointing to the original; projections honor latest truth. No event is ever deleted or mutated in place. [arch §3, BUILD.md §CRITICAL OPERATING RULES rule 5]
 9. Every `event_type` ships a Pydantic model under `adminme/lib/event_types/<namespace>/<type>.py`, a `schema_version` integer, and an upcaster on schema change; plugin-introduced types register via the `hearth.event_types` entry point in their own dotted namespace. [arch §3, BUILD.md §CRITICAL OPERATING RULES rule 18]
 10. Two bus implementations ship against the same `EventBus` Protocol — `InProcessBus` (asyncio queues + durable `bus_consumer_offsets` table) is the default, `RedisStreamsBus` is the spec'd alternate for future scale-out — and the full pipeline integration suite runs against both. [arch §3]
+11. Every declared member, adapter, bridge, or channel source fact has a reviewed source-assurance obligation and reaches exactly the appropriate audited disposition: candidate assessment (including explicit none/quarantine/failure), named canonical projection, canonical observation/action, or terminal command result; a checkpoint, configured adapter, or empty queue never substitutes for per-source proof. [CO-008, AC-34]
 
 ## Section 2: Projections are derived; they are never truth
 

@@ -1787,8 +1787,17 @@ async def submit_triage_intent(
         "extractor_id": EXTRACTOR_ID,
         "language": "en",
         "candidates": [candidate.feature_payload() for candidate in candidates],
-        "extraction_state": "complete" if candidates else "defensive_default",
+        # The deterministic assessor completed even when it could not derive
+        # a typed candidate. The exact text remains in the Triage holding
+        # state for human interpretation; this is not a model failure.
+        "extraction_state": "complete",
         "extracted_at": extracted_at,
+        "assessment_outcome": ("eligible_candidates" if candidates else "no_candidate"),
+        "reason_codes": [
+            "member_kind_or_text_rule_matched"
+            if candidates
+            else "member_text_requires_human_interpretation"
+        ],
     }
     feature_fingerprint = hashlib.sha256(
         json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
@@ -1805,7 +1814,7 @@ async def submit_triage_intent(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=session.tenant_id,
                 type="triage.intent.features_extracted",
-                schema_version=1,
+                schema_version=2,
                 occurred_at=extracted_at,
                 source_adapter=EXTRACTOR_ID,
                 source_account_id=session.auth_member_id,

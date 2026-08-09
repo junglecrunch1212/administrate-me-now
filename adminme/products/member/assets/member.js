@@ -383,6 +383,13 @@ function triageSurface(data) {
   const fragment = document.createDocumentFragment();
   const intro = document.createElement("section"); intro.className = "hero-card";
   intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "One decision at a time.", "action-title"), text("p", "Derived candidates wait here until you verify their meaning and destination. Raw provider observations never enter this queue."));
+  const assurance = data.processing_health?.details?.source_assurance;
+  if (assurance?.counts) {
+    const counts = assurance.counts;
+    const status = text("p", `${counts.accounted} of ${counts.obligations} source obligations accounted for · ${counts.eligible_candidates} with candidates · ${counts.no_candidate} explicitly assessed with none · ${counts.quarantined} safely quarantined${counts.failed ? ` · ${counts.failed} failed` : ""}${counts.pending ? ` · ${counts.pending} processing` : ""}${counts.missing ? ` · ${counts.missing} missing` : ""}.`, counts.missing || counts.failed ? "review-state" : "state-note");
+    status.setAttribute("data-source-assurance", assurance.state || "unknown");
+    intro.append(status);
+  }
   fragment.append(intro);
   const pending = data.items || [];
   const recent = data.recent_items || [];
@@ -1106,7 +1113,17 @@ function openAddForReview() {
   form.append(field("Thought to hold", input));
   const hints = [
     { value: "", label: "Let Triage identify possible types" },
-    ...["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "relationship_fact"].map((value) => ({ value, label: titleCase(value) })),
+    { value: "task", label: "Do — a task" },
+    { value: "commitment", label: "Promise — something I owe" },
+    { value: "calendar_event", label: "Time — a calendar event" },
+    { value: "reminder", label: "Reminder" },
+    { value: "list", label: "List" },
+    { value: "list_item", label: "List item" },
+    { value: "recurrence", label: "Repeat — a recurring pattern" },
+    { value: "party_identifier", label: "Link a person’s email or phone" },
+    { value: "party_candidate", label: "Add a person or organization" },
+    { value: "party_relationship", label: "Relationship between people" },
+    { value: "relationship_fact", label: "Fact about a person" },
   ];
   const hint = selectControl(hints, "", ""); hint.name = "kind_hint";
   form.append(field("Type hint (optional)", hint));
@@ -2243,6 +2260,8 @@ function privacySettings(data) {
 
 function systemSettings(data) {
   const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 14)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
+  const assuranceCapability = data.system.capabilities.find((value) => value.name === "source-assurance");
+  if (assuranceCapability?.details?.counts) { const counts = assuranceCapability.details.counts; const assurance = document.createElement("section"); assurance.className = "card"; assurance.append(text("p", "SOURCE ASSURANCE", "eyebrow"), text("h2", assuranceCapability.state === "healthy" ? "Every processed source has an accounted disposition" : "A source fact is missing its required disposition")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Source facts", counts.source_facts], ["Accounted obligations", `${counts.accounted} / ${counts.obligations}`], ["Candidate sources", `${counts.eligible_candidates} proposed · ${counts.no_candidate} none`], ["Quarantined / failed", `${counts.quarantined} / ${counts.failed}`], ["Processing / missing", `${counts.pending} / ${counts.missing}`]]) facts.append(text("dt", label), text("dd", value)); assurance.append(facts, text("p", "Empty is a recorded outcome. Missing means the expected assessor, projection, or terminal action result did not arrive after its checkpoint.", "state-note")); fragment.append(assurance); }
   const workbooks = document.createElement("section"); workbooks.className = "card"; workbooks.append(text("h2", "Recovery and workbooks")); const workbookList = document.createElement("ul"); workbookList.className = "household-settings-list"; for (const workbook of data.system.workbooks) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", workbook.name), text("small", workbook.updated_at ? `Updated ${new Date(workbook.updated_at).toLocaleString()}` : "No workbook file yet")); item.append(body, text("span", titleCase(workbook.state), `pill state-label state-${String(workbook.state).replaceAll("_", "-")}`)); workbookList.append(item); } workbooks.append(workbookList); fragment.append(workbooks);
   const advanced = document.createElement("details"); advanced.className = "card settings-advanced"; advanced.append(text("summary", "Advanced capability inventory"), text("p", "Pack validation, configuration and runtime provider health are different facts. This inventory is diagnostic and does not grant a capability.", "state-note")); const list = document.createElement("ul"); list.className = "advanced-capability-list"; for (const capability of data.system.capabilities) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", capability.name), text("small", capability.kind)); item.append(body, text("span", titleCase(capability.state), `pill state-label state-${String(capability.state).replaceAll("_", "-")}`)); list.append(item); } advanced.append(list); fragment.append(advanced); return fragment;
 }

@@ -42,10 +42,11 @@ from adminme.lib.skill_runner import (
 )
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
 from adminme.triage_intent import (
-    EXTRACTOR_ID,
     GROUNDED_NLP_EXTRACTOR_ID,
+    MESSAGE_FALLBACK_EXTRACTOR_ID,
     extract_grounded_nlp_candidates,
-    extract_intent_candidates,
+    extract_message_fallback_candidates,
+    is_inbound_reply_request,
     merge_intent_candidates,
 )
 
@@ -55,7 +56,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "4.0.3"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 7
+_REPLAY_GENERATION = 8
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -152,7 +153,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "7.0.0"
+    version: str = "8.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -169,16 +170,32 @@ class NoiseFilteringPipeline:
             "telephony.sms_received",
         ):
             return
+        source_event_id = str(event.get("event_id") or "")
         if event.get("sensitivity") == "privileged":
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["privileged_source_not_sent_to_language_seam"],
+            )
             return
 
         payload = event.get("payload") or {}
         prepared = _extract_text_and_inputs(event_type, payload)
         if prepared is None:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=["source_has_no_text_content"],
+            )
             return
         source_text, inputs = prepared
 
-        source_event_id = event.get("event_id", "")
         invocation_fingerprint = hashlib.sha256(
             json.dumps(
                 {
@@ -205,7 +222,13 @@ class NoiseFilteringPipeline:
             session=ctx.session,
             correlation_id=ctx.correlation_id,
             triggering_event_id=str(source_event_id),
-            invocation_idempotency_key=(f"message-nature:{invocation_fingerprint}"),
+            # Candidate eligibility changed at replay generation 8.  A new,
+            # reviewed invocation generation is required so historical
+            # terminal skill failures do not remain permanently cached while
+            # exact duplicate source observations still deduplicate.
+            invocation_idempotency_key=(
+                f"message-nature:v{_REPLAY_GENERATION}:{invocation_fingerprint}"
+            ),
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
@@ -236,6 +259,7 @@ class NoiseFilteringPipeline:
                     "candidates": [],
                 },
                 source_text=source_text,
+                assessment_failure_reason=f"language_seam_{type(exc).__name__}",
             )
             return
 
@@ -247,6 +271,7 @@ class NoiseFilteringPipeline:
             invocation_fingerprint=invocation_fingerprint,
             output=output,
             source_text=source_text,
+            assessment_failure_reason=None,
         )
 
     async def _emit_results(
@@ -258,6 +283,7 @@ class NoiseFilteringPipeline:
         invocation_fingerprint: str,
         output: dict[str, Any],
         source_text: str,
+        assessment_failure_reason: str | None,
     ) -> None:
         await self._emit_classified(
             event=event,
@@ -279,6 +305,18 @@ class NoiseFilteringPipeline:
             invocation_fingerprint=invocation_fingerprint,
             source_text=source_text,
             raw_candidates=output.get("candidates"),
+            message_direction=str(
+                "outbound"
+                if event.get("type") == "messaging.sent"
+                or "SENT"
+                in {
+                    str(value).upper()
+                    for value in (event.get("payload") or {}).get("provider_labels")
+                    or []
+                }
+                else "inbound"
+            ),
+            assessment_failure_reason=assessment_failure_reason,
         )
 
     async def _emit_classified(
@@ -381,16 +419,42 @@ class NoiseFilteringPipeline:
         invocation_fingerprint: str,
         source_text: str,
         raw_candidates: Any,
+        message_direction: str,
+        assessment_failure_reason: str | None,
     ) -> None:
         payload = event.get("payload") or {}
         owner_scope = str(event.get("owner_scope") or "")
         if not owner_scope.startswith("private:"):
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["source_scope_is_not_private_member"],
+            )
             return
         member_id = owner_scope.removeprefix("private:")
         payload_member = payload.get("member_id")
         if payload_member is not None and payload_member != member_id:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["payload_member_scope_mismatch"],
+            )
             return
         if not member_id:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["source_member_missing"],
+            )
             return
         try:
             submitted_at = datetime.fromisoformat(
@@ -401,14 +465,22 @@ class NoiseFilteringPipeline:
                 event["event_at_ms"] / 1000, timezone.utc
             )
         candidates = merge_intent_candidates(
-            extract_intent_candidates(
+            extract_message_fallback_candidates(
                 source_text,
                 submitted_at=submitted_at,
+                direction=message_direction,
             ),
             extract_grounded_nlp_candidates(source_text, raw_candidates),
         )
-        if not candidates:
-            return
+        if message_direction == "inbound":
+            candidates = [
+                candidate
+                for candidate in candidates
+                if not (
+                    candidate.target_kind in {"task", "commitment"}
+                    and is_inbound_reply_request(candidate.title)
+                )
+            ]
         intent_id = f"source:{source_event_id}"
         # Replay must produce byte-identical event identities.  Never place a
         # wall-clock retry time in an idempotent payload.
@@ -430,13 +502,20 @@ class NoiseFilteringPipeline:
             )
             is not None
         ]
-        idempotency_generation = ""
+        new_candidates = list(candidates)
         if prior_extractions:
             prior_proposals = []
             for prior_extraction in prior_extractions:
                 prior_proposals.extend(
                     await ctx.event_log.get_by_causation(prior_extraction["event_id"])
                 )
+            await self._supersede_retired_fallbacks(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                proposals=prior_proposals,
+                superseded_at=extracted_at,
+            )
             existing = {
                 (
                     str(proposal["payload"].get("target_kind") or ""),
@@ -445,18 +524,11 @@ class NoiseFilteringPipeline:
                 for proposal in prior_proposals
                 if proposal.get("type") == "triage.item.proposed"
             }
-            candidates = [
+            new_candidates = [
                 candidate
                 for candidate in candidates
                 if (candidate.target_kind, candidate.candidate_key) not in existing
             ]
-            if not candidates:
-                return
-            # A later reviewed language-seam repair may discover additional
-            # exact-source candidates after a defensive deterministic pass.
-            # Append only those additions under a new idempotency generation;
-            # never rewrite or duplicate proposals already reviewed in Triage.
-            idempotency_generation = f"v{_REPLAY_GENERATION}:"
 
         # Historical adapters could append the same provider observation more
         # than once under different source event ids.  A reviewed full replay
@@ -467,7 +539,7 @@ class NoiseFilteringPipeline:
         # anchor in the append-only log.
         deduplicated_candidates = []
         proposal_keys: dict[tuple[str, str], str] = {}
-        for candidate in candidates:
+        for candidate in new_candidates:
             proposal_key = (
                 f"triage:message-candidate:v{_REPLAY_GENERATION}:"
                 f"{invocation_fingerprint}:{candidate.candidate_key}:"
@@ -482,42 +554,33 @@ class NoiseFilteringPipeline:
             proposal_keys[(candidate.target_kind, candidate.candidate_key)] = (
                 proposal_key
             )
-        candidates = deduplicated_candidates
-        if not candidates:
-            return
-
-        extraction_event_id = await ctx.event_sink.write(
-            EventEnvelope(
-                event_at_ms=event["event_at_ms"],
-                tenant_id=event["tenant_id"],
-                type="triage.intent.features_extracted",
-                schema_version=1,
-                occurred_at=extracted_at,
-                source_adapter="deterministic_candidate_eligibility",
-                source_account_id="pipeline",
-                owner_scope=owner_scope,
-                visibility_scope=event["visibility_scope"],
-                sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=(
-                    f"triage:message-features:{idempotency_generation}{source_event_id}"
-                ),
-                payload={
-                    "intent_id": intent_id,
-                    "source_event_id": source_event_id,
-                    "skill_call_event_id": None,
-                    "extractor_id": f"{EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}",
-                    "language": None,
-                    "candidates": [
-                        candidate.feature_payload() for candidate in candidates
-                    ],
-                    "extraction_state": "complete",
-                    "extracted_at": extracted_at,
-                },
-            ),
-            correlation_id=ctx.correlation_id,
-            causation_id=ctx.triggering_event_id,
+        new_candidates = deduplicated_candidates
+        outcome = (
+            "eligible_candidates"
+            if candidates
+            else "failed"
+            if assessment_failure_reason
+            else "no_candidate"
         )
-        for candidate in candidates:
+        reason_codes = [
+            *(
+                [assessment_failure_reason]
+                if assessment_failure_reason is not None
+                else ["language_assessment_completed"]
+            ),
+            "eligible_candidate_found" if candidates else "no_eligible_candidate",
+        ]
+        extraction_event_id = await self._emit_triage_assessment(
+            event=event,
+            ctx=ctx,
+            source_event_id=source_event_id,
+            candidates=candidates,
+            outcome=outcome,
+            reason_codes=reason_codes,
+            occurred_at=extracted_at,
+            intent_id=intent_id,
+        )
+        for candidate in new_candidates:
             target_kind = candidate.target_kind
             fingerprint = hashlib.sha256(
                 (
@@ -559,3 +622,132 @@ class NoiseFilteringPipeline:
                 correlation_id=ctx.correlation_id,
                 causation_id=extraction_event_id,
             )
+
+    async def _supersede_retired_fallbacks(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        source_event_id: str,
+        proposals: list[dict[str, Any]],
+        superseded_at: str,
+    ) -> None:
+        """Retire untouched proposals admitted by the overbroad v1 rule.
+
+        Any member enrichment or decision wins permanently.  Only proposals
+        whose sole semantic eligibility was the retired generic action-verb
+        fallback receive a deterministic system supersession.
+        """
+
+        for proposal in proposals:
+            if proposal.get("type") != "triage.item.proposed":
+                continue
+            payload = proposal.get("payload") or {}
+            rule_ids = {
+                str(value) for value in payload.get("eligibility_rule_ids") or []
+            }
+            if "explicit_action_verb_v1" not in rule_ids or (
+                "exact_source_quote_grounded_v1" in rule_ids
+            ):
+                continue
+            descendants = await ctx.event_log.get_by_causation(proposal["event_id"])
+            if any(
+                child.get("type")
+                in {
+                    "triage.item.enriched",
+                    "triage.item.confirmed",
+                    "triage.item.materialized",
+                    "triage.item.dismissed",
+                    "triage.item.superseded",
+                }
+                for child in descendants
+            ):
+                continue
+            proposal_id = str(payload.get("proposal_id") or "")
+            if not proposal_id:
+                continue
+            await ctx.event_sink.write(
+                EventEnvelope(
+                    event_at_ms=event["event_at_ms"],
+                    tenant_id=event["tenant_id"],
+                    type="triage.item.superseded",
+                    schema_version=2,
+                    occurred_at=superseded_at,
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=event["owner_scope"],
+                    visibility_scope=event["visibility_scope"],
+                    sensitivity=event.get("sensitivity", "normal"),
+                    idempotency_key=(
+                        f"triage:message-retire-action-verb-v1:{proposal_id}"
+                    ),
+                    payload={
+                        "proposal_id": proposal_id,
+                        "superseded_at": superseded_at,
+                        "replacement_source_event_id": source_event_id,
+                        "reason": "eligibility_rule_replaced",
+                    },
+                ),
+                correlation_id=ctx.correlation_id,
+                causation_id=proposal["event_id"],
+            )
+
+    async def _emit_triage_assessment(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        source_event_id: str,
+        candidates: list[Any],
+        outcome: str,
+        reason_codes: list[str],
+        occurred_at: str | None = None,
+        intent_id: str | None = None,
+    ) -> str:
+        """Record one terminal assessment even when zero candidates exist."""
+
+        assessed_at = occurred_at or str(
+            event.get("recorded_at")
+            or event.get("occurred_at")
+            or datetime.fromtimestamp(
+                event["event_at_ms"] / 1000, timezone.utc
+            ).isoformat()
+        )
+        envelope = EventEnvelope(
+            event_at_ms=event["event_at_ms"],
+            tenant_id=event["tenant_id"],
+            type="triage.intent.features_extracted",
+            schema_version=2,
+            occurred_at=assessed_at,
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope=str(event.get("owner_scope") or "system"),
+            visibility_scope=str(
+                event.get("visibility_scope") or event.get("owner_scope") or "system"
+            ),
+            sensitivity=event.get("sensitivity", "normal"),
+            idempotency_key=f"triage:message-features:v{_REPLAY_GENERATION}:{source_event_id}",
+            payload={
+                "intent_id": intent_id or f"source:{source_event_id}",
+                "source_event_id": source_event_id,
+                "skill_call_event_id": None,
+                "extractor_id": f"{MESSAGE_FALLBACK_EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}",
+                "language": None,
+                "candidates": [candidate.feature_payload() for candidate in candidates],
+                "extraction_state": (
+                    "complete"
+                    if outcome in {"eligible_candidates", "no_candidate"}
+                    else "unavailable"
+                    if outcome == "failed"
+                    else "invalid"
+                ),
+                "extracted_at": assessed_at,
+                "assessment_outcome": outcome,
+                "reason_codes": list(dict.fromkeys(reason_codes))[:20],
+            },
+        )
+        return await ctx.event_sink.write(
+            envelope,
+            correlation_id=ctx.correlation_id,
+            causation_id=source_event_id,
+        )

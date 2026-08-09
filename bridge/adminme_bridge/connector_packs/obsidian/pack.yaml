@@ -8,10 +8,18 @@ pack:
 capabilities:
   - kind: Cat-D
     runtime: bridge
-    event_families: [member_knowledge]
+    event_families: [member_knowledge.note_added, member_knowledge.note_updated, member_knowledge.note_deleted]
     sensitivity_default: sensitive
 owner_scope_overridability_at_install: false
 sharing_model_discriminator: member-private-adult-only
 dedup_strategy:
   kind: external_id_and_content_sha256
 config: {}
+source_assurance:
+  - source_events: [member_knowledge.note_added, member_knowledge.note_updated, member_knowledge.note_deleted]
+    mode: canonical_projection
+    projections: [member_knowledge]
+  - source_events: [member_knowledge.note_added, member_knowledge.note_updated]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:member_knowledge_indexing

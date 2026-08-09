@@ -4,7 +4,7 @@ Closes prompt 11-γ's C4 deliverable: the three subcommands shipped in
 c1+c2+c3 (``list`` / ``validate`` / ``scaffold``) are exercised together
 end-to-end. The integration scenario is the framework's full developer
 workflow: ``scaffold`` writes a pack from a per-category template tree,
-then ``validate`` runs the 11-β six-check validator on the freshly
+then ``validate`` runs the seven-check validator on the freshly
 written pack, then ``list`` discovers the pack alongside on-main packs.
 The contract is "scaffold produces packs the validator accepts" —
 asserted by walking the CLI exit codes directly, not by stubbing.
@@ -97,9 +97,10 @@ def test_cat_a_central_scaffold_then_validate_clean(
 
     The canonical worked example for the operator-facing seam: an
     author scaffolds the Gmail-shape pack, the validator confirms the
-    skeleton passes all six checks (capability-runtime coherence,
+    skeleton passes all seven checks (capability-runtime coherence,
     event-schema registration, projection subscription, base class
-    conformance, write_capabilities, observation-mode wrapping),
+    conformance, write_capabilities, observation-mode wrapping,
+    source assurance),
     and the pack is ready for the supervisor's install flow.
     """
     pack_dir = _scaffold(tmp_path, "Cat-A", "central", "cat-a-e2e")

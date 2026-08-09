@@ -140,6 +140,21 @@ class TriageIntentFeaturesExtractedV1(BaseModel):
     extracted_at: datetime
 
 
+class TriageIntentFeaturesExtractedV2(TriageIntentFeaturesExtractedV1):
+    """A terminal, machine-auditable assessment of one candidate source.
+
+    Empty candidate lists are intentional outcomes, never an absent event.
+    ``reason_codes`` explain why a source yielded candidates, none, a
+    quarantine, or an extraction failure without copying source content.
+    """
+
+    model_config = {"extra": "forbid"}
+    assessment_outcome: Literal[
+        "eligible_candidates", "no_candidate", "quarantined", "failed"
+    ]
+    reason_codes: list[str] = Field(min_length=1, max_length=20)
+
+
 class TriageItemEnrichedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -216,11 +231,29 @@ class TriageItemSupersededV1(BaseModel):
     reason: Literal["source_changed", "source_deleted", "source_privileged"]
 
 
+class TriageItemSupersededV2(BaseModel):
+    """Reviewed invalidation may retire a superseded eligibility rule."""
+
+    model_config = {"extra": "forbid"}
+    proposal_id: str = Field(min_length=1, max_length=240)
+    superseded_at: str = Field(min_length=1)
+    replacement_source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal[
+        "source_changed",
+        "source_deleted",
+        "source_privileged",
+        "eligibility_rule_replaced",
+    ]
+
+
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
 registry.register("triage.intent.submitted", 1, TriageIntentSubmittedV1)
 registry.register(
     "triage.intent.features_extracted", 1, TriageIntentFeaturesExtractedV1
+)
+registry.register(
+    "triage.intent.features_extracted", 2, TriageIntentFeaturesExtractedV2
 )
 registry.register("triage.item.enriched", 1, TriageItemEnrichedV1)
 registry.register("triage.item.confirmed", 1, TriageItemConfirmedV1)
@@ -228,6 +261,7 @@ registry.register("triage.item.confirmed", 2, TriageItemConfirmedV2)
 registry.register("triage.item.materialized", 1, TriageItemMaterializedV1)
 registry.register("triage.item.dismissed", 1, TriageItemDismissedV1)
 registry.register("triage.item.superseded", 1, TriageItemSupersededV1)
+registry.register("triage.item.superseded", 2, TriageItemSupersededV2)
 
 
 __all__ = [
@@ -239,9 +273,11 @@ __all__ = [
     "TriageItemProposedV1",
     "TriageItemProposedV2",
     "TriageItemSupersededV1",
+    "TriageItemSupersededV2",
     "TriageRouteV1",
     "TriageTargetKind",
     "TriageSourceSurface",
     "TriageIntentSubmittedV1",
     "TriageIntentFeaturesExtractedV1",
+    "TriageIntentFeaturesExtractedV2",
 ]

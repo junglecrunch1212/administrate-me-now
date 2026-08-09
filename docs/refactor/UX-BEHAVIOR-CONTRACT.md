@@ -1,5 +1,12 @@
 # UX behavior contract
 
+CO-008 amendment (2026-08-08): the adult shared-shell Add for review picker
+exposes all eleven supported proposal kinds. Triage and Settings render the
+same content-free source-assurance counts: accounted obligations, eligible
+candidate sources, explicit no-candidate assessments, quarantines, failures,
+in-flight work, and missing dispositions. An empty lens is calm, but it may not
+claim healthy unless source accounting supports that claim.
+
 CO-007 amendment (2026-08-08): every authorized adult surface exposes the same
 Add for review action. Its only required input is exact text; the optional type
 hint never becomes authority. The browser preserves failed input, reports the
@@ -126,6 +133,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-38 | Add Bridge records one member/capability-scoped request and explains the separate target-device consent ceremony. Adult private bridges are self-owned; principals may govern child bridges; no portal payload contains enrollment tokens or credential references. |
 | UX-39 | The adult shared shell provides Add for review with one exact-text field, an optional non-authorizing type hint, dictation-compatible focus, explicit “nothing official yet” copy, preserved text on failure, idempotent submission, and a result count. It appends member intent before extraction and never bypasses Triage or creates a provider command. |
 | UX-40 | Triage independently renders Needs interpretation, Needs details, Ready, and Recent. Local confirmation is labeled separately from OpenClaw/provider approval; immutable confirmation, materialization, provider command, suppression/failure, and terminal observation remain distinct linked evidence states. Queue emptiness never substitutes for source, pipeline, or projection health. |
+| UX-41 | Every adult surface exposes the same Add for review action with all eleven non-authorizing kinds. Triage and Settings show content-free per-source assurance totals and distinguish explicit no-candidate, quarantine, failed, pending, and missing from empty; source content and account identifiers never enter these diagnostics. |
 
 ## State model
 

@@ -1,7 +1,7 @@
 pack:
   id: pipeline:member_knowledge_indexing
   name: Member knowledge domain indexing
-  version: 2.0.0
+  version: 3.0.0
   kind: pipeline
 runtime:
   language: python
@@ -14,6 +14,8 @@ triggers:
     - member_knowledge.note_updated
     - member_knowledge.note_corrected
     - member_knowledge.note_deleted
+replay:
+  on_version_change: full
 depends_on:
   skills:
     - skill:extract_note_semantics
@@ -24,5 +26,6 @@ events_emitted:
   - embedding.generated
   - embedding.revoked
   - member_knowledge.index_skipped
+  - triage.intent.features_extracted
   - triage.item.proposed
   - triage.item.superseded

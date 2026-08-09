@@ -201,7 +201,7 @@ def test_aggregator_preserves_mixed_severity_findings(
 
 
 def test_aggregator_clean_pack_yields_no_findings(tmp_path: Path) -> None:
-    """A correctly-shaped pack produces zero findings across all six checks."""
+    """A correctly-shaped pack produces zero findings across all seven checks."""
     projections_dir = tmp_path / "projections"
     projections_dir.mkdir()
     _write_projection(projections_dir, "tasks", subscribes_to=["task.created"])
@@ -215,6 +215,10 @@ def test_aggregator_clean_pack_yields_no_findings(tmp_path: Path) -> None:
             "    runtime: central\n"
             "    event_families:\n"
             "      - task.created\n"
+            "source_assurance:\n"
+            "  - source_events: [task.created]\n"
+            "    mode: canonical_projection\n"
+            "    projections: [tasks]\n"
             "write_capabilities:\n"
             "  - toggle_task\n"
         ),

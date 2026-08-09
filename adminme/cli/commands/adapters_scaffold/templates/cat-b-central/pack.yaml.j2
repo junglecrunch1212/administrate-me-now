@@ -16,6 +16,14 @@ capabilities:
       - calendar.event_updated
       - calendar.event_deleted
 
+source_assurance:
+  - source_events:
+      - calendar.event_added
+      - calendar.event_updated
+      - calendar.event_deleted
+    mode: canonical_projection
+    projections: [calendars]
+
 write_capabilities: [create_event, delete_event]
 sensitivity_default: normal
 observation_mode_required: true

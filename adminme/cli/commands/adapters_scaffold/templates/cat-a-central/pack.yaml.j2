@@ -13,6 +13,12 @@ capabilities:
     runtime: central
     event_families: [messaging.received, messaging.sent]
 
+source_assurance:
+  - source_events: [messaging.received, messaging.sent]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:noise_filtering
+
 sensitivity_default: normal
 observation_mode_required: true
 owner_scope_overridability_at_install: true

@@ -56,6 +56,31 @@ CapabilityKind = Literal["Cat-A", "Cat-B", "Cat-C", "Cat-D", "Cat-E"]
 # (e.g. Home Assistant integrations) and inherit the host's runtime.
 CapabilityRuntime = Literal["central", "bridge", "dual", "plugin"]
 
+SourceAssuranceMode = Literal[
+    "candidate_assessment",
+    "candidate_not_applicable",
+    "canonical_projection",
+    "canonical_observation",
+    "terminal_action",
+]
+
+
+class SourceAssuranceRule(BaseModel):
+    """Executable disposition obligation for one or more source facts.
+
+    A capability category describes what an adapter *is*.  This rule declares
+    what must happen after each fact it emits, preventing a healthy adapter
+    task or advanced cursor from being mistaken for end-to-end product health.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_events: list[str] = Field(min_length=1)
+    mode: SourceAssuranceMode
+    terminal_events: list[str] = Field(default_factory=list)
+    projections: list[str] = Field(default_factory=list)
+    assessor: str | None = Field(default=None, min_length=1)
+
 
 class Capability(BaseModel):
     """One capability block in an adapter pack's ``capabilities:`` list.
@@ -94,6 +119,7 @@ class AdapterManifest(BaseModel):
     owner_scope_overridability_at_install: bool = True
     sharing_model_discriminator: str | None = None
     dedup_strategy: dict[str, Any] | None = None
+    source_assurance: list[SourceAssuranceRule] = Field(default_factory=list)
 
     def resolve_effective_sensitivity(self, capability_index: int) -> SensitivityLevel:
         """Resolve the effective sensitivity for one capability.
@@ -126,5 +152,7 @@ __all__ = [
     "Capability",
     "CapabilityKind",
     "CapabilityRuntime",
+    "SourceAssuranceMode",
+    "SourceAssuranceRule",
     "SensitivityLevel",
 ]

@@ -82,3 +82,7 @@ sharing_model_discriminator: owner_member_id
 observation_mode_required: true
 dedup_strategy:
   kind: external_id
+source_assurance:
+  - source_events: [list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+    mode: canonical_projection
+    projections: [lists]

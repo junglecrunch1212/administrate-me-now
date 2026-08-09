@@ -18,6 +18,7 @@ from adminme.events.schemas.triage import TriageTargetKind
 
 EXTRACTOR_ID = "deterministic-intent-features-v1"
 GROUNDED_NLP_EXTRACTOR_ID = "grounded-nlp-intent-features-v1"
+MESSAGE_FALLBACK_EXTRACTOR_ID = "message-high-signal-intent-features-v1"
 
 CANDIDATE_FIELD_ALLOWLISTS: dict[str, frozenset[str]] = {
     "task": frozenset({"description", "due", "energy", "effort_min"}),
@@ -305,6 +306,99 @@ def extract_intent_candidates(
     return candidates
 
 
+_MESSAGE_BOILERPLATE = re.compile(
+    r"\b(?:unsubscribe|view in browser|privacy policy|terms of service|"
+    r"buy again|shop now|manage preferences|sent from my (?:iphone|ipad))\b|"
+    r"https?://|www\.",
+    re.IGNORECASE,
+)
+_INBOUND_DIRECTIVE = re.compile(
+    r"^\s*(?:please\s+|action required\s*:?\s*|can you\s+|could you\s+|"
+    r"would you\s+|need you to\s+|pay\s+|submit\s+|send\s+|return\s+|"
+    r"call\s+|schedule\s+|book\s+)",
+    re.IGNORECASE,
+)
+_INBOUND_DUE_OBLIGATION = re.compile(
+    r"\b(?:bill|invoice|payment|balance|renewal|premium|form|document)\b"
+    r".{0,120}\b(?:due|overdue|expires?|renew(?:s|al)?)\b|"
+    r"\b(?:due|overdue|expires?|renew(?:s|al)?)\b"
+    r".{0,120}\b(?:bill|invoice|payment|balance|premium|form|document)\b",
+    re.IGNORECASE,
+)
+_OUTBOUND_PROMISE = re.compile(
+    r"\b(?:i\s+will|i'll|i\s+can|i\s+promise|i\s+committed|i\s+owe|"
+    r"let\s+me)\b",
+    re.IGNORECASE,
+)
+_INBOUND_REPLY_REQUEST = re.compile(
+    r"^\s*(?:(?:please|can you|could you|would you|will you)\s+)?"
+    r"(?:reply|respond|confirm|let me know)\b",
+    re.IGNORECASE,
+)
+
+
+def is_inbound_reply_request(text: str) -> bool:
+    """Identify reply-only obligations owned by commitment extraction."""
+
+    return _INBOUND_REPLY_REQUEST.search(" ".join(text.split())) is not None
+
+
+def extract_message_fallback_candidates(
+    text: str,
+    *,
+    submitted_at: datetime,
+    direction: str,
+) -> list[IntentCandidate]:
+    """Conservative model-loss fallback for human communication facts.
+
+    Generic action verbs are appropriate when a member deliberately opens
+    Add for review, but not across arbitrary email bodies.  This policy admits
+    only an exact, bounded directive/obligation or an outbound first-person
+    promise and rejects common message/marketing boilerplate.  The language
+    seam remains the primary interpreter for richer wording.
+    """
+
+    candidates: list[IntentCandidate] = []
+    for index, (clause, start, end) in enumerate(_clauses(text)[:10], start=1):
+        compact = " ".join(clause.split())
+        if not compact or len(compact) > 500 or _MESSAGE_BOILERPLATE.search(compact):
+            continue
+        if direction == "outbound":
+            if not _OUTBOUND_PROMISE.search(compact):
+                continue
+            kind: TriageTargetKind = "commitment"
+            rule = "outbound_first_person_promise_v1"
+        else:
+            # Reply obligations already have a distinct commitment pipeline.
+            # Do not race it with a generic Task proposal for the same source.
+            if is_inbound_reply_request(compact):
+                continue
+            if not (
+                _INBOUND_DIRECTIVE.search(compact)
+                or _INBOUND_DUE_OBLIGATION.search(compact)
+            ):
+                continue
+            kind = "task"
+            rule = "inbound_explicit_directive_or_due_obligation_v1"
+        # Use the original source span for every persisted value. ``compact``
+        # exists only for bounded pattern matching; normalizing whitespace in
+        # a candidate would break exact-source provenance.
+        fields = _fields_for(kind, clause, submitted_at)
+        candidates.append(
+            IntentCandidate(
+                candidate_key=f"message-fallback-{index}",
+                target_kind=kind,
+                title=clause[:1000],
+                fields=fields,
+                evidence_spans=[{"field": "title", "start": start, "end": end}],
+                confidence=None,
+                reasons=[rule],
+                eligibility_rule_ids=[rule, f"candidate_fields_{kind}_v1"],
+            )
+        )
+    return candidates
+
+
 def extract_grounded_nlp_candidates(
     text: str,
     raw_candidates: Any,
@@ -330,6 +424,9 @@ def extract_grounded_nlp_candidates(
         "list_item",
         "recurrence",
         "party_identifier",
+        "party_candidate",
+        "party_relationship",
+        "relationship_fact",
     }
     candidates: list[IntentCandidate] = []
     for index, raw in enumerate(raw_candidates[:10], start=1):
@@ -398,6 +495,8 @@ def extract_grounded_nlp_candidates(
             fields["notes"] = quote
         elif kind == "recurrence":
             fields["notes"] = quote
+        elif kind == "calendar_event":
+            fields.setdefault("event_type", "busy")
 
         confidence = raw.get("confidence")
         if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
@@ -482,8 +581,11 @@ __all__ = [
     "CANDIDATE_FIELD_ALLOWLISTS",
     "EXTRACTOR_ID",
     "GROUNDED_NLP_EXTRACTOR_ID",
+    "MESSAGE_FALLBACK_EXTRACTOR_ID",
     "IntentCandidate",
     "extract_intent_candidates",
+    "extract_message_fallback_candidates",
     "extract_grounded_nlp_candidates",
+    "is_inbound_reply_request",
     "merge_intent_candidates",
 ]
