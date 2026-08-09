@@ -1,13 +1,15 @@
 # CO-010 — Whole-life event lifecycle completeness
 
-Status: **MERGED AND DEPLOYED; LIVE SOURCE-ASSURANCE CORRECTION IN REVIEW**
+Status: **MERGED AND DEPLOYED; SETTLED-IDLE ASSURANCE FOLLOW-UP IN REVIEW**
 
 Date: 2026-08-09
 
 Merged implementation: PR #305, commit `9591e01`
 
-Live correction: PR #306 from `codex/source-assurance-watermark`, based on
-current `main`
+Live correction: PR #306, merged as `d248c37`
+
+Settled-idle follow-up: PR #307 from
+`codex/source-assurance-settled-idle`, based on current `main`
 
 Affected architecture: event schemas, source assurance, candidate extraction,
 Triage, domain commands, projections, Today, Comms, Reminders, Calendar,
@@ -390,3 +392,25 @@ nonblocking refresh, bounded staleness, immediate failure degradation, and the
 unchanged Doctor terminal-count predicate. Final release evidence requires the
 same full matrix, reviewed merge, attested upgrade, Doctor, and authenticated
 portal verification as §8.
+
+### 11.6 Live profile and settled-idle correction
+
+PR #306 passed both hosted gates and deployed as `d248c37` after encrypted
+backup `administrateme-20260809T171713Z.ambackup`. The attested updater returned
+`status: upgraded`; the current-revision proof remained 61,333/61,333 with 30
+candidate-bearing facts and zero pending, missing, or failed outcomes.
+
+Live process sampling found that the refresh still consumed one CPU core even
+though it no longer blocked Doctor. SQLCipher was decrypting table pages for
+all source facts because one conditional payload expression prevented a
+covering read; the settled revision was also re-audited every 30 seconds with
+no new facts, checkpoints, or pending grace transition.
+
+The follow-up adds event-log migration v4 with a covering metadata index,
+splits payload-bearing terminal reads from content-free source metadata, and
+stops wall-clock-only rescans of a settled exact revision. A changed event or
+checkpoint revision still refreshes immediately. Pending obligations still
+refresh every 30 seconds and an unsettled proof fails stale after five minutes.
+Tests prove v1-through-v4 migration, index presence, selective payload reads,
+settled-idle behavior, revision invalidation, pending aging, failure, and
+Doctor's unchanged current-revision terminal predicate.

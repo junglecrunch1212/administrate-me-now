@@ -164,6 +164,7 @@ def test_source_assurance_refresh_never_blocks_readiness(
         runtime: AdministrateMeRuntime = app.state.runtime
         assert runtime._source_assurance_cache is not None
         cached = dict(runtime._source_assurance_cache)
+        runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
         )
@@ -197,6 +198,12 @@ def test_source_assurance_refresh_never_blocks_readiness(
             ]["refresh_in_progress"]
             is True
         )
+        assert (
+            first.json()["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["revision_current"]
+            is False
+        )
         assert second.status_code == first.status_code
         assert refresh_calls == 1
 
@@ -214,6 +221,101 @@ def test_source_assurance_refresh_never_blocks_readiness(
             ]["refresh_in_progress"]
             is False
         )
+        assert (
+            refreshed["capabilities"]["policy:source-assurance"]["details"][
+                "freshness"
+            ]["revision_current"]
+            is True
+        )
+
+
+def test_settled_current_source_assurance_proof_does_not_rescan_on_age(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        for _ in range(100):
+            freshness = client.get("/api/system/ready").json()["capabilities"][
+                "policy:source-assurance"
+            ]["details"]["freshness"]
+            if (
+                freshness["revision_current"] is True
+                and freshness["refresh_in_progress"] is False
+            ):
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert freshness["revision_current"] is True
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_MAX_STALE_SECONDS - 1
+        )
+        refresh_calls = 0
+
+        async def unexpected_refresh(
+            *_args: object, **_kwargs: object
+        ) -> dict[str, object]:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            return {}
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", unexpected_refresh
+        )
+
+        details = client.get("/api/system/ready").json()["capabilities"][
+            "policy:source-assurance"
+        ]["details"]
+        assert refresh_calls == 0
+        assert details["freshness"]["state"] == "fresh"
+        assert details["freshness"]["settled_revision"] is True
+        assert details["freshness"]["refresh_in_progress"] is False
+
+
+def test_pending_source_assurance_proof_rechecks_on_grace_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        for _ in range(100):
+            freshness = client.get("/api/system/ready").json()["capabilities"][
+                "policy:source-assurance"
+            ]["details"]["freshness"]
+            if (
+                freshness["revision_current"] is True
+                and freshness["refresh_in_progress"] is False
+            ):
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert freshness["revision_current"] is True
+        assert runtime._source_assurance_cache is not None
+        cached = dict(runtime._source_assurance_cache)
+        counts = dict(cached["counts"])
+        counts["pending"] = 1
+        cached["counts"] = counts
+        runtime._source_assurance_cache = cached
+        runtime._source_assurance_refreshed_monotonic = (
+            time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
+        )
+        refresh_calls = 0
+
+        async def slow_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+            nonlocal refresh_calls
+            refresh_calls += 1
+            await asyncio.sleep(0.5)
+            return cached
+
+        monkeypatch.setattr(
+            "adminme.runtime.application.audit_source_assurance", slow_refresh
+        )
+
+        details = client.get("/api/system/ready").json()["capabilities"][
+            "policy:source-assurance"
+        ]["details"]
+        assert refresh_calls == 1
+        assert details["freshness"]["pending_recheck_required"] is True
+        assert details["freshness"]["refresh_in_progress"] is True
+        assert details["freshness"]["settled_revision"] is False
 
 
 def test_over_age_source_assurance_proof_degrades_during_refresh(
@@ -222,6 +324,7 @@ def test_over_age_source_assurance_proof_degrades_during_refresh(
     app = create_application(_settings(tmp_path))
     with TestClient(app) as client:
         runtime: AdministrateMeRuntime = app.state.runtime
+        runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_MAX_STALE_SECONDS - 1
         )
@@ -247,6 +350,7 @@ def test_failed_source_assurance_refresh_degrades_without_retry_storm(
     app = create_application(_settings(tmp_path))
     with TestClient(app) as client:
         runtime: AdministrateMeRuntime = app.state.runtime
+        runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
         )

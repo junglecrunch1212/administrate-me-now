@@ -108,7 +108,10 @@ def test_v1_encrypted_log_migrates_in_place_and_preserves_append_only_truth(
         1,
         2,
         3,
+        4,
     ]
+    indexes = {row[1] for row in migrated.execute("PRAGMA index_list(events)")}
+    assert "idx_events_type_id_time" in indexes
     with pytest.raises(sqlcipher3.DatabaseError, match="append-only"):
         migrated.execute("DELETE FROM events WHERE event_id='ev_legacy'")
     migrated.close()

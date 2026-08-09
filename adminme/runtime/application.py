@@ -1609,9 +1609,11 @@ class AdministrateMeRuntime:
 
         The first audit remains a startup invariant. Later event appends and
         checkpoint advances never make readiness decrypt and scan the entire
-        event log synchronously. A successful fixed-watermark proof remains
-        fresh for a bounded interval while one refresh runs. Failure or an
-        over-age proof degrades health; refresh activity alone does not.
+        event log synchronously. A fixed-watermark proof with an unchanged
+        append-only head, unchanged checkpoints, and zero pending obligations
+        is still current and is not rescanned merely because time passed.
+        Changed revisions refresh immediately; pending work is rechecked on a
+        timer. Failure or an over-age unsettled proof degrades health.
         """
 
         capabilities = self._source_assurance_capability_snapshot()
@@ -1635,16 +1637,21 @@ class AdministrateMeRuntime:
                 capabilities, revision, initial=True
             )
 
+        assert self._source_assurance_cache is not None
         age_seconds = max(
             0.0, time.monotonic() - self._source_assurance_refreshed_monotonic
         )
         retry_age_seconds = max(
             0.0, time.monotonic() - self._source_assurance_last_attempt_monotonic
         )
-        refresh_due = (
-            revision != self._source_assurance_revision
-            or age_seconds >= self.SOURCE_ASSURANCE_REFRESH_SECONDS
+        revision_current = revision == self._source_assurance_revision
+        pending_count = int(
+            (self._source_assurance_cache.get("counts") or {}).get("pending") or 0
         )
+        pending_recheck_due = (
+            pending_count > 0 and age_seconds >= self.SOURCE_ASSURANCE_REFRESH_SECONDS
+        )
+        refresh_due = not revision_current or pending_recheck_due
         retry_allowed = (
             self._source_assurance_refresh_error is None
             or retry_age_seconds >= self.SOURCE_ASSURANCE_REFRESH_SECONDS
@@ -1659,13 +1666,14 @@ class AdministrateMeRuntime:
                 name="source-assurance-refresh",
             )
 
-        assert self._source_assurance_cache is not None
         refresh_in_progress = self._source_assurance_refresh_task is not None
+        time_sensitive_proof = not revision_current or pending_count > 0
         refresh_state = (
             "failed"
             if self._source_assurance_refresh_error
             else "stale"
-            if age_seconds > self.SOURCE_ASSURANCE_MAX_STALE_SECONDS
+            if time_sensitive_proof
+            and age_seconds > self.SOURCE_ASSURANCE_MAX_STALE_SECONDS
             else "fresh"
         )
         result = dict(self._source_assurance_cache)
@@ -1676,7 +1684,9 @@ class AdministrateMeRuntime:
             "refresh_interval_seconds": self.SOURCE_ASSURANCE_REFRESH_SECONDS,
             "max_stale_seconds": self.SOURCE_ASSURANCE_MAX_STALE_SECONDS,
             "refresh_in_progress": refresh_in_progress,
-            "revision_current": revision == self._source_assurance_revision,
+            "revision_current": revision_current,
+            "pending_recheck_required": pending_count > 0,
+            "settled_revision": revision_current and pending_count == 0,
             "refresh_error_type": self._source_assurance_refresh_error,
         }
         if refresh_state in {"failed", "stale"}:
