@@ -7,6 +7,11 @@ Today, and Scoreboard read models; it does not synthesize a provider item or
 Calendar event. Reminders uses a typed read-time union, not a merged truth
 model. Triage enrichment and API admission share one versioned target contract,
 and every confirmation returns its exact local or pending-provider destination.
+The receipt opens the exact record in its deterministic activation lens while
+remaining presentation-only. Google Calendar source observation is durably
+restart-idempotent, and initial discovery does not manufacture elapsed outcomes
+from already-past history; these changes further harden C017/C035/C101 without
+altering provider authority or event truth.
 
 CO-008 upgrade-controller amendment (2026-08-08): C080-C082/C086 are
 **PRESERVED/HARDENED** and the active-controller assumption in ADR-0006 is

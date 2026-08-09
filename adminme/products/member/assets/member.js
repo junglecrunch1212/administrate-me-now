@@ -17,6 +17,7 @@ const state = {
   remindersAccount: "all",
   remindersList: "all",
   reminderItem: null,
+  reminderDeepLinkPending: false,
   calendarView: "week",
   calendarAnchor: null,
   calendarToday: null,
@@ -1471,19 +1472,19 @@ function remindersControls(cockpit, data) {
   for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["waiting", "Waiting"], ["completed", "Completed"]]) {
     const button = text("button", `${label} ${cockpit.counts[value] || 0}`, "comms-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersView === value));
-    button.addEventListener("click", () => { state.remindersView = value; replaceQuery({ view: value }); renderReminders(data); }); views.append(button);
+    button.addEventListener("click", () => { state.remindersView = value; state.reminderItem = null; replaceQuery({ view: value, item: null }); renderReminders(data); }); views.append(button);
   }
   const accounts = document.createElement("div"); accounts.className = "comms-filter-row account-filters";
   for (const account of [{ provider_account_id: "all", label: "All accounts" }, ...(cockpit.accounts || [])]) {
     const button = text("button", account.label, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersAccount === account.provider_account_id));
-    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; replaceQuery({ account: state.remindersAccount, list: null }); renderReminders(data); }); accounts.append(button);
+    button.addEventListener("click", () => { state.remindersAccount = account.provider_account_id; state.remindersList = "all"; state.reminderItem = null; replaceQuery({ account: state.remindersAccount, list: null, item: null }); renderReminders(data); }); accounts.append(button);
   }
   const lists = document.createElement("div"); lists.className = "comms-filter-row account-filters";
   for (const list of [{ list_external_id: "all", list_name: "All lists" }, ...(cockpit.lists || []).filter((row) => state.remindersAccount === "all" || row.provider_account_id === state.remindersAccount)]) {
     const button = text("button", list.list_name, "account-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersList === list.list_external_id));
-    button.addEventListener("click", () => { state.remindersList = list.list_external_id; replaceQuery({ list: state.remindersList }); renderReminders(data); }); lists.append(button);
+    button.addEventListener("click", () => { state.remindersList = list.list_external_id; state.reminderItem = null; replaceQuery({ list: state.remindersList, item: null }); renderReminders(data); }); lists.append(button);
   }
   controls.append(views, accounts, lists); return controls;
 }
@@ -1881,6 +1882,16 @@ function renderCalendar(data) {
 
 function renderReminders(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
+  if (state.reminderDeepLinkPending) {
+    const linkedItem = cockpit.items.find((item) => item.id === state.reminderItem);
+    if (linkedItem) {
+      state.remindersView = linkedItem.bucket;
+      state.remindersAccount = "all";
+      state.remindersList = "all";
+      replaceQuery({ view: linkedItem.bucket, account: null, list: null, item: linkedItem.id });
+    }
+    state.reminderDeepLinkPending = false;
+  }
   $("#mode-label").textContent = "Private · canonical tasks + provider truth · deterministic";
   root.append(freshnessStrip(data), remindersHero(cockpit), remindersControls(cockpit, data));
   const visible = cockpit.items.filter(reminderMatches);
@@ -2727,6 +2738,7 @@ async function initialize() {
       state.remindersAccount = params.get("account") || "all";
       state.remindersList = params.get("list") || "all";
       state.reminderItem = params.get("item");
+      state.reminderDeepLinkPending = Boolean(state.reminderItem);
     }
     if (active === "calendar") {
       if (["day", "week", "month", "agenda", "find", "rules"].includes(requestedView)) state.calendarView = requestedView;
