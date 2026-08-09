@@ -77,6 +77,8 @@ def source_assurance_terminal_evidence(
             "max_stale_seconds": freshness.get("max_stale_seconds"),
             "refresh_in_progress": freshness.get("refresh_in_progress"),
             "revision_current": freshness.get("revision_current"),
+            "pending_recheck_required": freshness.get("pending_recheck_required"),
+            "settled_revision": freshness.get("settled_revision"),
             "refresh_error_type": freshness.get("refresh_error_type"),
         },
     }
@@ -406,6 +408,8 @@ class ServiceManager:
                                 "max_stale_seconds": 300.0,
                                 "refresh_in_progress": False,
                                 "revision_current": True,
+                                "pending_recheck_required": False,
+                                "settled_revision": True,
                                 "refresh_error_type": None,
                             },
                         },

@@ -3,19 +3,39 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_010_DEPLOYED_SOURCE_ASSURANCE_CORRECTION_IN_REVIEW
+gate_result: CO_010_DEPLOYED_SETTLED_IDLE_ASSURANCE_FOLLOWUP_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_305_merged_and_deployed_9591e01_pr_306_followup_candidate
+candidate_commit_resolution: pr_306_merged_and_deployed_d248c37_settled_idle_followup_candidate
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/306
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: merge_deploy_verify_bounded_watermark_assurance_then_member_triage_review
+next_phase: merge_deploy_verify_settled_idle_assurance_then_member_triage_review
 ---
 
 # Release handoff
+
+## 2026-08-09 CO-010 settled-idle assurance follow-up
+
+PR #306 passed the local and hosted release gates, merged as `d248c37`, and
+deployed through the attested updater after encrypted backup
+`administrateme-20260809T171713Z.ambackup`. The updater returned
+`status: upgraded`; Doctor accepted the current-revision 61,333/61,333 proof,
+with 30 candidate-bearing facts and zero pending, missing, or failed outcomes.
+Observation mode and the exact pinned OpenClaw runtime were preserved.
+
+Live sampling found a remaining performance defect: SQLCipher still decrypted
+the event table for all source facts, and the settled proof was recomputed
+every 30 seconds despite an unchanged append-only head and unchanged
+checkpoints. The follow-up candidate adds migration v4's covering metadata
+index, splits terminal payload access into a disjoint query branch, and makes
+settled exact revisions idle. Revision changes still refresh immediately;
+pending work still rechecks every 30 seconds; refresh errors fail immediately;
+and an unsettled proof fails stale after five minutes. Final review, merge,
+attested deployment, full Doctor, an idle-CPU observation, and authenticated
+Triage browser proof remain required.
 
 ## 2026-08-09 CO-010 live activation and source-assurance correction
 

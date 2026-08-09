@@ -159,6 +159,7 @@ class EventLog:
         (1, "0001_initial.sql"),
         (2, "0002_full_envelope.sql"),
         (3, "0003_idempotency_keys.sql"),
+        (4, "0004_source_assurance_covering_index.sql"),
     )
 
     def __init__(
@@ -510,14 +511,27 @@ class EventLog:
 
         batch_size = max(limit, 500)
         last = cursor
-        payload_types = tuple(include_payload_for or ())
+        if not types:
+            raise ValueError("metadata reads require an explicit type allowlist")
+        requested_types = tuple(dict.fromkeys(types))
+        payload_type_set = set(include_payload_for or ()) & set(requested_types)
+        payload_types = tuple(
+            event_type
+            for event_type in requested_types
+            if event_type in payload_type_set
+        )
+        metadata_types = tuple(
+            event_type
+            for event_type in requested_types
+            if event_type not in payload_type_set
+        )
         while True:
             rows = await self._run_locked(
                 self._read_metadata_page,
                 last,
                 through,
                 batch_size,
-                tuple(types) if types else None,
+                metadata_types,
                 payload_types,
             )
             if not rows:
@@ -572,41 +586,41 @@ class EventLog:
         after_id: str | None,
         through: str | None,
         limit: int,
-        types: tuple[str, ...] | None,
+        metadata_types: tuple[str, ...],
         payload_types: tuple[str, ...],
     ) -> list[sqlcipher3.Row]:
-        where: list[str] = []
-        where_params: list[Any] = []
-        if after_id is not None:
-            where.append("event_id > ?")
-            where_params.append(after_id)
-        if through is not None:
-            where.append("event_id <= ?")
-            where_params.append(through)
-        if types:
-            placeholders = ",".join("?" for _ in types)
-            where.append(f"type IN ({placeholders})")
-            where_params.extend(types)
+        def branch_where(branch_types: tuple[str, ...]) -> tuple[str, list[Any]]:
+            placeholders = ",".join("?" for _ in branch_types)
+            where = [f"type IN ({placeholders})"]
+            params: list[Any] = list(branch_types)
+            if after_id is not None:
+                where.append("event_id > ?")
+                params.append(after_id)
+            if through is not None:
+                where.append("event_id <= ?")
+                params.append(through)
+            return " AND ".join(where), params
 
-        if payload_types:
-            payload_placeholders = ",".join("?" for _ in payload_types)
-            payload_column = (
-                f"CASE WHEN type IN ({payload_placeholders}) "
-                "THEN payload ELSE NULL END AS payload"
+        branches: list[str] = []
+        params: list[Any] = []
+        if metadata_types:
+            metadata_where, metadata_params = branch_where(metadata_types)
+            branches.append(
+                "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
+                "FROM events INDEXED BY idx_events_type_id_time WHERE " + metadata_where
             )
-            params: list[Any] = [*payload_types, *where_params]
-        else:
-            payload_column = "NULL AS payload"
-            params = where_params
+            params.extend(metadata_params)
+        if payload_types:
+            payload_where, payload_params = branch_where(payload_types)
+            branches.append(
+                "SELECT event_id, type, occurred_at, recorded_at, payload "
+                "FROM events WHERE " + payload_where
+            )
+            params.extend(payload_params)
+        if not branches:
+            return []
 
-        sql = (
-            "SELECT event_id, type, occurred_at, recorded_at, "
-            + payload_column
-            + " FROM events"
-        )
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY event_id ASC LIMIT ?"
+        sql = " UNION ALL ".join(branches) + " ORDER BY event_id ASC LIMIT ?"
         params.append(limit)
         cur = self._conn.cursor()
         return list(cur.execute(sql, params))

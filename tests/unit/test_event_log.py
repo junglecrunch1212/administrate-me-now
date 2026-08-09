@@ -270,6 +270,19 @@ async def test_metadata_read_is_watermarked_and_payload_selective(
     assert [event["event_id"] for event in complete] == [first, second]
     assert complete[1]["payload"] is None
 
+    query_plan = [
+        str(row[3])
+        for row in log._conn.execute(  # noqa: SLF001 - storage-plan contract
+            "EXPLAIN QUERY PLAN "
+            "SELECT event_id, type, occurred_at, recorded_at, NULL AS payload "
+            "FROM events INDEXED BY idx_events_type_id_time "
+            "WHERE type IN (?, ?) AND event_id <= ? "
+            "ORDER BY event_id ASC LIMIT ?",
+            ("foo", "bar", second, 5000),
+        )
+    ]
+    assert any("COVERING INDEX idx_events_type_id_time" in row for row in query_plan)
+
 
 async def test_missing_required_fields_raises(log: EventLog) -> None:
     # EventEnvelope construction itself rejects missing fields — exercise both

@@ -400,3 +400,33 @@ Doctor still requires a healthy, current-revision proof with
 The change bounds what one proof attests and makes the bound explicit; it does
 not weaken terminal accounting, privacy, replay, observation, or deployment
 rollback.
+
+### 10.6 Settled-idle and SQLCipher covering-index correction
+
+PR #306 merged as `d248c37` and deployed after encrypted backup
+`administrateme-20260809T171713Z.ambackup`. Doctor passed and the live proof
+remained current during an age-triggered refresh. Process sampling then showed
+the SQLCipher worker still consuming one CPU core: the conditional payload
+column forced table-row visits for all 61,333 facts, and a settled immutable
+revision was unnecessarily rescanned every 30 seconds.
+
+The final correction **MODERNIZES** storage access and **SUPERSEDES** periodic
+settled rescans:
+
+- event-log migration v4 adds a covering
+  `(type, event_id, occurred_at, recorded_at)` index;
+- the metadata reader uses a covering-index branch for ordinary source facts
+  and a separate payload branch only for named terminal result types;
+- a proof with the exact current append-only head, exact current pipeline and
+  projection checkpoints, and zero pending obligations is settled and cannot
+  become stale merely because wall time passes;
+- a changed revision refreshes immediately, while a pending obligation is
+  rechecked every 30 seconds so the five-minute in-flight grace still expires;
+  and
+- the five-minute maximum applies to an unsettled proof. Refresh error still
+  fails immediately, and Doctor still requires the current exact revision.
+
+This is not a relaxed health policy. With no changed fact, checkpoint, or
+pending clock transition, recomputing the same deterministic audit cannot
+produce new truth. Any relevant change invalidates the revision and reopens
+the bounded refresh path.
