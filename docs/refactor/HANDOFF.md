@@ -7,8 +7,8 @@ gate_result: CO_010_DEPLOYED_SOURCE_ASSURANCE_CORRECTION_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_305_merged_and_deployed_9591e01_followup_candidate
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/305
+candidate_commit_resolution: pr_305_merged_and_deployed_9591e01_pr_306_followup_candidate
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/306
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -42,6 +42,8 @@ to equal the current event/checkpoint head, so cached evidence cannot certify
 new facts. Review, merge, attested upgrade, full Doctor, and authenticated
 Triage browser proof remain required before this handoff can advance to
 observation soak.
+
+That correction is published for review as PR #306.
 
 ## 2026-08-09 CO-010 lifecycle-completeness candidate
 

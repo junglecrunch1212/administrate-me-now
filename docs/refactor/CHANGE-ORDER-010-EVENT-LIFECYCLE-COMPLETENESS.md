@@ -6,8 +6,8 @@ Date: 2026-08-09
 
 Merged implementation: PR #305, commit `9591e01`
 
-Live correction branch: `codex/source-assurance-watermark`, based on current
-`main`
+Live correction: PR #306 from `codex/source-assurance-watermark`, based on
+current `main`
 
 Affected architecture: event schemas, source assurance, candidate extraction,
 Triage, domain commands, projections, Today, Comms, Reminders, Calendar,
