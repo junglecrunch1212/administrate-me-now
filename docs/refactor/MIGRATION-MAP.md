@@ -423,6 +423,14 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 
 Gate 1 itself changed no production file. Gate 2 has now executed the runtime-spine subset of this map.
 
+## CO-010 live source-assurance scale delta
+
+| Subsystem | Before live correction | Reviewed correction | Classification |
+|---|---|---|---|
+| Event Log diagnostic reads | Source assurance used the full-envelope reader, decrypting and parsing provider payloads that its content-free counts did not use. | `read_metadata_since` closes at an event-ID watermark and includes payload JSON only for named terminal result types. Ordinary provider content never enters the audit object. | MODERNIZE |
+| Assurance freshness | Any running refresh was labeled stale; a complete last-known proof therefore failed Doctor throughout a long scan. | Refresh activity is an independent boolean. A successful proof remains fresh for a hard five-minute maximum; refresh exception fails immediately and over-age proof fails stale. | SUPERSEDE |
+| Doctor settlement | Required healthy, exact terminal counts, zero pending/missing/failed, and a fresh proof. | Preserved and tightened: the explicit bounded-watermark proof must also match the current event/checkpoint revision; its age and refresh activity are separately visible. | PRESERVE/HARDEN |
+
 ## Gate 2 migration delta
 
 | Subsystem | Gate 2 result | Remaining boundary |

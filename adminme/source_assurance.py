@@ -145,6 +145,7 @@ async def audit_source_assurance(
     *,
     repository_root: Path,
     capabilities: dict[str, Any],
+    through_event_id: str | None = None,
 ) -> dict[str, Any]:
     """Return secret-free source accounting suitable for Doctor and Settings."""
 
@@ -157,13 +158,30 @@ async def audit_source_assurance(
         for obligation in obligations
         for event_type in obligation.terminal_events
     }
-    events: list[dict[str, Any]] = []
-    async for event in event_log.read_since(types=sorted(interesting)):
-        events.append(event)
+    payload_types = {
+        event_type
+        for obligation in obligations
+        for event_type in obligation.terminal_events
+    } | {
+        obligation.event_type
+        for obligation in obligations
+        if obligation.mode == "action_request_terminal"
+    }
+    watermark_event_id = through_event_id
+    if watermark_event_id is None:
+        watermark_event_id = await event_log.latest_event_id()
+    source_events: list[dict[str, Any]] = []
 
     assessments: dict[str, dict[str, Any]] = {}
     action_terminals: set[str] = set()
-    for event in events:
+    async for event in event_log.read_metadata_since(
+        # An empty log has a null public watermark; the impossible empty
+        # string still provides a closed upper bound if an append races the
+        # first audit.
+        through=watermark_event_id or "",
+        types=sorted(interesting),
+        include_payload_for=sorted(payload_types),
+    ):
         payload = event.get("payload") or {}
         if event.get("type") == "triage.intent.features_extracted":
             assessments[str(payload.get("source_event_id") or "")] = event
@@ -172,6 +190,8 @@ async def audit_source_assurance(
             "external_sync.write_failed",
         }:
             action_terminals.add(str(payload.get("command_id") or ""))
+        if event.get("type") in by_type:
+            source_events.append(event)
 
     counts = {
         "source_facts": 0,
@@ -190,7 +210,7 @@ async def audit_source_assurance(
     failures: list[dict[str, str]] = []
     by_event_type: dict[str, dict[str, int]] = {}
 
-    for event in events:
+    for event in source_events:
         event_type = str(event.get("type") or "")
         source_obligations = by_type.get(event_type) or []
         if not source_obligations:
@@ -320,6 +340,7 @@ async def audit_source_assurance(
         "by_event_type": by_event_type,
         "declared_source_event_types": len(by_type),
         "declared_obligations": len(obligations),
+        "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }
 

@@ -74,6 +74,9 @@ def source_assurance_terminal_evidence(
             "state": freshness.get("state"),
             "refreshed_at": freshness.get("refreshed_at"),
             "stale_seconds": freshness.get("stale_seconds"),
+            "max_stale_seconds": freshness.get("max_stale_seconds"),
+            "refresh_in_progress": freshness.get("refresh_in_progress"),
+            "revision_current": freshness.get("revision_current"),
             "refresh_error_type": freshness.get("refresh_error_type"),
         },
     }
@@ -87,6 +90,7 @@ def source_assurance_terminal_evidence(
         and _diagnostic_count(details.get("declared_obligations")) > 0
         and details.get("content_exposed") is False
         and freshness.get("state") == "fresh"
+        and freshness.get("revision_current") is True
         and freshness.get("refresh_error_type") is None
     )
     return ok, evidence
@@ -398,6 +402,10 @@ class ServiceManager:
                             "content_exposed": False,
                             "freshness": {
                                 "state": "fresh",
+                                "stale_seconds": 0.0,
+                                "max_stale_seconds": 300.0,
+                                "refresh_in_progress": False,
+                                "revision_current": True,
                                 "refresh_error_type": None,
                             },
                         },

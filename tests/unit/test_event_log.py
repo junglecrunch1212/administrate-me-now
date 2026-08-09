@@ -242,6 +242,35 @@ async def test_latest_event_id(log: EventLog) -> None:
     assert await log.latest_event_id() == second
 
 
+async def test_metadata_read_is_watermarked_and_payload_selective(
+    log: EventLog,
+) -> None:
+    first = await log.append(_event(1, type="foo"))
+    through = await log.latest_event_id()
+    second = await log.append(_event(2, type="bar"))
+
+    bounded = [
+        event
+        async for event in log.read_metadata_since(
+            through=through,
+            types=["foo", "bar"],
+            include_payload_for=["foo"],
+        )
+    ]
+    assert [event["event_id"] for event in bounded] == [first]
+    assert bounded[0]["payload"] == {"i": 1}
+
+    complete = [
+        event
+        async for event in log.read_metadata_since(
+            types=["foo", "bar"],
+            include_payload_for=["foo"],
+        )
+    ]
+    assert [event["event_id"] for event in complete] == [first, second]
+    assert complete[1]["payload"] is None
+
+
 async def test_missing_required_fields_raises(log: EventLog) -> None:
     # EventEnvelope construction itself rejects missing fields — exercise both
     # that path and the log-layer type guard against non-envelope arguments.
