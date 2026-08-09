@@ -10,6 +10,9 @@ attested before candidate policy can prepare or switch a release. Backup,
 compatibility, full Doctor, synthetic proof, and automatic rollback are
 unchanged. This repairs control-plane policy selection; it adds no event,
 projection, authority, provider permission, or truth store.
+PR #300 merged as `dc99208` and this path is **DEPLOYED**. The live receipt
+attested the controller, retained rollback, and passed terminal source equality,
+full Doctor, and authenticated synthetic execution in observation mode.
 
 CO-008 source-throughput repair (2026-08-08): `noise_filtering` v9 is
 **HARDENED** so privacy/member routing precedes NLP and its reviewed,

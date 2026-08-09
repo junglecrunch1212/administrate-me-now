@@ -12,6 +12,11 @@ Doctor and synthetic proof, or restore pointer, launch definitions, and exact
 OpenClaw selection.
 The runtime-migration gate compares compatibility range, preferred version,
 and formula for both Python and Node; matching only the range is insufficient.
+Live evidence: PR #300 passed both hosted gates, merged as `dc99208`, and the
+attested controller completed encrypted backup, activation, terminal source
+equality, final full Doctor, authenticated synthetic proof, and rollback
+retention. Authenticated Triage rendered candidate rows and all eleven capture
+hints while observation prevented member decisions and provider effects.
 
 CO-008 source-throughput amendment (2026-08-08): AC-34 requires privacy and
 member-route refusal before any language call. A language-bound replay may opt
