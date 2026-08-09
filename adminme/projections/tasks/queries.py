@@ -44,7 +44,7 @@ def today_for_member(
         SELECT * FROM tasks
          WHERE tenant_id = ?
            AND (assignee_party = ? OR assignee_party IS NULL)
-           AND status NOT IN ('done', 'dismissed', 'deferred')
+           AND status NOT IN ('done', 'cancelled', 'dismissed', 'deferred')
            AND ((due_date IS NOT NULL AND due_date <= ?)
                 OR status = 'in_progress')
          ORDER BY due_date ASC, created_at ASC
@@ -144,10 +144,10 @@ def work_history_for_member(
         SELECT * FROM tasks
          WHERE tenant_id = ?
            AND (assignee_party = ? OR assignee_party IS NULL)
-           AND status IN ('inbox', 'next', 'in_progress', 'waiting_on', 'deferred', 'done')
-         ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END,
+           AND status IN ('inbox', 'next', 'in_progress', 'waiting_on', 'deferred', 'done', 'cancelled', 'dismissed')
+         ORDER BY CASE WHEN status IN ('done', 'cancelled', 'dismissed') THEN 1 ELSE 0 END,
                   due_date ASC,
-                  COALESCE(completed_at, created_at) DESC
+                  COALESCE(completed_at, lifecycle_at, created_at) DESC
          LIMIT ?
         """,
         (session.tenant_id, member_party_id, limit),

@@ -35,7 +35,7 @@ _CANDIDATE_FIELDS = CANDIDATE_FIELD_ALLOWLISTS
 
 class MemberKnowledgeIndexingPipeline:
     pack_id = "pipeline:member_knowledge_indexing"
-    version = "3.0.0"
+    version = "4.0.0"
     triggers: Triggers = {
         "events": [
             "member_knowledge.note_added",
@@ -327,7 +327,7 @@ class MemberKnowledgeIndexingPipeline:
             session=ctx.session,
             correlation_id=ctx.correlation_id,
             triggering_event_id=source_event_id,
-            invocation_idempotency_key=f"note-semantics:v3:{source_event_id}",
+            invocation_idempotency_key=f"note-semantics:v4:{source_event_id}",
             owner_scope=str(event["owner_scope"]),
             visibility_scope=str(event["visibility_scope"]),
             sensitivity=event.get("sensitivity", "normal"),
@@ -373,7 +373,7 @@ class MemberKnowledgeIndexingPipeline:
             f"{event['tenant_id']}:{knowledge_id}".encode()
         ).hexdigest()[:20]
         eligible: list[dict[str, Any]] = []
-        for index, candidate in enumerate(candidates[:10]):
+        for index, candidate in enumerate(candidates[:20]):
             if not isinstance(candidate, dict):
                 continue
             target_kind = str(candidate.get("target_kind") or "")
@@ -461,7 +461,7 @@ class MemberKnowledgeIndexingPipeline:
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
                 idempotency_key=(
-                    f"triage:note-candidate:v2:{source_event_id}:"
+                    f"triage:note-candidate:v3:{source_event_id}:"
                     f"{candidate['candidate_key']}"
                 ),
                 payload={
@@ -525,19 +525,19 @@ class MemberKnowledgeIndexingPipeline:
                 event_at_ms=int(event["event_at_ms"]),
                 tenant_id=str(event["tenant_id"]),
                 type="triage.intent.features_extracted",
-                schema_version=2,
+                schema_version=3,
                 occurred_at=assessed_at,
                 source_adapter=self.pack_id,
                 source_account_id="note-semantics",
                 owner_scope=str(event["owner_scope"]),
                 visibility_scope=str(event["visibility_scope"]),
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=f"triage:note-features:v3:{source_event_id}",
+                idempotency_key=f"triage:note-features:v4:{source_event_id}",
                 payload={
                     "intent_id": f"source:{source_event_id}",
                     "source_event_id": source_event_id,
                     "skill_call_event_id": None,
-                    "extractor_id": "grounded-note-intent-features-v3",
+                    "extractor_id": "grounded-note-intent-features-v4",
                     "language": None,
                     "candidates": feature_candidates,
                     "extraction_state": (

@@ -15,7 +15,7 @@ from adminme.projections.commitments import handlers
 
 class CommitmentsProjection(Projection):
     name = "commitments"
-    version = 3
+    version = 4
     subscribes_to = [
         "commitment.proposed",
         "commitment.confirmed",
@@ -47,6 +47,8 @@ class CommitmentsProjection(Projection):
             "deferred_until": "TEXT",
             "lifecycle_at": "TEXT",
             "lifecycle_actor": "TEXT",
+            "lifecycle_reason": "TEXT",
+            "delegated_to_party": "TEXT",
         }.items():
             if column not in existing:
                 conn.execute(f"ALTER TABLE commitments ADD COLUMN {column} {sql_type}")

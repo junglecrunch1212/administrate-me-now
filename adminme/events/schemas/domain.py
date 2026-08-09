@@ -107,6 +107,55 @@ class TaskCompletedV1(BaseModel):
     note: str | None = None
 
 
+class TaskDeferredV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    deferred_at: str = Field(min_length=1)
+    deferred_until: str = Field(min_length=1)
+    deferred_by_member_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class TaskSnoozedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    snoozed_at: str = Field(min_length=1)
+    snoozed_until: str = Field(min_length=1)
+    snoozed_by_member_id: str = Field(min_length=1)
+
+
+class TaskBlockedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    blocked_at: str = Field(min_length=1)
+    blocked_by_member_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class TaskUnblockedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    unblocked_at: str = Field(min_length=1)
+    unblocked_by_member_id: str = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class TaskCancelledV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    cancelled_at: str = Field(min_length=1)
+    cancelled_by_member_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class TaskReopenedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    task_id: str = Field(min_length=1)
+    reopened_at: str = Field(min_length=1)
+    reopened_by_member_id: str = Field(min_length=1)
+    previous_status: Literal["done", "cancelled", "dismissed"]
+
+
 class CommitmentCompletedV1(BaseModel):
     model_config = {"extra": "forbid"}
     commitment_id: str = Field(min_length=1)
@@ -181,8 +230,7 @@ class CommitmentDelegatedV1(BaseModel):
 
 
 class CommitmentExpiredV1(BaseModel):
-    """Emitted by prompt-10c's timer pipeline — 14-day stale-proposal sweep.
-    Prompt 06 only registers the type; no pipeline emits it yet."""
+    """Emitted after an OpenClaw tick drives the fixed 14-day proposal sweep."""
 
     model_config = {"extra": "forbid"}
     commitment_id: str = Field(min_length=1)
@@ -232,6 +280,29 @@ class RecurrenceUpdatedV1(BaseModel):
     recurrence_id: str = Field(min_length=1)
     updated_at: str = Field(min_length=1)
     field_updates: dict[str, Any]
+
+
+class RecurrencePausedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    paused_at: str = Field(min_length=1)
+    paused_by_member_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RecurrenceResumedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    resumed_at: str = Field(min_length=1)
+    resumed_by_member_id: str = Field(min_length=1)
+
+
+class RecurrenceEndedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    recurrence_id: str = Field(min_length=1)
+    ended_at: str = Field(min_length=1)
+    ended_by_member_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class RewardReadyV1(BaseModel):
@@ -398,11 +469,20 @@ registry.register("commitment.delegated", 1, CommitmentDelegatedV1)
 registry.register("commitment.expired", 1, CommitmentExpiredV1)
 registry.register("task.created", 1, TaskCreatedV1)
 registry.register("task.completed", 1, TaskCompletedV1)
+registry.register("task.deferred", 1, TaskDeferredV1)
+registry.register("task.snoozed", 1, TaskSnoozedV1)
+registry.register("task.blocked", 1, TaskBlockedV1)
+registry.register("task.unblocked", 1, TaskUnblockedV1)
+registry.register("task.cancelled", 1, TaskCancelledV1)
+registry.register("task.reopened", 1, TaskReopenedV1)
 registry.register("task.updated", 1, TaskUpdatedV1)
 registry.register("task.deleted", 1, TaskDeletedV1)
 registry.register("recurrence.added", 1, RecurrenceAddedV1)
 registry.register("recurrence.completed", 1, RecurrenceCompletedV1)
 registry.register("recurrence.updated", 1, RecurrenceUpdatedV1)
+registry.register("recurrence.paused", 1, RecurrencePausedV1)
+registry.register("recurrence.resumed", 1, RecurrenceResumedV1)
+registry.register("recurrence.ended", 1, RecurrenceEndedV1)
 registry.register("reward.ready", 1, RewardReadyV1)
 registry.register("digest.composed", 1, DigestComposedV1)
 registry.register("paralysis.triggered", 1, ParalysisTriggeredV1)

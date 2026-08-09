@@ -58,7 +58,8 @@ def apply_calendar_completion(
         return
     conn.execute(
         """UPDATE commitments SET status='done', completed_at=?, lifecycle_at=?,
-                  lifecycle_actor=?, last_event_id=?
+                  lifecycle_actor=?, lifecycle_reason='calendar outcome policy',
+                  last_event_id=?
              WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
         (
             p["recorded_at"],
@@ -86,13 +87,14 @@ def apply_external_completion(
     at = str(p.get("completion_at") or p.get("last_modified_at"))
     conn.execute(
         """UPDATE commitments SET status=?, completed_at=?, lifecycle_at=?,
-                  lifecycle_actor=?, last_event_id=?
+                  lifecycle_actor=?, lifecycle_reason=?, last_event_id=?
              WHERE tenant_id=? AND commitment_id=? AND last_event_id < ?""",
         (
             "done" if completed else "pending",
             at if completed else None,
             at,
             p.get("member_id"),
+            "mirrored provider item completion" if completed else None,
             envelope["event_id"],
             envelope["tenant_id"],
             p["linked_item_id"],
@@ -167,12 +169,14 @@ def apply_commitment_completed(
     conn.execute(
         """UPDATE commitments SET status = 'done', completed_at = ?,
                   blocked_reason = NULL, deferred_until = NULL,
-                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+                  lifecycle_at = ?, lifecycle_actor = ?, lifecycle_reason = ?,
+                  delegated_to_party = NULL, last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["completed_at"],
             p["completed_at"],
             p["completed_by_party_id"],
+            p.get("completion_note"),
             envelope["event_id"],
             *_where_newer(envelope, p["commitment_id"]),
         ),
@@ -184,7 +188,12 @@ def apply_commitment_dismissed(
 ) -> None:
     p = envelope["payload"]
     _terminal(
-        envelope, conn, "cancelled", p["dismissed_at"], p["dismissed_by_party_id"]
+        envelope,
+        conn,
+        "cancelled",
+        p["dismissed_at"],
+        p["dismissed_by_party_id"],
+        p.get("reason"),
     )
 
 
@@ -253,13 +262,14 @@ def _timed_state(
     commitment_id = envelope["payload"]["commitment_id"]
     conn.execute(
         f"""UPDATE commitments SET status = ?, {column} = ?, lifecycle_at = ?,
-                  lifecycle_actor = ?, last_event_id = ?
+                  lifecycle_actor = ?, lifecycle_reason = ?, last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             status,
             until,
             at,
             actor,
+            envelope["payload"].get("reason"),
             envelope["event_id"],
             *_where_newer(envelope, commitment_id),
         ),
@@ -272,12 +282,14 @@ def apply_commitment_blocked(
     p = envelope["payload"]
     conn.execute(
         """UPDATE commitments SET status = 'blocked', blocked_reason = ?,
-                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+                  lifecycle_at = ?, lifecycle_actor = ?, lifecycle_reason = ?,
+                  last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["reason"],
             p["blocked_at"],
             p["blocked_by_party_id"],
+            p["reason"],
             envelope["event_id"],
             *_where_newer(envelope, p["commitment_id"]),
         ),
@@ -290,12 +302,14 @@ def apply_commitment_unblocked(
     p = envelope["payload"]
     conn.execute(
         """UPDATE commitments SET status = 'pending', blocked_reason = NULL,
-                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+                  lifecycle_at = ?, lifecycle_actor = ?, lifecycle_reason = ?,
+                  last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND status = 'blocked'
                AND last_event_id < ?""",
         (
             p["unblocked_at"],
             p["unblocked_by_party_id"],
+            p.get("note"),
             envelope["event_id"],
             *_where_newer(envelope, p["commitment_id"]),
         ),
@@ -307,7 +321,12 @@ def apply_commitment_cancelled(
 ) -> None:
     p = envelope["payload"]
     _terminal(
-        envelope, conn, "cancelled", p["cancelled_at"], p["cancelled_by_party_id"]
+        envelope,
+        conn,
+        "cancelled",
+        p["cancelled_at"],
+        p["cancelled_by_party_id"],
+        p.get("reason"),
     )
 
 
@@ -317,17 +336,18 @@ def _terminal(
     status: str,
     at: str,
     actor: str,
+    reason: str | None,
 ) -> None:
     commitment_id = envelope["payload"]["commitment_id"]
     conn.execute(
-        """UPDATE commitments SET status = ?, completed_at = ?, lifecycle_at = ?,
-                  lifecycle_actor = ?, last_event_id = ?
+        """UPDATE commitments SET status = ?, completed_at = NULL, lifecycle_at = ?,
+                  lifecycle_actor = ?, lifecycle_reason = ?, last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             status,
             at,
-            at,
             actor,
+            reason,
             envelope["event_id"],
             *_where_newer(envelope, commitment_id),
         ),
@@ -339,8 +359,9 @@ def apply_commitment_delegated(
 ) -> None:
     p = envelope["payload"]
     conn.execute(
-        """UPDATE commitments SET status = 'delegated', owed_by_party = ?,
-                  lifecycle_at = ?, lifecycle_actor = ?, last_event_id = ?
+        """UPDATE commitments SET status = 'delegated', completed_at = NULL,
+                  delegated_to_party = ?, lifecycle_at = ?, lifecycle_actor = ?,
+                  lifecycle_reason = 'delegated by original owner', last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["delegated_to_party_id"],
@@ -357,8 +378,9 @@ def apply_commitment_expired(
 ) -> None:
     p = envelope["payload"]
     conn.execute(
-        """UPDATE commitments SET status = 'cancelled', lifecycle_at = ?,
-                  lifecycle_actor = 'system:expiry', last_event_id = ?
+        """UPDATE commitments SET status = 'expired', completed_at = NULL,
+                  lifecycle_at = ?, lifecycle_actor = 'system:expiry',
+                  lifecycle_reason = 'unconfirmed proposal expired', last_event_id = ?
              WHERE tenant_id = ? AND commitment_id = ? AND last_event_id < ?""",
         (
             p["expired_at"],

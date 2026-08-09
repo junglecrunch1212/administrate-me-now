@@ -11,6 +11,8 @@ operation is separately declared and passes through observation mode.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Literal
@@ -285,16 +287,35 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
             if not tasklist_id:
                 continue
             previous_list = self._seen_lists.get(tasklist_id)
+            list_fingerprint = self._provider_fingerprint(
+                {
+                    "id": tasklist_id,
+                    "title": tasklist.get("title"),
+                    "etag": tasklist.get("etag"),
+                    "updated": tasklist.get("updated"),
+                },
+                state="present",
+            )
+            list_external_id = f"list:{tasklist_id}"
+            durable_list = self._durable_latest(ctx, list_external_id)
+            if previous_list is None and durable_list is not None:
+                if durable_list[0] == list_fingerprint:
+                    self._seen_lists[tasklist_id] = dict(tasklist)
+                    previous_list = self._seen_lists[tasklist_id]
+                else:
+                    previous_list = {"etag": "durable-prior-revision"}
             if previous_list is None or previous_list.get("etag") != tasklist.get(
                 "etag"
             ):
-                await self._emit_list_change(
+                event_id = await self._emit_list_change(
                     ctx=ctx,
                     event_type="list.created"
                     if previous_list is None
                     else "list.updated",
                     tasklist=tasklist,
+                    fingerprint=list_fingerprint,
                 )
+                self._record_durable(ctx, list_external_id, list_fingerprint, event_id)
                 self._seen_lists[tasklist_id] = dict(tasklist)
                 emitted += 1
             for task in self._fetch_tasks(tasklist_id=tasklist_id):
@@ -303,10 +324,31 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     continue
                 key = (tasklist_id, task_id)
                 previous = self._seen_inbound.get(key)
+                task_fingerprint = self._provider_fingerprint(
+                    task,
+                    state=(
+                        "deleted"
+                        if task.get("deleted")
+                        else str(task.get("status") or "needsAction")
+                    ),
+                )
+                durable_external_id = f"item:{tasklist_id}:{task_id}"
+                durable = self._durable_latest(ctx, durable_external_id)
+                if previous is None and durable is not None:
+                    if durable[0] == task_fingerprint:
+                        self._seen_inbound[key] = dict(task)
+                        continue
+                    previous = {"status": durable[0].split(":", 1)[0]}
                 if task.get("deleted"):
                     if previous is not None:
-                        await self._emit_deleted(
-                            ctx=ctx, tasklist_id=tasklist_id, task=task
+                        event_id = await self._emit_deleted(
+                            ctx=ctx,
+                            tasklist_id=tasklist_id,
+                            task=task,
+                            fingerprint=task_fingerprint,
+                        )
+                        self._record_durable(
+                            ctx, durable_external_id, task_fingerprint, event_id
                         )
                         self._seen_inbound.pop(key, None)
                         emitted += 1
@@ -329,15 +371,59 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                     )
                 else:
                     event_type = "list_item.updated"
-                await self._emit_item(
+                event_id = await self._emit_item(
                     ctx=ctx,
                     event_type=event_type,
                     tasklist=tasklist,
                     task=task,
+                    fingerprint=task_fingerprint,
+                )
+                self._record_durable(
+                    ctx, durable_external_id, task_fingerprint, event_id
                 )
                 self._seen_inbound[key] = dict(task)
                 emitted += 1
         return emitted
+
+    def _cursor_id(self) -> str:
+        return str(
+            getattr(self, "instance_name", None) or self._config.get("id") or self.name
+        )
+
+    @staticmethod
+    def _provider_fingerprint(value: dict[str, Any], *, state: str) -> str:
+        digest = hashlib.sha256(
+            json.dumps(
+                value, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"{state}:{digest}"
+
+    def _durable_latest(
+        self, ctx: AdapterContext, external_id: str
+    ) -> tuple[str, str] | None:
+        if ctx.cursor_store is None:
+            return None
+        latest = ctx.cursor_store.latest_event(self._cursor_id(), external_id)
+        if latest is not None:
+            self._status.extra["restart_dedupe"] = "durable"
+        return latest
+
+    def _record_durable(
+        self,
+        ctx: AdapterContext,
+        external_id: str,
+        fingerprint: str,
+        event_id: str,
+    ) -> None:
+        if ctx.cursor_store is None:
+            return
+        ctx.cursor_store.record_success(
+            self._cursor_id(),
+            external_id=external_id,
+            fingerprint=fingerprint,
+            event_id=event_id,
+        )
 
     def _fetch_tasklists(self) -> list[dict[str, Any]]:
         """Return every task list when enabled, otherwise the configured list."""
@@ -491,12 +577,26 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         event_type: str,
         tasklist: dict[str, Any],
         task: dict[str, Any],
-    ) -> None:
-        await self._append(
+        fingerprint: str | None = None,
+    ) -> str:
+        fingerprint = fingerprint or self._provider_fingerprint(
+            task, state=str(task.get("status") or "needsAction")
+        )
+        payload = self._item_payload(ctx=ctx, tasklist=tasklist, task=task)
+        payload["sync_cycle_id"] = (
+            f"google-tasks-revision:{fingerprint.split(':', 1)[1]}"
+        )
+        return await self._append(
             ctx=ctx,
             event_type=event_type,
-            payload=self._item_payload(ctx=ctx, tasklist=tasklist, task=task),
+            payload=payload,
             schema_version=3,
+            idempotency_key=self._revision_idempotency_key(
+                event_type,
+                str(tasklist.get("id") or ""),
+                str(task.get("id") or ""),
+                fingerprint,
+            ),
         )
 
     async def _emit_list_change(
@@ -505,8 +605,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         ctx: AdapterContext,
         event_type: str,
         tasklist: dict[str, Any],
-    ) -> None:
-        await self._append(
+        fingerprint: str,
+    ) -> str:
+        return await self._append(
             ctx=ctx,
             event_type=event_type,
             payload={
@@ -523,6 +624,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 "provider_revision": tasklist.get("etag"),
                 "changed_at": tasklist.get("updated") or ctx.now_factory().isoformat(),
             },
+            idempotency_key=self._revision_idempotency_key(
+                event_type, str(tasklist.get("id") or ""), "", fingerprint
+            ),
         )
 
     async def _emit_deleted(
@@ -531,8 +635,9 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         ctx: AdapterContext,
         tasklist_id: str,
         task: dict[str, Any],
-    ) -> None:
-        await self._append(
+        fingerprint: str,
+    ) -> str:
+        return await self._append(
             ctx=ctx,
             event_type="list_item.deleted",
             schema_version=2,
@@ -546,9 +651,36 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
                 "list_external_id": tasklist_id,
                 "item_external_id": str(task.get("id") or ""),
                 "deleted_at": task.get("updated") or ctx.now_factory().isoformat(),
-                "sync_cycle_id": ctx.correlation_id_factory(),
+                "sync_cycle_id": f"google-tasks-revision:{fingerprint.split(':', 1)[1]}",
             },
+            idempotency_key=self._revision_idempotency_key(
+                "list_item.deleted", tasklist_id, str(task.get("id") or ""), fingerprint
+            ),
         )
+
+    def _revision_idempotency_key(
+        self,
+        event_type: str,
+        list_id: str,
+        item_id: str,
+        fingerprint: str,
+    ) -> str:
+        seed = "\x1f".join(
+            (
+                self._cursor_id(),
+                str(self._config.get("member_id") or ""),
+                str(
+                    self._config.get("provider_account_id")
+                    or self._config.get("user_email")
+                    or ""
+                ),
+                list_id,
+                item_id,
+                event_type,
+                fingerprint,
+            )
+        )
+        return f"google-tasks:provider-revision:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
     async def _emit_list_deleted(
         self, *, ctx: AdapterContext, tasklist_id: str
@@ -746,21 +878,20 @@ class GoogleTasksAdapter(ExternalStateMirrorAdapter):
         payload: dict[str, Any],
         causation_id: str | None = None,
         schema_version: int = 1,
-    ) -> None:
+        idempotency_key: str | None = None,
+    ) -> str:
         """[§7.3, D17] append to the event log; never write projections."""
-        try:
-            await write_adapter_event(
-                ctx,
-                adapter_name=self.name,
-                sensitivity_floor=self.sensitivity_floor,
-                config=self._config,
-                event_type=event_type,
-                payload=payload,
-                causation_id=causation_id,
-                schema_version=schema_version,
-            )
-        except Exception:  # noqa: BLE001 — best-effort emission
-            _log.exception("google-tasks adapter failed to emit %s event", event_type)
+        return await write_adapter_event(
+            ctx,
+            adapter_name=self.name,
+            sensitivity_floor=self.sensitivity_floor,
+            config=self._config,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            schema_version=schema_version,
+            idempotency_key=idempotency_key,
+        )
 
     @staticmethod
     def _classify_tasks_error(

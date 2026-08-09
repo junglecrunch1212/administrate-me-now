@@ -264,7 +264,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "4.0.4"
+    assert envelope.payload["skill_version"] == "5.0.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -288,7 +288,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "4.0.4"
+    assert envelope.payload["skill_version"] == "5.0.0"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -429,6 +429,7 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
         "event_type": "busy",
     }
     assert proposal["confidence"] == 0.91
+    assert log.calls[2].envelope.schema_version == 3
     assert log.calls[3].envelope.schema_version == 2
     assert log.calls[3].causation_id == "fake-event-id-3"
 
@@ -535,7 +536,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v9:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v10:")
 
 
 @pytest.mark.asyncio
@@ -649,7 +650,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v9:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v10:")
         for proposal in proposals
     )
 

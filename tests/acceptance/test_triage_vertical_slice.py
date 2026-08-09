@@ -281,6 +281,20 @@ def test_add_for_review_holds_exact_text_and_splits_typed_candidates(
         assert ambiguous.json()["state"] == "pending_interpretation"
         assert ambiguous.json()["canonical_event_ids"] == []
 
+        language_text = "[fixture:member-intent] The school needs an answer by Friday"
+        language = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": language_text,
+                "source_surface": "today",
+                "client_request_id": "intent-language-0001",
+            },
+        )
+        assert language.status_code == 202, language.text
+        assert language.json()["state"] == "pending_review"
+        assert len(language.json()["proposal_event_ids"]) == 1
+
         multi_text = (
             "Call the school office; appointment on "
             "2026-08-10T18:00:00-04:00 until 2026-08-10T19:00:00-04:00; "
@@ -317,6 +331,14 @@ def test_add_for_review_holds_exact_text_and_splits_typed_candidates(
             "recurrence",
         }
         assert all(item["confidence"] is None for item in typed)
+        [language_row] = [
+            item
+            for item in surface["items"]
+            if item.get("parent_intent_id") == language.json()["intent_id"]
+        ]
+        assert language_row["target_kind"] == "task"
+        assert language_row["title"] == "The school needs an answer by Friday"
+        assert language_row["confidence"] == 0.98
 
         retry = client.post(
             "/api/member/v1/triage/intents",

@@ -456,11 +456,13 @@ async function run() {
         record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
         await screenshot(principal.page, "surface-finance-health-desktop.png");
       } else if (surface === "scoreboard") {
-        record("Scoreboard receives the confirmed canonical task", (await principal.page.locator("#surface").textContent()).includes("Send the completed enrollment form"), await principal.page.locator("#surface").textContent());
+        const scoreboardText = await principal.page.locator("#surface").textContent();
+        record("Scoreboard receives the confirmed canonical task", scoreboardText.includes("Send the completed enrollment form"), scoreboardText);
+        record("Scoreboard presents the internal task inbox status as Open", scoreboardText.includes("Open") && !scoreboardText.includes("Inbox"), scoreboardText);
         await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
-        record("Settings exposes all seven control areas", await principal.page.locator(".settings-nav button").count() === 7, await principal.page.locator(".settings-nav").textContent());
+        record("Settings exposes all eight control areas", await principal.page.locator(".settings-nav button").count() === 8, await principal.page.locator(".settings-nav").textContent());
         record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
         await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
@@ -493,7 +495,7 @@ async function run() {
       } else if (surface === "notes") {
         record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
       } else if (surface === "settings") {
-        record("Settings phone retains all control areas", await principalPhone.page.locator(".settings-nav button").count() === 7, await principalPhone.page.locator(".settings-nav").textContent());
+        record("Settings phone retains all control areas", await principalPhone.page.locator(".settings-nav button").count() === 8, await principalPhone.page.locator(".settings-nav").textContent());
         await principalPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings phone retains connection truth", (await principalPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principalPhone.page.locator("#surface").textContent());
       }

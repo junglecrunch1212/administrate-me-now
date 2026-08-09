@@ -22,12 +22,27 @@ CREATE TABLE IF NOT EXISTS recurrences (
     lead_time_days   INTEGER NOT NULL DEFAULT 0,
     trackable        INTEGER NOT NULL DEFAULT 0,
     notes            TEXT,
+    status           TEXT NOT NULL DEFAULT 'active'
+                     CHECK (status IN ('active','paused','ended')),
+    lifecycle_at     TEXT,
+    lifecycle_reason TEXT,
     owner_scope      TEXT NOT NULL,
     visibility_scope TEXT NOT NULL,
     sensitivity      TEXT NOT NULL DEFAULT 'normal'
                      CHECK (sensitivity IN ('normal','sensitive','privileged')),
     last_event_id    TEXT NOT NULL,
     PRIMARY KEY (tenant_id, recurrence_id)
+);
+
+CREATE TABLE IF NOT EXISTS recurrence_occurrences (
+    tenant_id             TEXT NOT NULL,
+    recurrence_id         TEXT NOT NULL,
+    occurrence_date       TEXT NOT NULL,
+    outcome               TEXT NOT NULL CHECK (outcome IN ('completed','skipped')),
+    recorded_at           TEXT NOT NULL,
+    recorded_by_member_id TEXT,
+    last_event_id         TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, recurrence_id, occurrence_date)
 );
 
 CREATE INDEX IF NOT EXISTS idx_recurrences_tenant_next
@@ -48,6 +63,10 @@ CREATE TABLE IF NOT EXISTS routines (
     rrule              TEXT NOT NULL,
     window_start_local TEXT NOT NULL,
     window_end_local   TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'active'
+                       CHECK (status IN ('active','paused','ended')),
+    lifecycle_at       TEXT,
+    lifecycle_reason   TEXT,
     owner_scope        TEXT NOT NULL,
     visibility_scope   TEXT NOT NULL,
     sensitivity        TEXT NOT NULL DEFAULT 'normal'
@@ -103,3 +122,5 @@ CREATE INDEX IF NOT EXISTS idx_routines_tenant_member
     ON routines(tenant_id, member_id);
 CREATE INDEX IF NOT EXISTS idx_routine_outcomes_occurrence
     ON routine_step_outcomes(tenant_id, routine_id, occurrence_date);
+CREATE INDEX IF NOT EXISTS idx_recurrence_outcomes_occurrence
+    ON recurrence_occurrences(tenant_id, recurrence_id, occurrence_date);

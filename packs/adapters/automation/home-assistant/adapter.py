@@ -342,6 +342,33 @@ class HomeAssistantAdapter(OutboundActionAdapter):
                 for key in mapping.get("attribute_allowlist") or []
                 if key in attributes
             }
+            reviewed_rules = []
+            for raw_rule in mapping.get("triage_rules") or []:
+                if not isinstance(raw_rule, dict):
+                    continue
+                candidate = raw_rule.get("candidate")
+                reviewed_rules.append(
+                    {
+                        key: value
+                        for key, value in {
+                            "rule_id": raw_rule.get("rule_id"),
+                            "target_kind": raw_rule.get("target_kind"),
+                            "title": raw_rule.get("title"),
+                            "operator": raw_rule.get("operator"),
+                            "expected_state": raw_rule.get("expected_state"),
+                            "expected_number": raw_rule.get("expected_number"),
+                            "candidate": candidate
+                            if isinstance(candidate, dict)
+                            else {},
+                        }.items()
+                        if value is not None
+                    }
+                )
+            if reviewed_rules:
+                # This reserved snapshot is reviewed adapter policy, not a
+                # provider attribute.  The downstream deterministic rule
+                # pipeline validates it again before proposing anything.
+                allowed_attributes["_administrateme_candidate_rules"] = reviewed_rules
             payload = {
                 "signal_id": ctx.correlation_id_factory(),
                 "signal_key": str(mapping.get("signal_key") or f"ha:{entity_id}"),

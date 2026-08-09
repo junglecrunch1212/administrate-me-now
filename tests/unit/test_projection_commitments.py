@@ -26,6 +26,7 @@ from adminme.projections.commitments.queries import (
     get_commitment,
     open_for_member,
     pending_approval,
+    work_history_for_member,
 )
 from adminme.projections.runner import ProjectionRunner
 
@@ -293,10 +294,13 @@ async def test_commitment_cancelled_sets_status(rig: dict[str, Any]) -> None:
     row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "cancelled"
-    assert row["completed_at"] == "2026-04-23T14:00:00Z"
+    assert row["completed_at"] is None
+    assert row["lifecycle_at"] == "2026-04-23T14:00:00Z"
 
 
-async def test_commitment_delegated_updates_owed_by(rig: dict[str, Any]) -> None:
+async def test_commitment_delegated_preserves_original_owner(
+    rig: dict[str, Any],
+) -> None:
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
@@ -320,7 +324,9 @@ async def test_commitment_delegated_updates_owed_by(rig: dict[str, Any]) -> None
     row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
     assert row["status"] == "delegated"
-    assert row["owed_by_party"] == "m2"
+    assert row["owed_by_party"] == "m1"
+    assert row["delegated_to_party"] == "m2"
+    assert row["completed_at"] is None
 
 
 async def test_commitment_expired_cancels_without_completed_by(
@@ -346,8 +352,47 @@ async def test_commitment_expired_cancels_without_completed_by(
     conn = runner.connection("commitments")
     row = get_commitment(conn, _S("tenant-a"), commitment_id="c1")
     assert row is not None
-    assert row["status"] == "cancelled"
+    assert row["status"] == "expired"
     # expired → nobody acted; no completed_by.
+    assert row["completed_at"] is None
+
+
+async def test_work_history_keeps_confirmed_terminal_commitments(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(_envelope("commitment.proposed", _proposed_payload()))
+    await log.append(
+        _envelope(
+            "commitment.confirmed",
+            {
+                "commitment_id": "c1",
+                "confirmed_at": "2026-04-23T13:00:00Z",
+                "confirmed_by_member_id": "m1",
+            },
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "commitment.cancelled",
+            {
+                "commitment_id": "c1",
+                "cancelled_at": "2026-04-23T14:00:00Z",
+                "cancelled_by_party_id": "m1",
+                "reason": "No longer promised",
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:commitments", last)
+
+    [row] = work_history_for_member(
+        runner.connection("commitments"), _S("tenant-a"), member_party_id="m1"
+    )
+    assert row["status"] == "cancelled"
+    assert row["lifecycle_reason"] == "No longer promised"
     assert row["completed_at"] is None
 
 

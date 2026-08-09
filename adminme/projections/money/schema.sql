@@ -165,6 +165,9 @@ CREATE TABLE IF NOT EXISTS finance_goals (
     priority             INTEGER NOT NULL DEFAULT 100,
     status               TEXT NOT NULL CHECK (status IN ('active','paused','complete')),
     notes                TEXT,
+    lifecycle_at         TEXT,
+    lifecycle_actor      TEXT,
+    lifecycle_reason     TEXT,
     owner_scope          TEXT NOT NULL,
     visibility_scope     TEXT NOT NULL,
     sensitivity          TEXT NOT NULL DEFAULT 'privileged'

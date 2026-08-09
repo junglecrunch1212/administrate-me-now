@@ -1,5 +1,16 @@
 # Constitutional crosswalk
 
+CO-010 amendment (2026-08-09): C001/C002/C007/C009/C010/C014-C019/C021-
+C023/C025/C026/C031/C033-C039/C044-C046/C049-C051/C053/C055-C071/C097-
+C105 are **PRESERVED/HARDENED** by one executable whole-life lifecycle
+catalog. It classifies every registered event schema, 11 candidate-entry
+channels, 121 source/target decisions, 23 object lifecycles, command/history
+surfaces, and named process evidence. Bounded language work remains feature
+and exact-evidence extraction only. Fixed code owns applicability, scope,
+routing, lifecycle, completion, scheduling, and health. Optional adapters stay
+truthfully not configured. C106 records this completeness invariant; AC-35 is
+the release gate.
+
 CO-009 amendment (2026-08-09): C001/C002/C007/C010/C015/C035/C044/C045/
 C056/C063–C067/C071/C076/C099/C101 are **PRESERVED/HARDENED**. A confirmed
 Task now retains one canonical identity while recalculating Tasks, Reminders,
@@ -395,6 +406,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C103 | People separates unresolved Endpoints, provider Contact Records, qualified Parties, scoped Identifier Links, Memberships, Relationships, member profiles, and typed facts; identity and cues are deterministic and private by default | VISION relationship continuity; ADR-0004; CO-003; C003/C009/C057–C061/C071/C097 | Parties v2, idempotent reviewed-enrollment event receipts, loss-aware contact mirrors, scoped SQL/FTS, fail-closed exact resolution, Triage Party/relationship/fact materialization, deterministic People cockpit, responsive portal and pinned OpenClaw binding | PRESERVE truth/privacy/human gating; MODERNIZE relationship memory; SUPERSEDE sender-as-person, implicit sharing, model closeness/ranking, and agent proliferation | AC-04, AC-07, AC-08, AC-10–AC-12, AC-18, AC-24, AC-30 |
 | C104 | Settings externalizes member identity, consent, connection truth, deterministic CoS behavior, bridge state, privacy, observation, and recovery without becoming household truth or OpenClaw administration | ADHD neuroprosthetic thesis; ADR-0001; ADR-0005; CO-004; C002/C024/C034–C048/C057–C068/C071/C075–C086 | `deterministic-settings-control-plane-v1`, visible Tailscale/auth/view identity, secret-free revisioned desired state, four-axis connection registry, supervisor reconciliation, bounded profile preferences, scoped bridge requests, responsive portal and typed receipts | PRESERVE identity/privacy/topology; MODERNIZE Settings; SUPERSEDE static/truncated config-as-health dump and operator-control fantasy | AC-08, AC-10–AC-12, AC-14, AC-17–AC-19, AC-21–AC-23, AC-31 |
 | C105 | Finance separates provider observations, reviewed planning intent, append-only history, and deterministic presentation; the workbook is the editable planning authority without overwriting Plaid facts or becoming a second event log | Household cash-flow/scenario objective; ADR-0007; CO-006; C019/C036/C049/C069–C071 | Money v2, detailed Plaid events/removals, durable cursor, validated twelve-sheet canonical workbook, deterministic Finance cockpit, private/shared isolation, replay, responsive portal, and no provider write seam | PRESERVE provider/event/privacy boundaries; MODERNIZE Finance; SUPERSEDE thin workbook, summary-only sync, and static projection | AC-07, AC-08, AC-10, AC-13, AC-18, AC-32 |
+| C106 | Every retained source fact receives an audited terminal assessment, every supported candidate remains human-gated, and every declared canonical/provider object has an explicit typed lifecycle with retained history | Whole platform loop; D18/D19/D26; CO-001/CO-007/CO-008/CO-010; C007/C010/C025/C026/C031/C097/C101 | Executable catalog and generated evidence; total 121-cell source matrix; all-eleven message/Note/member extraction; deterministic Finance/context assessment; typed Task/Commitment/Recurrence/Routine/Finance Goal/registry lifecycles; source-linked reassessment; Google Tasks restart dedupe; Scoreboard outcome/reward evidence | PRESERVE source/event/type boundaries; HARDEN completeness and human gating; SUPERSEDE prose-only or schema-only support claims | AC-07–AC-12, AC-14, AC-18, AC-21, AC-24–AC-35 |
 
 ## Source coverage index
 

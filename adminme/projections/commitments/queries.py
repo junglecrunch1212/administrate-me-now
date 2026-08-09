@@ -131,3 +131,24 @@ def by_source_interaction(
         (session.tenant_id, interaction_id),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])
+
+
+def work_history_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_party_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Confirmed obligations retained across active and terminal states."""
+    rows = conn.execute(
+        """
+        SELECT * FROM commitments
+         WHERE tenant_id = ? AND owed_by_party = ?
+           AND confirmed_at IS NOT NULL
+         ORDER BY COALESCE(lifecycle_at, proposed_at) DESC, commitment_id ASC
+         LIMIT ?
+        """,
+        (session.tenant_id, member_party_id, limit),
+    ).fetchall()
+    return filter_rows(session, [dict(r) for r in rows])

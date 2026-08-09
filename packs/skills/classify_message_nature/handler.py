@@ -23,6 +23,9 @@ _CANDIDATE_KINDS = {
     "list",
     "list_item",
     "party_identifier",
+    "party_candidate",
+    "party_relationship",
+    "relationship_fact",
 }
 
 

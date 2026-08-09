@@ -48,6 +48,7 @@ def due_within(
         """
         SELECT * FROM recurrences
          WHERE tenant_id = ?
+           AND status = 'active'
            AND next_occurrence <= ?
          ORDER BY next_occurrence ASC
         """,
@@ -62,8 +63,7 @@ def for_member(
     *,
     member_party_id: str,
 ) -> list[dict[str, Any]]:
-    """Recurrences linked directly to ``member_party_id`` or to the
-    household (linked_kind='household')."""
+    """All visible recurrence definitions, including paused/ended history."""
     rows = conn.execute(
         """
         SELECT * FROM recurrences
@@ -81,10 +81,10 @@ def all_active(
     conn: sqlcipher3.Connection,
     session: Session,
 ) -> list[dict[str, Any]]:
-    """No status field on recurrences — all rows are active. Ordered by
-    next_occurrence ascending."""
+    """Return active recurrence definitions ordered by next occurrence."""
     rows = conn.execute(
-        "SELECT * FROM recurrences WHERE tenant_id = ? ORDER BY next_occurrence ASC",
+        "SELECT * FROM recurrences WHERE tenant_id = ? AND status = 'active' "
+        "ORDER BY next_occurrence ASC",
         (session.tenant_id,),
     ).fetchall()
     return filter_rows(session, [dict(r) for r in rows])
@@ -128,6 +128,7 @@ def routine_occurrences_at(
     as_of = _parse_iso(as_of_iso).astimezone(timezone.utc)
     rows = conn.execute(
         "SELECT * FROM routines WHERE tenant_id = ? AND member_id = ? "
+        "AND status = 'active' "
         "ORDER BY routine_id ASC",
         (session.tenant_id, member_party_id),
     ).fetchall()
@@ -230,6 +231,102 @@ def routine_occurrences_at(
         )
     occurrences.sort(key=lambda row: (row["window_start_at"], row["routine_id"]))
     return occurrences
+
+
+def get_routine(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    routine_id: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM routines WHERE tenant_id = ? AND routine_id = ?",
+        (session.tenant_id, routine_id),
+    ).fetchone()
+    visible = filter_one(session, dict(row) if row is not None else None)
+    if visible is None:
+        return None
+    visible["steps"] = _routine_steps(conn, session.tenant_id, routine_id)
+    return visible
+
+
+def _routine_steps(
+    conn: sqlcipher3.Connection, tenant_id: str, routine_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT step_id, position, title, micro_step, linked_task_id, last_event_id "
+        "FROM routine_steps WHERE tenant_id = ? AND routine_id = ? "
+        "ORDER BY position ASC",
+        (tenant_id, routine_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def routine_definitions_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_party_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM routines WHERE tenant_id = ? AND member_id = ? "
+        "ORDER BY status ASC, title ASC",
+        (session.tenant_id, member_party_id),
+    ).fetchall()
+    visible = filter_rows(session, [dict(row) for row in rows])
+    for row in visible:
+        row["steps"] = _routine_steps(conn, session.tenant_id, row["routine_id"])
+    return visible
+
+
+def completion_history_for_member(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_party_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    recurrence_rows = conn.execute(
+        """
+        SELECT o.recurrence_id AS id, 'recurrence' AS kind,
+               r.kind AS title, o.outcome AS status, o.recorded_at,
+               o.occurrence_date, o.last_event_id,
+               r.owner_scope, r.visibility_scope, r.sensitivity
+          FROM recurrence_occurrences o
+          JOIN recurrences r
+            ON r.tenant_id = o.tenant_id AND r.recurrence_id = o.recurrence_id
+         WHERE o.tenant_id = ?
+           AND ((r.linked_kind = 'party' AND r.linked_id = ?)
+                OR r.linked_kind = 'household')
+        """,
+        (session.tenant_id, member_party_id),
+    ).fetchall()
+    routine_rows = conn.execute(
+        """
+        SELECT o.routine_id AS id, 'routine' AS kind,
+               r.title AS title, o.status AS status, NULL AS recorded_at,
+               o.occurrence_date, o.last_event_id,
+               r.owner_scope, r.visibility_scope, r.sensitivity
+          FROM routine_occurrences o
+          JOIN routines r
+            ON r.tenant_id = o.tenant_id AND r.routine_id = o.routine_id
+         WHERE o.tenant_id = ? AND r.member_id = ?
+           AND o.status IN ('completed', 'completed_with_skips')
+        """,
+        (session.tenant_id, member_party_id),
+    ).fetchall()
+    visible = filter_rows(
+        session,
+        [dict(row) for row in [*recurrence_rows, *routine_rows]],
+    )
+    visible.sort(
+        key=lambda row: (
+            str(row.get("recorded_at") or row.get("occurrence_date") or ""),
+            str(row.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    return visible[:limit]
 
 
 def get_routine_occurrence(

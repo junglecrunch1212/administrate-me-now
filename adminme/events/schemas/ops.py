@@ -52,6 +52,21 @@ class PlaceUpdatedV1(BaseModel):
     field_updates: dict[str, Any]
 
 
+class PlaceArchivedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    place_id: str = Field(min_length=1)
+    archived_at: str = Field(min_length=1)
+    archived_by_party_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class PlaceRestoredV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    place_id: str = Field(min_length=1)
+    restored_at: str = Field(min_length=1)
+    restored_by_party_id: str = Field(min_length=1)
+
+
 # ------------------------------------------------------------------
 # assets
 # ------------------------------------------------------------------
@@ -77,6 +92,21 @@ class AssetUpdatedV1(BaseModel):
     asset_id: str = Field(min_length=1)
     updated_at: str = Field(min_length=1)
     field_updates: dict[str, Any]
+
+
+class AssetArchivedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    asset_id: str = Field(min_length=1)
+    archived_at: str = Field(min_length=1)
+    archived_by_party_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AssetRestoredV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    asset_id: str = Field(min_length=1)
+    restored_at: str = Field(min_length=1)
+    restored_by_party_id: str = Field(min_length=1)
 
 
 # ------------------------------------------------------------------
@@ -112,6 +142,21 @@ class AccountUpdatedV1(BaseModel):
     account_id: str = Field(min_length=1)
     updated_at: str = Field(min_length=1)
     field_updates: dict[str, Any]
+
+
+class AccountArchivedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    account_id: str = Field(min_length=1)
+    archived_at: str = Field(min_length=1)
+    archived_by_party_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AccountRestoredV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    account_id: str = Field(min_length=1)
+    restored_at: str = Field(min_length=1)
+    restored_by_party_id: str = Field(min_length=1)
 
 
 # ------------------------------------------------------------------
@@ -206,10 +251,16 @@ class EmbeddingRevokedV1(BaseModel):
 
 registry.register("place.added", 1, PlaceAddedV1)
 registry.register("place.updated", 1, PlaceUpdatedV1)
+registry.register("place.archived", 1, PlaceArchivedV1)
+registry.register("place.restored", 1, PlaceRestoredV1)
 registry.register("asset.added", 1, AssetAddedV1)
 registry.register("asset.updated", 1, AssetUpdatedV1)
+registry.register("asset.archived", 1, AssetArchivedV1)
+registry.register("asset.restored", 1, AssetRestoredV1)
 registry.register("account.added", 1, AccountAddedV1)
 registry.register("account.updated", 1, AccountUpdatedV1)
+registry.register("account.archived", 1, AccountArchivedV1)
+registry.register("account.restored", 1, AccountRestoredV1)
 registry.register("money_flow.recorded", 1, MoneyFlowRecordedV1)
 registry.register("money_flow.manually_added", 1, MoneyFlowManuallyAddedV1)
 registry.register("money_flow.manually_deleted", 1, MoneyFlowManuallyDeletedV1)

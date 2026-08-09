@@ -30,6 +30,7 @@ from adminme.projections.tasks.queries import (
     open_for_member,
     sub_tasks_of,
     today_for_member,
+    work_history_for_member,
 )
 
 TEST_KEY = b"t" * 32
@@ -108,7 +109,7 @@ def _task_payload(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def test_tasks_v3_additive_migration_accepts_existing_v2_table(
+def test_tasks_v4_additive_migration_accepts_existing_v2_table(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "tasks-v2.db"
@@ -128,6 +129,7 @@ def test_tasks_v3_additive_migration_accepts_existing_v2_table(
         columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(tasks)")}
         assert "available_from" in columns
+        assert {"lifecycle_action", "lifecycle_at", "lifecycle_reason"} <= columns
         assert "idx_tasks_tenant_available" in indexes
     finally:
         conn.close()
@@ -180,6 +182,108 @@ async def test_task_completed_marks_done(rig: dict[str, Any]) -> None:
     assert row["status"] == "done"
     assert row["completed_at"] == "2026-04-25T14:00:00Z"
     assert row["completed_by"] == "m1"
+
+
+async def test_typed_task_lifecycle_preserves_intent_and_terminal_history(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+
+    await log.append(_envelope("task.created", _task_payload()))
+    transitions = [
+        (
+            "task.deferred",
+            {
+                "task_id": "t1",
+                "deferred_at": "2026-04-23T12:00:00Z",
+                "deferred_until": "2026-04-24T12:00:00Z",
+                "deferred_by_member_id": "m1",
+                "reason": "Wait for the quote",
+            },
+            "deferred",
+            "defer",
+        ),
+        (
+            "task.snoozed",
+            {
+                "task_id": "t1",
+                "snoozed_at": "2026-04-23T12:10:00Z",
+                "snoozed_until": "2026-04-23T14:00:00Z",
+                "snoozed_by_member_id": "m1",
+            },
+            "deferred",
+            "snooze",
+        ),
+        (
+            "task.blocked",
+            {
+                "task_id": "t1",
+                "blocked_at": "2026-04-23T14:00:00Z",
+                "blocked_by_member_id": "m1",
+                "reason": "Waiting for a reply",
+            },
+            "waiting_on",
+            "block",
+        ),
+        (
+            "task.unblocked",
+            {
+                "task_id": "t1",
+                "unblocked_at": "2026-04-23T15:00:00Z",
+                "unblocked_by_member_id": "m1",
+                "note": "Reply arrived",
+            },
+            "next",
+            "unblock",
+        ),
+        (
+            "task.cancelled",
+            {
+                "task_id": "t1",
+                "cancelled_at": "2026-04-23T16:00:00Z",
+                "cancelled_by_member_id": "m1",
+                "reason": "No longer useful",
+            },
+            "cancelled",
+            "cancel",
+        ),
+    ]
+    conn = runner.connection("tasks")
+    for event_type, payload, expected_status, expected_action in transitions:
+        event_id = await log.append(_envelope(event_type, payload))
+        await bus.notify(event_id)
+        await _wait_for_checkpoint(bus, "projection:tasks", event_id)
+        row = get_task(conn, _S("tenant-a"), task_id="t1")
+        assert row is not None
+        assert row["status"] == expected_status
+        assert row["lifecycle_action"] == expected_action
+        assert row["last_event_id"] == event_id
+
+    [terminal] = work_history_for_member(conn, _S("tenant-a"), member_party_id="m1")
+    assert terminal["status"] == "cancelled"
+    assert terminal["lifecycle_reason"] == "No longer useful"
+
+    reopened_id = await log.append(
+        _envelope(
+            "task.reopened",
+            {
+                "task_id": "t1",
+                "reopened_at": "2026-04-23T17:00:00Z",
+                "reopened_by_member_id": "m1",
+                "previous_status": "cancelled",
+            },
+        )
+    )
+    await bus.notify(reopened_id)
+    await _wait_for_checkpoint(bus, "projection:tasks", reopened_id)
+    reopened = get_task(conn, _S("tenant-a"), task_id="t1")
+    assert reopened is not None
+    assert reopened["status"] == "next"
+    assert reopened["lifecycle_action"] == "reopen"
+    assert reopened["available_from"] is None
+    assert reopened["waiting_on"] is None
 
 
 async def test_task_updated_new_status_changes_status_only(

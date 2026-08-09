@@ -246,7 +246,7 @@ def test_inbound_emit_payload_validates_against_list_item_v3_schema() -> None:
     assert instance.priority == 0
     assert instance.provider == "google_tasks"
     assert instance.completed is False
-    assert instance.sync_cycle_id == "corr-pack-internal-1"
+    assert instance.sync_cycle_id.startswith("google-tasks-revision:")
 
 
 def test_six_validator_checks_return_zero_errors_and_no_advisory() -> None:

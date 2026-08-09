@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-07T12:32:27.483Z",
+  "generated_at": "2026-08-09T15:44:57.790Z",
   "status": "PASS",
   "browser": "Google Chrome via playwright-core@1.62.0",
   "viewports": [
@@ -30,11 +30,77 @@
       "detail": 200
     },
     {
+      "name": "canonical task fixture seeded",
+      "status": "PASS",
+      "detail": {
+        "event_id": "ev_01KZKK4VKE0000",
+        "task": {
+          "task_id": "task_b2d5c6085fbfb379022b602cf949",
+          "tenant_id": "tenant-adminme-gate7-visual-3347-tPAuP1",
+          "title": "Return the signed school form",
+          "status": "inbox",
+          "assignee_party": "visual_principal",
+          "domain": "school",
+          "energy": "low",
+          "effort": "small",
+          "item_type": "task",
+          "due_date": "2026-08-04T16:00:00-04:00",
+          "available_from": null,
+          "micro_script": "Open the form and check the signature line",
+          "linked_item_id": null,
+          "linked_item_kind": null,
+          "recurring_id": null,
+          "depends_on_json": "[]",
+          "goal_ref": null,
+          "life_event": null,
+          "auto_research": 0,
+          "waiting_on": null,
+          "waiting_since": null,
+          "created_at": "2026-08-09T15:44:29Z",
+          "created_by": "visual_principal",
+          "completed_at": null,
+          "completed_by": null,
+          "lifecycle_action": null,
+          "lifecycle_at": null,
+          "lifecycle_reason": null,
+          "source_system": "member-portal",
+          "notes": "Canonical task seeded for cross-surface visual proof.",
+          "owner_scope": "private:visual_principal",
+          "visibility_scope": "private:visual_principal",
+          "sensitivity": "normal",
+          "last_event_id": "ev_01KZKK4VKE0000"
+        },
+        "duplicate": false,
+        "destination": {
+          "surface": "reminders",
+          "href": "/member/reminders?item=task%3Atask_b2d5c6085fbfb379022b602cf949",
+          "record_kind": "task",
+          "record_id": "task_b2d5c6085fbfb379022b602cf949"
+        }
+      }
+    },
+    {
+      "name": "Triage task fixture seeded",
+      "status": "PASS",
+      "detail": {
+        "seeded": 1,
+        "event_id": "ev_01KZKK4VKX0000"
+      }
+    },
+    {
+      "name": "Google Tasks Triage fixture seeded",
+      "status": "PASS",
+      "detail": {
+        "seeded": 2,
+        "last_event_id": "ev_01KZKK4VMB0001"
+      }
+    },
+    {
       "name": "calendar fixture seeded",
       "status": "PASS",
       "detail": {
         "seeded": 7,
-        "last_event_id": "ev_01KZE3B50P0006"
+        "last_event_id": "ev_01KZKK4VN30006"
       }
     },
     {
@@ -42,7 +108,15 @@
       "status": "PASS",
       "detail": {
         "seeded": 4,
-        "last_event_id": "ev_01KZE3B51K0003"
+        "last_event_id": "ev_01KZKK4VNZ0003"
+      }
+    },
+    {
+      "name": "Finance fixture seeded",
+      "status": "PASS",
+      "detail": {
+        "seeded": 10,
+        "last_event_id": "ev_01KZKK4VQA000A"
       }
     },
     {
@@ -58,7 +132,7 @@
     {
       "name": "Today defaults to Day Brief",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 5 visible recordsDay BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.1 timed event, 1 day-context item, 2 decisions, 1 message to notice.NEXT ON THE CLOCKReviewed appointment1:00 PM–2:00 PMTimed1Day context1Moves0Decisions2Time guardrailsWork window · Context until 1:00 PMContext only — it does not block your time.Next opening: Fri 10:15 AM–8:00 PM.On the clock1Reviewed appointment1:00 PM–2:00 PM · Provider location · UpcomingGet only what you need for this event ready.Why this is hereMoves for today0No planned moves are due today.Day context1Household context dayAll day · Household context · In ProgressGet only what you need for this event ready.AttendedMissedWhy this is hereNeeds a decision2Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereReturn the school formtask · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice1Message to reviewfixture-cat-a · Needs ReviewOpen it and decide whether to reply.Open conversationWhy this is here"
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 7 visible recordsDay BriefCarouselWhat Now?afternoon briefingHere is the shape of your day.1 timed event, 1 day-context item, 1 planned move, 4 decisions, 1 message to notice.Timed1Day context1Moves1Decisions4Time guardrailsOpen now until 8:00 PM.On the clock1Reviewed appointment1:00 PM–2:00 PM · Provider location · Awaiting OutcomeWrap up and record whether you attended.AttendedMissedWhy this is hereMoves for today1Return the signed school formschool · OpenOpen the form and check the signature lineDoneWhy this is hereDay context1Household context dayAll day · Household context · In ProgressGet only what you need for this event ready.AttendedMissedWhy this is hereNeeds a decision4Reply to the household messagecommitment · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereReturn the school formtask · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereRenew the annual registrationreminder · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereSend the completed enrollment formtask · Waiting For YouCheck the proposed fact, correct it if needed, then confirm or dismiss.ReviewWhy this is hereMessages to notice1Message to reviewfixture-cat-a · Needs ReviewOpen it and decide whether to reply.Open conversationWhy this is here"
     },
     {
       "name": "Today offers Carousel and What Now",
@@ -68,12 +142,12 @@
     {
       "name": "Today hides internal profile and member identifiers",
       "status": "PASS",
-      "detail": "Friday, August 7"
+      "detail": "Sunday, August 9"
     },
     {
       "name": "Today Carousel is interactive",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 5 visible recordsDay BriefCarouselWhat Now?Calendar Event · 1 of 4Reviewed appointmentGet only what you need for this event ready.1:00 PM–2:00 PM · Provider location · UpcomingLaterWhy this is here← PreviousLater only changes this view. Defer changes household truth and is always explicit."
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 7 visible recordsDay BriefCarouselWhat Now?Task · 1 of 7Return the signed school formOpen the form and check the signature lineschool · OpenDoneLaterWhy this is here← PreviousLater only changes this view. Defer changes household truth and is always explicit."
     },
     {
       "name": "/member/triage HTTP",
@@ -86,9 +160,39 @@
       "detail": "Triage"
     },
     {
-      "name": "triage member context",
+      "name": "Triage renders typed task properties",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "REVIEW ONE ITEMSend the completed enrollment formexplicit_proposalReview titleCreatesTaskCommitmentCalendar eventProvider reminderProvider list itemReminder listHousehold rhythmPerson endpointPerson or organizationRelationshipPerson factHousehold memberChoose a household member…Household member · principalFixture household adult · principalHousehold member · childDueAvailable fromEnergy neededNot setLowMediumHighEffortNot setTinySmallMediumLargeWork typeNot setTaskPurchaseAppointmentResearchDecisionChoreMaintenanceAreaFirst tiny stepNotesThis creates canonical household work. It appears in Reminders and Today when active; it is not silently copied to a provider.Ready for your final confirmation. Every real write still passes governance and observation controls.Save detailsConfirm and routeDismissView source evidence"
+    },
+    {
+      "name": "Triage removed machine-format date entry",
+      "status": "PASS",
+      "detail": "REVIEW ONE ITEMSend the completed enrollment formexplicit_proposalReview titleCreatesTaskCommitmentCalendar eventProvider reminderProvider list itemReminder listHousehold rhythmPerson endpointPerson or organizationRelationshipPerson factHousehold memberChoose a household member…Household member · principalFixture household adult · principalHousehold member · childDueAvailable fromEnergy neededNot setLowMediumHighEffortNot setTinySmallMediumLargeWork typeNot setTaskPurchaseAppointmentResearchDecisionChoreMaintenanceAreaFirst tiny stepNotesThis creates canonical household work. It appears in Reminders and Today when active; it is not silently copied to a provider.Ready for your final confirmation. Every real write still passes governance and observation controls.Save detailsConfirm and routeDismissView source evidence"
+    },
+    {
+      "name": "Triage saves visible edits before confirmation",
+      "status": "PASS",
+      "detail": "Confirmed and added to Reminders. Open Reminders"
+    },
+    {
+      "name": "Triage keeps the selected member bound to the signed-in identity",
+      "status": "PASS",
+      "detail": "{\"member\":{\"id\":\"visual_principal\",\"role\":\"principal\",\"auth_role\":\"principal\",\"display_name\":\"Household member\",\"authenticated_id\":\"visual_principal\",\"authenticated_display_name\":\"Household member\",\"authenticated_role\":\"principal\",\"authentication_method\":\"Tailscale\",\"viewing_as\":false},\"route\":{\"container_external_id\":null,\"member_id\":\"visual_principal\",\"provider\":null,\"provider_account_id\":null}}"
+    },
+    {
+      "name": "Triage receipt is destination-readable before return",
+      "status": "PASS",
+      "detail": "{\"recent\":{\"proposal_id\":\"gate7-visual-triage-task\",\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"source_kind\":\"household_action\",\"target_kind\":\"task\",\"owner_member_id\":\"visual_principal\",\"title\":\"Send the completed enrollment form\",\"source_event_id\":\"ev_01KZKK4VKX0000\",\"parent_intent_id\":null,\"candidate_key\":null,\"extraction_event_id\":null,\"confidence\":1,\"state\":\"confirmed\",\"proposed_at\":\"2026-08-09T15:44:29.821241+00:00\",\"resolved_at\":\"2026-08-09T15:44:31Z\",\"resolved_by\":\"visual_principal\",\"resolution_reason\":\"confirmed_local\",\"domain_approval_event_id\":\"ev_01KZKK4XK80000\",\"materialization_event_id\":\"ev_01KZKK4XKZ0000\",\"outcome_event_id\":null,\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4XKZ0000\",\"candidate\":{\"available_from\":null,\"domain\":\"tasks\",\"due\":\"2026-08-11T17:44:29.821241+00:00\",\"due_date\":\"2026-08-11T13:44:00+00:00\",\"effort\":null,\"energy\":null,\"item_type\":\"task\",\"micro_script\":\"Open the enrollment portal and attach the signed form\",\"notes\":null,\"title\":\"Send the completed enrollment form\"},\"route\":{\"container_external_id\":null,\"member_id\":\"visual_principal\",\"provider\":null,\"provider_account_id\":null},\"reasons\":[\"explicit_proposal\"],\"materialized_event_ids\":[\"ev_01KZKK4XKM0000\"],\"eligibility_rule_ids\":[],\"id\":\"gate7-visual-triage-task\",\"kind\":\"task\",\"actions\":[],\"review_state\":{\"contract\":\"triage-review-state-v2\",\"state\":\"ready\",\"missing\":[],\"human_gate_required\":true,\"approval_authorized\":false},\"surface_link\":{\"contract\":\"surface-link-v1\",\"surface\":\"triage\",\"object_kind\":\"item\",\"object_id\":\"gate7-visual-triage-task\",\"href\":\"/member/triage?item=gate7-visual-triage-task\",\"evidence_event_ids\":[\"ev_01KZKK4VKX0000\"]},\"destination\":{\"surface\":\"reminders\",\"href\":\"/member/reminders?item=task%3Atriage_task_gate7-visual-triage-task\",\"record_kind\":\"task\",\"record_id\":\"triage_task_gate7-visual-triage-task\",\"label\":\"Reminders\",\"state\":\"materialized\"}},\"evidence\":{\"event_id\":\"ev_01KZKK4XKM0000\",\"type\":\"task.created\",\"source\":{\"adapter\":\"member-portal\",\"account\":\"visual_principal\"},\"actor\":\"visual_principal\",\"occurred_at\":\"2026-08-09T15:44:31Z\",\"ingested_at\":\"2026-08-09T15:44:31Z\",\"confidence\":null,\"scope\":{\"owner\":\"private:visual_principal\",\"visibility\":\"private:visual_principal\",\"sensitivity\":\"normal\"},\"why\":{\"correlation_id\":\"gate7:visual\",\"causation_id\":\"ev_01KZKK4XK80000\"},\"correction\":null,\"approval\":null,\"delivery\":null,\"subject\":{\"task_id\":\"triage_task_gate7-visual-triage-task\",\"title\":\"Send the completed enrollment form\",\"description\":null}},\"reminders\":{\"surface\":\"reminders\",\"label\":\"Reminders\",\"member_id\":\"visual_principal\",\"mode\":\"carousel\",\"state\":\"ready\",\"semantics\":{\"profile_id\":\"adhd_executive\",\"mode\":\"carousel\",\"micro_steps\":true,\"endowed_progress\":true,\"optional_zeigarnik_teaser\":true,\"guilt_language_filter\":true,\"fog_checks_local_hours\":[15,17],\"rewards_mode\":\"event_based\",\"reward_distribution\":{\"done\":0.65,\"warm\":0.25,\"delight\":0.09,\"jackpot\":0.01},\"quiet_hours\":{\"start\":21,\"end\":7},\"nudge_penalty\":25,\"proactive_cap\":3,\"information_density\":2,\"planning_horizon_days\":7,\"task_chunk_minutes\":15,\"reminder_escalation\":1,\"celebration_intensity\":1,\"digest_hour\":8,\"location_cues\":false,\"temporal_horizons\":[\"now\",\"next_hour\",\"morning\",\"afternoon\",\"evening\",\"day\",\"week\",\"longer\"]},\"observation\":{\"active\":true,\"writes_execute\":false,\"explanation\":\"Observation mode records what would happen without changing providers.\",\"evidence_href\":\"/api/core/v1/activity\"},\"cockpit\":{\"version\":\"deterministic-reminders-cockpit-v2\",\"generated_at\":\"2026-08-09T15:44:32.030801+00:00\",\"counts\":{\"now\":1,\"scheduled\":1,\"places\":0,\"anytime\":0,\"waiting\":0,\"completed\":0},\"items\":[{\"task_id\":\"task_b2d5c6085fbfb379022b602cf949\",\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"title\":\"Return the signed school form\",\"status\":\"inbox\",\"assignee_party\":\"visual_principal\",\"domain\":\"school\",\"energy\":\"low\",\"effort\":\"small\",\"item_type\":\"task\",\"due_date\":\"2026-08-04T16:00:00-04:00\",\"available_from\":null,\"micro_script\":\"Open the form and check the signature line\",\"linked_item_id\":null,\"linked_item_kind\":null,\"recurring_id\":null,\"depends_on_json\":\"[]\",\"goal_ref\":null,\"life_event\":null,\"auto_research\":0,\"waiting_on\":null,\"waiting_since\":null,\"created_at\":\"2026-08-09T15:44:29Z\",\"created_by\":\"visual_principal\",\"completed_at\":null,\"completed_by\":null,\"lifecycle_action\":null,\"lifecycle_at\":null,\"lifecycle_reason\":null,\"source_system\":\"member-portal\",\"notes\":\"Canonical task seeded for cross-surface visual proof.\",\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4VKE0000\",\"id\":\"task:task_b2d5c6085fbfb379022b602cf949\",\"record_kind\":\"task\",\"provider\":\"administrateme\",\"provider_account_id\":\"administrateme\",\"list_external_id\":\"tasks\",\"item_external_id\":\"task_b2d5c6085fbfb379022b602cf949\",\"list_name\":\"Household work\",\"account_label\":\"AdministrateMe\",\"bucket\":\"now\",\"why\":[\"Due date has passed\"],\"due_at\":\"2026-08-04T16:00:00-04:00\",\"due_sort\":\"2026-08-04T20:00:00+00:00\",\"completed\":false,\"terminal_kind\":null,\"can_complete\":true,\"can_edit\":true,\"alarms\":[],\"recurrence_rules\":[],\"source_links\":[],\"provider_data\":{},\"cues\":[],\"surface_link\":{\"contract\":\"surface-link-v1\",\"surface\":\"reminders\",\"object_kind\":\"item\",\"object_id\":\"task:task_b2d5c6085fbfb379022b602cf949\",\"href\":\"/member/reminders?item=task%3Atask_b2d5c6085fbfb379022b602cf949\",\"evidence_event_ids\":[\"ev_01KZKK4VKE0000\"]},\"complete_action\":{\"kind\":\"domain\",\"action\":\"task.complete\",\"available\":true,\"reason\":\"Writes a canonical task.completed event\"},\"edit_action\":{\"kind\":\"domain\",\"action\":\"task.update\",\"available\":true,\"reason\":\"Writes a canonical task.updated event\"}},{\"task_id\":\"triage_task_gate7-visual-triage-task\",\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"title\":\"Send the completed enrollment form\",\"status\":\"inbox\",\"assignee_party\":\"visual_principal\",\"domain\":\"tasks\",\"energy\":null,\"effort\":null,\"item_type\":\"task\",\"due_date\":\"2026-08-11T13:44:00+00:00\",\"available_from\":null,\"micro_script\":\"Open the enrollment portal and attach the signed form\",\"linked_item_id\":null,\"linked_item_kind\":null,\"recurring_id\":null,\"depends_on_json\":\"[]\",\"goal_ref\":null,\"life_event\":null,\"auto_research\":0,\"waiting_on\":null,\"waiting_since\":null,\"created_at\":\"2026-08-09T15:44:31Z\",\"created_by\":\"visual_principal\",\"completed_at\":null,\"completed_by\":null,\"lifecycle_action\":null,\"lifecycle_at\":null,\"lifecycle_reason\":null,\"source_system\":\"triage\",\"notes\":null,\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4XKM0000\",\"id\":\"task:triage_task_gate7-visual-triage-task\",\"record_kind\":\"task\",\"provider\":\"administrateme\",\"provider_account_id\":\"administrateme\",\"list_external_id\":\"tasks\",\"item_external_id\":\"triage_task_gate7-visual-triage-task\",\"list_name\":\"Household work\",\"account_label\":\"AdministrateMe\",\"bucket\":\"scheduled\",\"why\":[\"Has a due date\"],\"due_at\":\"2026-08-11T13:44:00+00:00\",\"due_sort\":\"2026-08-11T13:44:00+00:00\",\"completed\":false,\"terminal_kind\":null,\"can_complete\":true,\"can_edit\":true,\"alarms\":[],\"recurrence_rules\":[],\"source_links\":[],\"provider_data\":{},\"cues\":[],\"surface_link\":{\"contract\":\"surface-link-v1\",\"surface\":\"reminders\",\"object_kind\":\"item\",\"object_id\":\"task:triage_task_gate7-visual-triage-task\",\"href\":\"/member/reminders?item=task%3Atriage_task_gate7-visual-triage-task\",\"evidence_event_ids\":[\"ev_01KZKK4XKM0000\"]},\"complete_action\":{\"kind\":\"domain\",\"action\":\"task.complete\",\"available\":true,\"reason\":\"Writes a canonical task.completed event\"},\"edit_action\":{\"kind\":\"domain\",\"action\":\"task.update\",\"available\":true,\"reason\":\"Writes a canonical task.updated event\"}}],\"tasks\":[{\"task_id\":\"task_b2d5c6085fbfb379022b602cf949\",\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"title\":\"Return the signed school form\",\"status\":\"inbox\",\"assignee_party\":\"visual_principal\",\"domain\":\"school\",\"energy\":\"low\",\"effort\":\"small\",\"item_type\":\"task\",\"due_date\":\"2026-08-04T16:00:00-04:00\",\"available_from\":null,\"micro_script\":\"Open the form and check the signature line\",\"linked_item_id\":null,\"linked_item_kind\":null,\"recurring_id\":null,\"depends_on_json\":\"[]\",\"goal_ref\":null,\"life_event\":null,\"auto_research\":0,\"waiting_on\":null,\"waiting_since\":null,\"created_at\":\"2026-08-09T15:44:29Z\",\"created_by\":\"visual_principal\",\"completed_at\":null,\"completed_by\":null,\"lifecycle_action\":null,\"lifecycle_at\":null,\"lifecycle_reason\":null,\"source_system\":\"member-portal\",\"notes\":\"Canonical task seeded for cross-surface visual proof.\",\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4VKE0000\",\"id\":\"task:task_b2d5c6085fbfb379022b602cf949\",\"record_kind\":\"task\",\"provider\":\"administrateme\",\"provider_account_id\":\"administrateme\",\"list_external_id\":\"tasks\",\"item_external_id\":\"task_b2d5c6085fbfb379022b602cf949\",\"list_name\":\"Household work\",\"account_label\":\"AdministrateMe\",\"bucket\":\"now\",\"why\":[\"Due date has passed\"],\"due_at\":\"2026-08-04T16:00:00-04:00\",\"due_sort\":\"2026-08-04T20:00:00+00:00\",\"completed\":false,\"terminal_kind\":null,\"can_complete\":true,\"can_edit\":true,\"alarms\":[],\"recurrence_rules\":[],\"source_links\":[],\"provider_data\":{},\"cues\":[],\"surface_link\":{\"contract\":\"surface-link-v1\",\"surface\":\"reminders\",\"object_kind\":\"item\",\"object_id\":\"task:task_b2d5c6085fbfb379022b602cf949\",\"href\":\"/member/reminders?item=task%3Atask_b2d5c6085fbfb379022b602cf949\",\"evidence_event_ids\":[\"ev_01KZKK4VKE0000\"]},\"complete_action\":{\"kind\":\"domain\",\"action\":\"task.complete\",\"available\":true,\"reason\":\"Writes a canonical task.completed event\"},\"edit_action\":{\"kind\":\"domain\",\"action\":\"task.update\",\"available\":true,\"reason\":\"Writes a canonical task.updated event\"}},{\"task_id\":\"triage_task_gate7-visual-triage-task\",\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"title\":\"Send the completed enrollment form\",\"status\":\"inbox\",\"assignee_party\":\"visual_principal\",\"domain\":\"tasks\",\"energy\":null,\"effort\":null,\"item_type\":\"task\",\"due_date\":\"2026-08-11T13:44:00+00:00\",\"available_from\":null,\"micro_script\":\"Open the enrollment portal and attach the signed form\",\"linked_item_id\":null,\"linked_item_kind\":null,\"recurring_id\":null,\"depends_on_json\":\"[]\",\"goal_ref\":null,\"life_event\":null,\"auto_research\":0,\"waiting_on\":null,\"waiting_since\":null,\"created_at\":\"2026-08-09T15:44:31Z\",\"created_by\":\"visual_principal\",\"completed_at\":null,\"completed_by\":null,\"lifecycle_action\":null,\"lifecycle_at\":null,\"lifecycle_reason\":null,\"source_system\":\"triage\",\"notes\":null,\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4XKM0000\",\"id\":\"task:triage_task_gate7-visual-triage-task\",\"record_kind\":\"task\",\"provider\":\"administrateme\",\"provider_account_id\":\"administrateme\",\"list_external_id\":\"tasks\",\"item_external_id\":\"triage_task_gate7-visual-triage-task\",\"list_name\":\"Household work\",\"account_label\":\"AdministrateMe\",\"bucket\":\"scheduled\",\"why\":[\"Has a due date\"],\"due_at\":\"2026-08-11T13:44:00+00:00\",\"due_sort\":\"2026-08-11T13:44:00+00:00\",\"completed\":false,\"terminal_kind\":null,\"can_complete\":true,\"can_edit\":true,\"alarms\":[],\"recurrence_rules\":[],\"source_links\":[],\"provider_data\":{},\"cues\":[],\"surface_link\":{\"contract\":\"surface-link-v1\",\"surface\":\"reminders\",\"object_kind\":\"item\",\"object_id\":\"task:triage_task_gate7-visual-triage-task\",\"href\":\"/member/reminders?item=task%3Atriage_task_gate7-visual-triage-task\",\"evidence_event_ids\":[\"ev_01KZKK4XKM0000\"]},\"complete_action\":{\"kind\":\"domain\",\"action\":\"task.complete\",\"available\":true,\"reason\":\"Writes a canonical task.completed event\"},\"edit_action\":{\"kind\":\"domain\",\"action\":\"task.update\",\"available\":true,\"reason\":\"Writes a canonical task.updated event\"}}],\"provider_items\":[],\"lists\":[{\"tenant_id\":\"tenant-adminme-gate7-visual-3347-tPAuP1\",\"member_id\":\"visual_principal\",\"provider\":\"google_tasks\",\"provider_account_id\":\"visual-google-tasks\",\"list_external_id\":\"visual-google-list\",\"list_name\":\"Personal tasks\",\"color\":null,\"is_default\":1,\"provider_revision\":null,\"changed_at\":\"2026-08-09T15:44:29.835674+00:00\",\"owner_scope\":\"private:visual_principal\",\"visibility_scope\":\"private:visual_principal\",\"sensitivity\":\"normal\",\"last_event_id\":\"ev_01KZKK4VMB0000\"}],\"accounts\":[{\"provider\":\"administrateme\",\"provider_account_id\":\"administrateme\",\"label\":\"AdministrateMe tasks\",\"state\":\"local\",\"native\":[\"typed household work\",\"due dates and times\",\"energy and effort\",\"work type and domain\",\"blocking, deferring, and completion\",\"event provenance\"],\"limitations\":[\"Local tasks are not provider-synced unless a separately governed link is created.\"],\"operations\":[]},{\"id\":\"projected:google_tasks:visual-google-tasks\",\"provider\":\"google_tasks\",\"provider_account_id\":\"visual-google-tasks\",\"label\":\"Google Tasks\",\"runtime\":\"projected_only\",\"state\":\"read_only\",\"operations\":[],\"native\":[\"task_lists\",\"title\",\"notes\",\"scheduled_date\",\"completion\",\"nesting\",\"ordering\",\"cross_list_move\",\"source_links\",\"assignment_provenance\"],\"limitations\":[\"The API stores only a scheduled date, not a due time.\",\"The API exposes no priority, alarm, recurrence, or geofence fields.\",\"Assigned tasks can have provider-enforced write restrictions.\"],\"remedy\":\"Reconnect this member's provider adapter to enable writes.\",\"configured_containers\":[]}],\"context_signal_catalog\":[{\"kind\":\"location\",\"label\":\"Place\",\"sources\":[\"Apple EventKit geofence\",\"member bridge location\"],\"contract\":\"Native geofences stay provider-owned; bridge location is an expiring fact.\"},{\"kind\":\"presence\",\"label\":\"Presence\",\"sources\":[\"Home Assistant\",\"member bridge\"],\"contract\":\"A typed state comparison may activate a cue; no model infers presence.\"},{\"kind\":\"device_state\",\"label\":\"Device\",\"sources\":[\"Home Assistant\",\"device bridge\"],\"contract\":\"Battery, charging, appliance, and other explicit states require a fresh fact.\"},{\"kind\":\"network_presence\",\"label\":\"Network\",\"sources\":[\"Home Assistant\",\"trusted network adapter\"],\"contract\":\"Home/work network presence is an explicit scoped signal, never a guessed location.\"},{\"kind\":\"calendar_transition\",\"label\":\"Calendar\",\"sources\":[\"authorized calendar projection\"],\"contract\":\"Before/after-event cues use typed calendar state and do not become calendar events.\"},{\"kind\":\"weather\",\"label\":\"Weather\",\"sources\":[\"configured weather adapter\"],\"contract\":\"Threshold rules use observed values with expiry, source, and unit.\"},{\"kind\":\"energy\",\"label\":\"Energy / capacity\",\"sources\":[\"member profile\",\"explicit member check-in\"],\"contract\":\"Member-authored state can filter a lens but never changes provider truth.\"}],\"active_signal_count\":0,\"contract\":{\"provider_is_source_of_truth\":true,\"list_items_are_not_tasks\":true,\"tasks_are_not_provider_items\":true,\"union_is_read_time_only\":true,\"model_ranking\":false,\"cue_evaluation\":\"typed operator against latest unexpired scoped fact\"},\"rhythms\":[]},\"freshness\":{\"contract\":\"surface-freshness-v1\",\"state\":\"fresh\",\"generated_at\":\"2026-08-09T15:44:32.030801+00:00\",\"latest_source_at\":\"2026-08-09T15:44:31+00:00\",\"stale_after_seconds\":604800,\"row_count\":2,\"degraded_reason\":null,\"checkpoint_event_id\":null,\"checkpoint_required\":false,\"lag_count\":null,\"safe_read_functions_available\":true}}}"
+    },
+    {
+      "name": "Recent decision retains destination receipt",
+      "status": "PASS",
+      "detail": "RECENT DECISIONSend the completed enrollment formexplicit_proposalConfirmed Local on 8/9/2026, 11:44:31 AM.1 audited materialization event.Your confirmation was recorded before canonical materialization.Open RemindersView source evidence"
+    },
+    {
+      "name": "Google Tasks uses only its reviewed date capability",
+      "status": "PASS",
+      "detail": "REVIEW ONE ITEMRenew the annual registrationexplicit provider reminder proposalReview titleCreatesTaskCommitmentCalendar eventProvider reminderProvider list itemReminder listHousehold rhythmPerson endpointPerson or organizationRelationshipPerson factHousehold memberChoose a household member…Household member · principalFixture household adult · principalHousehold member · childScheduled dateNotesGoogle Tasks API supports title, notes, hierarchy, order, and a scheduled date. Its API discards due time and exposes no priority, alarm, recurrence, or geofence fields.ProviderChoose…Google TasksAccountChoose account…visual-google-tasksListChoose destination…Personal tasksNeeds: Approved Reminder Destination. Save the missing details before confirming.Save detailsConfirm and routeDismissView source evidence"
     },
     {
       "name": "/member/comms HTTP",
@@ -108,7 +212,7 @@
     {
       "name": "Comms renders one member-bound account and thread",
       "status": "PASS",
-      "detail": "StaleLatest source Aug 4, 2026, 8:05 AM · 1 visible recordCOMMUNICATION COCKPIT1 conversation deserves a look.Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply0Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?1 derived item await TriageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: 1 derived item await Triage1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSnooze 2hQuiet thisReply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
+      "detail": "StaleLatest source Aug 4, 2026, 8:05 AM · 1 visible recordCheckpoint KK4VJP0003COMMUNICATION COCKPIT1 conversation deserves a look.Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply0Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?1 derived item await TriageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: 1 derived item await Triage1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSend to TriageSnooze 2hQuiet thisReply in this threadThis saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.Save reply for approval"
     },
     {
       "name": "Comms explains focus without a model",
@@ -118,7 +222,7 @@
     {
       "name": "Comms reply requires independent approval",
       "status": "PASS",
-      "detail": "Reply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
+      "detail": "Reply in this threadThis saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.Save reply for approval"
     },
     {
       "name": "Comms quiet lens is interactive",
@@ -136,19 +240,39 @@
       "detail": "Reminders"
     },
     {
-      "name": "Reminders identifies deterministic provider truth",
+      "name": "Reminders identifies typed local and provider truth",
       "status": "PASS",
-      "detail": "Private · provider-backed · deterministic"
+      "detail": "Private · canonical tasks + provider truth · deterministic"
     },
     {
       "name": "Reminders exposes stable activation lenses",
       "status": "PASS",
-      "detail": "Not ConfiguredNo source watermark yet · 0 visible recordsREMINDERS COCKPITNothing is asking to be remembered right now.Time, place, and context cues are deterministic lenses over provider-owned reminders. A reminder never silently becomes a task, promise, or calendar event.Now0Scheduled0Places0Anytime0Now 0Scheduled 0Places 0Anytime 0Completed 0All accountsAll listsNow remindersNothing in this lens. Your provider truth is unchanged.Choose one reminderThe cockpit carries the remembering. You only need to decide about one item at a time.Quick addCapture it now; enrich it only if useful.Connect a writable Apple Reminders or Google Tasks account in Settings.What each provider can really doNo reminder account is connected yet."
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsTASKS & REMINDERS1 item needs attention now.Canonical household tasks and provider-owned reminders share one calm workspace while retaining separate truth, provenance, and write paths.Now1Scheduled1Places0Anytime0Now 1Scheduled 1Places 0Anytime 0Waiting 0Completed 0All accountsAdministrateMe tasksGoogle TasksAll listsPersonal tasksNow tasks & remindersReturn the signed school formAdministrateMe · Household workDue date has passedAug 4, 2026, 4:00 PMADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORKReturn the signed school formCanonical task seeded for cross-surface visual proof.Why it is here: Due date has passedStatusOpenDueTuesday, August 4, 2026 at 4:00 PMAvailable fromNowEnergyLowEffortSmallWork typeTaskAreaSchoolFirst tiny step: Open the form and check the signature lineThis is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.DoneEdit propertiesDeferSnoozeWaiting on…Abandon…Add household workCreate an explicit canonical task. It appears here immediately and remains separate from provider truth.New taskAdd to a connected providerWrite directly only to the selected Apple Reminders or Google Tasks list.Connect a writable Apple Reminders or Google Tasks account in Settings.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.What each provider can really doAdministrateMe tasks · LocalNative: Typed Household Work, Due Dates And Times, Energy And Effort, Work Type And Domain, Blocking, Deferring, And Completion, Event Provenance.Local tasks are not provider-synced unless a separately governed link is created.Google Tasks · Read OnlyNative: Task Lists, Title, Notes, Scheduled Date, Completion, Nesting, Ordering, Cross List Move, Source Links, Assignment Provenance.The API stores only a scheduled date, not a due time.The API exposes no priority, alarm, recurrence, or geofence fields.Assigned tasks can have provider-enforced write restrictions."
+    },
+    {
+      "name": "Reminders projects direct canonical tasks without provider claims",
+      "status": "PASS",
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsTASKS & REMINDERS1 item needs attention now.Canonical household tasks and provider-owned reminders share one calm workspace while retaining separate truth, provenance, and write paths.Now1Scheduled1Places0Anytime0Now 1Scheduled 1Places 0Anytime 0Waiting 0Completed 0All accountsAdministrateMe tasksGoogle TasksAll listsPersonal tasksNow tasks & remindersReturn the signed school formAdministrateMe · Household workDue date has passedAug 4, 2026, 4:00 PMADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORKReturn the signed school formCanonical task seeded for cross-surface visual proof.Why it is here: Due date has passedStatusOpenDueTuesday, August 4, 2026 at 4:00 PMAvailable fromNowEnergyLowEffortSmallWork typeTaskAreaSchoolFirst tiny step: Open the form and check the signature lineThis is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.DoneEdit propertiesDeferSnoozeWaiting on…Abandon…Add household workCreate an explicit canonical task. It appears here immediately and remains separate from provider truth.New taskAdd to a connected providerWrite directly only to the selected Apple Reminders or Google Tasks list.Connect a writable Apple Reminders or Google Tasks account in Settings.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.What each provider can really doAdministrateMe tasks · LocalNative: Typed Household Work, Due Dates And Times, Energy And Effort, Work Type And Domain, Blocking, Deferring, And Completion, Event Provenance.Local tasks are not provider-synced unless a separately governed link is created.Google Tasks · Read OnlyNative: Task Lists, Title, Notes, Scheduled Date, Completion, Nesting, Ordering, Cross List Move, Source Links, Assignment Provenance.The API stores only a scheduled date, not a due time.The API exposes no priority, alarm, recurrence, or geofence fields.Assigned tasks can have provider-enforced write restrictions."
+    },
+    {
+      "name": "Reminders receives the enriched Triage task",
+      "status": "PASS",
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsTASKS & REMINDERS1 item needs attention now.Canonical household tasks and provider-owned reminders share one calm workspace while retaining separate truth, provenance, and write paths.Now1Scheduled1Places0Anytime0Now 1Scheduled 1Places 0Anytime 0Waiting 0Completed 0All accountsAdministrateMe tasksGoogle TasksAll listsPersonal tasksScheduled tasks & remindersSend the completed enrollment formAdministrateMe · Household workHas a due dateAug 11, 2026, 9:44 AMADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORKSend the completed enrollment formWhy it is here: Has a due dateStatusOpenDueTuesday, August 11, 2026 at 9:44 AMAvailable fromNowEnergyNot setEffortNot setWork typeTaskAreaTasksFirst tiny step: Open the enrollment portal and attach the signed formThis is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.DoneEdit propertiesDeferSnoozeWaiting on…Abandon…Add household workCreate an explicit canonical task. It appears here immediately and remains separate from provider truth.New taskAdd to a connected providerWrite directly only to the selected Apple Reminders or Google Tasks list.Connect a writable Apple Reminders or Google Tasks account in Settings.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.What each provider can really doAdministrateMe tasks · LocalNative: Typed Household Work, Due Dates And Times, Energy And Effort, Work Type And Domain, Blocking, Deferring, And Completion, Event Provenance.Local tasks are not provider-synced unless a separately governed link is created.Google Tasks · Read OnlyNative: Task Lists, Title, Notes, Scheduled Date, Completion, Nesting, Ordering, Cross List Move, Source Links, Assignment Provenance.The API stores only a scheduled date, not a due time.The API exposes no priority, alarm, recurrence, or geofence fields.Assigned tasks can have provider-enforced write restrictions."
+    },
+    {
+      "name": "Reminders translates the internal task lifecycle into member language",
+      "status": "PASS",
+      "detail": "ADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORKSend the completed enrollment formWhy it is here: Has a due dateStatusOpenDueTuesday, August 11, 2026 at 9:44 AMAvailable fromNowEnergyNot setEffortNot setWork typeTaskAreaTasksFirst tiny step: Open the enrollment portal and attach the signed formThis is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.DoneEdit propertiesDeferSnoozeWaiting on…Abandon…"
+    },
+    {
+      "name": "Triage receipt deep-link opens its exact Reminders task",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:3347/member/reminders?item=task%3Atriage_task_gate7-visual-triage-task&view=scheduled"
     },
     {
       "name": "Reminders does not invent a writable provider",
       "status": "PASS",
-      "detail": "Quick addCapture it now; enrich it only if useful.Connect a writable Apple Reminders or Google Tasks account in Settings."
+      "detail": "Add to a connected providerWrite directly only to the selected Apple Reminders or Google Tasks list.Connect a writable Apple Reminders or Google Tasks account in Settings."
     },
     {
       "name": "/member/people HTTP",
@@ -183,17 +307,17 @@
     {
       "name": "Notes preserves provider sources and master list",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 8:32 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 7, 2026, 8:32 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 7, 2026, 8:32 AMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 9, 2026, 11:44 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 9, 2026, 11:44 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 9, 2026, 11:44 AMPut bags by the door and check tomorrow's calendar.Send to TriageView source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes detail retains exact source identity",
       "status": "PASS",
-      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 7, 2026, 8:32 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 9, 2026, 11:44 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageSend to TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes links candidates to Triage without inline approval",
       "status": "PASS",
-      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 7, 2026, 8:32 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "Meeting NoteSchool planning callMeeting notes · Aug 9, 2026, 11:44 AMschoolplanningThe school planning call covered the autumn pickup routine and the form due Friday.Open in sourceReview 1 in TriageSend to TriageView source evidenceFolderCalls/SchoolAccessOwnerFormatTranscriptRevisionvisual-revision-1Provider limits: Speaker Identity Unverified.AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
     },
     {
       "name": "Notes sharing is explicit and read-search only",
@@ -203,7 +327,7 @@
     {
       "name": "Notes deterministic search is interactive",
       "status": "PASS",
-      "detail": "Results for “autumn pickup”School planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in Triage"
+      "detail": "Results for “autumn pickup”School planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 9, 2026, 11:44 AM1 in Triage"
     },
     {
       "name": "Notes search state survives a URL reload",
@@ -213,7 +337,7 @@
     {
       "name": "Notes meeting lens is presentation-only",
       "status": "PASS",
-      "detail": "MeetingsSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in Triage"
+      "detail": "MeetingsSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 9, 2026, 11:44 AM1 in Triage"
     },
     {
       "name": "/member/finance HTTP",
@@ -226,9 +350,39 @@
       "detail": "Finance"
     },
     {
-      "name": "finance member context",
+      "name": "Finance identifies deterministic planning and no bank writes",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "Private · deterministic planning · no bank writes"
+    },
+    {
+      "name": "Finance leads with cash safety and one explained review",
+      "status": "PASS",
+      "detail": "HOUSEHOLD CASH-FLOW COCKPITReview GroceriesMonth-to-date spending is above its workbook budget.Reclassify transactions or change the plan in the workbook.Cash$24KMonth-to-date$7KMonthly plan$2KCash runway>36 mo"
+    },
+    {
+      "name": "Finance compares explicit scenarios without changing baseline",
+      "status": "PASS",
+      "detail": "Scenario labScenarios are workbook-authored deltas. Switching here compares projections; it does not change the baseline.Current planReduce monthly burnMonthly net$1,800.00Ending cash$88,800.00Below reserveNot in horizonCash outNot in horizon"
+    },
+    {
+      "name": "Finance shows goals as planning without moving money",
+      "status": "PASS",
+      "detail": "Goals and capital plansGoals organize future uses of money. They never move funds or silently change a scenario.Emergency reserveActive$24,000.00 of $30,000.00Planning target only; no funds are moved.PauseMark completeView evidence"
+    },
+    {
+      "name": "Finance Spending shows categorized provider movement",
+      "status": "PASS",
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsHOUSEHOLD CASH-FLOW COCKPITReview GroceriesMonth-to-date spending is above its workbook budget.Reclassify transactions or change the plan in the workbook.Cash$24KMonth-to-date$7KMonthly plan$2KCash runway>36 moOverviewCash flowSpendingScenariosNet worthData healthSpending planGroceriesReview$360.00 of $300.00 · -$60.00 remainingRecent money movementNeighborhood market2026-08-09 · Groceries-$360.00Income deposit2026-08-09 · Income$7,000.00"
+    },
+    {
+      "name": "Finance view survives URL reload",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:3347/member/finance?view=spending"
+    },
+    {
+      "name": "Finance data health exposes source and workbook truth",
+      "status": "PASS",
+      "detail": "Source and model healthStateReadyTransactions2Accounts1Accounts needing attention0Pending0Uncategorized0Non-USD rows excluded0Latest source8/9/2026, 11:44:29 AMWorkbookNot publishedAuthority split: Plaid owns provider facts; the workbook owns reviewed planning inputs and manual overrides; the event log preserves provenance and replay."
     },
     {
       "name": "/member/calendar HTTP",
@@ -248,7 +402,7 @@
     {
       "name": "Calendar defaults to a spatial Week",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 2 visible recordsCALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Aug 3–9, 2026DayWeekMonthAgendaFind timeCalendar settingsCalendars in viewShow only what is useful right now. This is a private display filter; household rules remain active.Capacity colorsCalendar colorsPersonalPersonal · Hard blockHousehold contextFamily Context · ContextShow allCapacity only2 of 2 visibleWeek at a glanceHardSoftContextGuardrailBufferEtc/UTCMon3Tue4Wed5Thu6Fri7Sat8Sun9all-dayHousehold context day6 AM7 AM8 AM9 AM10 AM11 AM12 PM1 PM2 PM3 PM4 PM5 PM6 PM7 PM8 PM9 PM10 PMProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowReviewed appointment1:00 PM · Hard blockEVENT DETAILSelect a calendar itemOpen an item to see its source, effect, buffers, duplicate copies, and evidence without leaving the calendar.Conflicts and pressureNo buffered hard conflict or soft-load pressure is visible."
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsCALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Aug 3–9, 2026DayWeekMonthAgendaFind timeCalendar settingsCalendars in viewShow only what is useful right now. This is a private display filter; household rules remain active.Capacity colorsCalendar colorsPersonalPersonal · Hard blockHousehold contextFamily Context · ContextShow allCapacity only2 of 2 visibleWeek at a glanceHardSoftContextGuardrailBufferEtc/UTCMon3Tue4Wed5Thu6Fri7Sat8Sun9all-dayHousehold context day6 AM7 AM8 AM9 AM10 AM11 AM12 PM1 PM2 PM3 PM4 PM5 PM6 PM7 PM8 PM9 PM10 PMProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowProtected morningWork windowReviewed appointment1:00 PM · Hard blockEVENT DETAILSelect a calendar itemOpen an item to see its source, effect, buffers, duplicate copies, and evidence without leaving the calendar.Conflicts and pressureNo buffered hard conflict or soft-load pressure is visible."
     },
     {
       "name": "Calendar exposes source and capacity lenses",
@@ -268,7 +422,7 @@
     {
       "name": "Calendar detail preserves timezone and buffer provenance",
       "status": "PASS",
-      "detail": "EVENT DETAILReviewed appointmentHard blockWhenFri 1:00 PM–2:00 PMCalendarPersonalPurposePersonalBuffer30 min before · 15 min afterLocationProvider locationProviderGoogle CalendarWhy it behaves this waypersonal calendar This time is unavailable unless the rule is changed.View evidence"
+      "detail": "EVENT DETAILReviewed appointmentHard blockWhenSun 1:00 PM–2:00 PMCalendarPersonalPurposePersonalBuffer30 min before · 15 min afterLocationProvider locationProviderGoogle CalendarWhy it behaves this waypersonal calendar This time is unavailable unless the rule is changed.View evidenceExtract related work"
     },
     {
       "name": "Calendar Month is an anchored six-week grid",
@@ -278,17 +432,17 @@
     {
       "name": "Calendar Agenda remains available",
       "status": "PASS",
-      "detail": "AgendaFriday, August 7Household context dayAll day · ContextReviewed appointment1:00 PM · Hard block"
+      "detail": "AgendaSunday, August 9Household context dayAll day · ContextReviewed appointment1:00 PM · Hard block"
     },
     {
       "name": "Find time offers explicit duration",
       "status": "PASS",
-      "detail": "Find a workable windowHard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.30 min60 min90 min120 minEarliest fit · Fri, Aug 72:15 PM–3:15 PMClearMon, Aug 1010:00 AM–11:00 AMClearTue, Aug 1110:00 AM–11:00 AMClearWed, Aug 1210:00 AM–11:00 AMClearThu, Aug 1310:00 AM–11:00 AMClearFri, Aug 1410:00 AM–11:00 AMClearMon, Aug 1710:00 AM–11:00 AMClearTue, Aug 1810:00 AM–11:00 AMClearWed, Aug 1910:00 AM–11:00 AMClearThu, Aug 2010:00 AM–11:00 AMClear"
+      "detail": "Find a workable windowHard blocks, buffers, and protected time are removed. Soft load is flagged, never silently overruled.30 min60 min90 min120 minEarliest fit · Mon, Aug 1010:00 AM–11:00 AMClearTue, Aug 1110:00 AM–11:00 AMClearWed, Aug 1210:00 AM–11:00 AMClearThu, Aug 1310:00 AM–11:00 AMClearFri, Aug 1410:00 AM–11:00 AMClearMon, Aug 1710:00 AM–11:00 AMClearTue, Aug 1810:00 AM–11:00 AMClearWed, Aug 1910:00 AM–11:00 AMClearThu, Aug 2010:00 AM–11:00 AMClearFri, Aug 2110:00 AM–11:00 AMClear"
     },
     {
       "name": "Calendar policy editing is progressively disclosed",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 9:00 AM · 2 visible recordsCALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Calendar policyDayWeekMonthAgendaFind timeCalendar settingsHousehold time guardrailsThese recurring windows shape availability before any suggested opening is shown.Protected morningMon, Tue, Wed, Thu, Fri · 00:00–10:00Hard blockWork windowMon, Tue, Wed, Thu, Fri · 10:30–17:00ContextPreparation and recovery buffersRemote0 min before · 0 min afterAppointment30 min before · 15 min afterMedical0 min before · 0 min afterHandoff0 min before · 0 min afterDeep Work0 min before · 0 min afterCalendar routing and capacityProvider access is factual. Purpose, capacity effect, and approved write destinations are explicit household policy.Review or change calendar rulesPersonalOwner · can writePurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Approved Triage write destinationHousehold contextReader · read onlyPurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Read-only provider calendarSave reviewed rules"
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsCALENDAR REASONINGOne schedule, explicit rules.2 connected calendars are composed without merging provider truth. View filters never change availability or write routes.Hard1Soft load0Context1Conflicts0Today‹›Calendar policyDayWeekMonthAgendaFind timeCalendar settingsHousehold time guardrailsThese recurring windows shape availability before any suggested opening is shown.Protected morningMon, Tue, Wed, Thu, Fri · 00:00–10:00Hard blockWork windowMon, Tue, Wed, Thu, Fri · 10:30–17:00ContextPreparation and recovery buffersRemote0 min before · 0 min afterAppointment30 min before · 15 min afterMedical0 min before · 0 min afterHandoff0 min before · 0 min afterDeep Work0 min before · 0 min afterCalendar routing and capacityProvider access is factual. Purpose, capacity effect, and approved write destinations are explicit household policy.Review or change calendar rulesPersonalOwner · can writePurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Approved Triage write destinationHousehold contextReader · read onlyPurposePersonalWorkHouseholdCoparentingPropertyFamily ContextHolidaysTestOtherCapacity effectHard blockSoft loadContextIgnored Read-only provider calendarSave reviewed rules"
     },
     {
       "name": "/member/scoreboard HTTP",
@@ -301,9 +455,14 @@
       "detail": "Scoreboard"
     },
     {
-      "name": "scoreboard member context",
+      "name": "Scoreboard receives the confirmed canonical task",
       "status": "PASS",
-      "detail": "Private member view"
+      "detail": "YOUR RHYTHM2 gentle next stepsProgress is evidence, not pressure.Active2Completed0Closed0Redirected0Up nextReturn the signed school formOpenView evidenceSend the completed enrollment formOpenView evidenceOutcomes and evidenceNo completed, closed, or redirected work has been recorded yet.Completion reinforcementNo completion reinforcement event has been recorded yet.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.Routine and recurrence historyNo recurring occurrence has been completed yet."
+    },
+    {
+      "name": "Scoreboard presents the internal task inbox status as Open",
+      "status": "PASS",
+      "detail": "YOUR RHYTHM2 gentle next stepsProgress is evidence, not pressure.Active2Completed0Closed0Redirected0Up nextReturn the signed school formOpenView evidenceSend the completed enrollment formOpenView evidenceOutcomes and evidenceNo completed, closed, or redirected work has been recorded yet.Completion reinforcementNo completion reinforcement event has been recorded yet.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.Routine and recurrence historyNo recurring occurrence has been completed yet."
     },
     {
       "name": "/member/settings HTTP",
@@ -321,9 +480,9 @@
       "detail": "Private · deterministic control plane"
     },
     {
-      "name": "Settings exposes all seven control areas",
+      "name": "Settings exposes all eight control areas",
       "status": "PASS",
-      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & system"
+      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesPlaces, assets & accountsHousehold & privacySafety & system"
     },
     {
       "name": "Settings separates read identity from action identity",
@@ -333,7 +492,7 @@
     {
       "name": "Settings connection truth explains independent axes",
       "status": "PASS",
-      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
+      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesPlaces, assets & accountsHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
     },
     {
       "name": "Settings control area survives URL reload",
@@ -355,6 +514,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": true,
@@ -367,6 +527,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": true,
@@ -379,6 +540,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": true,
@@ -391,6 +553,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": true,
@@ -413,6 +576,163 @@
       }
     },
     {
+      "name": "/member/today HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/today title",
+      "status": "PASS",
+      "detail": "Today"
+    },
+    {
+      "name": "narrow today named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow today no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow today single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow today screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow today contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow today keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/triage HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/triage title",
+      "status": "PASS",
+      "detail": "Triage"
+    },
+    {
+      "name": "Triage phone retains the provider capability ceiling",
+      "status": "PASS",
+      "detail": "REVIEW ONE ITEMRenew the annual registrationexplicit provider reminder proposalReview titleCreatesTaskCommitmentCalendar eventProvider reminderProvider list itemReminder listHousehold rhythmPerson endpointPerson or organizationRelationshipPerson factHousehold memberChoose a household member…Household member · principalFixture household adult · principalHousehold member · childScheduled dateNotesGoogle Tasks API supports title, notes, hierarchy, order, and a scheduled date. Its API discards due time and exposes no priority, alarm, recurrence, or geofence fields.ProviderChoose…Google TasksAccountChoose account…visual-google-tasksListChoose destination…Personal tasksNeeds: Approved Reminder Destination. Save the missing details before confirming.Save detailsConfirm and routeDismissView source evidence"
+    },
+    {
+      "name": "narrow triage named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow triage no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow triage single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow triage screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow triage contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow triage keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "button",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
       "name": "/member/comms HTTP",
       "status": "PASS",
       "detail": 200
@@ -423,14 +743,232 @@
       "detail": "Comms"
     },
     {
-      "name": "Comms reflows without phone overflow",
-      "status": "PASS",
-      "detail": false
-    },
-    {
       "name": "Comms phone retains focus explanation and reply approval",
       "status": "PASS",
-      "detail": "StaleLatest source Aug 4, 2026, 8:05 AM · 1 visible recordCOMMUNICATION COCKPIT1 conversation deserves a look.Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply0Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?1 derived item await TriageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: 1 derived item await Triage1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSnooze 2hQuiet thisReply in this thread Approve the independent OpenClaw delivery gate for this exact replySend reply"
+      "detail": "StaleLatest source Aug 4, 2026, 8:05 AM · 1 visible recordCheckpoint KK4VJP0003COMMUNICATION COCKPIT1 conversation deserves a look.Focus uses typed action signals—not unread status—to protect your attention. Messages stay in their original member, workspace, provider, and privacy boundary.Needs reply0Waiting0To Triage1Quieted0Focus 1Waiting 0Snoozed 0Quieted 0All 1All accountsDeterministic fixture · PersonalConversations1Fixture SenderDeterministic fixture1Could you reply today with the calm household update?1 derived item await TriageDeterministic fixture · Fixture-Cat-AFixture SenderFocusWhy it is here: 1 derived item await Triage1 extracted candidate awaiting TriageFrom Fixture Sender · Aug 4, 2026, 8:05 AMCould you reply today with the calm household update?Why this is hereSend to TriageSnooze 2hQuiet thisReply in this threadThis saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.Save reply for approval"
+    },
+    {
+      "name": "narrow comms named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow comms no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow comms single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow comms screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow comms contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow comms keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/reminders HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/reminders title",
+      "status": "PASS",
+      "detail": "Reminders"
+    },
+    {
+      "name": "Reminders phone retains typed task controls",
+      "status": "PASS",
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsTASKS & REMINDERS1 item needs attention now.Canonical household tasks and provider-owned reminders share one calm workspace while retaining separate truth, provenance, and write paths.Now1Scheduled1Places0Anytime0Now 1Scheduled 1Places 0Anytime 0Waiting 0Completed 0All accountsAdministrateMe tasksGoogle TasksAll listsPersonal tasksNow tasks & remindersReturn the signed school formAdministrateMe · Household workDue date has passedAug 4, 2026, 4:00 PMADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORKReturn the signed school formCanonical task seeded for cross-surface visual proof.Why it is here: Due date has passedStatusOpenDueTuesday, August 4, 2026 at 4:00 PMAvailable fromNowEnergyLowEffortSmallWork typeTaskAreaSchoolFirst tiny step: Open the form and check the signature lineThis is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.DoneEdit propertiesDeferSnoozeWaiting on…Abandon…Add household workCreate an explicit canonical task. It appears here immediately and remains separate from provider truth.New taskAdd to a connected providerWrite directly only to the selected Apple Reminders or Google Tasks list.Connect a writable Apple Reminders or Google Tasks account in Settings.Recurring structuresAdd recurrenceAdd routineNo recurring structures are recorded.What each provider can really doAdministrateMe tasks · LocalNative: Typed Household Work, Due Dates And Times, Energy And Effort, Work Type And Domain, Blocking, Deferring, And Completion, Event Provenance.Local tasks are not provider-synced unless a separately governed link is created.Google Tasks · Read OnlyNative: Task Lists, Title, Notes, Scheduled Date, Completion, Nesting, Ordering, Cross List Move, Source Links, Assignment Provenance.The API stores only a scheduled date, not a due time.The API exposes no priority, alarm, recurrence, or geofence fields.Assigned tasks can have provider-enforced write restrictions."
+    },
+    {
+      "name": "narrow reminders named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow reminders no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow reminders single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow reminders screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow reminders contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow reminders keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/people HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/people title",
+      "status": "PASS",
+      "detail": "People"
+    },
+    {
+      "name": "narrow people named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow people no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow people single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow people screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow people contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow people keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
     },
     {
       "name": "/member/notes HTTP",
@@ -443,14 +981,303 @@
       "detail": "Notes"
     },
     {
-      "name": "Notes reflows without phone overflow",
-      "status": "PASS",
-      "detail": false
-    },
-    {
       "name": "Notes phone retains sources, search, and source evidence",
       "status": "PASS",
-      "detail": "FreshLatest source Aug 7, 2026, 8:32 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 7, 2026, 8:32 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 7, 2026, 8:32 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 7, 2026, 8:32 AMPut bags by the door and check tomorrow's calendar.View source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+      "detail": "FreshLatest source Aug 9, 2026, 11:44 AM · 2 visible recordsPRIVATE RECALLWrite it down once. Find it when it matters.Notes keeps your member-owned sources searchable and turns only evidence-backed candidates into Triage proposals. Nothing becomes an official event, reminder, or task here.Visible notes2Shared with me0Meeting notes1Needs Triage1SearchClearAllRecentSharedMeetingsNeeds TriageSourcesProvider access and AdministrateMe sharing stay separate.All sources · 2Personal iCloud1 note · ReadyMeeting notes1 note · LimitedConnect or review sourcesAllHousehold landing listPut bags by the door and check tomorrow's calendar.Personal iCloud · Aug 9, 2026, 11:44 AMSchool planning callThe school planning call covered the autumn pickup routine and the form due Friday.Meeting notes · Aug 9, 2026, 11:44 AM1 in TriageNoteHousehold landing listPersonal iCloud · Aug 9, 2026, 11:44 AMPut bags by the door and check tomorrow's calendar.Send to TriageView source evidenceFolderShared householdAccessOwnerFormatPlainRevisionvisual-revision-2AdministrateMe accessA provider share never grants access here. Share one note explicitly and revoke it independently.MemberChoose household adult…Fixture household adultPermissionShare note"
+    },
+    {
+      "name": "narrow notes named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow notes no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow notes single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow notes screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow notes contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow notes keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/finance HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/finance title",
+      "status": "PASS",
+      "detail": "Finance"
+    },
+    {
+      "name": "narrow finance named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow finance no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow finance single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow finance screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow finance contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow finance keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/calendar HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/calendar title",
+      "status": "PASS",
+      "detail": "Calendar"
+    },
+    {
+      "name": "narrow calendar named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow calendar no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow calendar single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow calendar screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow calendar contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow calendar keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
+    },
+    {
+      "name": "/member/scoreboard HTTP",
+      "status": "PASS",
+      "detail": 200
+    },
+    {
+      "name": "/member/scoreboard title",
+      "status": "PASS",
+      "detail": "Scoreboard"
+    },
+    {
+      "name": "narrow scoreboard named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow scoreboard no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow scoreboard single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow scoreboard screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow scoreboard contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow scoreboard keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "a",
+        "visible": true,
+        "outline": 3
+      }
     },
     {
       "name": "/member/settings HTTP",
@@ -463,19 +1290,80 @@
       "detail": "Settings"
     },
     {
-      "name": "Settings reflows without phone overflow",
-      "status": "PASS",
-      "detail": false
-    },
-    {
       "name": "Settings phone retains all control areas",
       "status": "PASS",
-      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & system"
+      "detail": "OverviewMy accountCoS behaviorConnectionsBridges & devicesPlaces, assets & accountsHousehold & privacySafety & system"
     },
     {
       "name": "Settings phone retains connection truth",
       "status": "PASS",
-      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
+      "detail": "MEMBER CONTROL PLANEYou’re signed in as Household member.See what AdministrateMe can access, what is actually running, and what it is allowed to change. Every control below follows explicit rules and leaves an audit receipt.Needs attention0Connected0Running0Writes executeNoOverviewMy accountCoS behaviorConnectionsBridges & devicesPlaces, assets & accountsHousehold & privacySafety & systemConnection truth has four separate axes.Configured, authenticated, running, and allowed to write are different facts. Unknown is never promoted to healthy.No reviewed provider connection is configured for this member.Add a providerOnly reviewed adapters appear here. OAuth consent and credential setup run through a provider-specific secure enrollment flow; secrets never enter this page.Google account · reviewed central adapterApple apps · requires a member bridgeOutlook, Twilio and BlueBubbles · adapter not installed"
+    },
+    {
+      "name": "narrow settings named controls",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow settings no horizontal overflow",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow settings single page heading",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow settings screen-reader landmarks",
+      "status": "PASS",
+      "detail": {
+        "unnamed": 0,
+        "unnamedExamples": [],
+        "overflow": false,
+        "headings": 1,
+        "motion": false,
+        "landmarks": true,
+        "minContrast": 5.121965522471414
+      }
+    },
+    {
+      "name": "narrow settings contrast tokens",
+      "status": "PASS",
+      "detail": 5.121965522471414
+    },
+    {
+      "name": "narrow settings keyboard focus indicator",
+      "status": "PASS",
+      "detail": {
+        "tag": "button",
+        "visible": true,
+        "outline": 3
+      }
     },
     {
       "name": "/member/today HTTP",
@@ -518,6 +1406,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -530,6 +1419,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -542,6 +1432,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -554,6 +1445,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -580,6 +1472,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -598,12 +1491,12 @@
       "detail": 201
     },
     {
-      "name": "/member/quests/view_859056f1f388472c HTTP",
+      "name": "/member/quests/view_fc5bff77d3ed47c8 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_859056f1f388472c title",
+      "name": "/member/quests/view_fc5bff77d3ed47c8 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -618,12 +1511,12 @@
       "detail": 200
     },
     {
-      "name": "/member/quests/view_859056f1f388472c HTTP",
+      "name": "/member/quests/view_fc5bff77d3ed47c8 HTTP",
       "status": "PASS",
       "detail": 200
     },
     {
-      "name": "/member/quests/view_859056f1f388472c title",
+      "name": "/member/quests/view_fc5bff77d3ed47c8 title",
       "status": "PASS",
       "detail": "30-day Garage Quest"
     },
@@ -672,6 +1565,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -684,6 +1578,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -696,6 +1591,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -708,6 +1604,7 @@
       "status": "PASS",
       "detail": {
         "unnamed": 0,
+        "unnamedExamples": [],
         "overflow": false,
         "headings": 1,
         "motion": false,
@@ -792,104 +1689,148 @@
   ],
   "screenshots": {
     "surface-today-day-brief-desktop.png": {
-      "bytes": 344573,
-      "sha256": "2d6ea1bce9b8ea88aab34158a60fde9f7e72a5502d585201c18ce9818dd7f11e"
+      "bytes": 366394,
+      "sha256": "814520a794c638c747cd938b5a78940b9b59f52ee3f2bc2d1129af025c579e24"
     },
     "surface-today-carousel-desktop.png": {
-      "bytes": 151988,
-      "sha256": "38acb254acf07c8926c3bdf266f186301b042c88c01fb6158a7901abbcb6d5a7"
+      "bytes": 153610,
+      "sha256": "e6181511c8b8d1855065aecae0355a0827e2a8cfcb979c6100e7fe417ddea374"
     },
-    "surface-triage-desktop.png": {
-      "bytes": 201012,
-      "sha256": "23f5dc3a2981c7865af1d1c72eb7d6b7afd00cd5e48591bbc3443c84b14aa707"
+    "surface-triage-task-desktop.png": {
+      "bytes": 237301,
+      "sha256": "321cf68360bdb1b3b3c33cf2a1de356361b16e8c70338560eefc32118d4bd706"
+    },
+    "surface-triage-routed-recent-desktop.png": {
+      "bytes": 191557,
+      "sha256": "ec3e8feff384ef0852b857b4646196b5306e6474c51f28c4960a5c6135ddfc09"
+    },
+    "surface-triage-google-tasks-desktop.png": {
+      "bytes": 235378,
+      "sha256": "acf9d4b045185b18b1981518f04a8be93c94026de61d626d058ab2740a5d12f5"
     },
     "surface-comms-focus-desktop.png": {
-      "bytes": 292238,
-      "sha256": "d237e78f9b0533e4b126875149b1a9f30003ae60f98ba79d071662295a3db257"
+      "bytes": 236724,
+      "sha256": "9351d4987ad436e5bfad0ffdbe066cfa57dbd20b4cc2900ea2309eda101831a9"
+    },
+    "surface-reminders-routed-task-desktop.png": {
+      "bytes": 377621,
+      "sha256": "bf1223d2af62cea3e0b38531750296031e310752e79b72422a1fe5958dc82204"
     },
     "surface-reminders-desktop.png": {
-      "bytes": 282897,
-      "sha256": "d8f1c794dd7231ae03a5a6fb3d8a01520b8dacdfacac104adc7005f6ba392d69"
+      "bytes": 382354,
+      "sha256": "b5791d6870f1f5f100ae711a238cd8dc53fe051aa1ec733ac7245caf0c1bd8e4"
     },
     "surface-people-desktop.png": {
-      "bytes": 344377,
-      "sha256": "4fea1bd67ef8eb7da45842451ed8203290cf1e771d5407622871fef9bd1dd216"
+      "bytes": 342013,
+      "sha256": "054ffa140cfdd6da60866ac010e541c47b84ba192bc60042b332ac35f0c2c4e6"
     },
     "surface-notes-meetings-desktop.png": {
-      "bytes": 331372,
-      "sha256": "e4f9b1a3627aac4683e637708eb878b5f58c83eef0dbd64c662c95c5b458e7b5"
+      "bytes": 331027,
+      "sha256": "9ffcaa12355b32937d77dc57eb03919968500a613c6d46dd6522610034e0d673"
     },
-    "surface-finance-desktop.png": {
-      "bytes": 109552,
-      "sha256": "ef6311ea5fb9ddee06ee07383095078a8b0d7fb2e84216d1c7ae498c17c1f0a4"
+    "surface-finance-overview-desktop.png": {
+      "bytes": 275946,
+      "sha256": "176d6da602e8f7ccb08d9342f642ebcd0bb4593e4a63fb7de6dbdf63dd75d7b9"
+    },
+    "surface-finance-health-desktop.png": {
+      "bytes": 203666,
+      "sha256": "de6532a838deffa48ed8e325f1547370e722a26b27b37f8f4bb11adf0ae73e8e"
     },
     "surface-calendar-week-desktop.png": {
-      "bytes": 284396,
-      "sha256": "e8638c2069fc7c4fd408a35c2c068d1bbcf06787063205134eaaca37f82298f2"
+      "bytes": 349299,
+      "sha256": "5eaaa1cb8825bffd2f14560a5d78bce5ffa27030dd71ce9afeaffbbc8f599b59"
     },
     "surface-calendar-month-desktop.png": {
-      "bytes": 223810,
-      "sha256": "dd0450632acb7cdcbe73ce746252dbc395620267bba4a4e162e8124ebfcff4e6"
+      "bytes": 222911,
+      "sha256": "935346dd69da5f83d2a8ac38d3c8947f4c926cb1e5800b4aa1c787f88371c9a2"
     },
     "surface-scoreboard-desktop.png": {
-      "bytes": 123421,
-      "sha256": "d572c75f3754527905b5839bfb6202707e00eb2057fab1f45820da526ff19ed5"
+      "bytes": 198049,
+      "sha256": "14cbbcfeece63c7fb4c5cd96ab34eafcfc8e2c811286b576b2bfbf61e2372df5"
     },
     "surface-settings-behavior-desktop.png": {
-      "bytes": 242600,
-      "sha256": "e6422e6c0eddb29aaf8db16ce272c136d1a000a73f2be27b128811b3a63c3a0c"
+      "bytes": 279570,
+      "sha256": "4a96b1a3579f931f00eb9e61e80c7fb79cf690eb3f8458a431ff64ecb8f60c59"
+    },
+    "surface-today-narrow.png": {
+      "bytes": 248263,
+      "sha256": "aab8174ec2b63986d14660d3b93f1eaddbf53a21ae654f5de57de12b24a52fe6"
+    },
+    "surface-triage-narrow.png": {
+      "bytes": 177735,
+      "sha256": "0041d6507dbe453f2491f138581d56ff56a3374e9abe14b922c21480a7eec90a"
     },
     "surface-comms-focus-narrow.png": {
-      "bytes": 181675,
-      "sha256": "1bf53aec492a2ab38fb8915569439403e85d217c36c1a1e93332a5805ca76e9e"
+      "bytes": 193084,
+      "sha256": "e031ab16e8fc3ca48e435d667aa34e875835058229142850d75f8558799f0f8f"
+    },
+    "surface-reminders-narrow.png": {
+      "bytes": 268712,
+      "sha256": "0810c6f2c1c5bf249ca8b42e0e141280b457b0aea2aa3c39a5a4e90e5e9cd715"
+    },
+    "surface-people-narrow.png": {
+      "bytes": 214124,
+      "sha256": "fbd785f1a6ff3323ad025dfd83e0148b97b5bc78fcc83286d5e67a1faa6218ff"
     },
     "surface-notes-narrow.png": {
-      "bytes": 209519,
-      "sha256": "e1cac45befc3349be065c4f6ff2742c0f7306008f6d7bd37c7bebc962be08e3d"
+      "bytes": 217191,
+      "sha256": "fabfc6270bcf592f5a05fc1be33b0148b200159207556f50c6c9cdbb411f66a6"
+    },
+    "surface-finance-narrow.png": {
+      "bytes": 238671,
+      "sha256": "9b3e0c493c2d405e8b32ddc6304a2b5fbdc070c2b2ee87f880e744bb4510bec8"
+    },
+    "surface-calendar-narrow.png": {
+      "bytes": 199528,
+      "sha256": "eaacbaa16477dedf7fab23021eec7edc714724597684b2daf0dcdaeac5f13c45"
+    },
+    "surface-scoreboard-narrow.png": {
+      "bytes": 151096,
+      "sha256": "1b6c19343254a28e19597fa43e2932f37590190f58ca38a3eb73c48a3a41aab8"
     },
     "surface-settings-connections-narrow.png": {
-      "bytes": 139551,
-      "sha256": "5f37a210af98af79dcf749eebbf1bc14b418cb2dc84a389197bf426958c1b761"
+      "bytes": 144423,
+      "sha256": "9bab82774149b3d27eebad07cb1fee7b5d4ad847584a8d1d0a32f6deaecb105e"
     },
     "mode-compressed-observation-tablet.png": {
-      "bytes": 151761,
-      "sha256": "c44d83447e10efbd9fa3e265b11b1cecb69ea76aabd5c8715599dcb34d34cfd6"
+      "bytes": 156329,
+      "sha256": "078436693711e0a660d64a086b1fa17f0243b0bf56bb7cae94b24bcfb84154f5"
     },
     "adult-chat-streamed-tablet.png": {
-      "bytes": 123359,
-      "sha256": "ac17f2b0c343fb18db190436d7cd78764fdd3dd6fa7149a69b00e61f924009b7"
+      "bytes": 125341,
+      "sha256": "6db9552c220157d331da3b0263b4f2db2fd23bb6a0c53c45ed25f5c66b7f8479"
     },
     "quest-private-compressed.png": {
-      "bytes": 172757,
-      "sha256": "5fb8db7e4a05222a7c61b34657e2a6dfd4aa381354054d03beeb0fa732d41aab"
+      "bytes": 222552,
+      "sha256": "347bc3643085d59e49531588cfe7d7c4058a2ce0c8e4a5a92a2eb23fa4ecedff"
     },
     "quest-promoted-carousel.png": {
-      "bytes": 255874,
-      "sha256": "e04b6d08f6b12911f30c58d98d0076acf06b04d570249d8766769489bd5c376c"
+      "bytes": 241252,
+      "sha256": "e638e3d938987ec2e69c2c1a917c9d15e36d433cbcfe95ccd75b1d5e618093b9"
     },
     "quest-archived-bookmark.png": {
-      "bytes": 105458,
-      "sha256": "a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7"
+      "bytes": 110117,
+      "sha256": "c82bb3b235ffab1c2b3c92a7801b378d6c30219ce8755c1180191fb9bd5ff475"
     },
     "quest-expired-bookmark.png": {
-      "bytes": 105458,
-      "sha256": "a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7"
+      "bytes": 110117,
+      "sha256": "c82bb3b235ffab1c2b3c92a7801b378d6c30219ce8755c1180191fb9bd5ff475"
     },
     "mode-child-today-narrow.png": {
-      "bytes": 109439,
-      "sha256": "666510f968fbce89f457c32d929ce3e213abbeb0b4ea94eb61b06d67be81fb95"
+      "bytes": 131485,
+      "sha256": "5274439d90d0da2cecc17b3b96bc5dca9e383625783b96c21514744021b6877f"
     },
     "mode-child-scoreboard-narrow.png": {
-      "bytes": 63180,
-      "sha256": "473eafcf06df432060f9f428e26ddb7db1002db8df0977bfe9407a4f015cf318"
+      "bytes": 125403,
+      "sha256": "9f176611fede605f6022f57d5b2972f3a4cd7642e78d4ec34d135d2911f32db5"
     },
     "shared-screen-scoreboard.png": {
-      "bytes": 95181,
-      "sha256": "75d6deb9b624d072222eedea8485f1ca4d170f47f569b4130708c17f6e12ef12"
+      "bytes": 207685,
+      "sha256": "a137e19235d13b6feb3b91eec1785f062ae3ad77ffd6962136e9c98af5f24dc0"
     },
     "adult-chat-degraded-domain-healthy.png": {
-      "bytes": 177770,
-      "sha256": "82933408b2da6b3cc4e87e0d0149d22e3a91ac7e77f68d8d5665b94e5d187686"
+      "bytes": 177552,
+      "sha256": "771724d5532fdfce30d73918ea29ed6a0d7b9264d33d24cac3799bf5d11e43e2"
     }
   },
   "console_errors": [],

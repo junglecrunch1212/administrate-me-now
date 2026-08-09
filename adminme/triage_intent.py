@@ -284,7 +284,7 @@ def extract_intent_candidates(
     """Return bounded typed features; confidence never controls eligibility."""
 
     candidates: list[IntentCandidate] = []
-    for index, (clause, start, end) in enumerate(_clauses(text)[:10], start=1):
+    for index, (clause, start, end) in enumerate(_clauses(text)[:20], start=1):
         kind, rule = _kind_for(clause, kind_hint)
         if kind is None:
             continue
@@ -361,7 +361,7 @@ def extract_message_fallback_candidates(
     """
 
     candidates: list[IntentCandidate] = []
-    for index, (clause, start, end) in enumerate(_clauses(text)[:10], start=1):
+    for index, (clause, start, end) in enumerate(_clauses(text)[:20], start=1):
         compact = " ".join(clause.split())
         if not compact or len(compact) > 500 or _MESSAGE_BOILERPLATE.search(compact):
             continue
@@ -405,6 +405,8 @@ def extract_message_fallback_candidates(
 def extract_grounded_nlp_candidates(
     text: str,
     raw_candidates: Any,
+    *,
+    source_rule_id: str = "private_member_message_v1",
 ) -> list[IntentCandidate]:
     """Admit bounded model-extracted evidence into deterministic Triage.
 
@@ -432,7 +434,7 @@ def extract_grounded_nlp_candidates(
         "relationship_fact",
     }
     candidates: list[IntentCandidate] = []
-    for index, raw in enumerate(raw_candidates[:10], start=1):
+    for index, raw in enumerate(raw_candidates[:20], start=1):
         if not isinstance(raw, dict):
             continue
         kind = str(raw.get("target_kind") or "")
@@ -521,7 +523,7 @@ def extract_grounded_nlp_candidates(
                 confidence=float(confidence) if confidence is not None else None,
                 reasons=["exact_source_quote_grounded_v1", *reasons],
                 eligibility_rule_ids=[
-                    "private_member_message_v1",
+                    source_rule_id,
                     "exact_source_quote_grounded_v1",
                     f"candidate_fields_{kind}_v1",
                 ],
@@ -577,7 +579,7 @@ def merge_intent_candidates(
                 )
             )[:20],
         )
-    return merged[:10]
+    return merged[:20]
 
 
 __all__ = [

@@ -13,8 +13,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 ## Checks
 
 - PASS: canonical fixture seeded
+- PASS: canonical task fixture seeded
+- PASS: Triage task fixture seeded
+- PASS: Google Tasks Triage fixture seeded
 - PASS: calendar fixture seeded
 - PASS: Notes fixture seeded
+- PASS: Finance fixture seeded
 - PASS: /member/today HTTP
 - PASS: /member/today title
 - PASS: Today defaults to Day Brief
@@ -23,7 +27,13 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: Today Carousel is interactive
 - PASS: /member/triage HTTP
 - PASS: /member/triage title
-- PASS: triage member context
+- PASS: Triage renders typed task properties
+- PASS: Triage removed machine-format date entry
+- PASS: Triage saves visible edits before confirmation
+- PASS: Triage keeps the selected member bound to the signed-in identity
+- PASS: Triage receipt is destination-readable before return
+- PASS: Recent decision retains destination receipt
+- PASS: Google Tasks uses only its reviewed date capability
 - PASS: /member/comms HTTP
 - PASS: /member/comms title
 - PASS: Comms identifies deterministic private focus
@@ -33,8 +43,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: Comms quiet lens is interactive
 - PASS: /member/reminders HTTP
 - PASS: /member/reminders title
-- PASS: Reminders identifies deterministic provider truth
+- PASS: Reminders identifies typed local and provider truth
 - PASS: Reminders exposes stable activation lenses
+- PASS: Reminders projects direct canonical tasks without provider claims
+- PASS: Reminders receives the enriched Triage task
+- PASS: Reminders translates the internal task lifecycle into member language
+- PASS: Triage receipt deep-link opens its exact Reminders task
 - PASS: Reminders does not invent a writable provider
 - PASS: /member/people HTTP
 - PASS: /member/people title
@@ -51,7 +65,13 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: Notes meeting lens is presentation-only
 - PASS: /member/finance HTTP
 - PASS: /member/finance title
-- PASS: finance member context
+- PASS: Finance identifies deterministic planning and no bank writes
+- PASS: Finance leads with cash safety and one explained review
+- PASS: Finance compares explicit scenarios without changing baseline
+- PASS: Finance shows goals as planning without moving money
+- PASS: Finance Spending shows categorized provider movement
+- PASS: Finance view survives URL reload
+- PASS: Finance data health exposes source and workbook truth
 - PASS: /member/calendar HTTP
 - PASS: /member/calendar title
 - PASS: Calendar identifies deterministic policy
@@ -66,11 +86,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: Calendar policy editing is progressively disclosed
 - PASS: /member/scoreboard HTTP
 - PASS: /member/scoreboard title
-- PASS: scoreboard member context
+- PASS: Scoreboard receives the confirmed canonical task
+- PASS: Scoreboard presents the internal task inbox status as Open
 - PASS: /member/settings HTTP
 - PASS: /member/settings title
 - PASS: Settings identifies the deterministic control plane
-- PASS: Settings exposes all seven control areas
+- PASS: Settings exposes all eight control areas
 - PASS: Settings separates read identity from action identity
 - PASS: Settings connection truth explains independent axes
 - PASS: Settings control area survives URL reload
@@ -82,19 +103,92 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: desktop screen-reader landmarks
 - PASS: desktop contrast tokens
 - PASS: desktop keyboard focus indicator
+- PASS: /member/today HTTP
+- PASS: /member/today title
+- PASS: narrow today named controls
+- PASS: narrow today no horizontal overflow
+- PASS: narrow today single page heading
+- PASS: narrow today screen-reader landmarks
+- PASS: narrow today contrast tokens
+- PASS: narrow today keyboard focus indicator
+- PASS: /member/triage HTTP
+- PASS: /member/triage title
+- PASS: Triage phone retains the provider capability ceiling
+- PASS: narrow triage named controls
+- PASS: narrow triage no horizontal overflow
+- PASS: narrow triage single page heading
+- PASS: narrow triage screen-reader landmarks
+- PASS: narrow triage contrast tokens
+- PASS: narrow triage keyboard focus indicator
 - PASS: /member/comms HTTP
 - PASS: /member/comms title
-- PASS: Comms reflows without phone overflow
 - PASS: Comms phone retains focus explanation and reply approval
+- PASS: narrow comms named controls
+- PASS: narrow comms no horizontal overflow
+- PASS: narrow comms single page heading
+- PASS: narrow comms screen-reader landmarks
+- PASS: narrow comms contrast tokens
+- PASS: narrow comms keyboard focus indicator
+- PASS: /member/reminders HTTP
+- PASS: /member/reminders title
+- PASS: Reminders phone retains typed task controls
+- PASS: narrow reminders named controls
+- PASS: narrow reminders no horizontal overflow
+- PASS: narrow reminders single page heading
+- PASS: narrow reminders screen-reader landmarks
+- PASS: narrow reminders contrast tokens
+- PASS: narrow reminders keyboard focus indicator
+- PASS: /member/people HTTP
+- PASS: /member/people title
+- PASS: narrow people named controls
+- PASS: narrow people no horizontal overflow
+- PASS: narrow people single page heading
+- PASS: narrow people screen-reader landmarks
+- PASS: narrow people contrast tokens
+- PASS: narrow people keyboard focus indicator
 - PASS: /member/notes HTTP
 - PASS: /member/notes title
-- PASS: Notes reflows without phone overflow
 - PASS: Notes phone retains sources, search, and source evidence
+- PASS: narrow notes named controls
+- PASS: narrow notes no horizontal overflow
+- PASS: narrow notes single page heading
+- PASS: narrow notes screen-reader landmarks
+- PASS: narrow notes contrast tokens
+- PASS: narrow notes keyboard focus indicator
+- PASS: /member/finance HTTP
+- PASS: /member/finance title
+- PASS: narrow finance named controls
+- PASS: narrow finance no horizontal overflow
+- PASS: narrow finance single page heading
+- PASS: narrow finance screen-reader landmarks
+- PASS: narrow finance contrast tokens
+- PASS: narrow finance keyboard focus indicator
+- PASS: /member/calendar HTTP
+- PASS: /member/calendar title
+- PASS: narrow calendar named controls
+- PASS: narrow calendar no horizontal overflow
+- PASS: narrow calendar single page heading
+- PASS: narrow calendar screen-reader landmarks
+- PASS: narrow calendar contrast tokens
+- PASS: narrow calendar keyboard focus indicator
+- PASS: /member/scoreboard HTTP
+- PASS: /member/scoreboard title
+- PASS: narrow scoreboard named controls
+- PASS: narrow scoreboard no horizontal overflow
+- PASS: narrow scoreboard single page heading
+- PASS: narrow scoreboard screen-reader landmarks
+- PASS: narrow scoreboard contrast tokens
+- PASS: narrow scoreboard keyboard focus indicator
 - PASS: /member/settings HTTP
 - PASS: /member/settings title
-- PASS: Settings reflows without phone overflow
 - PASS: Settings phone retains all control areas
 - PASS: Settings phone retains connection truth
+- PASS: narrow settings named controls
+- PASS: narrow settings no horizontal overflow
+- PASS: narrow settings single page heading
+- PASS: narrow settings screen-reader landmarks
+- PASS: narrow settings contrast tokens
+- PASS: narrow settings keyboard focus indicator
 - PASS: /member/today HTTP
 - PASS: /member/today title
 - PASS: tablet Day Brief default
@@ -109,12 +203,12 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 - PASS: tablet reduced-motion keyboard focus indicator
 - PASS: reduced motion honored
 - PASS: private quest created
-- PASS: /member/quests/view_859056f1f388472c HTTP
-- PASS: /member/quests/view_859056f1f388472c title
+- PASS: /member/quests/view_fc5bff77d3ed47c8 HTTP
+- PASS: /member/quests/view_fc5bff77d3ed47c8 title
 - PASS: private quest undiscoverable
 - PASS: quest promoted by explicit review
-- PASS: /member/quests/view_859056f1f388472c HTTP
-- PASS: /member/quests/view_859056f1f388472c title
+- PASS: /member/quests/view_fc5bff77d3ed47c8 HTTP
+- PASS: /member/quests/view_fc5bff77d3ed47c8 title
 - PASS: archived quest has no navigation entry
 - PASS: expiring quest created
 - PASS: expired quest has no navigation entry
@@ -144,28 +238,39 @@ The harness starts credential-free loopback fixtures, uses Google Chrome via pla
 
 ## Screenshots
 
-- `surface-today-day-brief-desktop.png` — 344573 bytes, SHA-256 `2d6ea1bce9b8ea88aab34158a60fde9f7e72a5502d585201c18ce9818dd7f11e`
-- `surface-today-carousel-desktop.png` — 151988 bytes, SHA-256 `38acb254acf07c8926c3bdf266f186301b042c88c01fb6158a7901abbcb6d5a7`
-- `surface-triage-desktop.png` — 201012 bytes, SHA-256 `23f5dc3a2981c7865af1d1c72eb7d6b7afd00cd5e48591bbc3443c84b14aa707`
-- `surface-comms-focus-desktop.png` — 292238 bytes, SHA-256 `d237e78f9b0533e4b126875149b1a9f30003ae60f98ba79d071662295a3db257`
-- `surface-reminders-desktop.png` — 282897 bytes, SHA-256 `d8f1c794dd7231ae03a5a6fb3d8a01520b8dacdfacac104adc7005f6ba392d69`
-- `surface-people-desktop.png` — 344377 bytes, SHA-256 `4fea1bd67ef8eb7da45842451ed8203290cf1e771d5407622871fef9bd1dd216`
-- `surface-notes-meetings-desktop.png` — 331372 bytes, SHA-256 `e4f9b1a3627aac4683e637708eb878b5f58c83eef0dbd64c662c95c5b458e7b5`
-- `surface-finance-desktop.png` — 109552 bytes, SHA-256 `ef6311ea5fb9ddee06ee07383095078a8b0d7fb2e84216d1c7ae498c17c1f0a4`
-- `surface-calendar-week-desktop.png` — 284396 bytes, SHA-256 `e8638c2069fc7c4fd408a35c2c068d1bbcf06787063205134eaaca37f82298f2`
-- `surface-calendar-month-desktop.png` — 223810 bytes, SHA-256 `dd0450632acb7cdcbe73ce746252dbc395620267bba4a4e162e8124ebfcff4e6`
-- `surface-scoreboard-desktop.png` — 123421 bytes, SHA-256 `d572c75f3754527905b5839bfb6202707e00eb2057fab1f45820da526ff19ed5`
-- `surface-settings-behavior-desktop.png` — 242600 bytes, SHA-256 `e6422e6c0eddb29aaf8db16ce272c136d1a000a73f2be27b128811b3a63c3a0c`
-- `surface-comms-focus-narrow.png` — 181675 bytes, SHA-256 `1bf53aec492a2ab38fb8915569439403e85d217c36c1a1e93332a5805ca76e9e`
-- `surface-notes-narrow.png` — 209519 bytes, SHA-256 `e1cac45befc3349be065c4f6ff2742c0f7306008f6d7bd37c7bebc962be08e3d`
-- `surface-settings-connections-narrow.png` — 139551 bytes, SHA-256 `5f37a210af98af79dcf749eebbf1bc14b418cb2dc84a389197bf426958c1b761`
-- `mode-compressed-observation-tablet.png` — 151761 bytes, SHA-256 `c44d83447e10efbd9fa3e265b11b1cecb69ea76aabd5c8715599dcb34d34cfd6`
-- `adult-chat-streamed-tablet.png` — 123359 bytes, SHA-256 `ac17f2b0c343fb18db190436d7cd78764fdd3dd6fa7149a69b00e61f924009b7`
-- `quest-private-compressed.png` — 172757 bytes, SHA-256 `5fb8db7e4a05222a7c61b34657e2a6dfd4aa381354054d03beeb0fa732d41aab`
-- `quest-promoted-carousel.png` — 255874 bytes, SHA-256 `e04b6d08f6b12911f30c58d98d0076acf06b04d570249d8766769489bd5c376c`
-- `quest-archived-bookmark.png` — 105458 bytes, SHA-256 `a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7`
-- `quest-expired-bookmark.png` — 105458 bytes, SHA-256 `a394e534a35db8c5b0912edc02d00135db11eda9dc29a64c0da18252a18c36b7`
-- `mode-child-today-narrow.png` — 109439 bytes, SHA-256 `666510f968fbce89f457c32d929ce3e213abbeb0b4ea94eb61b06d67be81fb95`
-- `mode-child-scoreboard-narrow.png` — 63180 bytes, SHA-256 `473eafcf06df432060f9f428e26ddb7db1002db8df0977bfe9407a4f015cf318`
-- `shared-screen-scoreboard.png` — 95181 bytes, SHA-256 `75d6deb9b624d072222eedea8485f1ca4d170f47f569b4130708c17f6e12ef12`
-- `adult-chat-degraded-domain-healthy.png` — 177770 bytes, SHA-256 `82933408b2da6b3cc4e87e0d0149d22e3a91ac7e77f68d8d5665b94e5d187686`
+- `surface-today-day-brief-desktop.png` — 366394 bytes, SHA-256 `814520a794c638c747cd938b5a78940b9b59f52ee3f2bc2d1129af025c579e24`
+- `surface-today-carousel-desktop.png` — 153610 bytes, SHA-256 `e6181511c8b8d1855065aecae0355a0827e2a8cfcb979c6100e7fe417ddea374`
+- `surface-triage-task-desktop.png` — 237301 bytes, SHA-256 `321cf68360bdb1b3b3c33cf2a1de356361b16e8c70338560eefc32118d4bd706`
+- `surface-triage-routed-recent-desktop.png` — 191557 bytes, SHA-256 `ec3e8feff384ef0852b857b4646196b5306e6474c51f28c4960a5c6135ddfc09`
+- `surface-triage-google-tasks-desktop.png` — 235378 bytes, SHA-256 `acf9d4b045185b18b1981518f04a8be93c94026de61d626d058ab2740a5d12f5`
+- `surface-comms-focus-desktop.png` — 236724 bytes, SHA-256 `9351d4987ad436e5bfad0ffdbe066cfa57dbd20b4cc2900ea2309eda101831a9`
+- `surface-reminders-routed-task-desktop.png` — 377621 bytes, SHA-256 `bf1223d2af62cea3e0b38531750296031e310752e79b72422a1fe5958dc82204`
+- `surface-reminders-desktop.png` — 382354 bytes, SHA-256 `b5791d6870f1f5f100ae711a238cd8dc53fe051aa1ec733ac7245caf0c1bd8e4`
+- `surface-people-desktop.png` — 342013 bytes, SHA-256 `054ffa140cfdd6da60866ac010e541c47b84ba192bc60042b332ac35f0c2c4e6`
+- `surface-notes-meetings-desktop.png` — 331027 bytes, SHA-256 `9ffcaa12355b32937d77dc57eb03919968500a613c6d46dd6522610034e0d673`
+- `surface-finance-overview-desktop.png` — 275946 bytes, SHA-256 `176d6da602e8f7ccb08d9342f642ebcd0bb4593e4a63fb7de6dbdf63dd75d7b9`
+- `surface-finance-health-desktop.png` — 203666 bytes, SHA-256 `de6532a838deffa48ed8e325f1547370e722a26b27b37f8f4bb11adf0ae73e8e`
+- `surface-calendar-week-desktop.png` — 349299 bytes, SHA-256 `5eaaa1cb8825bffd2f14560a5d78bce5ffa27030dd71ce9afeaffbbc8f599b59`
+- `surface-calendar-month-desktop.png` — 222911 bytes, SHA-256 `935346dd69da5f83d2a8ac38d3c8947f4c926cb1e5800b4aa1c787f88371c9a2`
+- `surface-scoreboard-desktop.png` — 198049 bytes, SHA-256 `14cbbcfeece63c7fb4c5cd96ab34eafcfc8e2c811286b576b2bfbf61e2372df5`
+- `surface-settings-behavior-desktop.png` — 279570 bytes, SHA-256 `4a96b1a3579f931f00eb9e61e80c7fb79cf690eb3f8458a431ff64ecb8f60c59`
+- `surface-today-narrow.png` — 248263 bytes, SHA-256 `aab8174ec2b63986d14660d3b93f1eaddbf53a21ae654f5de57de12b24a52fe6`
+- `surface-triage-narrow.png` — 177735 bytes, SHA-256 `0041d6507dbe453f2491f138581d56ff56a3374e9abe14b922c21480a7eec90a`
+- `surface-comms-focus-narrow.png` — 193084 bytes, SHA-256 `e031ab16e8fc3ca48e435d667aa34e875835058229142850d75f8558799f0f8f`
+- `surface-reminders-narrow.png` — 268712 bytes, SHA-256 `0810c6f2c1c5bf249ca8b42e0e141280b457b0aea2aa3c39a5a4e90e5e9cd715`
+- `surface-people-narrow.png` — 214124 bytes, SHA-256 `fbd785f1a6ff3323ad025dfd83e0148b97b5bc78fcc83286d5e67a1faa6218ff`
+- `surface-notes-narrow.png` — 217191 bytes, SHA-256 `fabfc6270bcf592f5a05fc1be33b0148b200159207556f50c6c9cdbb411f66a6`
+- `surface-finance-narrow.png` — 238671 bytes, SHA-256 `9b3e0c493c2d405e8b32ddc6304a2b5fbdc070c2b2ee87f880e744bb4510bec8`
+- `surface-calendar-narrow.png` — 199528 bytes, SHA-256 `eaacbaa16477dedf7fab23021eec7edc714724597684b2daf0dcdaeac5f13c45`
+- `surface-scoreboard-narrow.png` — 151096 bytes, SHA-256 `1b6c19343254a28e19597fa43e2932f37590190f58ca38a3eb73c48a3a41aab8`
+- `surface-settings-connections-narrow.png` — 144423 bytes, SHA-256 `9bab82774149b3d27eebad07cb1fee7b5d4ad847584a8d1d0a32f6deaecb105e`
+- `mode-compressed-observation-tablet.png` — 156329 bytes, SHA-256 `078436693711e0a660d64a086b1fa17f0243b0bf56bb7cae94b24bcfb84154f5`
+- `adult-chat-streamed-tablet.png` — 125341 bytes, SHA-256 `6db9552c220157d331da3b0263b4f2db2fd23bb6a0c53c45ed25f5c66b7f8479`
+- `quest-private-compressed.png` — 222552 bytes, SHA-256 `347bc3643085d59e49531588cfe7d7c4058a2ce0c8e4a5a92a2eb23fa4ecedff`
+- `quest-promoted-carousel.png` — 241252 bytes, SHA-256 `e638e3d938987ec2e69c2c1a917c9d15e36d433cbcfe95ccd75b1d5e618093b9`
+- `quest-archived-bookmark.png` — 110117 bytes, SHA-256 `c82bb3b235ffab1c2b3c92a7801b378d6c30219ce8755c1180191fb9bd5ff475`
+- `quest-expired-bookmark.png` — 110117 bytes, SHA-256 `c82bb3b235ffab1c2b3c92a7801b378d6c30219ce8755c1180191fb9bd5ff475`
+- `mode-child-today-narrow.png` — 131485 bytes, SHA-256 `5274439d90d0da2cecc17b3b96bc5dca9e383625783b96c21514744021b6877f`
+- `mode-child-scoreboard-narrow.png` — 125403 bytes, SHA-256 `9f176611fede605f6022f57d5b2972f3a4cd7642e78d4ec34d135d2911f32db5`
+- `shared-screen-scoreboard.png` — 207685 bytes, SHA-256 `a137e19235d13b6feb3b91eec1785f062ae3ad77ffd6962136e9c98af5f24dc0`
+- `adult-chat-degraded-domain-healthy.png` — 177552 bytes, SHA-256 `771724d5532fdfce30d73918ea29ed6a0d7b9264d33d24cac3799bf5d11e43e2`

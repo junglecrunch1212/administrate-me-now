@@ -327,9 +327,18 @@ class EventBus:
         state = self._subscribers.get(subscriber_id)
         if state is None:
             raise KeyError(subscriber_id)
-        lag = await self._log.count_since(state.checkpoint, types=state.types_filter)
+        # ``count_since`` yields while the encrypted log query runs. A
+        # concurrent delivery batch may advance the in-memory checkpoint in
+        # that interval. Retry until the checkpoint used for the count is the
+        # checkpoint returned to the caller; otherwise Doctor can report the
+        # impossible combination of a final checkpoint and stale positive lag.
+        while True:
+            checkpoint = state.checkpoint
+            lag = await self._log.count_since(checkpoint, types=state.types_filter)
+            if checkpoint == state.checkpoint:
+                break
         return {
-            "checkpoint_event_id": state.checkpoint,
+            "checkpoint_event_id": checkpoint,
             "lag_count": lag,
             "last_success_at": state.last_success_at_ms,
             "last_failure_at": state.last_failure_at_ms,

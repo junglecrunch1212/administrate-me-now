@@ -8,6 +8,7 @@ row state (§2 invariant 4). Keyed by ``(tenant_id, task_id)``.
 Subscribed event types:
 - ``task.created``    → INSERT row from payload
 - ``task.completed``  → status='done', completed_at/completed_by
+- typed lifecycle events preserve defer/snooze/block/cancel/reopen intent
 - ``task.updated``    → apply field_updates (and new_status if given)
 - ``task.deleted``    → soft-delete: status='dismissed' (row stays for
   rebuild correctness)
@@ -55,6 +56,12 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     dispatch = {
         "task.created": apply_task_created,
         "task.completed": apply_task_completed,
+        "task.deferred": apply_task_deferred,
+        "task.snoozed": apply_task_snoozed,
+        "task.blocked": apply_task_blocked,
+        "task.unblocked": apply_task_unblocked,
+        "task.cancelled": apply_task_cancelled,
+        "task.reopened": apply_task_reopened,
         "task.updated": apply_task_updated,
         "task.deleted": apply_task_deleted,
         "list_item.completed": apply_external_completion,
@@ -82,11 +89,14 @@ def apply_calendar_completion(
     ):
         return
     conn.execute(
-        """UPDATE tasks SET status='done', completed_at=?, completed_by=?, last_event_id=?
+        """UPDATE tasks SET status='done', completed_at=?, completed_by=?,
+                lifecycle_action='complete_from_calendar', lifecycle_at=?,
+                lifecycle_reason='linked calendar outcome', last_event_id=?
              WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
         (
             p["recorded_at"],
             p["member_id"],
+            p["recorded_at"],
             envelope["event_id"],
             envelope["tenant_id"],
             p["linked_item_id"],
@@ -109,7 +119,8 @@ def apply_external_completion(
         return
     completed = envelope["type"] == "list_item.completed"
     conn.execute(
-        """UPDATE tasks SET status=?, completed_at=?, completed_by=?, last_event_id=?
+        """UPDATE tasks SET status=?, completed_at=?, completed_by=?,
+                lifecycle_action=?, lifecycle_at=?, lifecycle_reason=?, last_event_id=?
              WHERE tenant_id=? AND task_id=? AND last_event_id < ?""",
         (
             "done" if completed else "next",
@@ -117,6 +128,9 @@ def apply_external_completion(
             if completed
             else None,
             p.get("member_id") if completed else None,
+            "complete_from_provider" if completed else "reopen_from_provider",
+            str(p.get("completion_at") or p.get("last_modified_at")),
+            "linked provider item outcome",
             envelope["event_id"],
             envelope["tenant_id"],
             p["linked_item_id"],
@@ -213,16 +227,145 @@ def apply_task_completed(envelope: dict[str, Any], conn: sqlcipher3.Connection) 
            SET status        = 'done',
                completed_at  = ?,
                completed_by  = ?,
+               lifecycle_action = 'complete',
+               lifecycle_at = ?,
+               lifecycle_reason = ?,
                last_event_id = ?
          WHERE tenant_id = ? AND task_id = ?
         """,
         (
             p["completed_at"],
             p["completed_by_member_id"],
+            p["completed_at"],
+            p.get("note"),
             envelope["event_id"],
             envelope["tenant_id"],
             p["task_id"],
         ),
+    )
+
+
+def _apply_typed_lifecycle(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    status: str,
+    action: str,
+    at_field: str,
+    reason_field: str | None = None,
+    available_field: str | None = None,
+    waiting_field: str | None = None,
+    clear_completion: bool = False,
+    clear_available: bool = False,
+    clear_waiting: bool = False,
+) -> None:
+    p = envelope["payload"]
+    reason = p.get(reason_field) if reason_field else None
+    assignments = [
+        "status = ?",
+        "lifecycle_action = ?",
+        "lifecycle_at = ?",
+        "lifecycle_reason = ?",
+        "last_event_id = ?",
+    ]
+    params: list[Any] = [
+        status,
+        action,
+        p[at_field],
+        reason,
+        envelope["event_id"],
+    ]
+    if available_field:
+        assignments.append("available_from = ?")
+        params.append(p.get(available_field))
+    elif clear_available:
+        assignments.append("available_from = NULL")
+    if waiting_field:
+        assignments.extend(["waiting_on = ?", "waiting_since = ?"])
+        params.extend([p.get(waiting_field), p[at_field]])
+    elif clear_waiting:
+        assignments.extend(["waiting_on = NULL", "waiting_since = NULL"])
+    if clear_completion:
+        assignments.extend(["completed_at = NULL", "completed_by = NULL"])
+    params.extend([envelope["tenant_id"], p["task_id"]])
+    conn.execute(
+        f"UPDATE tasks SET {', '.join(assignments)} "
+        "WHERE tenant_id = ? AND task_id = ?",
+        params,
+    )
+
+
+def apply_task_deferred(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="deferred",
+        action="defer",
+        at_field="deferred_at",
+        reason_field="reason",
+        available_field="deferred_until",
+        clear_waiting=True,
+    )
+
+
+def apply_task_snoozed(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="deferred",
+        action="snooze",
+        at_field="snoozed_at",
+        available_field="snoozed_until",
+        clear_waiting=True,
+    )
+
+
+def apply_task_blocked(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="waiting_on",
+        action="block",
+        at_field="blocked_at",
+        reason_field="reason",
+        waiting_field="reason",
+    )
+
+
+def apply_task_unblocked(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="next",
+        action="unblock",
+        at_field="unblocked_at",
+        reason_field="note",
+        clear_waiting=True,
+    )
+
+
+def apply_task_cancelled(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="cancelled",
+        action="cancel",
+        at_field="cancelled_at",
+        reason_field="reason",
+        clear_waiting=True,
+    )
+
+
+def apply_task_reopened(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_typed_lifecycle(
+        envelope,
+        conn,
+        status="next",
+        action="reopen",
+        at_field="reopened_at",
+        clear_completion=True,
+        clear_available=True,
+        clear_waiting=True,
     )
 
 
@@ -242,8 +385,12 @@ def apply_task_updated(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             params.append(value)
     if not columns:
         return
-    assignments = ", ".join(f"{c} = ?" for c in columns) + ", last_event_id = ?"
-    params.append(envelope["event_id"])
+    assignments = ", ".join(f"{c} = ?" for c in columns)
+    assignments += (
+        ", lifecycle_action = 'edit', lifecycle_at = ?, "
+        "lifecycle_reason = NULL, last_event_id = ?"
+    )
+    params.extend([envelope["occurred_at"], envelope["event_id"]])
     params.extend([envelope["tenant_id"], p["task_id"]])
     conn.execute(
         f"UPDATE tasks SET {assignments} WHERE tenant_id = ? AND task_id = ?",
@@ -258,10 +405,14 @@ def apply_task_deleted(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         """
         UPDATE tasks
            SET status        = 'dismissed',
+               lifecycle_action = 'delete',
+               lifecycle_at = ?,
+               lifecycle_reason = 'deleted from reviewed workbook',
                last_event_id = ?
          WHERE tenant_id = ? AND task_id = ?
         """,
         (
+            p["deleted_at"],
             envelope["event_id"],
             envelope["tenant_id"],
             p["task_id"],

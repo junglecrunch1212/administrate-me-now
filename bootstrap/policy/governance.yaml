@@ -21,6 +21,9 @@ action_gates:
   settings.*: allow
   money_flow.*: allow
   finance.*: allow
+  place.*: allow
+  asset.*: allow
+  account.*: allow
   xlsx.regenerated: allow
   external_sync.write_requested: allow
   send_as_principal: hard_refuse

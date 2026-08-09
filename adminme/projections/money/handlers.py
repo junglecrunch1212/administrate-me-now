@@ -40,6 +40,9 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "finance.budget_set": apply_finance_budget_set,
         "finance.scenario_set": apply_finance_scenario_set,
         "finance.goal_set": apply_finance_goal_set,
+        "finance.goal_paused": apply_finance_goal_paused,
+        "finance.goal_completed": apply_finance_goal_completed,
+        "finance.goal_reopened": apply_finance_goal_reopened,
         "finance.workbook_published": apply_finance_workbook_published,
     }
     handler = dispatch.get(event_type)
@@ -478,6 +481,73 @@ def apply_finance_goal_set(
             "notes",
         ),
         defaults={"current_minor": 0, "priority": 100, "status": "active"},
+    )
+
+
+def _apply_finance_goal_lifecycle(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    status: str,
+    at_field: str,
+    actor_field: str,
+    reason_field: str | None = None,
+) -> None:
+    payload = envelope["payload"]
+    reason = payload.get(reason_field) if reason_field is not None else None
+    conn.execute(
+        """UPDATE finance_goals
+              SET status=?, lifecycle_at=?, lifecycle_actor=?,
+                  lifecycle_reason=?, last_event_id=?
+            WHERE tenant_id=? AND goal_id=? AND last_event_id < ?""",
+        (
+            status,
+            payload[at_field],
+            payload[actor_field],
+            reason,
+            envelope["event_id"],
+            envelope["tenant_id"],
+            payload["goal_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_finance_goal_paused(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    _apply_finance_goal_lifecycle(
+        envelope,
+        conn,
+        status="paused",
+        at_field="paused_at",
+        actor_field="paused_by_member_id",
+        reason_field="reason",
+    )
+
+
+def apply_finance_goal_completed(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    _apply_finance_goal_lifecycle(
+        envelope,
+        conn,
+        status="complete",
+        at_field="completed_at",
+        actor_field="completed_by_member_id",
+        reason_field="note",
+    )
+
+
+def apply_finance_goal_reopened(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    _apply_finance_goal_lifecycle(
+        envelope,
+        conn,
+        status="active",
+        at_field="reopened_at",
+        actor_field="reopened_by_member_id",
     )
 
 

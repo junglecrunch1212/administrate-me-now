@@ -49,6 +49,8 @@ REACTIVE_PIPELINES = {
     "pipeline:noise_filtering",
     "pipeline:reward_dispatch",
     "pipeline:thank_you_detection",
+    "pipeline:deterministic_source_candidates",
+    "pipeline:lifecycle_maintenance",
 }
 
 

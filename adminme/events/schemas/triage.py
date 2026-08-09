@@ -155,6 +155,14 @@ class TriageIntentFeaturesExtractedV2(TriageIntentFeaturesExtractedV1):
     reason_codes: list[str] = Field(min_length=1, max_length=20)
 
 
+class TriageIntentFeaturesExtractedV3(TriageIntentFeaturesExtractedV2):
+    """Expanded reviewed candidate batch without rewriting v1/v2 history."""
+
+    candidates: list[TriageFeatureCandidateV1] = Field(
+        default_factory=list, max_length=20
+    )
+
+
 class TriageItemEnrichedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -255,6 +263,9 @@ registry.register(
 registry.register(
     "triage.intent.features_extracted", 2, TriageIntentFeaturesExtractedV2
 )
+registry.register(
+    "triage.intent.features_extracted", 3, TriageIntentFeaturesExtractedV3
+)
 registry.register("triage.item.enriched", 1, TriageItemEnrichedV1)
 registry.register("triage.item.confirmed", 1, TriageItemConfirmedV1)
 registry.register("triage.item.confirmed", 2, TriageItemConfirmedV2)
@@ -280,4 +291,5 @@ __all__ = [
     "TriageIntentSubmittedV1",
     "TriageIntentFeaturesExtractedV1",
     "TriageIntentFeaturesExtractedV2",
+    "TriageIntentFeaturesExtractedV3",
 ]

@@ -7,13 +7,13 @@
   "properties": {
     "candidates": {
       "type": "array",
-      "maxItems": 10,
+      "maxItems": 20,
       "items": {
         "type": "object",
         "required": ["target_kind", "title", "candidate", "evidence_quote", "confidence", "reasons"],
         "additionalProperties": false,
         "properties": {
-          "target_kind": {"type": "string", "enum": ["task", "calendar_event", "reminder", "list", "list_item", "recurrence"]},
+          "target_kind": {"type": "string", "enum": ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"]},
           "title": {"type": "string", "minLength": 1, "maxLength": 1000},
           "candidate": {"type": "object"},
           "evidence_quote": {"type": "string", "minLength": 1, "maxLength": 2000},

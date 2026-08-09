@@ -94,6 +94,12 @@ def rank_what_now(
         score = 800 + urgency_score + status_score + 200 + outcome_bias
         if in_quiet_hours and row.get("kind") == "reply":
             score -= 75
+        lifecycle_actions = {
+            "pending": ["complete", "defer", "block", "cancel", "delegate", "evidence"],
+            "snoozed": ["complete", "defer", "cancel", "delegate", "evidence"],
+            "deferred": ["complete", "cancel", "delegate", "evidence"],
+            "blocked": ["complete", "unblock", "cancel", "delegate", "evidence"],
+        }.get(status, ["evidence"])
         candidates.append(
             {
                 "id": row["commitment_id"],
@@ -110,7 +116,7 @@ def rank_what_now(
                 "energy": "communication" if row.get("kind") == "reply" else None,
                 "effort": "15 min",
                 "context": "commitment",
-                "actions": ["complete", "block", "evidence"],
+                "actions": lifecycle_actions,
                 "_score": score,
                 "_due": due,
                 "explanation": {
@@ -300,7 +306,7 @@ def rank_what_now(
         )
 
     for row in recurrences or []:
-        if not row.get("trackable"):
+        if not row.get("trackable") or row.get("status", "active") != "active":
             continue
         due = _parse_time(row.get("next_occurrence"))
         urgency_score, urgency_reason = _urgency(due, as_of)
@@ -317,7 +323,7 @@ def rank_what_now(
                 "energy": "routine",
                 "effort": "repeatable",
                 "context": "routine",
-                "actions": ["complete", "evidence"],
+                "actions": ["complete", "pause", "evidence"],
                 "_score": 475 + urgency_score + outcome_bias,
                 "_due": due,
                 "explanation": {
@@ -372,7 +378,7 @@ def rank_what_now(
                 "energy": "routine",
                 "effort": f"step {int(current_step.get('position', 0)) + 1} of {row.get('total_steps', 1)}",
                 "context": "ordered routine",
-                "actions": ["complete_step", "skip_step", "evidence"],
+                "actions": ["complete_step", "skip_step", "pause", "evidence"],
                 "occurrence_date": row["occurrence_date"],
                 "current_step": current_step,
                 "steps": row.get("steps") or [],

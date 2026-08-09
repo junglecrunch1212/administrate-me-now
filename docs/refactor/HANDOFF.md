@@ -17,6 +17,39 @@ next_phase: observation_soak_member_triage_review_and_false_positive_feedback
 
 # Release handoff
 
+## 2026-08-09 CO-010 lifecycle-completeness candidate
+
+The principal authorized a whole-life event audit after the live mailbox had
+retained source messages but surfaced no useful Triage candidates. The clean
+candidate branch adds an executable catalog (15 life patterns, 11 candidate
+channels, 121 source/target decisions, 23 object lifecycles, and all registered
+event schemas) plus a generated evidence artifact and process gates. It does
+not alter the current family runtime before review and merge.
+
+The repair broadens message, Note, member-intent, and pinned OpenClaw proposal
+vocabulary to all eleven Triage kinds while keeping exact evidence and human
+confirmation mandatory. Retained message/Note facts are replayed on reviewed
+pipeline-version activation; no mailbox fact is rewritten. Plaid recurrence
+recognition and reviewed Home Assistant rule snapshots are deterministic and
+never sent to a model. Comms, Notes, Calendar, and Reminders can explicitly
+reassess exact visible source evidence.
+
+Typed Task, Commitment, Recurrence, Routine, Place/Asset/Account, and Finance
+Goal lifecycle commands now retain terminal outcomes and surface them in
+Reminders, Today, Finance, Settings, and Scoreboard as appropriate. Google
+Tasks restart polling persists fingerprints with its cursor. The Finance
+workbook emits the same Goal lifecycle events as the portal instead of
+overwriting status. Optional providers remain truthful and unconfigured.
+
+Phase A release evidence is complete on the required Python 3.14 / Node 24
+candidate path: 46 strict acceptance tests, 1,716 root/pack tests, 60 bridge
+tests, static analysis, audits, builds, clean install, tenant isolation,
+encrypted backup/restore, OpenClaw contract/build/tests, and shell checks all
+passed. The rendered Gate 7 harness passed 223 assertions with zero recorded
+failures. Phase B remains pending: final diff review, merge, attested immutable
+upgrade, Doctor, and observation-mode source replay must pass before the
+handoff front matter may claim CO-010 deployed.
+
 ## 2026-08-09 CO-009 cross-surface Task lifecycle (deployed and live verified)
 
 PR #302 merged as `3ab4b7839b0ad867eed326b34c576fd1ffc150cb` and the

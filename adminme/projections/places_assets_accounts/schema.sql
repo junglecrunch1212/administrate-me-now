@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS places (
     geo_lat           REAL,
     geo_lon           REAL,
     attributes_json   TEXT NOT NULL DEFAULT '{}',
+    lifecycle_status  TEXT NOT NULL DEFAULT 'active'
+                      CHECK (lifecycle_status IN ('active','archived')),
+    archived_at       TEXT,
+    archived_by       TEXT,
+    archive_reason    TEXT,
     owner_scope       TEXT NOT NULL,
     visibility_scope  TEXT NOT NULL,
     sensitivity       TEXT NOT NULL DEFAULT 'normal'
@@ -64,6 +69,11 @@ CREATE TABLE IF NOT EXISTS assets (
                           'firearm','pet','other')),
     linked_place      TEXT,                          -- doc-only → places(place_id)
     attributes_json   TEXT NOT NULL DEFAULT '{}',
+    lifecycle_status  TEXT NOT NULL DEFAULT 'active'
+                      CHECK (lifecycle_status IN ('active','archived')),
+    archived_at       TEXT,
+    archived_by       TEXT,
+    archive_reason    TEXT,
     owner_scope       TEXT NOT NULL,
     visibility_scope  TEXT NOT NULL,
     sensitivity       TEXT NOT NULL DEFAULT 'normal'
@@ -110,6 +120,11 @@ CREATE TABLE IF NOT EXISTS accounts (
     linked_asset      TEXT,                          -- doc-only → assets(asset_id)
     linked_place      TEXT,                          -- doc-only → places(place_id)
     attributes_json   TEXT NOT NULL DEFAULT '{}',
+    lifecycle_status  TEXT NOT NULL DEFAULT 'active'
+                      CHECK (lifecycle_status IN ('active','archived')),
+    archived_at       TEXT,
+    archived_by       TEXT,
+    archive_reason    TEXT,
     owner_scope       TEXT NOT NULL,
     visibility_scope  TEXT NOT NULL,
     sensitivity       TEXT NOT NULL DEFAULT 'normal'

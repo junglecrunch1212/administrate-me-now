@@ -5,7 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 
-_KINDS = {"task", "calendar_event", "reminder", "list", "list_item", "recurrence"}
+_KINDS = {
+    "task",
+    "commitment",
+    "calendar_event",
+    "reminder",
+    "list",
+    "list_item",
+    "recurrence",
+    "party_identifier",
+    "party_candidate",
+    "party_relationship",
+    "relationship_fact",
+}
 
 
 def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
@@ -41,6 +53,6 @@ def post_process(raw: dict, inputs: dict, ctx: Any) -> dict:
             }
         )
     return {
-        "candidates": cleaned[:10],
+        "candidates": cleaned[:20],
         "reasons": [str(value)[:500] for value in raw.get("reasons") or []][:20],
     }

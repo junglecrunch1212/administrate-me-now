@@ -35,6 +35,9 @@ from adminme.projections.calendars.queries import (
     week,
 )
 from adminme.projections.commitments.queries import by_party
+from adminme.projections.commitments.queries import (
+    work_history_for_member as commitment_history_for_member,
+)
 from adminme.projections.interactions.queries import (
     closeness_signals,
     participants_for,
@@ -63,8 +66,15 @@ from adminme.projections.parties.queries import (
     relationships_of,
     search_visible_people,
 )
-from adminme.projections.places_assets_accounts.queries import linked_to_party
-from adminme.projections.recurrences.queries import for_member
+from adminme.projections.places_assets_accounts.queries import (
+    linked_to_party,
+    registry_items,
+)
+from adminme.projections.recurrences.queries import (
+    completion_history_for_member,
+    for_member,
+    routine_definitions_for_member,
+)
 from adminme.projections.tasks.queries import (
     actionable_for_member,
     work_history_for_member,
@@ -780,6 +790,20 @@ def build_surface(
             )
         )
         base["what_now"] = what_now
+        base["lifecycle_options"] = {
+            "commitment_delegates": [
+                {
+                    "party_id": party["party_id"],
+                    "label": party.get("display_name") or "Unnamed person",
+                    "kind": party.get("kind") or "person",
+                }
+                for party in all_parties(
+                    runtime.projections.connection("parties"), session
+                )
+                if party["party_id"] != session.auth_member_id
+                and party.get("kind") in {"person", "household", "organization"}
+            ]
+        }
         base["brief"] = compose_daily_brief(
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
@@ -1170,6 +1194,35 @@ def build_surface(
             now=now,
             tasks=tasks,
         )
+        recurrence_conn = runtime.projections.connection("recurrences")
+        rhythms = [
+            {
+                **item,
+                "id": item["recurrence_id"],
+                "object_kind": "recurrence",
+                "title": str(item.get("kind") or "recurrence")
+                .replace("_", " ")
+                .title(),
+            }
+            for item in for_member(
+                recurrence_conn,
+                session,
+                member_party_id=member,
+            )
+        ]
+        rhythms.extend(
+            {
+                **item,
+                "id": item["routine_id"],
+                "object_kind": "routine",
+            }
+            for item in routine_definitions_for_member(
+                recurrence_conn,
+                session,
+                member_party_id=member,
+            )
+        )
+        base["cockpit"]["rhythms"] = rhythms
         base["freshness"] = surface_freshness(
             generated_at=now,
             latest_source_at=_latest_time(
@@ -1421,15 +1474,115 @@ def build_surface(
             configured=bool(base["cockpit"]["sources"]),
         )
     elif surface == "scoreboard":
+        tasks_conn = runtime.projections.connection("tasks")
         tasks = actionable_for_member(
-            runtime.projections.connection("tasks"),
+            tasks_conn,
             session,
             member_party_id=member,
             as_of_iso=now.isoformat(),
         )
+        history = work_history_for_member(
+            tasks_conn,
+            session,
+            member_party_id=member,
+            limit=100,
+        )
+        outcomes = []
+        for task in history:
+            if task.get("status") not in {"done", "cancelled", "dismissed"}:
+                continue
+            outcome = dict(task)
+            outcome["reason"] = task.get("lifecycle_reason")
+            outcome["outcome_kind"] = (
+                "completed" if task.get("status") == "done" else "abandoned"
+            )
+            outcomes.append(outcome)
+        commitment_history = commitment_history_for_member(
+            runtime.projections.connection("commitments"),
+            session,
+            member_party_id=member,
+            limit=100,
+        )
+        for commitment in commitment_history:
+            if commitment.get("status") not in {
+                "done",
+                "cancelled",
+                "delegated",
+                "expired",
+            }:
+                continue
+            outcome = dict(commitment)
+            outcome["id"] = commitment["commitment_id"]
+            outcome["title"] = commitment["description"]
+            outcome["object_kind"] = "commitment"
+            outcome["reason"] = commitment.get("lifecycle_reason")
+            outcome["outcome_kind"] = {
+                "done": "completed",
+                "cancelled": "cancelled",
+                "delegated": "delegated",
+                "expired": "expired",
+            }[str(commitment["status"])]
+            outcomes.append(outcome)
+        outcomes.sort(
+            key=lambda item: str(
+                item.get("lifecycle_at") or item.get("completed_at") or ""
+            ),
+            reverse=True,
+        )
+        recurrence_conn = runtime.projections.connection("recurrences")
+        rhythms = [
+            {
+                **item,
+                "id": item["recurrence_id"],
+                "object_kind": "recurrence",
+                "title": str(item.get("kind") or "recurrence")
+                .replace("_", " ")
+                .title(),
+            }
+            for item in for_member(
+                recurrence_conn,
+                session,
+                member_party_id=member,
+            )
+        ]
+        rhythms.extend(
+            {
+                **item,
+                "id": item["routine_id"],
+                "object_kind": "routine",
+            }
+            for item in routine_definitions_for_member(
+                recurrence_conn,
+                session,
+                member_party_id=member,
+            )
+        )
+        rhythm_outcomes = completion_history_for_member(
+            recurrence_conn,
+            session,
+            member_party_id=member,
+            limit=50,
+        )
         base["scoreboard"] = {
             "open_count": len(tasks),
             "next_steps": tasks[:3],
+            "completed_count": sum(
+                1 for task in outcomes if task["outcome_kind"] == "completed"
+            ),
+            "abandoned_count": sum(
+                1 for task in outcomes if task["outcome_kind"] == "abandoned"
+            ),
+            "closed_count": sum(
+                1
+                for item in outcomes
+                if item["outcome_kind"] in {"abandoned", "cancelled", "expired"}
+            ),
+            "redirected_count": sum(
+                1 for item in outcomes if item["outcome_kind"] == "delegated"
+            ),
+            "recent_outcomes": outcomes[:20],
+            "rhythms": rhythms,
+            "rhythm_outcomes": rhythm_outcomes,
             "reward_language": "warm" if session.auth_role == "child" else "calm",
         }
     elif surface == "settings":
@@ -1452,6 +1605,9 @@ def build_surface(
                 "projection_count": len(runtime.projections.projection_names()),
             },
         }
+        base["registry"] = registry_items(
+            runtime.projections.connection("places_assets_accounts"), session
+        )
         # Compatibility fields remain for pinned clients while the canonical
         # Settings contract is the structured control/system pair above.
         base["capabilities"] = base["system"]["capabilities"]
