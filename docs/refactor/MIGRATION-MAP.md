@@ -1,5 +1,13 @@
 # Migration map
 
+Explicit reactive replay contract (2026-08-08): the durable bus is **HARDENED**
+with an opt-in manifest declaration for full replay on a reviewed consumer
+version change. Healthy consumers otherwise retain their checkpoint; poisoned
+consumers retain the existing last-good recovery. `noise_filtering` v7 opts in,
+uses a privacy-scoped exact-message fingerprint to reuse one recorded language
+result across duplicate source observations, and appends only kind/key pairs
+absent from baseline/v4/v5/v6 proposal history.
+
 Gateway-first startup repair (2026-08-08): central service ordering is
 **HARDENED** after the guarded Phase-B candidate proved that starting the Python
 runtime first lets reactive language replay race the unavailable Gateway. The

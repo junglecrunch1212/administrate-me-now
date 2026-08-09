@@ -305,6 +305,45 @@ async def test_reviewed_consumer_version_replays_from_last_good_checkpoint(
     await log.close()
 
 
+async def test_opt_in_version_change_replays_healthy_consumer_from_start(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    checkpoint_db = tmp_path / "bus.db"
+    event_ids = [await log.append(_event(i)) for i in range(3)]
+    first_delivery: list[str] = []
+
+    async def v1(event: dict) -> None:
+        first_delivery.append(event["event_id"])
+
+    first_bus = EventBus(log, checkpoint_db)
+    first_bus.subscribe("pipeline:test", "*", v1, consumer_version="1.0.0")
+    await first_bus.start()
+    await _wait_for(lambda: first_delivery == event_ids)
+    await first_bus.stop()
+
+    replayed: list[str] = []
+
+    async def v2(event: dict) -> None:
+        replayed.append(event["event_id"])
+
+    second_bus = EventBus(log, checkpoint_db)
+    second_bus.subscribe(
+        "pipeline:test",
+        "*",
+        v2,
+        consumer_version="2.0.0",
+        replay_on_version_change=True,
+    )
+    before = await second_bus.subscriber_status("pipeline:test")
+    assert before["checkpoint_event_id"] is None
+    assert before["consumer_version"] == "2.0.0"
+    await second_bus.start()
+    await _wait_for(lambda: replayed == event_ids)
+    await second_bus.stop()
+    await log.close()
+
+
 async def test_subscriber_registered_after_events_replays_on_start(
     tmp_path: Path,
 ) -> None:

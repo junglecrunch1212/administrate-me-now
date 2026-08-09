@@ -23,6 +23,7 @@ SDKs.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -52,9 +53,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "4.0.2"
+SKILL_VERSION = "4.0.3"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 6
+_REPLAY_GENERATION = 7
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -151,7 +152,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "6.0.0"
+    version: str = "7.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -178,10 +179,33 @@ class NoiseFilteringPipeline:
         source_text, inputs = prepared
 
         source_event_id = event.get("event_id", "")
+        invocation_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "tenant_id": event.get("tenant_id"),
+                    "owner_scope": event.get("owner_scope"),
+                    "visibility_scope": event.get("visibility_scope"),
+                    "sensitivity": event.get("sensitivity", "normal"),
+                    "source_adapter": event.get("source_adapter"),
+                    "source_account_id": event.get("source_account_id"),
+                    "event_type": event_type,
+                    "source_at": payload.get("received_at") or payload.get("sent_at"),
+                    "native_message_id": payload.get("native_message_id")
+                    or payload.get("carrier_message_id")
+                    or payload.get("rfc_message_id"),
+                    "thread_id": payload.get("thread_id"),
+                    "inputs": inputs,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,
             triggering_event_id=str(source_event_id),
+            invocation_idempotency_key=(f"message-nature:{invocation_fingerprint}"),
             owner_scope=event["owner_scope"],
             visibility_scope=event["visibility_scope"],
             sensitivity=event.get("sensitivity", "normal"),
@@ -198,6 +222,7 @@ class NoiseFilteringPipeline:
                 event=event,
                 ctx=ctx,
                 source_event_id=source_event_id,
+                invocation_fingerprint=invocation_fingerprint,
                 output={
                     "classification": DEFAULT_CLASSIFICATION,
                     "confidence": 0.0,
@@ -219,6 +244,7 @@ class NoiseFilteringPipeline:
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
+            invocation_fingerprint=invocation_fingerprint,
             output=output,
             source_text=source_text,
         )
@@ -229,6 +255,7 @@ class NoiseFilteringPipeline:
         event: dict[str, Any],
         ctx: PipelineContext,
         source_event_id: str,
+        invocation_fingerprint: str,
         output: dict[str, Any],
         source_text: str,
     ) -> None:
@@ -249,6 +276,7 @@ class NoiseFilteringPipeline:
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
+            invocation_fingerprint=invocation_fingerprint,
             source_text=source_text,
             raw_candidates=output.get("candidates"),
         )
@@ -350,6 +378,7 @@ class NoiseFilteringPipeline:
         event: dict[str, Any],
         ctx: PipelineContext,
         source_event_id: str,
+        invocation_fingerprint: str,
         source_text: str,
         raw_candidates: Any,
     ) -> None:
@@ -428,6 +457,35 @@ class NoiseFilteringPipeline:
             # Append only those additions under a new idempotency generation;
             # never rewrite or duplicate proposals already reviewed in Triage.
             idempotency_generation = f"v{_REPLAY_GENERATION}:"
+
+        # Historical adapters could append the same provider observation more
+        # than once under different source event ids.  A reviewed full replay
+        # must not multiply Triage work.  The private-scope fingerprint covers
+        # the exact bounded model inputs plus source/privacy identity; proposal
+        # keys deliberately omit the append id so one exact observation yields
+        # one candidate set.  The first causal source remains the provenance
+        # anchor in the append-only log.
+        deduplicated_candidates = []
+        proposal_keys: dict[tuple[str, str], str] = {}
+        for candidate in candidates:
+            proposal_key = (
+                f"triage:message-candidate:v{_REPLAY_GENERATION}:"
+                f"{invocation_fingerprint}:{candidate.candidate_key}:"
+                f"{candidate.target_kind}"
+            )
+            if (
+                await ctx.event_log.get_by_idempotency(event["tenant_id"], proposal_key)
+                is not None
+            ):
+                continue
+            deduplicated_candidates.append(candidate)
+            proposal_keys[(candidate.target_kind, candidate.candidate_key)] = (
+                proposal_key
+            )
+        candidates = deduplicated_candidates
+        if not candidates:
+            return
+
         extraction_event_id = await ctx.event_sink.write(
             EventEnvelope(
                 event_at_ms=event["event_at_ms"],
@@ -479,11 +537,7 @@ class NoiseFilteringPipeline:
                 owner_scope=owner_scope,
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=(
-                    f"triage:message-candidate:{idempotency_generation}"
-                    f"{source_event_id}:"
-                    f"{candidate.candidate_key}:{target_kind}"
-                ),
+                idempotency_key=proposal_keys[(target_kind, candidate.candidate_key)],
                 payload={
                     "proposal_id": proposal_id,
                     "target_kind": target_kind,

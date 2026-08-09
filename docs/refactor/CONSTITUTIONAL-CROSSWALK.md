@@ -1,5 +1,16 @@
 # Constitutional crosswalk
 
+Explicit replay amendment (2026-08-08): C001/C002/C004/C007/C035/C044/C045/
+C048/C050/C053/C055/C056/C071/C076/C101 are **PRESERVED/HARDENED** after live
+evidence proved a healthy versioned consumer retained its terminal checkpoint
+instead of replaying immutable source messages. Full replay is now an explicit,
+reviewed pipeline-manifest capability rather than an implicit version-number
+claim. Cursor reset changes no source or prior output event. The Triage v7
+consumer uses versioned idempotency plus a private-scope exact-message digest to
+reuse language output across duplicate observations, while fixed code still
+owns source grounding, candidate eligibility, deduplication, scope, route,
+authority, truth, and the no-write human gate.
+
 Gateway-first replay amendment (2026-08-08): C001/C002/C007/C035/C046/C050/
 C055/C071/C076 are **PRESERVED/HARDENED** after guarded activation proved that
 the prior runtime-first launch order allowed the deterministic bus to begin NLP
