@@ -7,8 +7,8 @@ gate_result: CO_010_DEPLOYED_SETTLED_IDLE_ASSURANCE_FOLLOWUP_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_306_merged_and_deployed_d248c37_settled_idle_followup_candidate
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/306
+candidate_commit_resolution: pr_306_merged_and_deployed_d248c37_pr_307_settled_idle_candidate
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/307
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -36,6 +36,8 @@ pending work still rechecks every 30 seconds; refresh errors fail immediately;
 and an unsettled proof fails stale after five minutes. Final review, merge,
 attested deployment, full Doctor, an idle-CPU observation, and authenticated
 Triage browser proof remain required.
+
+That settled-idle correction is published for review as PR #307.
 
 ## 2026-08-09 CO-010 live activation and source-assurance correction
 

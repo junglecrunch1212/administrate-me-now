@@ -8,8 +8,8 @@ Merged implementation: PR #305, commit `9591e01`
 
 Live correction: PR #306, merged as `d248c37`
 
-Settled-idle follow-up: `codex/source-assurance-settled-idle`, based on current
-`main`
+Settled-idle follow-up: PR #307 from
+`codex/source-assurance-settled-idle`, based on current `main`
 
 Affected architecture: event schemas, source assurance, candidate extraction,
 Triage, domain commands, projections, Today, Comms, Reminders, Calendar,

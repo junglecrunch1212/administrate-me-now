@@ -410,8 +410,8 @@ the SQLCipher worker still consuming one CPU core: the conditional payload
 column forced table-row visits for all 61,333 facts, and a settled immutable
 revision was unnecessarily rescanned every 30 seconds.
 
-The final correction **MODERNIZES** storage access and **SUPERSEDES** periodic
-settled rescans:
+PR #307's final correction **MODERNIZES** storage access and **SUPERSEDES**
+periodic settled rescans:
 
 - event-log migration v4 adds a covering
   `(type, event_id, occurred_at, recorded_at)` index;
