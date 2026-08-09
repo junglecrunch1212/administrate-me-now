@@ -102,6 +102,7 @@ from adminme.projections.member_knowledge.queries import (
 from adminme.projections.triage.queries import get_item as get_triage_item
 from adminme.projections.tasks.queries import get_task
 from adminme.projections.money.queries import get_finance_goal
+from adminme.candidate_policy import validate_policy_override
 from adminme.settings_control import (
     compose_connections,
     member_label,
@@ -124,6 +125,7 @@ from adminme.triage_intent import (
     merge_intent_candidates,
 )
 from adminme.triage_contract import candidate_update_fields, triage_destination
+from adminme.triage_context import add_triage_source_context
 
 
 router = APIRouter(tags=["member-portal"])
@@ -167,6 +169,15 @@ class SettingsConnectionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     request_id: str = Field(min_length=8, max_length=120)
     action: Literal["pause", "resume"]
+
+
+class SettingsCandidatePolicyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(ge=0)
+    request_id: str = Field(min_length=8, max_length=120)
+    mode: Literal["review", "manual", "quiet"]
+    language_enabled: bool
+    candidate_kinds: list[TriageTargetKind] = Field(min_length=1, max_length=11)
 
 
 class SettingsBridgeRequest(BaseModel):
@@ -3682,11 +3693,13 @@ async def surface(
     runtime = _runtime(request)
     await runtime._refresh_capability_registry()
     if surface == "inbox":
-        return {
+        result = {
             **build_surface(runtime, session, "triage"),
             "deprecated_alias": "inbox",
             "canonical_path": "/api/member/v1/surfaces/triage",
         }
+        await add_triage_source_context(runtime, session, result)
+        return result
     if surface == "knowledge":
         return {
             **build_surface(runtime, session, "notes"),
@@ -3700,6 +3713,8 @@ async def surface(
         calendar_anchor=calendar_date,
         calendar_view=view,
     )
+    if surface == "triage":
+        await add_triage_source_context(runtime, session, result)
     if surface == "scoreboard" and runtime.event_log is not None:
         rewards: list[dict[str, Any]] = []
         async for event in runtime.event_log.read_since(types=["reward.ready"]):
@@ -4030,6 +4045,117 @@ async def change_settings_connection(
             "revision": candidate["revision"],
             "event_id": event_id,
             "runtime": snapshot,
+        }
+
+
+@router.post("/api/member/v1/settings/candidate-policies/{source_id}", status_code=202)
+async def change_settings_candidate_policy(
+    source_id: str,
+    body: SettingsCandidatePolicyRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Change candidate admission without changing source truth or authority."""
+
+    _require_self_settings(session)
+    runtime = _runtime(request)
+    try:
+        normalized = validate_policy_override(
+            source_id,
+            mode=body.mode,
+            language_enabled=body.language_enabled,
+            candidate_kinds=list(body.candidate_kinds),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    values = {
+        "source_id": source_id,
+        "expected_revision": body.expected_revision,
+        **normalized,
+    }
+    fingerprint = _settings_request_fingerprint(
+        "settings.candidate_policy_changed", values
+    )
+    lock = runtime.settings_command_locks.setdefault("settings-control", asyncio.Lock())
+    async with lock:
+        prior_receipt = await _prior_settings_receipt(
+            runtime,
+            session,
+            event_type="settings.candidate_policy_changed",
+            request_id=body.request_id,
+            request_fingerprint=fingerprint,
+        )
+        if prior_receipt is not None:
+            payload = prior_receipt["payload"]
+            return {
+                "accepted": True,
+                "revision": payload["revision"],
+                "event_id": prior_receipt["event_id"],
+                "idempotent": True,
+                "policy": {
+                    "source_id": payload["source_id"],
+                    "mode": payload["mode"],
+                    "language_enabled": payload["language_enabled"],
+                    "candidate_kinds": payload["candidate_kinds"],
+                },
+            }
+        previous_state = runtime.settings_control.read()
+        await _guard_member_write(
+            runtime,
+            session,
+            "settings.candidate_policy_changed",
+            {
+                "member_id": session.auth_member_id,
+                **values,
+                "source_retention_changed": False,
+                "routing_authority_changed": False,
+            },
+        )
+        try:
+            mutation = runtime.settings_control.set_candidate_policy(
+                session.auth_member_id,
+                source_id,
+                mode=normalized["mode"],
+                language_enabled=normalized["language_enabled"],
+                candidate_kinds=normalized["candidate_kinds"],
+                expected_revision=body.expected_revision,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status = 409 if "revision" in message.casefold() else 422
+            raise HTTPException(status, message) from exc
+        changed_at = EventEnvelope.now_utc_iso()
+        try:
+            event_id = await _write_settings_receipt(
+                runtime,
+                session,
+                event_type="settings.candidate_policy_changed",
+                request_id=body.request_id,
+                request_fingerprint=fingerprint,
+                owner_member_id=session.auth_member_id,
+                payload={
+                    "member_id": session.auth_member_id,
+                    "source_id": source_id,
+                    "mode": normalized["mode"],
+                    "language_enabled": normalized["language_enabled"],
+                    "candidate_kinds": normalized["candidate_kinds"],
+                    "revision": mutation.revision,
+                    "changed_by_member_id": session.auth_member_id,
+                    "changed_at": changed_at,
+                    "source_retention_changed": False,
+                    "routing_authority_changed": False,
+                },
+            )
+        except Exception:
+            runtime.settings_control.save_candidate(previous_state)
+            raise
+        return {
+            "accepted": True,
+            "revision": mutation.revision,
+            "event_id": event_id,
+            "policy": runtime.settings_control.effective_candidate_policy(
+                session.auth_member_id, source_id
+            ),
         }
 
 

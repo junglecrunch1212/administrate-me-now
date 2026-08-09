@@ -1,5 +1,16 @@
 # Migration map
 
+CO-011 update (2026-08-09): candidate identification is **HARDENED IN THE
+REVIEWED CANDIDATE** with an additive `candidate_policies` map in the
+secret-free Settings journal. Schema v1 is accepted and migrates in memory;
+the next Settings mutation persists schema v2 atomically. Unknown/corrupt
+policy rows fail closed. `settings.candidate_policy_changed@v1` is additive and
+private. Pipeline and skill version changes request reviewed replay where their
+manifests already declare it, but no source fact, prior Triage proposal,
+canonical object, provider object, projection row, or credential is rewritten.
+Policy applies prospectively; historical reassessment stays explicit. Rollback
+may ignore the additive event/map and needs no destructive data migration.
+
 CO-010 update (2026-08-09): whole-life source and lifecycle coverage is
 **HARDENED IN THE REVIEWED CANDIDATE**. Existing immutable source and domain
 events are preserved. Message and Notes pipeline version changes request a

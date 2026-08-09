@@ -1,5 +1,17 @@
 # UX behavior contract
 
+CO-011 amendment (2026-08-09): Settings publishes one member-scoped candidate
+identification matrix across every member entry point and current/planned
+source family. Adults may select automatic review, explicit-request only, or
+no proposals; limit supported target kinds; and independently disable grounded
+language contribution. These controls never change source retention,
+accounting, privacy, routing, confirmation, or provider-write gates. Triage
+master/detail renders authorized channel, direction, adapter/account,
+sender/counterparty, subject, observed time, possible meaning, allowlisted
+fields, literal evidence, extraction methods, and effective policy. Missing or
+withheld context is explicit; a model paraphrase is never presented as source
+evidence.
+
 CO-010 amendment (2026-08-09): every visible source detail that may contain
 derivative work offers an exact source-linked Triage action; it never copies
 the source into truth. Reminders owns member-facing Recurrence and ordered
@@ -159,6 +171,8 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-42 | A confirmed canonical Task returns an exact Reminders destination receipt and appears under the same Task ID in Reminders, Today, and Scoreboard. Opening that receipt selects the exact Task, activates its deterministic Reminders lens, and clears incompatible presentation filters; later member-selected filters clear the stale item selection. The Reminders union labels the record as AdministrateMe-owned and routes complete/edit/defer/block through `task.*`; a Task deadline and available-from/defer activation are separate, and an elapsed activation re-enters executable reads without rewriting stored lifecycle truth. Provider items retain provider/account/list/revision identity and the governed external-write path. Neither record kind is copied or promoted implicitly, and deep-link state never authorizes or mutates truth. |
 | UX-43 | Triage enrichment is rendered from the server-published `triage-enrichment-v3` contract. Dates and times use native pickers plus the reviewed instance timezone; repetition uses a bounded builder; Parties and external routes use authorized selectors; provider-only fields follow the selected route ceiling. Google Tasks is date-only and cannot expose Apple-only start, priority, alarm, recurrence, URL, or geofence controls. The API rejects fields outside the same target contract before append. Immediate and refreshed confirmation feedback names and links the resulting local surface or pending provider path. |
 | UX-44 | A Comms message, Note, Calendar detail, or provider Reminder detail can submit its exact visible source to Triage. The request preserves the source event ID, scope, sensitivity, and evidence; it does not authorize, materialize, schedule, or write anything. |
+| UX-45 | Settings exposes one revisioned, secret-free candidate-identification matrix for all ten Add-for-review entry points, OpenClaw, current candidate-bearing adapters, and reviewed future sources. Explicit member entry remains locked on. Review/manual/quiet, supported-kind subsets, and optional grounded-language contribution change candidate admission only; source retention/accounting, privacy, deterministic eligibility/routing, human confirmation, governance, observation, and provider effects remain non-configurable. |
+| UX-46 | Every Triage proposal exposes decision-grade authorized source context: channel/direction, adapter/account, sender/counterparty, subject/title, time, possible target meaning, allowlisted fields, literal source evidence when applicable, extraction-method disclosure, and the effective policy snapshot. Unavailable or withheld context is named, and generated paraphrase is never labeled evidence. |
 | UX-45 | Reminders presents canonical Recurrences and ordered Routines as separate structures with add/edit/pause/resume/end controls, optimistic concurrency, member/household scope disclosure, accessible repeat/window/step inputs, and retained occurrence history. Ending is not deletion and Routine steps never imply Task completion. |
 | UX-46 | Scoreboard presents typed completed, abandoned, cancelled, delegated, expired, recurrence, and Routine outcomes. Immediate completion feedback and asynchronous reward delivery link to the same immutable completion evidence and render once. |
 | UX-47 | Finance Goal definition and lifecycle remain separate. Pause, complete, and reopen controls disclose that they change planning state only, use optimistic concurrency, retain history, and never transfer money; reviewed workbook status edits emit the same typed lifecycle. |

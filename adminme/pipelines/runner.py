@@ -82,6 +82,7 @@ class PipelineRunner:
         run_skill_fn: Callable[..., Awaitable[Any]] | None = None,
         profile_loader: Callable[[str], dict[str, Any] | None] | None = None,
         persona_loader: Callable[[], dict[str, Any] | None] | None = None,
+        candidate_policy_fn: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> None:
         self._bus = bus
         self._log = event_log
@@ -93,6 +94,7 @@ class PipelineRunner:
         self._run_skill_fn = run_skill_fn or run_skill
         self._profile_loader = profile_loader
         self._persona_loader = persona_loader
+        self._candidate_policy_fn = candidate_policy_fn
         self._packs: dict[str, LoadedPipelinePack] = {}
         self._started = False
 
@@ -251,6 +253,7 @@ class PipelineRunner:
                 triggering_event_id=event["event_id"],
                 correlation_id=correlation,
                 parties_conn_factory=self._parties_conn_factory,
+                candidate_policy_fn=self._candidate_policy_fn,
             )
             await pack.instance.handle(event, ctx)
 

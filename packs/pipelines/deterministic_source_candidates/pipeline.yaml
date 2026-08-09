@@ -1,7 +1,7 @@
 pack:
   id: pipeline:deterministic_source_candidates
   name: Deterministic structured-source candidates
-  version: 1.0.0
+  version: 2.0.0
   kind: pipeline
 runtime:
   language: python

@@ -17,6 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from adminme.candidate_policy import (
+    SOURCE_CATALOG,
+    effective_policy,
+    validate_policy_override,
+)
+
 
 ConnectionAction = Literal["pause", "resume"]
 
@@ -188,7 +194,7 @@ class SettingsMutation:
 class SettingsControlStore:
     """Atomic, secret-free desired-state journal for member controls."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -201,6 +207,7 @@ class SettingsControlStore:
             "connections": {},
             "member_preferences": {},
             "bridge_requests": {},
+            "candidate_policies": {},
         }
 
     def read(self) -> dict[str, Any]:
@@ -210,13 +217,51 @@ class SettingsControlStore:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Settings control journal is unreadable") from exc
-        if not isinstance(value, dict) or value.get("schema_version") != 1:
+        if not isinstance(value, dict) or value.get("schema_version") not in {1, 2}:
             raise RuntimeError("Settings control journal has an unsupported schema")
+        if value["schema_version"] == 1:
+            value = copy.deepcopy(value)
+            value["schema_version"] = self.SCHEMA_VERSION
+            value["candidate_policies"] = {}
         if not isinstance(value.get("revision"), int):
             raise RuntimeError("Settings control journal revision is invalid")
-        for key in ("connections", "member_preferences", "bridge_requests"):
+        for key in (
+            "connections",
+            "member_preferences",
+            "bridge_requests",
+            "candidate_policies",
+        ):
             if not isinstance(value.get(key), dict):
                 raise RuntimeError(f"Settings control journal {key} is invalid")
+        for member_rows in value["candidate_policies"].values():
+            if not isinstance(member_rows, dict):
+                raise RuntimeError(
+                    "Settings control journal candidate policies are invalid"
+                )
+            for source_id, override in member_rows.items():
+                if not isinstance(override, dict):
+                    raise RuntimeError(
+                        "Settings control journal candidate policy is invalid"
+                    )
+                language_enabled = override.get("language_enabled")
+                candidate_kinds = override.get("candidate_kinds")
+                if not isinstance(language_enabled, bool) or not isinstance(
+                    candidate_kinds, list
+                ):
+                    raise RuntimeError(
+                        "Settings control journal candidate policy is invalid"
+                    )
+                try:
+                    validate_policy_override(
+                        str(source_id),
+                        mode=str(override.get("mode") or ""),
+                        language_enabled=language_enabled,
+                        candidate_kinds=candidate_kinds,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Settings control journal candidate policy is invalid"
+                    ) from exc
         return value
 
     def connection_lifecycle(self, connection_id: str) -> str | None:
@@ -299,6 +344,49 @@ class SettingsControlStore:
     def preferences_for(self, member_id: str) -> dict[str, Any]:
         value = self.read()["member_preferences"].get(member_id)
         return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+    def set_candidate_policy(
+        self,
+        member_id: str,
+        source_id: str,
+        *,
+        mode: str,
+        language_enabled: bool,
+        candidate_kinds: list[str],
+        expected_revision: int,
+    ) -> SettingsMutation:
+        state = self.read()
+        self._expect_revision(state, expected_revision)
+        normalized = validate_policy_override(
+            source_id,
+            mode=mode,
+            language_enabled=language_enabled,
+            candidate_kinds=candidate_kinds,
+        )
+        member_rows = state["candidate_policies"].setdefault(member_id, {})
+        previous = copy.deepcopy(member_rows.get(source_id) or {})
+        current = {
+            **normalized,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        member_rows[source_id] = current
+        state["revision"] += 1
+        _atomic_json(self.path, state)
+        return SettingsMutation(previous, current, state["revision"])
+
+    def effective_candidate_policy(
+        self,
+        member_id: str,
+        source_id: str,
+        *,
+        state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        current = state or self.read()
+        rows = current["candidate_policies"].get(member_id)
+        override = rows.get(source_id) if isinstance(rows, dict) else None
+        return effective_policy(
+            source_id, override if isinstance(override, dict) else None
+        )
 
     def effective_adapter_config(
         self, value: dict[str, Any], *, state: dict[str, Any] | None = None
@@ -577,6 +665,35 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         )
         if role not in {"device", "ambient"}
     ]
+    configured_adapter_kinds = {
+        str(entry.get("kind") or "").removeprefix("adapter:")
+        for entry in runtime.settings.adapter_config.get("adapters", [])
+        if isinstance(entry, dict)
+        and isinstance(entry.get("config"), dict)
+        and entry["config"].get("member_id") == view_id
+    }
+    candidate_sources: list[dict[str, Any]] = []
+    for source in SOURCE_CATALOG:
+        source_id = str(source["id"])
+        policy = runtime.settings_control.effective_candidate_policy(
+            view_id, source_id, state=state
+        )
+        adapter_kind = source.get("adapter_kind")
+        if source_id.startswith("surface:"):
+            availability = "available"
+        elif source["implementation"] == "planned":
+            availability = "planned"
+        elif adapter_kind in configured_adapter_kinds:
+            availability = "configured"
+        else:
+            availability = "available_not_configured"
+        candidate_sources.append(
+            {
+                **copy.deepcopy(source),
+                "availability": availability,
+                "policy": policy,
+            }
+        )
     return {
         "revision": state["revision"],
         "identity": {
@@ -596,6 +713,25 @@ def compose_settings_control(runtime: Any, session: Any) -> dict[str, Any]:
         },
         "needs_attention": needs_attention,
         "connections": connections,
+        "candidate_identification": {
+            "contract": "deterministic-candidate-policy-v1",
+            "sources": candidate_sources,
+            "candidate_kinds": list(
+                dict.fromkeys(
+                    kind
+                    for source in SOURCE_CATALOG
+                    for kind in source["candidate_kinds"]
+                )
+            ),
+            "non_configurable": [
+                "source retention and terminal accounting",
+                "privacy and member isolation",
+                "exact-evidence grounding",
+                "deterministic eligibility and routing",
+                "human confirmation before canonical truth",
+                "governance and observation before provider effects",
+            ],
+        },
         "behavior": {
             "active_profile_id": active_profile.get("id")
             if isinstance(active_profile, dict)

@@ -33,6 +33,24 @@
     "from_party_known": {
       "type": "boolean",
       "description": "Has a Party already been resolved for this sender? Hint only — defaults to false in the noise_filtering pipeline."
+    },
+    "candidate_mode": {
+      "type": "string",
+      "enum": ["review", "manual", "quiet"],
+      "description": "Member candidate-admission policy. Classification still runs; only review admits candidates."
+    },
+    "candidate_language_enabled": {
+      "type": "boolean",
+      "description": "Whether grounded language output may contribute candidate fields."
+    },
+    "candidate_kinds": {
+      "type": "array",
+      "maxItems": 11,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"]
+      }
     }
   }
 }

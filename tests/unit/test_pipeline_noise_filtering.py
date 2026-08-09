@@ -104,7 +104,12 @@ class _FakeEventLog:
         ]
 
 
-def _make_ctx(event_log: Any, run_skill_fn: Any) -> PipelineContext:
+def _make_ctx(
+    event_log: Any,
+    run_skill_fn: Any,
+    *,
+    candidate_policy_fn: Any | None = None,
+) -> PipelineContext:
     from adminme.lib.session import build_internal_session
 
     session = build_internal_session("pipeline_runner", "device", "tenant-test")
@@ -118,6 +123,7 @@ def _make_ctx(event_log: Any, run_skill_fn: Any) -> PipelineContext:
         observation_manager=None,
         triggering_event_id="trigger-eid-001",
         correlation_id="corr-001",
+        candidate_policy_fn=candidate_policy_fn,
     )
 
 
@@ -264,7 +270,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "5.0.0"
+    assert envelope.payload["skill_version"] == "5.1.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -288,7 +294,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "5.0.0"
+    assert envelope.payload["skill_version"] == "5.1.0"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -333,6 +339,85 @@ async def test_telephony_sms_uses_body_field() -> None:
     assert captured["source_channel"] == "sms"
     assert len(log.calls) == 3
     assert log.calls[0].envelope.payload["classification"] == "noise"
+
+
+@pytest.mark.asyncio
+async def test_quiet_source_is_assessed_without_a_triage_proposal() -> None:
+    log = _FakeEventLog()
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        raise OpenClawTimeout("classification may fail without reopening candidates")
+
+    def policy(member_id: str, source_id: str) -> dict[str, Any]:
+        assert (member_id, source_id) == ("member-fixture", "adapter:gmail")
+        return {
+            "source_id": source_id,
+            "mode": "quiet",
+            "language_enabled": True,
+            "candidate_kinds": ["task"],
+        }
+
+    await NoiseFilteringPipeline().handle(
+        _messaging_received_event(body_text="Please call me tomorrow."),
+        _make_ctx(log, stub_run_skill, candidate_policy_fn=policy),
+    )
+
+    assert "triage.item.proposed" not in [call.envelope.type for call in log.calls]
+    assessment = next(
+        call.envelope.payload
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment["assessment_outcome"] == "no_candidate"
+    assert "candidate_policy_quiet" in assessment["reason_codes"]
+    assert "candidate_policy_v1:adapter:gmail:quiet" in assessment["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_language_toggle_cannot_contribute_candidates_or_skip_assessment() -> (
+    None
+):
+    log = _FakeEventLog()
+    captured: dict[str, Any] = {}
+
+    async def stub_run_skill(
+        skill_id: str, inputs: dict[str, Any], skill_ctx: SkillContext
+    ) -> SkillResult:
+        captured.update(inputs)
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "evidence_quote": "A message with no deterministic action pattern.",
+                    "candidate": {},
+                    "confidence": 0.99,
+                }
+            ]
+        )
+
+    def policy(_member_id: str, source_id: str) -> dict[str, Any]:
+        return {
+            "source_id": source_id,
+            "mode": "review",
+            "language_enabled": False,
+            "candidate_kinds": ["task"],
+        }
+
+    await NoiseFilteringPipeline().handle(
+        _messaging_received_event(
+            body_text="A message with no deterministic action pattern."
+        ),
+        _make_ctx(log, stub_run_skill, candidate_policy_fn=policy),
+    )
+
+    assert captured["candidate_language_enabled"] is False
+    assert "triage.item.proposed" not in [call.envelope.type for call in log.calls]
+    assessment = next(
+        call.envelope.payload
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert "candidate_language_disabled" in assessment["reason_codes"]
 
 
 @pytest.mark.asyncio
@@ -536,7 +621,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v10:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v11:")
 
 
 @pytest.mark.asyncio
@@ -650,7 +735,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v10:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v11:")
         for proposal in proposals
     )
 

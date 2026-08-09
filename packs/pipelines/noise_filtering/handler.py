@@ -25,9 +25,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+from adminme.candidate_policy import (
+    default_policy,
+    filter_candidates,
+    source_id_for_event,
+)
 from adminme.events.envelope import EventEnvelope
 from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
@@ -54,9 +60,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "5.0.0"
+SKILL_VERSION = "5.1.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 10
+_REPLAY_GENERATION = 11
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -153,7 +159,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "10.0.0"
+    version: str = "11.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -216,6 +222,12 @@ class NoiseFilteringPipeline:
                 reason_codes=["source_member_missing"],
             )
             return
+        policy_source_id = source_id_for_event(event) or "adapter:gmail"
+        policy = (
+            ctx.candidate_policy_fn(member_id, policy_source_id)
+            if ctx.candidate_policy_fn is not None
+            else default_policy(policy_source_id)
+        )
         prepared = _extract_text_and_inputs(event_type, payload)
         if prepared is None:
             await self._emit_triage_assessment(
@@ -228,6 +240,9 @@ class NoiseFilteringPipeline:
             )
             return
         source_text, inputs = prepared
+        inputs["candidate_mode"] = policy["mode"]
+        inputs["candidate_kinds"] = list(policy["candidate_kinds"])
+        inputs["candidate_language_enabled"] = bool(policy["language_enabled"])
 
         invocation_fingerprint = hashlib.sha256(
             json.dumps(
@@ -292,6 +307,8 @@ class NoiseFilteringPipeline:
                 },
                 source_text=source_text,
                 assessment_failure_reason=f"language_seam_{type(exc).__name__}",
+                policy_source_id=policy_source_id,
+                policy=policy,
             )
             return
 
@@ -304,6 +321,8 @@ class NoiseFilteringPipeline:
             output=output,
             source_text=source_text,
             assessment_failure_reason=None,
+            policy_source_id=policy_source_id,
+            policy=policy,
         )
 
     async def _emit_results(
@@ -316,6 +335,8 @@ class NoiseFilteringPipeline:
         output: dict[str, Any],
         source_text: str,
         assessment_failure_reason: str | None,
+        policy_source_id: str,
+        policy: dict[str, Any],
     ) -> None:
         await self._emit_classified(
             event=event,
@@ -349,6 +370,8 @@ class NoiseFilteringPipeline:
                 else "inbound"
             ),
             assessment_failure_reason=assessment_failure_reason,
+            policy_source_id=policy_source_id,
+            policy=policy,
         )
 
     async def _emit_classified(
@@ -453,6 +476,8 @@ class NoiseFilteringPipeline:
         raw_candidates: Any,
         message_direction: str,
         assessment_failure_reason: str | None,
+        policy_source_id: str,
+        policy: dict[str, Any],
     ) -> None:
         owner_scope = str(event.get("owner_scope") or "")
         member_id = owner_scope.removeprefix("private:")
@@ -464,13 +489,18 @@ class NoiseFilteringPipeline:
             submitted_at = datetime.fromtimestamp(
                 event["event_at_ms"] / 1000, timezone.utc
             )
+        language_candidates = (
+            extract_grounded_nlp_candidates(source_text, raw_candidates)
+            if policy.get("language_enabled")
+            else []
+        )
         candidates = merge_intent_candidates(
             extract_message_fallback_candidates(
                 source_text,
                 submitted_at=submitted_at,
                 direction=message_direction,
             ),
-            extract_grounded_nlp_candidates(source_text, raw_candidates),
+            language_candidates,
         )
         if message_direction == "inbound":
             candidates = [
@@ -481,6 +511,20 @@ class NoiseFilteringPipeline:
                     and is_inbound_reply_request(candidate.title)
                 )
             ]
+        candidates = filter_candidates(candidates, policy)
+        policy_rule = (
+            f"candidate_policy_v1:{policy_source_id}:{policy.get('mode', 'review')}"
+        )
+        candidates = [
+            replace(
+                candidate,
+                eligibility_rule_ids=list(
+                    dict.fromkeys([*candidate.eligibility_rule_ids, policy_rule])
+                ),
+                reasons=list(dict.fromkeys([*candidate.reasons, policy_rule])),
+            )
+            for candidate in candidates
+        ]
         intent_id = f"source:{source_event_id}"
         # Replay must produce byte-identical event identities.  Never place a
         # wall-clock retry time in an idempotent payload.
@@ -560,7 +604,18 @@ class NoiseFilteringPipeline:
             if candidates
             else "failed"
             if assessment_failure_reason
+            and policy.get("mode") == "review"
+            and policy.get("language_enabled")
             else "no_candidate"
+        )
+        policy_reason = (
+            "candidate_policy_manual_only"
+            if policy.get("mode") == "manual"
+            else "candidate_policy_quiet"
+            if policy.get("mode") == "quiet"
+            else "candidate_language_disabled"
+            if not policy.get("language_enabled")
+            else None
         )
         reason_codes = [
             *(
@@ -569,6 +624,8 @@ class NoiseFilteringPipeline:
                 else ["language_assessment_completed"]
             ),
             "eligible_candidate_found" if candidates else "no_eligible_candidate",
+            *([policy_reason] if policy_reason else []),
+            policy_rule,
         ]
         extraction_event_id = await self._emit_triage_assessment(
             event=event,
