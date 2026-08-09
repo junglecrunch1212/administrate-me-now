@@ -1,6 +1,6 @@
 # CO-009 — Cross-surface work lifecycle and member-interface parity
 
-Status: **AUTHORIZED 2026-08-09 — CORE MERGED AND DEPLOYED IN PR #302; LIVE-FOUND DEEP-LINK AND CALENDAR RESTART HARDENING CANDIDATE VERIFIED**
+Status: **COMPLETE 2026-08-09 — PRS #302 AND #303 MERGED; GUARDED DEPLOYMENT AND CONTROLLED LIVE RESTART VERIFIED**
 
 Affected surfaces: **Today, Triage, Comms, Reminders, Calendar, People, Notes,
 Finance, Scoreboard, Settings**
@@ -153,8 +153,15 @@ two confirmed canonical Tasks are present in the member-scoped Reminders union,
 but also exposed two release-blocking follow-ups: the receipt retained the exact
 item while defaulting to the incompatible Now lens, and restart-time Calendar
 discovery re-emitted unchanged source observations and historical elapsed
-outcomes. The follow-up candidate corrects exact item/lens routing, durably
+outcomes. The follow-up corrects exact item/lens routing, durably
 deduplicates unchanged calendar-source observations, excludes already-past
 history from initial elapsed tracking, and assigns stable idempotency to future
-outcome transitions. Review, merge, guarded deployment, and live verification
-of that follow-up remain required before CO-009 is complete.
+outcome transitions. PR #303 passed Constitution sync and the credential-free
+macOS rehearsal, merged as `6d2d6e582a3e76060901ec8f2ccd9bad37b3d72a`,
+and deployed through the attested controller without a runtime migration. Live
+Triage Recent opened the exact confirmed Task under the automatically selected
+Anytime lens, both canonical Tasks remained visible, and observation remained
+active. Source assurance settled with zero pending, missing, or failed facts.
+A controlled runtime-only restart left Calendar source and outcome counts
+unchanged at 388 and 43,510 respectively, proving the restart repair against
+the production composition root. CO-009 is complete.

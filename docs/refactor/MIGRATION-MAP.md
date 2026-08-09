@@ -14,6 +14,10 @@ with their prior defaults. Triage candidate enrichment is **HARDENED** behind th
 published `triage-enrichment-v3` allowlist. Rollback ignores no new event kind
 and needs no destructive data conversion; older code safely ignores the new
 optional payload/property while the additive projection column remains.
+PRs #302 and #303 are **DEPLOYED**. Live exact-receipt navigation and a
+controlled runtime restart verify the migrated Reminders composition and
+restart-stable Calendar-source/outcome behavior without a runtime migration;
+observation remains active and rollback remains available.
 
 CO-008 upgrade-controller repair (2026-08-08): the ordinary updater's use of
 the active release controller is **SUPERSEDED**. Every reviewed candidate now

@@ -1,5 +1,12 @@
 # Release acceptance contract
 
+CO-009 deployment evidence (2026-08-09): PR #303 passed both required GitHub
+checks and deployed as `6d2d6e582a3e76060901ec8f2ccd9bad37b3d72a` through
+the attested controller without a runtime migration. Live receipt navigation
+selected the exact confirmed Task and its Anytime lens. A controlled runtime
+restart left Calendar source and outcome counts unchanged, and source assurance
+settled with zero pending, missing, or failed obligations under observation.
+
 CO-009 amendment (2026-08-09): AC-18, AC-24, AC-26, and AC-28 additionally
 prove the canonical Task lifecycle across Triage, Reminders, Today, and
 Scoreboard. The same process proof must show that no provider item or Calendar

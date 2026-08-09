@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: SOURCE_ASSURANCE_DEPLOYED_OBSERVATION
+gate_result: CO_009_DEPLOYED_LIVE_VERIFIED_OBSERVATION
 verified_local_date: 2026-08-09
-verified_github_date: 2026-08-08
+verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_302_merged_and_deployed_3ab4b783_with_followup_candidate_verified
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/302
+candidate_commit_resolution: pr_303_merged_and_deployed_6d2d6e58_live_restart_verified
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/303
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -17,7 +17,7 @@ next_phase: observation_soak_member_triage_review_and_false_positive_feedback
 
 # Release handoff
 
-## 2026-08-09 CO-009 cross-surface Task lifecycle (candidate verified)
+## 2026-08-09 CO-009 cross-surface Task lifecycle (deployed and live verified)
 
 PR #302 merged as `3ab4b7839b0ad867eed326b34c576fd1ffc150cb` and the
 attested upgrade controller deployed it with a compatible-runtime receipt,
@@ -28,7 +28,7 @@ confirmation and projection path was correct; the remaining member-visible
 defect was receipt navigation, which selected the exact item but left Reminders
 on the incompatible default Now lens for Anytime work.
 
-The follow-up candidate makes receipt navigation select the exact Task and its
+The follow-up makes receipt navigation select the exact Task and its
 deterministic activation lens while clearing only incompatible presentation
 filters. The same live deployment exposed a separate Google Calendar restart
 defect: unchanged calendar-source facts were re-appended, and initial sync put
@@ -40,8 +40,31 @@ elapsed/cancelled transitions stable idempotency. It does not persist a partial
 Google sync token or change provider authority. Focused adapter and lifecycle
 suites pass 46 tests, and rendered Gate 7 passes 222 assertions with 36
 screenshots and zero console, page, request, accessibility-name, overflow, or
-result failures. Follow-up review, merge, guarded deployment, and live receipt
-verification remain pending.
+result failures.
+
+PR #303 passed both required GitHub gates and merged as
+`6d2d6e582a3e76060901ec8f2ccd9bad37b3d72a`. The attested candidate
+controller deployed that exact commit without a Python, Node, or OpenClaw
+migration. The receipt records a compatible lockfile, pinned OpenClaw
+`2026.7.2` at `ce67ffb7`, an encrypted backup at
+`administrateme-20260809T133553Z.ambackup`, and an immutable rollback release.
+Both launchd services run from the new release; observation remains active.
+
+Live Triage Recent now opens the exact confirmed Task in Reminders, adds the
+deterministic `view=anytime` URL state, presses the Anytime lens, and renders
+the canonical Task detail. Both confirmed email-derived Tasks remain visible
+as AdministrateMe-owned household work. Readiness settled at 61,175/61,175
+source obligations with zero pending, missing, or failed. A controlled
+runtime-only restart then proved the targeted adapter invariant: Calendar
+source observations remained exactly 388 and Calendar outcomes remained
+exactly 43,510. The final audit settled at 61,225/61,225 with zero pending,
+missing, or failed and no Calendar counter growth.
+
+The controlled restart separately exposed an older Google Tasks behavior: five
+list and 45 item observations were re-appended once, then fully reconciled.
+Provider/list/item identity and the two canonical Tasks remained correct. This
+is recorded as the next adapter idempotency hardening item; it is not evidence
+against the completed CO-009 canonical Task lifecycle or Calendar restart fix.
 
 The member-reported failure was reproduced: two confirmed Triage Task
 candidates had canonical `task.created` events and Tasks rows, but the
@@ -87,7 +110,7 @@ landmarks, keyboard focus, contrast, and zero console/page/request errors.
 Final local candidate evidence on 2026-08-09:
 
 - strict acceptance: 39 passed under `--runxfail`;
-- complete Python/pack suite: 1,691 passed; bridge distribution: 60 passed;
+- complete Python/pack suite: 1,694 passed; bridge distribution: 60 passed;
 - Ruff and format clean across 508 files; mypy clean across 228 sources;
   Pyright reports zero errors and zero warnings;
 - root and bridge dependency audits plus the production OpenClaw npm audit
@@ -101,16 +124,16 @@ Final local candidate evidence on 2026-08-09:
   passed;
 - pinned OpenClaw contract, TypeScript check, 15 tests, build, package dry run,
   and production audit passed;
-- rendered Gate 7 passed 221 assertions and retained 36 screenshots with zero
+- rendered Gate 7 passed 222 assertions and retained 36 screenshots with zero
   failed result, console/page/request error, unnamed control, or horizontal
   overflow.
 
 The aggregate suite was run with Python 3.14.6 and the side-by-side Node
 24.19.0 candidate path. Its first attempt correctly stopped when the shell
 selected live Node 22; the passing rerun explicitly selected Node 24 without
-changing the live runtime, as required by ADR-0006. Review, merge, guarded
-deployment, and live verification remain pending, so CO-009 and the persistent
-user goal are not complete.
+changing the live runtime, as required by ADR-0006. PRs #302 and #303, guarded
+deployment, exact receipt navigation, both live canonical Tasks, full source
+settlement, and the controlled restart proof complete CO-009.
 
 ## 2026-08-08 CO-008 candidate-controller repair and live deployment
 
