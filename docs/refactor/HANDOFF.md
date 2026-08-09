@@ -8,7 +8,7 @@ verified_local_date: 2026-08-08
 verified_github_date: 2026-08-08
 branch: codex/repair-triage-replay-contract
 candidate_commit_resolution: independent_review_pending
-pull_request_url: pending
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/294
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
