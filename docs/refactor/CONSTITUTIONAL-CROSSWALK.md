@@ -12,6 +12,10 @@ remaining presentation-only. Google Calendar source observation is durably
 restart-idempotent, and initial discovery does not manufacture elapsed outcomes
 from already-past history; these changes further harden C017/C035/C101 without
 altering provider authority or event truth.
+PR #303 merged and deployed as
+`6d2d6e582a3e76060901ec8f2ccd9bad37b3d72a`; exact-receipt browser proof and a
+controlled live runtime restart satisfy the CO-009 production boundary for
+C017/C035/C101 while observation remains active.
 
 CO-008 upgrade-controller amendment (2026-08-08): C080-C082/C086 are
 **PRESERVED/HARDENED** and the active-controller assumption in ADR-0006 is
