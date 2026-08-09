@@ -239,6 +239,10 @@ async def test_skill_success_emits_classified() -> None:
         skill_id: str, inputs: dict[str, Any], skill_ctx: SkillContext
     ) -> SkillResult:
         assert skill_id == "skill:classify_message_nature"
+        assert skill_ctx.invocation_idempotency_key is not None
+        assert skill_ctx.invocation_idempotency_key.startswith("message-nature:")
+        assert ":v8:" not in skill_ctx.invocation_idempotency_key
+        assert skill_ctx.retry_prior_failure is True
         assert inputs["body_text"] == "Hello from a real friend!"
         assert inputs["source_channel"] == "gmail"
         assert inputs["from_identifier"] == "ada@example.com"

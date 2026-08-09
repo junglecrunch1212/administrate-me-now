@@ -1,12 +1,24 @@
 # Migration map
 
+CO-008 deployment repair (2026-08-08): runtime source accounting is
+**HARDENED** from per-readiness synchronous invalidation to a mandatory initial
+audit plus a 30-second, single-flight background refresh. This changes no event
+schema or projection and adds no truth store; the cache is disposable runtime
+health state. Failure-retry identity is **HARDENED** so the stable private
+message fingerprint continues to reuse success, while an explicit reviewed
+flag may bypass only an older causal failure once. The new failure terminal is
+fingerprint-qualified and therefore idempotent. Bootstrap Doctor adds a named
+fresh/terminal source check; it does not inspect content. The updater's bounded
+wait widens only for named replay/health transients and preserves immediate
+rejection of structural failures and automatic rollback.
+
 CO-008 update (2026-08-08): source ingestion is **HARDENED IN THE REVIEWED
 CANDIDATE** by additive manifest `source_assurance` rules,
 `triage.intent.features_extracted@v2`, and `triage.item.superseded@v2`.
 `noise_filtering` v8 and Notes indexing v3 explicitly opt into full replay.
 Replay preserves every immutable source and member decision, appends a terminal
-assessment for each candidate-bearing source, retries the new reviewed skill
-invocation generation, and retires only untouched proposals whose sole
+assessment for each candidate-bearing source, reuses a prior successful exact
+fingerprint while retrying an older terminal failure once, and retires only untouched proposals whose sole
 semantic admission was `explicit_action_verb_v1`. Runtime accounting adds no
 projection and persists no second truth store. Rollback ignores additive event
 versions but cannot remove their audit history. Adapter scaffolds and install

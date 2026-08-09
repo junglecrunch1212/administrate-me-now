@@ -290,6 +290,51 @@ class ServiceManager:
         return data.get("status") == "alive" and data.get("runtime_started") is True
 
     def _runtime_health(self) -> str:
+        data = self.runtime_diagnostics()
+        if not data:
+            return "degraded"
+        if not data.get("ready"):
+            return "failed" if data.get("status") == "blocked" else "degraded"
+        return "healthy" if data.get("status") == "healthy" else "observation_only"
+
+    def runtime_diagnostics(self) -> dict[str, Any] | None:
+        """Return the local runtime's secret-free readiness document."""
+
+        if self.test_mode:
+            return {
+                "status": "observation_only",
+                "ready": True,
+                "capabilities": {
+                    "policy:source-assurance": {
+                        "name": "source-assurance",
+                        "kind": "source_disposition_policy",
+                        "state": "healthy",
+                        "reason": None,
+                        "details": {
+                            "contract": "source-assurance-v1",
+                            "state": "healthy",
+                            "counts": {
+                                "source_facts": 1,
+                                "obligations": 1,
+                                "accounted": 1,
+                                "pending": 0,
+                                "missing": 0,
+                                "eligible_candidates": 1,
+                                "no_candidate": 0,
+                                "quarantined": 0,
+                                "failed": 0,
+                            },
+                            "declared_source_event_types": 1,
+                            "declared_obligations": 1,
+                            "content_exposed": False,
+                            "freshness": {
+                                "state": "fresh",
+                                "refresh_error_type": None,
+                            },
+                        },
+                    }
+                },
+            }
         port = load_versions()["administrateme"]["runtime_port"]
         try:
             with urllib.request.urlopen(
@@ -298,10 +343,8 @@ class ServiceManager:
             ) as response:
                 data = json.loads(response.read())
         except (OSError, urllib.error.URLError, json.JSONDecodeError):
-            return "degraded"
-        if not data.get("ready"):
-            return "failed" if data.get("status") == "blocked" else "degraded"
-        return "healthy" if data.get("status") == "healthy" else "observation_only"
+            return None
+        return data if isinstance(data, dict) else None
 
     def status(self) -> ServiceStatus:
         observation = True
