@@ -456,3 +456,25 @@ ends reconciliation; and shutdown cancels the timer before reporting
 `unavailable`. Logs contain only state, HTTP status, and delay—not response
 content, credentials, or household data. Release evidence requires an actual
 Gateway-before-runtime restart to converge without an operator health nudge.
+
+### 10.8 Immutable plugin-release selection
+
+PR #308 passed both hosted gates, merged as `43cd565`, and deployed after
+encrypted backup `administrateme-20260809T182639Z.ambackup`. The updater and
+full Doctor reported healthy, but direct runtime-source inspection proved that
+OpenClaw still loaded AdministrateMe from immutable release `d52050b`, not the
+new active release. The upgrade path selected the reviewed OpenClaw executable,
+built the candidate plugin, and replaced both launch definitions, but it never
+updated OpenClaw's linked local-plugin registration. Doctor compared the
+candidate manifest with the pin and searched discovery output only for the
+plugin name, so a same-version stale plugin passed.
+
+The repair **HARDENS** immutable release selection and **SUPERSEDES** name-only
+plugin discovery. While services are stopped, the candidate-owned updater
+removes only AdministrateMe registrations within a fixed safety bound, links
+the candidate release's built plugin through OpenClaw's reviewed CLI, validates
+the resulting config, and proves that both install paths and the loaded runtime
+module resolve inside the selected release. Candidate failure restores the
+previous executable, plugin registration, pointer, and launch definitions
+before restart. Doctor reports only booleans for these paths; no instance path,
+credential, response body, or household content becomes diagnostic evidence.

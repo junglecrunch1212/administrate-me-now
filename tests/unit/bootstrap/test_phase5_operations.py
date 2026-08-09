@@ -1505,6 +1505,38 @@ def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
         assert value.hex().encode() not in rendered
 
 
+def test_doctor_rejects_plugin_loaded_from_a_stale_release(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wizard(test_paths).run()
+    ServiceManager(test_paths, test_mode=True).start()
+    monkeypatch.setattr(
+        "bootstrap.doctor.administrateme_plugin_status",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "discovered": True,
+            "loaded": True,
+            "release_root_valid": True,
+            "release_path_current": False,
+            "runtime_source_current": False,
+        },
+    )
+
+    report = Doctor(test_paths, root=REPO_ROOT, test_mode=True).run(
+        include_synthetic_proof=False
+    )
+
+    check = next(
+        item
+        for item in report["checks"]
+        if item["name"] == "openclaw_compatibility_and_plugin_discovery"
+    )
+    assert check["ok"] is False
+    assert check["evidence"]["release_path_current"] is False
+    assert report["status"] == "failed"
+
+
 def test_doctor_fails_when_source_obligations_are_not_terminal(
     test_paths: DeploymentPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -48,7 +48,7 @@ Startup order is transactional and health-visible:
 5. Register all fourteen projections and schemas (thirteen domain truth plus Triage); open/rebuild/migrate as required.
 6. Register reactive pipelines and durable consumer ids; reconcile pack registry.
 7. Start central adapters and xlsx services with durable watermarks/circuit state.
-8. Validate/install/reconcile the one native AdministrateMe OpenClaw plugin, compiled workspace/SOUL, typed skill, slash commands, dashboard bindings, automation standing orders, and the pinned host's bundled `llm-task`; add the required tool without removing existing policy entries, then require runtime tool registration, plugin inspect, and deep RPC health.
+8. Validate/install/reconcile the one native AdministrateMe OpenClaw plugin from the exact selected immutable release, compiled workspace/SOUL, typed skill, slash commands, dashboard bindings, automation standing orders, and the pinned host's bundled `llm-task`; add the required tool without removing existing policy entries, then require exact plugin install/runtime-source identity, runtime tool registration, plugin inspect, and deep RPC health.
 9. Start router namespaces/browser assets behind identity middleware; report readiness only after required capabilities are healthy or explicitly degraded by policy.
 10. Emit a versioned runtime-started/health snapshot without secrets.
 

@@ -17,6 +17,7 @@ from bootstrap.openclaw_install import resolve_reviewed_openclaw
 
 REQUIRED_LLM_TOOL = "llm-task"
 REQUIRED_LLM_AGENT = "main"
+ADMINISTRATEME_PLUGIN = "administrateme"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -31,6 +32,169 @@ def _environment(paths: DeploymentPaths) -> dict[str, str]:
     environment["OPENCLAW_STATE_DIR"] = str(state_dir)
     environment["OPENCLAW_CONFIG_PATH"] = str(state_dir / "openclaw.json")
     return environment
+
+
+def administrateme_plugin_status(
+    paths: DeploymentPaths,
+    release: Path,
+    *,
+    test_mode: bool = False,
+) -> dict[str, Any]:
+    """Prove that OpenClaw loaded the plugin from the selected release."""
+
+    if test_mode:
+        return {
+            "ok": True,
+            "discovered": True,
+            "loaded": True,
+            "release_root_valid": True,
+            "release_path_current": True,
+            "runtime_source_current": True,
+        }
+    candidate_plugin = release / "openclaw" / "administrateme"
+    try:
+        expected = candidate_plugin.resolve()
+        release_root_valid = (
+            not candidate_plugin.is_symlink()
+            and expected.is_relative_to(release.resolve())
+        )
+    except (OSError, RuntimeError):
+        expected = candidate_plugin.absolute()
+        release_root_valid = False
+    try:
+        completed = subprocess.run(
+            [
+                resolve_reviewed_openclaw(paths),
+                "plugins",
+                "inspect",
+                ADMINISTRATEME_PLUGIN,
+                "--runtime",
+                "--json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_environment(paths),
+        )
+        inspected = json.loads(completed.stdout) if completed.returncode == 0 else {}
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ):
+        inspected = {}
+    document = _mapping(inspected)
+    plugin = _mapping(document.get("plugin"))
+    install = _mapping(document.get("install"))
+    discovered = plugin.get("id") == ADMINISTRATEME_PLUGIN
+    loaded = plugin.get("status") == "loaded" and plugin.get("activated") is True
+
+    def exact_path(value: Any) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        try:
+            return Path(value).resolve() == expected
+        except (OSError, RuntimeError):
+            return False
+
+    source = plugin.get("source")
+    try:
+        runtime_source_current = isinstance(source, str) and Path(
+            source
+        ).resolve().is_relative_to(expected)
+    except (OSError, RuntimeError):
+        runtime_source_current = False
+    release_path_current = exact_path(install.get("sourcePath")) and exact_path(
+        install.get("installPath")
+    )
+    return {
+        "ok": (
+            discovered
+            and loaded
+            and release_path_current
+            and runtime_source_current
+            and release_root_valid
+        ),
+        "discovered": discovered,
+        "loaded": loaded,
+        "release_root_valid": release_root_valid,
+        "release_path_current": release_path_current,
+        "runtime_source_current": runtime_source_current,
+    }
+
+
+def reconcile_administrateme_plugin(
+    paths: DeploymentPaths,
+    release: Path,
+    *,
+    test_mode: bool = False,
+) -> dict[str, Any]:
+    """Replace stale local-plugin registration with the reviewed release path."""
+
+    if test_mode:
+        return administrateme_plugin_status(paths, release, test_mode=True)
+    candidate_plugin = release / "openclaw" / "administrateme"
+    plugin = candidate_plugin.resolve()
+    if candidate_plugin.is_symlink() or not plugin.is_relative_to(release.resolve()):
+        raise RuntimeError("reviewed AdministrateMe plugin path escapes the release")
+    manifest = plugin / "openclaw.plugin.json"
+    entrypoint = plugin / "dist" / "index.js"
+    if (
+        not manifest.is_file()
+        or manifest.is_symlink()
+        or not entrypoint.is_file()
+        or entrypoint.is_symlink()
+    ):
+        raise RuntimeError("reviewed AdministrateMe plugin build is incomplete")
+    executable = resolve_reviewed_openclaw(paths)
+    environment = _environment(paths)
+
+    def run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [executable, *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+
+    for _ in range(20):
+        inspected = run(["plugins", "inspect", ADMINISTRATEME_PLUGIN, "--json"])
+        if inspected.returncode:
+            break
+        removed = run(
+            [
+                "plugins",
+                "uninstall",
+                ADMINISTRATEME_PLUGIN,
+                "--force",
+                "--keep-files",
+            ]
+        )
+        if removed.returncode:
+            raise RuntimeError(
+                "stale AdministrateMe plugin registration could not be removed"
+            )
+    else:
+        raise RuntimeError(
+            "stale AdministrateMe plugin registrations exceeded the safety bound"
+        )
+
+    installed = run(["plugins", "install", "--link", "--force", str(plugin)])
+    if installed.returncode:
+        raise RuntimeError("reviewed AdministrateMe plugin registration failed")
+    validated = run(["config", "validate"])
+    if validated.returncode:
+        raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
+    status = administrateme_plugin_status(paths, release)
+    if not status["ok"]:
+        raise RuntimeError(
+            "OpenClaw did not load AdministrateMe from the selected release"
+        )
+    return status
 
 
 def required_llm_tool_status(
@@ -299,10 +463,13 @@ def probe_required_llm_tool(
 
 
 __all__ = [
+    "ADMINISTRATEME_PLUGIN",
     "REQUIRED_LLM_AGENT",
     "REQUIRED_LLM_TOOL",
+    "administrateme_plugin_status",
     "configure_required_llm_tool",
     "probe_required_llm_tool",
+    "reconcile_administrateme_plugin",
     "required_llm_tool_status",
 ]
 

@@ -176,6 +176,10 @@ single expected startup refusal cannot require a manual health nudge. It
 may retry only the bounded projection/Gateway/plugin/cron/listener startup
 checks; it then requires the complete Doctor, including the canonical
 synthetic round trip. Every other failed check causes immediate rollback.
+The same cutover removes only stale AdministrateMe plugin registrations, links
+the plugin from the selected immutable release, and proves both its install
+path and loaded runtime module resolve inside that release. Rollback restores
+the previous release's plugin link before restarting either service.
 
 For a bug report, create a secret-redacted machine report:
 

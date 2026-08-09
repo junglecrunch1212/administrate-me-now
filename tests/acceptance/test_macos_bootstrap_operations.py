@@ -130,6 +130,16 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
         text=True,
     ).stdout.strip()
     monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    reconciled: list[tuple[Path, bool]] = []
+
+    def reconcile(_paths, release: Path, *, test_mode: bool = False):
+        reconciled.append((release, test_mode))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        reconcile,
+    )
 
     result = UpgradeManager(
         paths,
@@ -143,6 +153,7 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
     pointer = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
     assert pointer["commit"] == commit
     assert Path(pointer["path"]).is_dir()
+    assert reconciled == [(Path(pointer["path"]), True)]
 
 
 def test_doctor_fails_when_required_triage_pipeline_is_poisoned(
