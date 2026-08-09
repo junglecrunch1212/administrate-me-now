@@ -74,8 +74,28 @@ class TaskCreatedV1(BaseModel):
     description: str | None = None
     owner_member_id: str | None = None
     due: str | None = None
+    due_date: str | None = None
+    available_from: str | None = None
     energy: Literal["low", "medium", "high"] | None = None
     effort_min: int | None = Field(default=None, ge=0)
+    effort: Literal["tiny", "small", "medium", "large"] | None = None
+    domain: str | None = None
+    item_type: (
+        Literal[
+            "task",
+            "purchase",
+            "appointment",
+            "research",
+            "decision",
+            "chore",
+            "maintenance",
+        ]
+        | None
+    ) = None
+    micro_script: str | None = None
+    notes: str | None = None
+    created_by: str | None = None
+    source_system: str | None = None
     source_commitment_id: str | None = None
 
 

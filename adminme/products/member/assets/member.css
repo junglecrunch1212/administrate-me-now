@@ -149,6 +149,11 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .field input, .field select, .field textarea { width: 100%; min-height: 2.5rem; border: 1px solid #aaa097; border-radius: var(--radius); padding: .55rem .62rem; background: white; color: var(--ink); font: inherit; }
 .field textarea { min-height: 5rem; resize: vertical; }
 .field-span { grid-column: 1 / -1; }
+.date-time-control { display: grid; grid-template-columns: minmax(8.5rem, 1fr) minmax(7rem, .7fr); gap: .45rem; }
+.dialog-form .field input, .dialog-form .field select, .dialog-form .field textarea { width: 100%; min-height: 2.6rem; border: 1px solid #aaa097; border-radius: var(--radius); padding: .55rem .62rem; background: white; color: var(--ink); font: inherit; }
+.dialog-form .field textarea { min-height: 4.5rem; resize: vertical; }
+.task-properties-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.task-properties-form .field:nth-of-type(1), .task-properties-form .field:nth-of-type(7), .task-properties-form .field:nth-of-type(8), .task-properties-form .button { grid-column: 1 / -1; }
 .review-state { padding: .65rem .75rem; border-radius: var(--radius); background: #fff0c9; color: #72510b; }
 .review-state.ready { background: #d7eee8; color: #195f59; }
 .possible-copy { margin-top: .55rem; padding: .55rem .65rem; border-radius: var(--radius); background: #fff0c9; color: #72510b; font-size: .72rem; }

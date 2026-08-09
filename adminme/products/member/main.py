@@ -81,6 +81,7 @@ from adminme.projections.member_knowledge.queries import (
     search_visible as search_visible_notes,
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.projections.tasks.queries import get_task
 from adminme.settings_control import (
     compose_connections,
     member_label,
@@ -98,6 +99,7 @@ from adminme.temporary_surfaces import (
     TemporarySurfaceSpec,
 )
 from adminme.triage_intent import EXTRACTOR_ID, extract_intent_candidates
+from adminme.triage_contract import candidate_update_fields, triage_destination
 
 
 router = APIRouter(tags=["member-portal"])
@@ -326,6 +328,121 @@ class ReminderCueRequest(BaseModel):
     expected_state: str | None = Field(default=None, max_length=500)
     expected_number: float | None = None
     enabled: bool = True
+
+
+TaskItemType = Literal[
+    "task",
+    "purchase",
+    "appointment",
+    "research",
+    "decision",
+    "chore",
+    "maintenance",
+]
+
+
+class MemberTaskCreateRequest(BaseModel):
+    """Explicit member-authored canonical work; no model interpretation."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    title: str = Field(min_length=1, max_length=1000)
+    notes: str | None = Field(default=None, max_length=20_000)
+    due_date: str | None = Field(default=None, max_length=80)
+    available_from: str | None = Field(default=None, max_length=80)
+    energy: Literal["low", "medium", "high"] | None = None
+    effort: Literal["tiny", "small", "medium", "large"] | None = None
+    domain: str = Field(default="tasks", min_length=1, max_length=120)
+    item_type: TaskItemType = "task"
+    micro_script: str | None = Field(default=None, max_length=2000)
+
+
+class MemberTaskUpdateRequest(BaseModel):
+    """Closed task correction contract for the member portal."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    title: str | None = Field(default=None, min_length=1, max_length=1000)
+    notes: str | None = Field(default=None, max_length=20_000)
+    due_date: str | None = Field(default=None, max_length=80)
+    available_from: str | None = Field(default=None, max_length=80)
+    energy: Literal["low", "medium", "high"] | None = None
+    effort: Literal["tiny", "small", "medium", "large"] | None = None
+    domain: str | None = Field(default=None, min_length=1, max_length=120)
+    item_type: TaskItemType | None = None
+    micro_script: str | None = Field(default=None, max_length=2000)
+
+
+def _validated_triage_candidate_updates(
+    target_kind: str,
+    updates: dict[str, Any],
+    *,
+    timezone_name: str,
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Validate only member-editable fields for the chosen canonical type."""
+
+    allowed = candidate_update_fields(target_kind, provider=provider)
+    if not allowed:
+        raise HTTPException(422, "unsupported triage target")
+    unexpected = set(updates) - allowed
+    if unexpected:
+        raise HTTPException(
+            422,
+            f"unsupported {target_kind} enrichment fields: {sorted(unexpected)}",
+        )
+    values = dict(updates)
+    for field_name in {
+        "due",
+        "due_date",
+        "due_at",
+        "available_from",
+        "start",
+        "end",
+        "next_occurrence",
+        "effective_date",
+        "since",
+    } & values.keys():
+        value = values[field_name]
+        if value is None or value == "":
+            values[field_name] = None
+        elif not isinstance(value, str):
+            raise HTTPException(422, f"{field_name} must be a date or date and time")
+        else:
+            values[field_name] = _normalized_task_due(
+                value, timezone_name=timezone_name
+            )
+    if "energy" in values and values["energy"] not in {None, "low", "medium", "high"}:
+        raise HTTPException(422, "energy must be low, medium, or high")
+    if "effort" in values and values["effort"] not in {
+        None,
+        "tiny",
+        "small",
+        "medium",
+        "large",
+    }:
+        raise HTTPException(422, "effort must be tiny, small, medium, or large")
+    if "item_type" in values and values["item_type"] not in {
+        "task",
+        "purchase",
+        "appointment",
+        "research",
+        "decision",
+        "chore",
+        "maintenance",
+    }:
+        raise HTTPException(422, "unsupported task type")
+    if "effort_min" in values and (
+        not isinstance(values["effort_min"], int) or values["effort_min"] < 0
+    ):
+        raise HTTPException(422, "effort minutes must be a positive whole number")
+    if "priority" in values and values["priority"] not in {0, 1, 5, 9}:
+        raise HTTPException(422, "reminder priority must be none, high, medium, or low")
+    for list_field in {"alarms", "recurrence_rules"} & values.keys():
+        if not isinstance(values[list_field], list) or len(values[list_field]) > 20:
+            raise HTTPException(422, f"{list_field} must be a short list")
+    return values
 
 
 class TriageEnrichmentRequest(BaseModel):
@@ -985,6 +1102,24 @@ def _materialization_envelopes(
         "raw_ref": f"triage-candidate-sha256:{_triage_candidate_fingerprint(item)}",
     }
     if target_kind == "task":
+        due_date = (
+            candidate["due_date"] if "due_date" in candidate else candidate.get("due")
+        )
+        notes = (
+            candidate["notes"] if "notes" in candidate else candidate.get("description")
+        )
+        effort = candidate.get("effort")
+        if effort is None and isinstance(candidate.get("effort_min"), int):
+            minutes = int(candidate["effort_min"])
+            effort = (
+                "tiny"
+                if minutes <= 10
+                else "small"
+                if minutes <= 30
+                else "medium"
+                if minutes <= 90
+                else "large"
+            )
         return [
             EventEnvelope(
                 **common,
@@ -994,11 +1129,19 @@ def _materialization_envelopes(
                 payload={
                     "task_id": f"triage_task_{item['proposal_id']}",
                     "title": title,
-                    "description": candidate.get("description"),
+                    "description": notes,
                     "owner_member_id": target_member,
-                    "due": candidate.get("due"),
+                    "due_date": due_date,
+                    "available_from": candidate.get("available_from"),
                     "energy": candidate.get("energy"),
                     "effort_min": candidate.get("effort_min"),
+                    "effort": effort,
+                    "domain": candidate.get("domain") or "tasks",
+                    "item_type": candidate.get("item_type") or "task",
+                    "micro_script": candidate.get("micro_script"),
+                    "notes": notes,
+                    "created_by": session.auth_member_id,
+                    "source_system": "triage",
                     "source_commitment_id": candidate.get("source_commitment_id"),
                 },
             )
@@ -1305,6 +1448,13 @@ def _materialization_envelopes(
         operation = (
             "create_reminder" if provider == "apple_reminders" else "create_task"
         )
+        candidate = {
+            key: value
+            for key, value in candidate.items()
+            if key in _REMINDER_PAYLOAD_FIELDS[operation]
+        }
+        if provider == "google_tasks" and isinstance(candidate.get("due"), str):
+            candidate["due"] = candidate["due"].split("T", 1)[0]
         candidate.setdefault(
             "target_list_id" if provider == "apple_reminders" else "tasklist_id",
             container,
@@ -1315,6 +1465,11 @@ def _materialization_envelopes(
         if provider != "apple_reminders":
             raise HTTPException(422, "list creation currently requires Apple Reminders")
         operation = "create_list"
+        candidate = {
+            key: value
+            for key, value in candidate.items()
+            if key in _REMINDER_PAYLOAD_FIELDS[operation]
+        }
         candidate.setdefault("list_name", title)
         candidate.setdefault("member_id", target_member)
     else:
@@ -1341,6 +1496,36 @@ def _materialization_envelopes(
             payload=payload,
         )
     ]
+
+
+def _triage_destination(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the human-visible destination for one typed materialization."""
+    return triage_destination(item)
+
+
+_MATERIALIZATION_PROJECTION = {
+    "task.created": "tasks",
+    "commitment.proposed": "commitments",
+    "commitment.confirmed": "commitments",
+    "recurrence.added": "recurrences",
+    "party.created": "parties",
+    "identifier.added": "parties",
+    "relationship.added": "parties",
+    "relationship_fact.confirmed": "parties",
+}
+
+
+async def _wait_for_materialized_destinations(
+    runtime: Any,
+    envelopes: list[EventEnvelope],
+    event_ids: list[str],
+) -> None:
+    """Do not return a local success receipt before its destination is readable."""
+
+    for envelope, event_id in zip(envelopes, event_ids, strict=True):
+        projection = _MATERIALIZATION_PROJECTION.get(envelope.type)
+        if projection is not None:
+            await runtime.wait_for_projection(projection, event_id)
 
 
 def _reminder_account_for_command(
@@ -1538,6 +1723,242 @@ def _provider_reminder_payload(
                     "floating": True,
                 }
     return provider_payload, allowed_fields
+
+
+def _normalized_task_due(value: str | None, *, timezone_name: str) -> str | None:
+    if value is None or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        if len(raw) == 10:
+            return date.fromisoformat(raw).isoformat()
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            422, "due date must be a valid date or date and time"
+        ) from exc
+    if parsed.tzinfo is None:
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo(timezone_name))
+        except ZoneInfoNotFoundError as exc:
+            raise HTTPException(503, "instance timezone is unavailable") from exc
+    return parsed.isoformat()
+
+
+@router.post("/api/member/v1/tasks", status_code=201)
+async def create_member_task(
+    body: MemberTaskCreateRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """Create explicit member-authored work and return its destination receipt."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "task creation is unavailable in view-as mode")
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "task state is unavailable")
+    title = body.title.strip()
+    domain = body.domain.strip()
+    if not title:
+        raise HTTPException(422, "task title cannot be blank")
+    if not domain:
+        raise HTTPException(422, "task area cannot be blank")
+    values = body.model_dump(mode="json")
+    fingerprint = hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type="task.created",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("tasks", prior["event_id"])
+        task_id = str(prior["payload"]["task_id"])
+        return {
+            "event_id": prior["event_id"],
+            "task": get_task(
+                runtime.projections.connection("tasks"), session, task_id=task_id
+            ),
+            "duplicate": True,
+            "destination": {
+                "surface": "reminders",
+                "href": f"/member/reminders?item=task%3A{task_id}",
+                "record_kind": "task",
+                "record_id": task_id,
+            },
+        }
+    task_seed = f"{session.tenant_id}|{session.auth_member_id}|{body.request_id}"
+    task_id = "task_" + hashlib.sha256(task_seed.encode()).hexdigest()[:28]
+    payload = {
+        "task_id": task_id,
+        "title": title,
+        "description": body.notes,
+        "owner_member_id": session.auth_member_id,
+        "due_date": _normalized_task_due(
+            body.due_date, timezone_name=runtime.settings.instance.timezone
+        ),
+        "available_from": _normalized_task_due(
+            body.available_from, timezone_name=runtime.settings.instance.timezone
+        ),
+        "energy": body.energy,
+        "effort": body.effort,
+        "domain": domain,
+        "item_type": body.item_type,
+        "micro_script": body.micro_script,
+        "notes": body.notes,
+        "created_by": session.auth_member_id,
+        "source_system": "member-portal",
+    }
+    await _guard_member_write(runtime, session, "task.created", payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="task.created",
+            schema_version=1,
+            occurred_at=EventEnvelope.now_utc_iso(),
+            source_adapter="member-portal",
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="normal",
+            correlation_id=session.correlation_id,
+            actor_identity=session.auth_member_id,
+            idempotency_key=(
+                f"member-command:task.created:{session.auth_member_id}:"
+                f"{body.request_id}"
+            ),
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {
+        "event_id": event_id,
+        "task": get_task(
+            runtime.projections.connection("tasks"), session, task_id=task_id
+        ),
+        "duplicate": False,
+        "destination": {
+            "surface": "reminders",
+            "href": f"/member/reminders?item=task%3A{task_id}",
+            "record_kind": "task",
+            "record_id": task_id,
+        },
+    }
+
+
+@router.patch("/api/member/v1/tasks/{task_id}")
+async def update_member_task(
+    task_id: str,
+    body: MemberTaskUpdateRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Correct an owned canonical task through a closed field allowlist."""
+
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "task editing is unavailable in view-as mode")
+    runtime = _runtime(request)
+    if runtime.events is None or runtime.projections is None:
+        raise HTTPException(503, "task state is unavailable")
+    row = get_task(runtime.projections.connection("tasks"), session, task_id=task_id)
+    if row is None or row.get("assignee_party") not in {
+        None,
+        session.auth_member_id,
+    }:
+        raise HTTPException(404, "task not found")
+    values = body.model_dump(mode="json", exclude_unset=True)
+    fingerprint = hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type="task.updated",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("tasks", prior["event_id"])
+        return {
+            "event_id": prior["event_id"],
+            "task": get_task(
+                runtime.projections.connection("tasks"), session, task_id=task_id
+            ),
+            "duplicate": True,
+        }
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "task changed; refresh before saving")
+    updates = {
+        key: value
+        for key, value in values.items()
+        if key
+        in {
+            "title",
+            "notes",
+            "due_date",
+            "available_from",
+            "energy",
+            "effort",
+            "domain",
+            "item_type",
+            "micro_script",
+        }
+    }
+    if not updates:
+        raise HTTPException(422, "at least one task field must be changed")
+    for required_field in ("title", "domain", "item_type"):
+        if required_field in updates and updates[required_field] is None:
+            raise HTTPException(422, f"{required_field} cannot be cleared")
+    for text_field in ("title", "domain"):
+        if text_field in updates:
+            updates[text_field] = str(updates[text_field]).strip()
+            if not updates[text_field]:
+                raise HTTPException(422, f"{text_field} cannot be blank")
+    if "due_date" in updates:
+        updates["due_date"] = _normalized_task_due(
+            updates["due_date"], timezone_name=runtime.settings.instance.timezone
+        )
+    if "available_from" in updates:
+        updates["available_from"] = _normalized_task_due(
+            updates["available_from"],
+            timezone_name=runtime.settings.instance.timezone,
+        )
+    payload = {
+        "task_id": task_id,
+        "updated_at": EventEnvelope.now_utc_iso(),
+        "updated_by_party_id": session.auth_member_id,
+        "previous_status": row["status"],
+        "new_status": None,
+        "field_updates": updates,
+    }
+    await _guard_member_write(runtime, session, "task.updated", payload)
+    event_id = await runtime.events.write(
+        _member_command_event(
+            session,
+            event_type="task.updated",
+            payload=payload,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+            causation_id=row["last_event_id"],
+            owner_scope=row["owner_scope"],
+            visibility_scope=row["visibility_scope"],
+            sensitivity=cast(Sensitivity, row.get("sensitivity") or "normal"),
+        )
+    )
+    await runtime.wait_for_projection("tasks", event_id)
+    return {
+        "event_id": event_id,
+        "task": get_task(
+            runtime.projections.connection("tasks"), session, task_id=task_id
+        ),
+        "duplicate": False,
+    }
 
 
 @router.post("/api/member/v1/reminders/commands", status_code=202)
@@ -1957,6 +2378,18 @@ async def _enrich_triage_item_locked(
         )
         await runtime.wait_for_projection("triage", result["event_id"])
         return {**result, "triage": _owned_triage_item(runtime, session, proposal_id)}
+    selected_target = str(body.target_kind or item.get("target_kind") or "")
+    selected_route = (
+        body.route.model_dump(mode="json")
+        if body.route
+        else dict(item.get("route") or {})
+    )
+    body.candidate_updates = _validated_triage_candidate_updates(
+        selected_target,
+        body.candidate_updates,
+        timezone_name=runtime.settings.instance.timezone,
+        provider=str(selected_route.get("provider") or "") or None,
+    )
     request_fingerprint = _triage_request_fingerprint(proposal_id, body)
     prior = await _prior_triage_command(
         runtime,
@@ -2060,6 +2493,10 @@ async def _approve_triage_item_locked(
                 "materialized_event_ids": prior_confirmation["payload"][
                     "materialized_event_ids"
                 ],
+                "destination": {
+                    **_triage_destination(item),
+                    "state": "materialized",
+                },
                 "duplicate": True,
             }
         prior_receipt = await _prior_triage_command(
@@ -2078,6 +2515,10 @@ async def _approve_triage_item_locked(
                 "materialized_event_ids": prior_receipt["payload"][
                     "materialized_event_ids"
                 ],
+                "destination": {
+                    **_triage_destination(item),
+                    "state": "materialized",
+                },
                 "duplicate": True,
             }
         if (
@@ -2148,6 +2589,10 @@ async def _approve_triage_item_locked(
             "pending_provider_action_event_id": pending_event_id,
             "state": "approved_awaiting_openclaw",
             "materialized_event_ids": [],
+            "destination": {
+                **_triage_destination(item),
+                "state": "awaiting_openclaw_approval",
+            },
             "duplicate": prior_confirmation is not None and pending_duplicate,
         }
 
@@ -2183,6 +2628,9 @@ async def _approve_triage_item_locked(
         for envelope in materializations:
             await _guard_triage_write(runtime, session, envelope.type, envelope.payload)
         materialized_event_ids = await runtime.events.write_batch(materializations)
+    await _wait_for_materialized_destinations(
+        runtime, materializations, materialized_event_ids
+    )
     materialized_at = EventEnvelope.now_utc_iso()
     receipt = _triage_event(
         session,
@@ -2205,6 +2653,7 @@ async def _approve_triage_item_locked(
         "confirmation_event_id": confirmation_event_id,
         "state": "confirmed",
         "materialized_event_ids": materialized_event_ids,
+        "destination": {**_triage_destination(item), "state": "materialized"},
     }
 
 

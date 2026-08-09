@@ -1247,7 +1247,12 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
         item = surface.json()["cockpit"]["items"][0]
         assert item["bucket"] == "now"
         assert item["why"] == ["Presence cue matched"]
-        assert surface.json()["cockpit"]["accounts"][0]["state"] == "read_only"
+        google_account = next(
+            account
+            for account in surface.json()["cockpit"]["accounts"]
+            if account["provider"] == "google_tasks"
+        )
+        assert google_account["state"] == "read_only"
 
         forged_approval = client.post(
             "/api/member/v1/reminders/commands",
@@ -1303,7 +1308,7 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
         )
         assert dashboard.status_code == 200, dashboard.text
         assert dashboard.json()["cockpit"]["version"] == (
-            "deterministic-reminders-cockpit-v1"
+            "deterministic-reminders-cockpit-v2"
         )
         assert client.get("/api/member/v1/bootstrap").status_code == 401
 
@@ -2012,6 +2017,10 @@ def test_calendar_onboarding_drives_calendar_today_and_triage_routes(
         assert triage["calendar_destinations"][0]["calendar_external_id"] == (
             "calendar-personal"
         )
+        assert any(
+            destination["member_id"] == PRINCIPAL
+            for destination in triage["destinations"]["members"]
+        )
 
 
 def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
@@ -2125,6 +2134,10 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
         assert proposal["review_state"]["state"] == "ready"
         assert proposal["source_event_id"] == message_event
         assert triage["recent_items"] == []
+        assert any(
+            destination["member_id"] == PRINCIPAL
+            for destination in triage["destinations"]["members"]
+        )
         approved = client.post(
             "/api/member/v1/triage/ac28-school-form/approve",
             headers=HEADERS[PRINCIPAL],

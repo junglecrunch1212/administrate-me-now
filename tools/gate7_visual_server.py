@@ -274,6 +274,106 @@ def build_app():
         await runtime.wait_for_projection("calendars", last_event_id)
         return {"seeded": len(events), "last_event_id": last_event_id}
 
+    @app.post("/__gate7/seed-triage-task")
+    async def seed_triage_task():
+        """Seed one unconfirmed task proposal for structured-form evidence."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="household.action.proposed",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-triage-fixture",
+                source_account_id=PRINCIPAL,
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                actor_identity=PRINCIPAL,
+                idempotency_key="gate7:visual:triage-task",
+                payload={
+                    "proposal_id": "gate7-visual-triage-task",
+                    "kind": "task",
+                    "title": "Send the completed enrollment form",
+                    "owner_member_id": PRINCIPAL,
+                    "due": (now + timedelta(days=2)).replace(hour=17).isoformat(),
+                    "reason": "explicit_proposal",
+                    "provenance": {"fixture": "gate7-visual"},
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", event_id)
+        return {"seeded": 1, "event_id": event_id}
+
+    @app.post("/__gate7/seed-triage-google-task")
+    async def seed_triage_google_task():
+        """Seed a routed Google Tasks proposal for capability-ceiling QA."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-triage-fixture",
+            "source_account_id": PRINCIPAL,
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        list_event = await runtime.events.write(
+            EventEnvelope(
+                **common,
+                type="list.created",
+                schema_version=1,
+                idempotency_key="gate7:visual:google-list",
+                payload={
+                    "member_id": PRINCIPAL,
+                    "provider": "google_tasks",
+                    "provider_account_id": "visual-google-tasks",
+                    "list_external_id": "visual-google-list",
+                    "list_name": "Personal tasks",
+                    "is_default": True,
+                    "changed_at": now.isoformat(),
+                },
+            )
+        )
+        await runtime.wait_for_projection("lists", list_event)
+        proposal_event = await runtime.events.write(
+            EventEnvelope(
+                **common,
+                type="triage.item.proposed",
+                schema_version=1,
+                idempotency_key="gate7:visual:triage-google-task",
+                causation_id=list_event,
+                payload={
+                    "proposal_id": "gate7-visual-google-task",
+                    "target_kind": "reminder",
+                    "owner_member_id": PRINCIPAL,
+                    "title": "Renew the annual registration",
+                    "candidate": {
+                        "due": (now + timedelta(days=10)).replace(hour=14).isoformat(),
+                        "notes": "Provider-ceiling visual fixture.",
+                    },
+                    "route": {
+                        "member_id": PRINCIPAL,
+                        "provider": "google_tasks",
+                        "provider_account_id": "visual-google-tasks",
+                        "container_external_id": "visual-google-list",
+                    },
+                    "source_event_id": list_event,
+                    "confidence": 0.98,
+                    "reasons": ["explicit provider reminder proposal"],
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", proposal_event)
+        return {"seeded": 2, "last_event_id": proposal_event}
+
     @app.post("/__gate7/seed-notes")
     async def seed_notes():
         """Seed synthetic owner-private Notes and one Triage link."""

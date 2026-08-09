@@ -34,6 +34,7 @@ _UPDATABLE_COLUMNS = frozenset(
         "effort",
         "item_type",
         "due_date",
+        "available_from",
         "micro_script",
         "linked_item_id",
         "linked_item_kind",
@@ -133,13 +134,13 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
         """
         INSERT INTO tasks (
             task_id, tenant_id, title, status, assignee_party, domain,
-            energy, effort, item_type, due_date, micro_script,
+            energy, effort, item_type, due_date, available_from, micro_script,
             linked_item_id, linked_item_kind, recurring_id,
             depends_on_json, goal_ref, life_event, auto_research,
             waiting_on, waiting_since, created_at, created_by,
             completed_at, completed_by, source_system, notes,
             owner_scope, visibility_scope, sensitivity, last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                   ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, task_id) DO UPDATE SET
             title            = excluded.title,
@@ -150,6 +151,7 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             effort           = excluded.effort,
             item_type        = excluded.item_type,
             due_date         = excluded.due_date,
+            available_from   = excluded.available_from,
             micro_script     = excluded.micro_script,
             linked_item_id   = excluded.linked_item_id,
             linked_item_kind = excluded.linked_item_kind,
@@ -175,11 +177,12 @@ def apply_task_created(envelope: dict[str, Any], conn: sqlcipher3.Connection) ->
             p["title"],
             p.get("status", "inbox"),
             p.get("assignee_party") or p.get("owner_member_id"),
-            p.get("domain", "tasks"),
+            p.get("domain") or "tasks",
             p.get("energy"),
             p.get("effort"),
-            p.get("item_type", "task"),
+            p.get("item_type") or "task",
             p.get("due_date") or p.get("due"),
+            p.get("available_from"),
             p.get("micro_script"),
             p.get("linked_item_id"),
             p.get("linked_item_kind"),

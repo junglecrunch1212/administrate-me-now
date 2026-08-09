@@ -24,6 +24,7 @@ from adminme.reminders import (
 from adminme.lib.session import Session
 from adminme.products.core import main as core
 from adminme.today import compose_daily_brief
+from adminme.triage_contract import TRIAGE_ENRICHMENT_CONTRACT, triage_destination
 from adminme.projections.artifacts.queries import linked_to, list_recent
 from adminme.projections.calendars.queries import (
     events_in_range,
@@ -64,11 +65,18 @@ from adminme.projections.parties.queries import (
 )
 from adminme.projections.places_assets_accounts.queries import linked_to_party
 from adminme.projections.recurrences.queries import for_member
-from adminme.projections.tasks.queries import open_for_member
+from adminme.projections.tasks.queries import (
+    actionable_for_member,
+    work_history_for_member,
+)
 from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.projections.triage.queries import recent_for_member as recent_triage
 from adminme.surface_contracts import surface_freshness, surface_link
-from adminme.settings_control import compose_connections, compose_settings_control
+from adminme.settings_control import (
+    compose_connections,
+    compose_settings_control,
+    member_label,
+)
 
 
 ADULT_SURFACES = (
@@ -811,6 +819,18 @@ def build_surface(
                 object_id=str(item["proposal_id"]),
                 evidence_event_ids=[str(item.get("source_event_id") or "")],
             )
+        for item in recent_items:
+            if item.get("materialized_event_ids") or item.get(
+                "domain_approval_event_id"
+            ):
+                item["destination"] = {
+                    **triage_destination(item),
+                    "state": (
+                        "materialized"
+                        if item.get("materialized_event_ids")
+                        else "awaiting_provider_result"
+                    ),
+                }
         base["items"] = items
         base["recent_items"] = recent_items
         base["contract"] = {
@@ -825,6 +845,7 @@ def build_surface(
                 "failed",
             ],
         }
+        base["enrichment_schema"] = TRIAGE_ENRICHMENT_CONTRACT
         calendar_conn = runtime.projections.connection("calendars")
         calendar_sources = list_sources(calendar_conn, session)
         calendar_rules = rules_for_member(calendar_conn, session, member_id=member)
@@ -926,16 +947,28 @@ def build_surface(
                     }
                 )
         parties = all_parties(runtime.projections.connection("parties"), session)
+        parties_by_id = {str(party["party_id"]): party for party in parties}
         base["calendar_destinations"] = calendar_destinations
         base["destinations"] = {
             "members": [
                 {
-                    "member_id": party["party_id"],
-                    "label": party.get("display_name") or "Household member",
-                    "role": runtime.settings.member_roles.get(party["party_id"]),
+                    "member_id": member_id,
+                    "label": (
+                        parties_by_id.get(member_id, {}).get("display_name")
+                        or member_label(runtime, member_id)
+                    ),
+                    "role": role,
+                }
+                for member_id, role in runtime.settings.member_roles.items()
+                if role not in {"device", "ambient"}
+            ],
+            "people": [
+                {
+                    "party_id": party["party_id"],
+                    "label": party.get("display_name") or "Unnamed person",
+                    "kind": party.get("kind") or "person",
                 }
                 for party in parties
-                if party["party_id"] in runtime.settings.member_roles
             ],
             "calendars": calendar_destinations,
             "reminder_accounts": reminder_account_rows,
@@ -1092,6 +1125,11 @@ def build_surface(
         )
     elif surface == "reminders":
         lists_conn = runtime.projections.connection("lists")
+        tasks = work_history_for_member(
+            runtime.projections.connection("tasks"),
+            session,
+            member_party_id=member,
+        )
         reminder_items = items_for_member(lists_conn, session, member_id=member)
         reminder_lists = lists_for_member(lists_conn, session, member_id=member)
         accounts = reminder_accounts(
@@ -1100,24 +1138,50 @@ def build_surface(
             projected_items=reminder_items,
             projected_lists=reminder_lists,
         )
+        cockpit_accounts = [
+            {
+                "provider": "administrateme",
+                "provider_account_id": "administrateme",
+                "label": "AdministrateMe tasks",
+                "state": "local",
+                "native": [
+                    "typed household work",
+                    "due dates and times",
+                    "energy and effort",
+                    "work type and domain",
+                    "blocking, deferring, and completion",
+                    "event provenance",
+                ],
+                "limitations": [
+                    "Local tasks are not provider-synced unless a separately governed link is created."
+                ],
+                "operations": [],
+            },
+            *accounts,
+        ]
         base["cockpit"] = compose_reminders_cockpit(
             member_id=member,
             timezone_name=runtime.settings.instance.timezone,
             items=reminder_items,
             lists=reminder_lists,
-            accounts=accounts,
+            accounts=cockpit_accounts,
             cues=reminder_cues_for_member(lists_conn, session, member_id=member),
             signals=context_signals_for_member(lists_conn, session, member_id=member),
             now=now,
+            tasks=tasks,
         )
         base["freshness"] = surface_freshness(
             generated_at=now,
             latest_source_at=_latest_time(
-                reminder_items, "updated_at", "completed_at", "due_at"
+                [*reminder_items, *tasks],
+                "updated_at",
+                "completed_at",
+                "due_at",
+                "created_at",
             ),
             stale_after_seconds=604800,
-            row_count=len(reminder_items),
-            configured=bool(accounts),
+            row_count=len(reminder_items) + len(tasks),
+            configured=bool(accounts) or bool(tasks),
         )
     elif surface == "people":
         parties_conn = runtime.projections.connection("parties")
@@ -1357,8 +1421,11 @@ def build_surface(
             configured=bool(base["cockpit"]["sources"]),
         )
     elif surface == "scoreboard":
-        tasks = open_for_member(
-            runtime.projections.connection("tasks"), session, member_party_id=member
+        tasks = actionable_for_member(
+            runtime.projections.connection("tasks"),
+            session,
+            member_party_id=member,
+            as_of_iso=now.isoformat(),
         )
         base["scoreboard"] = {
             "open_count": len(tasks),
@@ -1496,10 +1563,11 @@ def evaluate_query(
     if name == "what_now":
         return core._what_now(runtime, session)
     if name == "tasks.open":
-        return open_for_member(
+        return actionable_for_member(
             runtime.projections.connection("tasks"),
             session,
             member_party_id=session.view_member_id,
+            as_of_iso=datetime.now(timezone.utc).isoformat(),
         )
     if name == "lists.open":
         return open_items_for_member(

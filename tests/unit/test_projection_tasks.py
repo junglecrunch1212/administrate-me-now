@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import sqlcipher3
 
 from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
@@ -22,6 +23,7 @@ from adminme.lib.session import Session, build_internal_session
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
 from adminme.projections.tasks.queries import (
+    actionable_for_member,
     by_context,
     get_task,
     in_status,
@@ -104,6 +106,31 @@ def _task_payload(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def test_tasks_v3_additive_migration_accepts_existing_v2_table(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "tasks-v2.db"
+    conn = sqlcipher3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE tasks (
+                task_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                due_date TEXT,
+                PRIMARY KEY (tenant_id, task_id)
+            );
+            """
+        )
+        TasksProjection().migrate_schema(conn)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(tasks)")}
+        assert "available_from" in columns
+        assert "idx_tasks_tenant_available" in indexes
+    finally:
+        conn.close()
 
 
 async def test_task_created_inserts_row(rig: dict[str, Any]) -> None:
@@ -522,6 +549,56 @@ async def test_open_for_member_excludes_done(rig: dict[str, Any]) -> None:
     conn = runner.connection("tasks")
     rows = open_for_member(conn, _S("tenant-a"), member_party_id="m1")
     assert {r["task_id"] for r in rows} == {"t1"}
+
+
+async def test_deferred_task_reappears_without_overwriting_due_date(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+
+    await log.append(
+        _envelope(
+            "task.created",
+            _task_payload(task_id="wake", due_date="2026-05-01T17:00:00-04:00"),
+        )
+    )
+    last = await log.append(
+        _envelope(
+            "task.updated",
+            {
+                "task_id": "wake",
+                "updated_at": "2026-04-23T10:00:00Z",
+                "previous_status": "inbox",
+                "new_status": "deferred",
+                "field_updates": {"available_from": "2026-04-24T09:00:00-04:00"},
+            },
+        )
+    )
+    await bus.notify(last)
+    await _wait_for_checkpoint(bus, "projection:tasks", last)
+
+    conn = runner.connection("tasks")
+    assert (
+        actionable_for_member(
+            conn,
+            _S("tenant-a"),
+            member_party_id="m1",
+            as_of_iso="2026-04-24T12:59:59Z",
+        )
+        == []
+    )
+    [available] = actionable_for_member(
+        conn,
+        _S("tenant-a"),
+        member_party_id="m1",
+        as_of_iso="2026-04-24T13:00:00Z",
+    )
+    assert available["status"] == "deferred"
+    assert available["effective_status"] == "next"
+    assert available["due_date"] == "2026-05-01T17:00:00-04:00"
+    assert available["available_from"] == "2026-04-24T09:00:00-04:00"
 
 
 async def test_by_context_and_in_status(rig: dict[str, Any]) -> None:

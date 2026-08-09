@@ -4,7 +4,7 @@ current_phase: 8
 phase_name: production_activation
 gate: 8
 gate_result: SOURCE_ASSURANCE_DEPLOYED_OBSERVATION
-verified_local_date: 2026-08-08
+verified_local_date: 2026-08-09
 verified_github_date: 2026-08-08
 branch: main
 candidate_commit_resolution: pr_300_merged_and_deployed_dc99208
@@ -16,6 +16,77 @@ next_phase: observation_soak_member_triage_review_and_false_positive_feedback
 ---
 
 # Release handoff
+
+## 2026-08-09 CO-009 cross-surface Task lifecycle (candidate verified)
+
+The member-reported failure was reproduced: two confirmed Triage Task
+candidates had canonical `task.created` events and Tasks rows, but the
+Reminders surface queried only provider Lists. The result was technically
+materialized and operationally invisible. CO-009 treats that as a failed
+product lifecycle.
+
+The current candidate adds `deterministic-reminders-cockpit-v2`, a typed
+read-time union that labels canonical AdministrateMe Tasks separately from
+provider items and retains independent IDs, provenance, lifecycle events,
+revisions, and write paths. Reminders adds local Task create/edit/complete/
+defer/block controls plus Waiting and Completed lenses. Task deadlines and
+available-from/defer activation are now separate; elapsed activations re-enter
+the deterministic Today/What Now/Scoreboard read without rewriting event
+truth. Triage now publishes `triage-enrichment-v3`; browser controls include date/time pickers, bounded
+recurrence, energy, effort, work type, domain, first tiny step, notes,
+authorized Party selection, and capability-filtered provider fields. The API
+derives a closed target allowlist from the same contract. Task confirmation and
+direct Task creation return an exact Reminders destination receipt; refreshed
+Recent decisions retain the same destination link. Google Tasks renders a
+date-only control and no Apple-only start/priority/alarm/recurrence/geofence
+properties.
+
+The browser saves visible ordinary-field edits before confirmation and requires
+a refreshed final review after structural target/member/provider/account/list
+changes. Triage's member directory is now derived from configured identities
+and only enriched with Party labels; it cannot silently substitute the first
+visible Party when the authenticated member has no Party row. The selector
+fails closed when no configured member matches. Local confirmation waits for
+the exact destination projection before returning success. Member-facing Task
+status says **Open**, not the internal lifecycle token `inbox`.
+
+Targeted proof passes with 46 tests: `tests/unit/test_projection_tasks.py`,
+`tests/unit/test_reminders_cockpit.py`,
+`tests/acceptance/test_triage_vertical_slice.py`, and the Gate 7 household
+experience slice. The Task process proof verifies the same ID in Reminders,
+Today, and Scoreboard and verifies no Calendar event is synthesized. The Gate 7
+rendered harness now seeds and inspects a canonical Task, the Task enrichment
+form, and the exact Google Tasks capability ceiling. All ten adult surfaces
+pass desktop plus 390-pixel rendered use with named controls, no overflow,
+landmarks, keyboard focus, contrast, and zero console/page/request errors.
+
+Final local candidate evidence on 2026-08-09:
+
+- strict acceptance: 39 passed under `--runxfail`;
+- complete Python/pack suite: 1,691 passed; bridge distribution: 60 passed;
+- Ruff and format clean across 508 files; mypy clean across 228 sources;
+  Pyright reports zero errors and zero warnings;
+- root and bridge dependency audits plus the production OpenClaw npm audit
+  report no known vulnerability;
+- performance passed every budget: 849.05 ms cold start, 16.45 ms append/
+  projection p95, 14.39 ms temporary-view p95, 17.43 ms Today p95, 13.46 ms
+  Task rebuild, 2.98 ms chat-fixture p95, 14.16 MiB peak traced memory, and
+  2,381,176 encrypted bytes after 100 Task events;
+- clean install, architecture negatives, tenant isolation, encrypted backup/
+  restore, both Python package builds, shell validation, and diff hygiene
+  passed;
+- pinned OpenClaw contract, TypeScript check, 15 tests, build, package dry run,
+  and production audit passed;
+- rendered Gate 7 passed 221 assertions and retained 36 screenshots with zero
+  failed result, console/page/request error, unnamed control, or horizontal
+  overflow.
+
+The aggregate suite was run with Python 3.14.6 and the side-by-side Node
+24.19.0 candidate path. Its first attempt correctly stopped when the shell
+selected live Node 22; the passing rerun explicitly selected Node 24 without
+changing the live runtime, as required by ADR-0006. Review, merge, guarded
+deployment, and live verification remain pending, so CO-009 and the persistent
+user goal are not complete.
 
 ## 2026-08-08 CO-008 candidate-controller repair and live deployment
 

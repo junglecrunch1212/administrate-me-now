@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     effort            TEXT,                   -- tiny | small | medium | large
     item_type         TEXT NOT NULL,          -- task | purchase | appointment | research | decision | chore | maintenance
     due_date          TEXT,
+    available_from    TEXT,                   -- deterministic activation/snooze boundary; distinct from the deadline
     micro_script      TEXT,
     linked_item_id    TEXT,
     linked_item_kind  TEXT,

@@ -148,6 +148,38 @@ async function seed(baseUrl) {
     },
   );
   record("canonical fixture seeded", message.response.ok, message.response.status);
+  const task = await jsonRequest(
+    baseUrl,
+    "/api/member/v1/tasks",
+    identities.principal,
+    "POST",
+    {
+      request_id: "gate7-visual-household-task",
+      title: "Return the signed school form",
+      due_date: "2026-08-04T16:00:00-04:00",
+      energy: "low",
+      effort: "small",
+      domain: "school",
+      item_type: "task",
+      micro_script: "Open the form and check the signature line",
+      notes: "Canonical task seeded for cross-surface visual proof.",
+    },
+  );
+  record("canonical task fixture seeded", task.response.ok, task.value);
+  const triageTask = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-triage-task",
+    identities.principal,
+    "POST",
+  );
+  record("Triage task fixture seeded", triageTask.response.ok && triageTask.value.seeded === 1, triageTask.value);
+  const triageGoogleTask = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-triage-google-task",
+    identities.principal,
+    "POST",
+  );
+  record("Google Tasks Triage fixture seeded", triageGoogleTask.response.ok && triageGoogleTask.value.seeded === 2, triageGoogleTask.value);
   const calendar = await jsonRequest(
     baseUrl,
     "/__gate7/seed-calendar",
@@ -216,13 +248,15 @@ async function visit(page, baseUrl, path, expectedTitle) {
 async function auditAccessibility(page, label) {
   const audit = await page.evaluate(() => {
     const controls = [...document.querySelectorAll("button, a, textarea")];
-    const unnamed = controls.filter((node) => {
+    const unnamedControls = controls.filter((node) => {
       const labelValue = node.getAttribute("aria-label") || node.textContent?.trim();
       if (node instanceof HTMLTextAreaElement) {
         return !node.labels?.length && !labelValue;
       }
       return !labelValue;
-    }).length;
+    });
+    const unnamed = unnamedControls.length;
+    const unnamedExamples = unnamedControls.slice(0, 5).map((node) => node.outerHTML.slice(0, 240));
     const overflow = document.documentElement.scrollWidth > document.documentElement.clientWidth + 1;
     const headings = [...document.querySelectorAll("h1")].length;
     const toMs = (value) => {
@@ -255,7 +289,7 @@ async function auditAccessibility(page, label) {
       && Boolean(document.querySelector("main#main"))
       && Boolean(document.querySelector("nav[aria-label='Primary']"))
       && Boolean(document.querySelector("#surface[aria-live='polite']"));
-    return { unnamed, overflow, headings, motion, landmarks, minContrast: Math.min(...contrastPairs) };
+    return { unnamed, unnamedExamples, overflow, headings, motion, landmarks, minContrast: Math.min(...contrastPairs) };
   });
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -293,6 +327,7 @@ async function run() {
       today: "Today", triage: "Triage", comms: "Comms", reminders: "Reminders", people: "People", notes: "Notes",
       finance: "Finance", calendar: "Calendar", scoreboard: "Scoreboard", settings: "Settings",
     };
+    let routedTaskBucket = "scheduled";
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "today") {
@@ -304,18 +339,54 @@ async function run() {
         await principal.page.locator(".carousel-card").waitFor();
         record("Today Carousel is interactive", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "false", await principal.page.locator("#surface").textContent());
         await screenshot(principal.page, "surface-today-carousel-desktop.png");
+      } else if (surface === "triage") {
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).click();
+        record("Triage renders typed task properties", await principal.page.getByLabel("Due date").count() === 1 && await principal.page.getByText("Available from", { exact: true }).count() === 1 && await principal.page.getByText("Energy needed", { exact: true }).count() === 1 && await principal.page.getByText("First tiny step", { exact: true }).count() === 1, await principal.page.locator(".triage-detail").textContent());
+        record("Triage removed machine-format date entry", !(await principal.page.locator(".triage-detail").textContent()).includes("ISO 8601"), await principal.page.locator(".triage-detail").textContent());
+        await screenshot(principal.page, "surface-triage-task-desktop.png");
+        await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
+        await principal.page.getByRole("button", { name: "Save & confirm" }).click();
+        await principal.page.getByRole("link", { name: "Open Reminders" }).waitFor();
+        record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
+        const bootstrap = await jsonRequest(server.baseUrl, "/api/member/v1/bootstrap", identities.principal);
+        const triageAfterConfirmation = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/triage", identities.principal);
+        const recentTaskDecision = triageAfterConfirmation.value.recent_items?.find((value) => value.title === "Send the completed enrollment form");
+        record("Triage keeps the selected member bound to the signed-in identity", bootstrap.response.ok && recentTaskDecision?.route?.member_id === bootstrap.value.member.id, JSON.stringify({ member: bootstrap.value.member, route: recentTaskDecision?.route }));
+        const materializedEvidence = recentTaskDecision?.materialized_event_ids?.[0]
+          ? await jsonRequest(server.baseUrl, `/api/member/v1/evidence/${encodeURIComponent(recentTaskDecision.materialized_event_ids[0])}`, identities.principal)
+          : { response: { ok: false }, value: { missing: "materialized event id" } };
+        const routedReminders = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/reminders", identities.principal);
+        const routedTaskRecord = routedReminders.value.cockpit?.tasks?.find((value) => value.title === "Send the completed enrollment form");
+        record("Triage receipt is destination-readable before return", routedReminders.response.ok && materializedEvidence.response.ok && Boolean(routedTaskRecord), JSON.stringify({ recent: recentTaskDecision, evidence: materializedEvidence.value, reminders: routedReminders.value }));
+        routedTaskBucket = routedTaskRecord.bucket;
+        await principal.page.getByRole("button", { name: /^Recent/ }).click();
+        record("Recent decision retains destination receipt", await principal.page.locator(".triage-detail").getByRole("link", { name: "Open Reminders" }).count() === 1, await principal.page.locator(".triage-detail").textContent());
+        await screenshot(principal.page, "surface-triage-routed-recent-desktop.png");
+        await principal.page.getByRole("button", { name: /^Needs details/ }).click();
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Renew the annual registration" }).click();
+        record("Google Tasks uses only its reviewed date capability", await principal.page.getByLabel("Scheduled date date").count() === 1 && await principal.page.getByLabel("Scheduled date time (optional)").count() === 0 && await principal.page.getByText("Available from", { exact: true }).count() === 0 && (await principal.page.locator(".triage-detail").textContent()).includes("discards due time"), await principal.page.locator(".triage-detail").textContent());
+        await screenshot(principal.page, "surface-triage-google-tasks-desktop.png");
       } else if (surface === "comms") {
         record("Comms identifies deterministic private focus", await principal.page.locator("#mode-label").textContent() === "Private · deterministic focus", await principal.page.locator("#mode-label").textContent());
         record("Comms renders one member-bound account and thread", await principal.page.locator(".account-filters .account-filter").count() === 2 && await principal.page.locator(".comms-thread").count() === 1, await principal.page.locator("#surface").textContent());
         record("Comms explains focus without a model", (await principal.page.locator(".focus-reason").textContent()).includes("Why it is here"), await principal.page.locator(".focus-reason").textContent());
-        record("Comms reply requires independent approval", await principal.page.getByLabel(/Approve the independent OpenClaw delivery gate/).count() === 1 && await principal.page.getByRole("button", { name: "Send reply" }).count() === 1, await principal.page.locator(".comms-compose").textContent());
+        record("Comms reply requires independent approval", (await principal.page.locator(".comms-compose").textContent()).includes("pending provider action") && await principal.page.getByRole("button", { name: "Save reply for approval" }).count() === 1, await principal.page.locator(".comms-compose").textContent());
         await screenshot(principal.page, "surface-comms-focus-desktop.png");
         await principal.page.getByRole("button", { name: /^Quieted/ }).click();
         record("Comms quiet lens is interactive", (await principal.page.locator(".comms-list").textContent()).includes("Nothing in this lens"), await principal.page.locator(".comms-list").textContent());
         await principal.page.getByRole("button", { name: /^Focus/ }).click();
       } else if (surface === "reminders") {
-        record("Reminders identifies deterministic provider truth", await principal.page.locator("#mode-label").textContent() === "Private · provider-backed · deterministic", await principal.page.locator("#mode-label").textContent());
+        record("Reminders identifies typed local and provider truth", await principal.page.locator("#mode-label").textContent() === "Private · canonical tasks + provider truth · deterministic", await principal.page.locator("#mode-label").textContent());
         record("Reminders exposes stable activation lenses", await principal.page.getByRole("button", { name: /^Now/ }).count() === 1 && await principal.page.getByRole("button", { name: /^Places/ }).count() === 1, await principal.page.locator("#surface").textContent());
+        record("Reminders projects direct canonical tasks without provider claims", await principal.page.locator(".reminder-item").filter({ hasText: "Return the signed school form" }).count() === 1 && await principal.page.locator(".task-quick-add").count() === 1, await principal.page.locator("#surface").textContent());
+        const routedLens = routedTaskBucket === "now" ? "Now" : routedTaskBucket === "anytime" ? "Anytime" : "Scheduled";
+        await principal.page.getByRole("button", { name: new RegExp(`^${routedLens}`) }).click();
+        const routedTask = principal.page.locator(".reminder-item").filter({ hasText: "Send the completed enrollment form" });
+        await routedTask.click();
+        record("Reminders receives the enriched Triage task", await routedTask.count() === 1 && (await principal.page.locator(".task-detail").textContent()).includes("Open the enrollment portal and attach the signed form"), await principal.page.locator("#surface").textContent());
+        record("Reminders translates the internal task lifecycle into member language", (await principal.page.locator(".task-detail").textContent()).includes("StatusOpen") && !(await principal.page.locator(".task-detail").textContent()).includes("StatusInbox"), await principal.page.locator(".task-detail").textContent());
+        await screenshot(principal.page, "surface-reminders-routed-task-desktop.png");
+        await principal.page.getByRole("button", { name: /^Now/ }).click();
         record("Reminders does not invent a writable provider", (await principal.page.locator(".reminder-quick-add").textContent()).includes("Connect a writable"), await principal.page.locator(".reminder-quick-add").textContent());
         await screenshot(principal.page, "surface-reminders-desktop.png");
       } else if (surface === "calendar") {
@@ -378,6 +449,9 @@ async function run() {
         await principal.page.getByRole("button", { name: "Data health", exact: true }).click();
         record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
         await screenshot(principal.page, "surface-finance-health-desktop.png");
+      } else if (surface === "scoreboard") {
+        record("Scoreboard receives the confirmed canonical task", (await principal.page.locator("#surface").textContent()).includes("Send the completed enrollment form"), await principal.page.locator("#surface").textContent());
+        await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());
         record("Settings exposes all seven control areas", await principal.page.locator(".settings-nav button").count() === 7, await principal.page.locator(".settings-nav").textContent());
@@ -399,31 +473,29 @@ async function run() {
     await auditAccessibility(principal.page, "desktop");
     await principal.context.close();
 
-    const commsPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
-    await visit(commsPhone.page, server.baseUrl, "/member/comms", "Comms");
-    const commsPhoneOverflow = await commsPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-    record("Comms reflows without phone overflow", commsPhoneOverflow === false, commsPhoneOverflow);
-    record("Comms phone retains focus explanation and reply approval", await commsPhone.page.locator(".focus-reason").count() === 1 && await commsPhone.page.getByLabel(/Approve the independent OpenClaw delivery gate/).count() === 1, await commsPhone.page.locator("#surface").textContent());
-    await screenshot(commsPhone.page, "surface-comms-focus-narrow.png");
-    await commsPhone.context.close();
-
-    const notesPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
-    await visit(notesPhone.page, server.baseUrl, "/member/notes", "Notes");
-    const notesPhoneOverflow = await notesPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-    record("Notes reflows without phone overflow", notesPhoneOverflow === false, notesPhoneOverflow);
-    record("Notes phone retains sources, search, and source evidence", await notesPhone.page.locator(".notes-source-button").count() === 3 && await notesPhone.page.locator(".notes-search input").count() === 1 && await notesPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await notesPhone.page.locator("#surface").textContent());
-    await screenshot(notesPhone.page, "surface-notes-narrow.png");
-    await notesPhone.context.close();
-
-    const settingsPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
-    await visit(settingsPhone.page, server.baseUrl, "/member/settings", "Settings");
-    const settingsPhoneOverflow = await settingsPhone.page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-    record("Settings reflows without phone overflow", settingsPhoneOverflow === false, settingsPhoneOverflow);
-    record("Settings phone retains all control areas", await settingsPhone.page.locator(".settings-nav button").count() === 7, await settingsPhone.page.locator(".settings-nav").textContent());
-    await settingsPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
-    record("Settings phone retains connection truth", (await settingsPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await settingsPhone.page.locator("#surface").textContent());
-    await screenshot(settingsPhone.page, "surface-settings-connections-narrow.png");
-    await settingsPhone.context.close();
+    const principalPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
+    for (const [surface, label] of Object.entries(surfaceLabels)) {
+      await visit(principalPhone.page, server.baseUrl, `/member/${surface}`, label);
+      if (surface === "triage") {
+        await principalPhone.page.getByRole("button", { name: /^Needs details/ }).click();
+        await principalPhone.page.locator(".triage-master-button").filter({ hasText: "Renew the annual registration" }).click();
+        record("Triage phone retains the provider capability ceiling", await principalPhone.page.getByLabel("Scheduled date date").count() === 1 && await principalPhone.page.getByLabel("Scheduled date time (optional)").count() === 0 && (await principalPhone.page.locator(".triage-detail").textContent()).includes("discards due time"), await principalPhone.page.locator(".triage-detail").textContent());
+      } else if (surface === "comms") {
+        record("Comms phone retains focus explanation and reply approval", await principalPhone.page.locator(".focus-reason").count() === 1 && await principalPhone.page.getByRole("button", { name: "Save reply for approval" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
+      } else if (surface === "reminders") {
+        record("Reminders phone retains typed task controls", await principalPhone.page.locator(".reminder-item").filter({ hasText: "Return the signed school form" }).count() === 1 && await principalPhone.page.locator(".task-quick-add").count() === 1, await principalPhone.page.locator("#surface").textContent());
+      } else if (surface === "notes") {
+        record("Notes phone retains sources, search, and source evidence", await principalPhone.page.locator(".notes-source-button").count() === 3 && await principalPhone.page.locator(".notes-search input").count() === 1 && await principalPhone.page.getByRole("button", { name: "View source evidence" }).count() === 1, await principalPhone.page.locator("#surface").textContent());
+      } else if (surface === "settings") {
+        record("Settings phone retains all control areas", await principalPhone.page.locator(".settings-nav button").count() === 7, await principalPhone.page.locator(".settings-nav").textContent());
+        await principalPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
+        record("Settings phone retains connection truth", (await principalPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principalPhone.page.locator("#surface").textContent());
+      }
+      await auditAccessibility(principalPhone.page, `narrow ${surface}`);
+      const screenshotName = surface === "comms" ? "surface-comms-focus-narrow.png" : surface === "settings" ? "surface-settings-connections-narrow.png" : `surface-${surface}-narrow.png`;
+      await screenshot(principalPhone.page, screenshotName);
+    }
+    await principalPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");

@@ -1,10 +1,12 @@
 """Deterministic member Reminders cockpit composition.
 
-The cockpit is a read-time lens over the Lists projection. It never promotes a
-provider list item into a Task, never treats a due date as a promise, and never
-asks a model to rank or activate work. Provider-native time/location alarms and
-member-authored context cues are explained separately so the member can see why
-an item is visible and which system remains authoritative.
+The cockpit is a union of two *read-time* lenses: canonical AdministrateMe Tasks
+and provider-owned items from the Lists projection.  The records remain typed
+and independently authoritative.  A provider item is never promoted into a
+Task, a Task is never presented as provider-synced, and a due date never becomes
+a promise.  Provider-native alarms and member-authored context cues remain
+separate so the member can see both why an item is visible and which system owns
+it.
 """
 
 from __future__ import annotations
@@ -98,7 +100,14 @@ PROVIDER_CONTRACTS: dict[str, dict[str, Any]] = {
     },
 }
 
-_BUCKET_RANK = {"now": 0, "scheduled": 1, "places": 2, "anytime": 3, "completed": 4}
+_BUCKET_RANK = {
+    "now": 0,
+    "scheduled": 1,
+    "places": 2,
+    "anytime": 3,
+    "waiting": 4,
+    "completed": 5,
+}
 
 CONTEXT_SIGNAL_CATALOG = [
     {
@@ -389,6 +398,7 @@ def compose_effective_reminders(
             {
                 **row,
                 "id": item_id,
+                "record_kind": "provider_item",
                 "bucket": bucket,
                 "why": why,
                 "alarms": alarms,
@@ -455,6 +465,128 @@ def compose_effective_reminders(
     return enriched
 
 
+def compose_canonical_tasks(
+    *,
+    timezone_name: str,
+    tasks: list[dict[str, Any]],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    """Project canonical Tasks into the Reminders workspace without merging.
+
+    This is deliberately a display contract, not a new source of truth.  Local
+    lifecycle actions still emit typed ``task.*`` events and provider actions
+    still travel through their own governed adapter path.
+    """
+
+    tz = ZoneInfo(timezone_name)
+    now = now.astimezone(timezone.utc)
+    local_today = now.astimezone(tz).date()
+    enriched: list[dict[str, Any]] = []
+    for raw in tasks:
+        row = dict(raw)
+        due = _instant(row.get("due_date"), tz)
+        due_local = due.astimezone(tz) if due is not None else None
+        available = _instant(row.get("available_from"), tz)
+        status = str(row.get("status") or "inbox")
+        why: list[str]
+        if status == "done":
+            bucket = "completed"
+            why = ["Completed in AdministrateMe"]
+        elif status == "deferred":
+            activation = available or due  # replay compatibility for old defer events
+            if activation is not None and activation <= now:
+                bucket = "now"
+                why = ["Deferred-until time has arrived"]
+            else:
+                activation_local = activation.astimezone(tz) if activation else None
+                bucket = "scheduled" if activation_local is not None else "anytime"
+                why = [
+                    f"Deferred until {activation_local.date().isoformat()}"
+                    if activation_local is not None
+                    else "Deferred without a return date"
+                ]
+        elif status == "waiting_on":
+            bucket = "waiting"
+            why = [
+                f"Waiting on {row['waiting_on']}"
+                if row.get("waiting_on")
+                else "Waiting on another person or condition"
+            ]
+        elif status == "in_progress":
+            bucket = "now"
+            why = ["Already in progress"]
+        elif due_local is not None and due_local.date() <= local_today:
+            bucket = "now"
+            why = [
+                "Due today"
+                if due_local.date() == local_today
+                else "Due date has passed"
+            ]
+        elif due_local is not None:
+            bucket = "scheduled"
+            why = ["Has a due date"]
+        else:
+            bucket = "anytime"
+            why = ["Available without a date or trigger"]
+
+        task_id = str(row["task_id"])
+        evidence_ids = [str(row.get("last_event_id") or "")]
+        enriched.append(
+            {
+                **row,
+                "id": f"task:{task_id}",
+                "record_kind": "task",
+                "provider": "administrateme",
+                "provider_account_id": "administrateme",
+                "list_external_id": "tasks",
+                "item_external_id": task_id,
+                "list_name": "Household work",
+                "account_label": "AdministrateMe",
+                "bucket": bucket,
+                "why": why,
+                "due_at": row.get("due_date"),
+                "due_sort": due.isoformat() if due else None,
+                "completed": status == "done",
+                "can_complete": status != "done",
+                "can_edit": status != "done",
+                "alarms": [],
+                "recurrence_rules": [],
+                "source_links": [],
+                "provider_data": {},
+                "cues": [],
+                "surface_link": surface_link(
+                    "reminders",
+                    object_kind="item",
+                    object_id=f"task:{task_id}",
+                    evidence_event_ids=evidence_ids,
+                ),
+                "complete_action": {
+                    "kind": "domain",
+                    "action": "task.complete",
+                    "available": status != "done",
+                    "reason": "Writes a canonical task.completed event",
+                },
+                "edit_action": {
+                    "kind": "domain",
+                    "action": "task.update",
+                    "available": status != "done",
+                    "reason": "Writes a canonical task.updated event",
+                },
+            }
+        )
+
+    enriched.sort(
+        key=lambda item: (
+            _BUCKET_RANK[item["bucket"]],
+            item["due_sort"] is None,
+            item["due_sort"] or "",
+            str(item.get("created_at") or ""),
+            item["id"],
+        )
+    )
+    return enriched
+
+
 def compose_reminders_cockpit(
     *,
     member_id: str,
@@ -465,12 +597,13 @@ def compose_reminders_cockpit(
     cues: list[dict[str, Any]],
     signals: list[dict[str, Any]],
     now: datetime,
+    tasks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return one stable member-isolated reminders read contract."""
+    """Return one stable member-isolated work-and-reminders read contract."""
 
     del member_id  # all rows arrive through member/scope-filtered queries.
     now = now.astimezone(timezone.utc)
-    enriched = compose_effective_reminders(
+    provider_items = compose_effective_reminders(
         timezone_name=timezone_name,
         items=items,
         accounts=accounts,
@@ -478,15 +611,32 @@ def compose_reminders_cockpit(
         signals=signals,
         now=now,
     )
+    canonical_tasks = compose_canonical_tasks(
+        timezone_name=timezone_name,
+        tasks=tasks or [],
+        now=now,
+    )
+    enriched = sorted(
+        [*canonical_tasks, *provider_items],
+        key=lambda item: (
+            _BUCKET_RANK[item["bucket"]],
+            item.get("due_sort") is None,
+            item.get("due_sort") or "",
+            str(item.get("title") or "").casefold(),
+            item["id"],
+        ),
+    )
     counts = {
         bucket: sum(1 for item in enriched if item["bucket"] == bucket)
         for bucket in _BUCKET_RANK
     }
     return {
-        "version": "deterministic-reminders-cockpit-v1",
+        "version": "deterministic-reminders-cockpit-v2",
         "generated_at": now.isoformat(),
         "counts": counts,
         "items": enriched,
+        "tasks": canonical_tasks,
+        "provider_items": provider_items,
         "lists": lists,
         "accounts": accounts,
         "context_signal_catalog": CONTEXT_SIGNAL_CATALOG,
@@ -494,6 +644,8 @@ def compose_reminders_cockpit(
         "contract": {
             "provider_is_source_of_truth": True,
             "list_items_are_not_tasks": True,
+            "tasks_are_not_provider_items": True,
+            "union_is_read_time_only": True,
             "model_ranking": False,
             "cue_evaluation": "typed operator against latest unexpired scoped fact",
         },
@@ -504,6 +656,7 @@ __all__ = [
     "APPLE_OPERATIONS",
     "CONTEXT_SIGNAL_CATALOG",
     "compose_effective_reminders",
+    "compose_canonical_tasks",
     "GOOGLE_OPERATIONS",
     "PROVIDER_CONTRACTS",
     "compose_reminders_cockpit",
