@@ -126,6 +126,7 @@ describe("native OpenClaw contract fixture", () => {
   afterEach(() => {
     delete process.env.ADMINME_OPENCLAW_SHARED_SECRET;
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("pins the current native manifest and registers every declared surface", async () => {
@@ -151,6 +152,65 @@ describe("native OpenClaw contract fixture", () => {
     expect(runtime.commands).toHaveLength(0);
     expect(runtime.hooks).toHaveLength(0);
     expect(runtime.services).toHaveLength(0);
+  });
+
+  it("reconciles plugin health after the runtime starts later", async () => {
+    vi.useFakeTimers();
+    const healthFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("loopback runtime unavailable"))
+      .mockResolvedValue(
+        jsonResponse({ event_id: "ev_health", state: "healthy" }),
+      );
+    vi.stubGlobal("fetch", healthFetch);
+    const runtime = fakeApi();
+    const service = runtime.services[0];
+    expect(service).toBeDefined();
+
+    const started = service?.start();
+    expect(started).toBeUndefined();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(healthFetch).toHaveBeenCalledTimes(1);
+    expect(runtime.api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retrying in 1000ms"),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+    expect(requestBody(healthFetch, 1)).toMatchObject({
+      state: "healthy",
+      openclaw_version: OPENCLAW_VERSION,
+      openclaw_commit: OPENCLAW_COMMIT,
+    });
+    expect(runtime.api.logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("AdministrateMe plugin ready"),
+    );
+
+    await service?.stop();
+    expect(healthFetch).toHaveBeenCalledTimes(3);
+    expect(requestBody(healthFetch, 2)).toMatchObject({ state: "unavailable" });
+  });
+
+  it("cancels pending health reconciliation when the plugin stops", async () => {
+    vi.useFakeTimers();
+    const healthFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("loopback runtime unavailable"))
+      .mockResolvedValue(jsonResponse({ event_id: "ev_stopped", state: "unavailable" }));
+    vi.stubGlobal("fetch", healthFetch);
+    const runtime = fakeApi();
+    const service = runtime.services[0];
+
+    service?.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await service?.stop();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+    expect(requestBody(healthFetch, 1)).toMatchObject({ state: "unavailable" });
   });
 
   it("exposes tools without starting services during tool discovery", () => {

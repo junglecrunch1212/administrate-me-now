@@ -106,6 +106,14 @@ exact pinned OpenClaw health endpoint must be live before the runtime starts.
 replay boundary; they retain failed-start audit facts and deduplicate proposals
 across baseline/v4/v5 history.
 
+OpenClaw plugin-health reconciliation (2026-08-09): Gateway-first startup is
+**PRESERVED/HARDENED**. The native plugin's formerly one-shot authenticated
+health report is **MODERNIZED** into a nonblocking bounded-backoff service
+reconciliation. Exact version/commit refusal and unavailable state remain
+fail-closed; success ends retries and shutdown cancels them. This does not
+change event schemas, consumer versions, source facts, projections, runtime
+baselines, provider authority, or rollback compatibility.
+
 Pinned language execution repair (2026-08-08): OpenClaw `2026.7.2` commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61` **SUPERSEDES** only the declared
 defective same-version snapshot. The updater installs and atomically selects
@@ -249,8 +257,11 @@ links. Arbitrary state links remain fail-closed and excluded generated links are
 reconstructed by the pinned runtime rather than restored as trusted state.
 SQLite's disposable `-wal`/`-shm` cleanup race is likewise excluded only after
 service quiescence; the database and every other durable file remain required.
-Central launchd startup now follows the runtime-before-Gateway dependency and
-proves runtime readiness before allowing OpenClaw plugin registration.
+Central launchd startup now follows the Gateway-before-runtime dependency and
+proves Gateway liveness before starting reactive replay. Because native plugin
+registration occurs during that earlier Gateway start, its authenticated
+AdministrateMe health report reconciles on bounded backoff until runtime
+readiness rather than requiring a manual restart.
 
 Mac bootstrap compatibility update (2026-08-05): the build/package and
 bootstrap rows are **HARDEN COMPLETE** for Homebrew 6 metadata, external pinned
