@@ -314,8 +314,11 @@ _MESSAGE_BOILERPLATE = re.compile(
 )
 _INBOUND_DIRECTIVE = re.compile(
     r"^\s*(?:please\s+|action required\s*:?\s*|can you\s+|could you\s+|"
-    r"would you\s+|need you to\s+|pay\s+|submit\s+|send\s+|return\s+|"
-    r"call\s+|schedule\s+|book\s+)",
+    r"would you\s+|need you to\s+)",
+    re.IGNORECASE,
+)
+_INBOUND_PAYMENT_DIRECTIVE = re.compile(
+    r"^\s*pay\b.{0,120}\b(?:bill|invoice|balance|premium)\b",
     re.IGNORECASE,
 )
 _INBOUND_DUE_OBLIGATION = re.compile(
@@ -326,8 +329,7 @@ _INBOUND_DUE_OBLIGATION = re.compile(
     re.IGNORECASE,
 )
 _OUTBOUND_PROMISE = re.compile(
-    r"\b(?:i\s+will|i'll|i\s+can|i\s+promise|i\s+committed|i\s+owe|"
-    r"let\s+me)\b",
+    r"\b(?:i\s+will|i'll|i\s+promise|i\s+committed|i\s+owe)\b",
     re.IGNORECASE,
 )
 _INBOUND_REPLY_REQUEST = re.compile(
@@ -375,6 +377,7 @@ def extract_message_fallback_candidates(
                 continue
             if not (
                 _INBOUND_DIRECTIVE.search(compact)
+                or _INBOUND_PAYMENT_DIRECTIVE.search(compact)
                 or _INBOUND_DUE_OBLIGATION.search(compact)
             ):
                 continue

@@ -176,6 +176,8 @@ def test_message_fallback_rejects_marketing_chrome_and_generic_action_verbs() ->
     for text in (
         "Buy Again and save twenty percent",
         "Shop now https://example.invalid/deal",
+        "Book your summer escape today",
+        "Call now for a free consultation",
         "Review our latest summer collection",
         "Manage preferences or unsubscribe",
     ):
@@ -184,6 +186,16 @@ def test_message_fallback_rejects_marketing_chrome_and_generic_action_verbs() ->
                 text,
                 submitted_at=NOW,
                 direction="inbound",
+            )
+            == []
+        )
+
+    for text in ("I can see why that happened.", "Let me know what you decide."):
+        assert (
+            extract_message_fallback_candidates(
+                text,
+                submitted_at=NOW,
+                direction="outbound",
             )
             == []
         )
