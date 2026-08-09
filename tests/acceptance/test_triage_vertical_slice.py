@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -369,7 +370,67 @@ async def _events(runtime: object, *types: str) -> list[dict]:
     return rows
 
 
-def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) -> None:
+def test_member_can_create_canonical_task_directly_in_reminders(tmp_path: Path) -> None:
+    instance = tmp_path / "direct-task-instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    direct_body = {
+        "request_id": "member-task-create-0001",
+        "title": "Call the school office",
+        "due_date": "2026-08-12T10:30",
+        "available_from": "2026-08-11",
+        "energy": "low",
+        "effort": "tiny",
+        "domain": "school",
+        "item_type": "task",
+        "micro_script": "Open the contact card",
+        "notes": "Explicitly entered by the member.",
+    }
+    with TestClient(app) as client:
+        direct = client.post("/api/member/v1/tasks", headers=AUTH, json=direct_body)
+        assert direct.status_code == 201, direct.text
+        assert direct.json()["task"]["title"] == "Call the school office"
+        assert datetime.fromisoformat(direct.json()["task"]["due_date"]).tzinfo
+        assert direct.json()["destination"]["href"].startswith(
+            "/member/reminders?item=task%3A"
+        )
+        reminders = client.get("/api/member/v1/surfaces/reminders", headers=AUTH)
+        assert reminders.status_code == 200, reminders.text
+        assert (
+            reminders.json()["cockpit"]["tasks"][0]["task_id"]
+            == (direct.json()["task"]["task_id"])
+        )
+        direct_retry = client.post(
+            "/api/member/v1/tasks", headers=AUTH, json=direct_body
+        )
+        assert direct_retry.status_code == 201, direct_retry.text
+        assert direct_retry.json()["duplicate"] is True
+        assert direct_retry.json()["event_id"] == direct.json()["event_id"]
+        child_denied = client.post(
+            "/api/member/v1/tasks", headers=CHILD_AUTH, json=direct_body
+        )
+        assert child_denied.status_code == 403
+        view_as_denied = client.post(
+            "/api/member/v1/tasks",
+            headers={**AUTH, "X-AdminMe-View-Member": CHILD},
+            json={**direct_body, "request_id": "member-task-view-as-0001"},
+        )
+        assert view_as_denied.status_code == 403
+        blank_denied = client.post(
+            "/api/member/v1/tasks",
+            headers=AUTH,
+            json={
+                **direct_body,
+                "request_id": "member-task-blank-title-0001",
+                "title": "   ",
+            },
+        )
+        assert blank_denied.status_code == 422
+
+
+def test_proposal_requires_member_triage_before_official_task(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     instance = tmp_path / "instance"
     instance.mkdir()
     app = create_application(_settings(instance))
@@ -424,6 +485,16 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
             "request_id": "triage-approve-0001",
             "expected_last_event_id": item["last_event_id"],
         }
+        waited_destinations: list[tuple[str, str]] = []
+        original_wait_for_projection = runtime.wait_for_projection
+
+        async def tracked_wait_for_projection(
+            projection_name: str, event_id: str
+        ) -> None:
+            waited_destinations.append((projection_name, event_id))
+            await original_wait_for_projection(projection_name, event_id)
+
+        monkeypatch.setattr(runtime, "wait_for_projection", tracked_wait_for_projection)
         approved = client.post(
             f"/api/member/v1/triage/{item['proposal_id']}/approve",
             headers=AUTH,
@@ -432,6 +503,72 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         assert approved.status_code == 200, approved.text
         assert approved.json()["state"] == "confirmed"
         assert len(approved.json()["materialized_event_ids"]) == 1
+        assert (
+            "tasks",
+            approved.json()["materialized_event_ids"][0],
+        ) in waited_destinations
+        assert approved.json()["destination"] == {
+            "surface": "reminders",
+            "href": (
+                f"/member/reminders?item=task%3Atriage_task_{item['proposal_id']}"
+            ),
+            "record_kind": "task",
+            "record_id": f"triage_task_{item['proposal_id']}",
+            "label": "Reminders",
+            "state": "materialized",
+        }
+        triage_history = client.get(
+            "/api/member/v1/surfaces/triage", headers=AUTH
+        ).json()["recent_items"]
+        [recent_decision] = [
+            recent
+            for recent in triage_history
+            if recent["proposal_id"] == item["proposal_id"]
+        ]
+        assert recent_decision["destination"] == approved.json()["destination"]
+        reminders = client.get("/api/member/v1/surfaces/reminders", headers=AUTH)
+        assert reminders.status_code == 200, reminders.text
+        [routed_task] = reminders.json()["cockpit"]["tasks"]
+        assert routed_task["task_id"] == f"triage_task_{item['proposal_id']}"
+        assert routed_task["title"] == "Put the school form on the correct list"
+        assert routed_task["record_kind"] == "task"
+        assert routed_task["bucket"] == "now"
+        edited = client.patch(
+            f"/api/member/v1/tasks/{routed_task['task_id']}",
+            headers=AUTH,
+            json={
+                "request_id": "task-edit-from-reminders-0001",
+                "expected_last_event_id": routed_task["last_event_id"],
+                "energy": "low",
+                "effort": "small",
+                "item_type": "task",
+                "micro_script": "Open the form and identify the required fields",
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["task"]["energy"] == "low"
+        assert edited.json()["task"]["effort"] == "small"
+        refreshed_task = client.get(
+            "/api/member/v1/surfaces/reminders", headers=AUTH
+        ).json()["cockpit"]["tasks"][0]
+        assert refreshed_task["micro_script"].startswith("Open the form")
+        today = client.get("/api/member/v1/surfaces/today", headers=AUTH).json()
+        assert any(
+            move["id"] == routed_task["task_id"] and move["kind"] == "task"
+            for move in today["brief"]["plan"]
+        )
+        scoreboard = client.get(
+            "/api/member/v1/surfaces/scoreboard", headers=AUTH
+        ).json()
+        assert any(
+            move["task_id"] == routed_task["task_id"]
+            for move in scoreboard["scoreboard"]["next_steps"]
+        )
+        calendar = client.get("/api/member/v1/surfaces/calendar", headers=AUTH).json()
+        assert all(
+            event.get("linked_item_id") != routed_task["task_id"]
+            for event in calendar["events"]
+        )
         retried_approval = client.post(
             f"/api/member/v1/triage/{item['proposal_id']}/approve",
             headers=AUTH,
@@ -900,6 +1037,21 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         [task_list_item] = client.get("/api/core/v1/triage", headers=AUTH).json()[
             "items"
         ]
+        unsupported_google_priority = client.post(
+            f"/api/member/v1/triage/{task_list_item['proposal_id']}/enrich",
+            headers=AUTH,
+            json={
+                "request_id": "triage-google-priority-0001",
+                "expected_last_event_id": task_list_item["last_event_id"],
+                "candidate_updates": {"priority": 1},
+                "route": task_list_item["route"],
+            },
+        )
+        assert unsupported_google_priority.status_code == 422
+        assert (
+            "unsupported list_item enrichment fields"
+            in (unsupported_google_priority.json()["detail"])
+        )
         task_list_approved = client.post(
             f"/api/member/v1/triage/{task_list_item['proposal_id']}/approve",
             headers=AUTH,
@@ -923,6 +1075,7 @@ def test_proposal_requires_member_triage_before_official_task(tmp_path: Path) ->
         assert google_task_action["payload"]["command_payload"]["tasklist_id"] == (
             "@default"
         )
+        assert google_task_action["payload"]["command_payload"]["due"] == ("2026-08-07")
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []
         )

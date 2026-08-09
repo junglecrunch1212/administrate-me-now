@@ -14,6 +14,7 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -918,7 +919,24 @@ async def _task_lifecycle(
             raise HTTPException(409, "reason is required")
         updates: dict[str, Any] = {}
         if body.until:
-            updates["due_date"] = body.until
+            try:
+                activation = datetime.fromisoformat(
+                    body.until.strip().replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    422, "until must be a valid date or date and time"
+                ) from exc
+            if activation.tzinfo is None:
+                try:
+                    activation = activation.replace(
+                        tzinfo=ZoneInfo(runtime.settings.instance.timezone)
+                    )
+                except ZoneInfoNotFoundError as exc:
+                    raise HTTPException(
+                        503, "instance timezone is unavailable"
+                    ) from exc
+            updates["available_from"] = activation.isoformat()
         if body.action == "block":
             updates["waiting_on"] = body.reason
         if body.action == "unblock":

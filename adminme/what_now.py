@@ -140,7 +140,7 @@ def rank_what_now(
         energy_score = 75 if energy == current_energy else 0
         domain = str(row.get("domain") or "general")
         context_score = 60 if domain in preferred_contexts else 0
-        status = str(row.get("status") or "inbox")
+        status = str(row.get("effective_status") or row.get("status") or "inbox")
         status_score = {"in_progress": 180, "next": 100, "inbox": 0}.get(status, -500)
         try:
             dependencies = json.loads(row.get("depends_on_json") or "[]")
@@ -167,6 +167,7 @@ def rank_what_now(
                 "last_event_id": row.get("last_event_id"),
                 "due": row.get("due_date"),
                 "status": status,
+                "lifecycle_status": row.get("status"),
                 "micro_step": row.get("micro_script")
                 or "Open it and do only the first visible step.",
                 "energy": energy,

@@ -161,12 +161,19 @@ async function decideTriage(item, action, buttons) {
   const banner = $("#state-banner"); banner.hidden = false;
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
   try {
-    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
+    const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
       body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null }),
     });
-    banner.textContent = action === "approve" ? "Confirmed. The routed household record is now being materialized." : "Dismissed. No household record or provider write was created.";
     await reloadActiveSurface();
+    banner.replaceChildren();
+    if (action === "approve" && result.destination) {
+      const pending = result.destination.state === "awaiting_openclaw_approval";
+      banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. `));
+      const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
+    } else {
+      banner.textContent = "Dismissed. No household record or provider write was created.";
+    }
   } catch (error) {
     banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
     buttons.forEach((button) => { button.disabled = false; });
@@ -205,14 +212,125 @@ function replaceSelectOptions(select, options, selected = "", emptyLabel = "Choo
   }
 }
 
-async function saveTriageForm(item, form) {
+function triageDateTimeParts(value) {
+  if (!value) return { date: "", time: "" };
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return { date: raw, time: "" };
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return { date: raw.slice(0, 10), time: raw.slice(11, 16) };
+  return {
+    date: `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`,
+    time: `${String(parsed.getHours()).padStart(2, "0")}:${String(parsed.getMinutes()).padStart(2, "0")}`,
+  };
+}
+
+function triageFieldControl(spec, candidate, data) {
+  const current = candidate?.[spec.name] ?? spec.default;
+  if (spec.control === "date_time") {
+    const parts = triageDateTimeParts(current);
+    const wrapper = document.createElement("div"); wrapper.className = "date-time-control";
+    const dateInput = document.createElement("input"); dateInput.type = "date"; dateInput.name = `${spec.name}__date`; dateInput.value = parts.date;
+    dateInput.setAttribute("aria-label", `${spec.label} date`);
+    const timeInput = document.createElement("input"); timeInput.type = "time"; timeInput.name = `${spec.name}__time`; timeInput.value = parts.time;
+    timeInput.setAttribute("aria-label", `${spec.label} time (optional)`);
+    wrapper.append(dateInput);
+    if (!spec.date_only) wrapper.append(timeInput);
+    return wrapper;
+  }
+  if (spec.control === "date") {
+    const input = document.createElement("input"); input.type = "date"; input.name = spec.name; input.value = current ? String(current).slice(0, 10) : ""; return input;
+  }
+  if (spec.control === "textarea") {
+    const input = document.createElement("textarea"); input.name = spec.name; input.rows = 3; input.maxLength = 20000; input.value = current || ""; return input;
+  }
+  if (spec.control === "select") {
+    const options = (spec.options || []).map((value) => ({ value, label: titleCase(value) }));
+    const input = selectControl(options, current || "", "Not set"); input.name = spec.name; return input;
+  }
+  if (spec.control === "party") {
+    const options = (data.destinations?.people || []).map((person) => ({ value: person.party_id, label: `${person.label} · ${titleCase(person.kind)}` }));
+    const input = selectControl(options, current || "", "Choose a person…"); input.name = spec.name; return input;
+  }
+  if (spec.control === "checkbox") {
+    const input = document.createElement("input"); input.type = "checkbox"; input.name = spec.name; input.checked = Boolean(current); return input;
+  }
+  if (spec.control === "number") {
+    const input = document.createElement("input"); input.type = "number"; input.name = spec.name; input.value = current ?? ""; input.min = spec.minimum ?? 0; if (spec.maximum != null) input.max = spec.maximum; return input;
+  }
+  if (spec.control === "priority") {
+    const input = selectControl([{ value: "0", label: "None" }, { value: "1", label: "High" }, { value: "5", label: "Medium" }, { value: "9", label: "Low" }], String(current ?? 0), ""); input.name = spec.name; return input;
+  }
+  if (spec.control === "recurrence") {
+    const existing = Array.isArray(current) ? current[0] : current;
+    const known = new Map([
+      ["FREQ=DAILY", "daily"],
+      ["FREQ=WEEKLY", "weekly"],
+      ["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", "weekdays"],
+      ["FREQ=MONTHLY", "monthly"],
+      ["FREQ=YEARLY", "yearly"],
+    ]);
+    const selected = known.get(String(existing || "").replace(/^RRULE:/, "")) || (existing ? "existing" : "none");
+    const options = [
+      { value: "none", label: "Does not repeat" }, { value: "daily", label: "Daily" },
+      { value: "weekdays", label: "Weekdays" }, { value: "weekly", label: "Weekly" },
+      { value: "monthly", label: "Monthly" }, { value: "yearly", label: "Yearly" },
+    ];
+    if (selected === "existing") options.push({ value: `existing:${existing}`, label: "Keep existing custom pattern" });
+    const input = selectControl(options, selected === "existing" ? `existing:${existing}` : selected, ""); input.name = `${spec.name}__repeat`; return input;
+  }
+  if (spec.control === "alarm_offset") {
+    const seconds = Array.isArray(current) ? Math.abs(Number(current[0]?.relative_offset_seconds || 0)) : 0;
+    const minutes = seconds ? String(Math.round(seconds / 60)) : "none";
+    const input = selectControl([
+      { value: "none", label: "None" }, { value: "0", label: "At due time" },
+      { value: "5", label: "5 minutes before" }, { value: "15", label: "15 minutes before" },
+      { value: "30", label: "30 minutes before" }, { value: "60", label: "1 hour before" },
+      { value: "1440", label: "1 day before" },
+    ], minutes, ""); input.name = `${spec.name}__offset`; return input;
+  }
+  const input = document.createElement("input"); input.type = spec.control === "url" ? "url" : spec.control === "color" ? "color" : "text"; input.name = spec.name; input.value = current || ""; return input;
+}
+
+function triageCandidateUpdates(form, targetKind, schema) {
+  const values = new FormData(form); const updates = {};
+  const activeProvider = String(values.get("provider") || "");
+  const target = schema?.targets?.[targetKind] || {};
+  const source = target.fields_from ? schema.targets?.[target.fields_from] : target;
+  for (const spec of source?.fields || []) {
+    if (spec.provider && spec.provider !== activeProvider) continue;
+    if (spec.control === "date_time") {
+      const dateValue = String(values.get(`${spec.name}__date`) || "");
+      const timeValue = String(values.get(`${spec.name}__time`) || "");
+      updates[spec.name] = dateValue
+        ? activeProvider === "google_tasks" && spec.name === "due"
+          ? dateValue
+          : timeValue ? `${dateValue}T${timeValue}` : dateValue
+        : null;
+    } else if (spec.control === "checkbox") {
+      updates[spec.name] = values.has(spec.name);
+    } else if (spec.control === "number") {
+      const value = String(values.get(spec.name) || ""); updates[spec.name] = value ? Number(value) : null;
+    } else if (spec.control === "priority") {
+      updates[spec.name] = Number(values.get(spec.name) || 0);
+    } else if (spec.control === "recurrence") {
+      const selected = String(values.get(`${spec.name}__repeat`) || "none");
+      const rules = { daily: "FREQ=DAILY", weekdays: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", weekly: "FREQ=WEEKLY", monthly: "FREQ=MONTHLY", yearly: "FREQ=YEARLY" };
+      const rule = selected.startsWith("existing:") ? selected.slice(9) : rules[selected];
+      updates[spec.name] = spec.name === "recurrence_rules" ? (rule ? [rule] : []) : (rule || null);
+    } else if (spec.control === "alarm_offset") {
+      const selected = String(values.get(`${spec.name}__offset`) || "none");
+      updates[spec.name] = selected !== "none" ? [{ kind: "relative", relative_offset_seconds: -Number(selected) * 60, proximity: "none" }] : [];
+    } else {
+      const value = String(values.get(spec.name) || "").trim(); updates[spec.name] = value || null;
+    }
+  }
+  return updates;
+}
+
+async function saveTriageForm(item, form, { reload = true } = {}) {
   const values = new FormData(form);
   const targetKind = String(values.get("target_kind") || item.target_kind);
-  const candidateUpdates = {};
-  for (const key of ["due", "start", "end", "owed_to_party_id", "rrule", "next_occurrence", "recurrence_text", "notes"]) {
-    const value = String(values.get(key) || "").trim();
-    if (value) candidateUpdates[key] = value;
-  }
+  const candidateUpdates = triageCandidateUpdates(form, targetKind, state.surface?.enrichment_schema);
   let route = null;
   if (item.source_kind !== "commitment_proposal") {
     route = {
@@ -226,7 +344,7 @@ async function saveTriageForm(item, form) {
   buttons.forEach((button) => { button.disabled = true; });
   setBanner("Saving these details as a proposal—nothing official is being created yet…");
   try {
-    await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
+    const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
       body: JSON.stringify({
@@ -239,10 +357,12 @@ async function saveTriageForm(item, form) {
       }),
     });
     setBanner("Details saved. Review the destination and preview once more before confirming.");
-    await reloadActiveSurface();
+    if (reload) await reloadActiveSurface();
+    return result.triage;
   } catch (error) {
     setBanner(`${error.message} The proposal was not changed.`);
     buttons.forEach((button) => { button.disabled = false; });
+    return null;
   }
 }
 
@@ -260,60 +380,46 @@ function triageDetail(item, data, readOnly = false) {
     if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
     if (item.domain_approval_event_id) section.append(text("p", item.materialized_event_ids?.length ? "Your confirmation was recorded before canonical materialization." : "Your domain confirmation is recorded before any provider action.", "meta"));
     if (item.outcome_event_id) section.append(text("p", "A terminal provider-path outcome is linked to this decision.", "meta"));
+    if (item.destination) {
+      const destination = text("a", `Open ${item.destination.label || titleCase(item.destination.surface)}`, "button button-quiet");
+      destination.href = item.destination.href;
+      section.append(destination);
+    }
     const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.source_event_id)); section.append(evidence);
     return section;
   }
 
   const form = document.createElement("form"); form.className = "triage-review-form";
   const grid = document.createElement("div"); grid.className = "field-grid";
+  const schema = data.enrichment_schema || {};
   const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = item.title || "";
   grid.append(field("Review title", title, "field-span"));
-  const targetOptions = ["task", "commitment", "calendar_event", "reminder", "list", "list_item", "recurrence", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"].map((value) => ({ value, label: titleCase(value) }));
+  const targetOptions = Object.entries(schema.targets || {}).map(([value, contract]) => ({ value, label: contract.label || titleCase(value) }));
   const target = selectControl(targetOptions, item.target_kind, ""); target.name = "target_kind"; target.disabled = item.source_kind === "commitment_proposal";
   grid.append(field("Creates", target));
   const members = (data.destinations?.members || []).map((value) => ({ value: value.member_id, label: `${value.label} · ${value.role || "member"}` }));
-  const member = selectControl(members, item.route?.member_id || state.bootstrap.member.id, ""); member.name = "member_id"; member.disabled = item.source_kind === "commitment_proposal";
+  const member = selectControl(members, item.route?.member_id || state.bootstrap.member.id, "Choose a household member…"); member.name = "member_id"; member.required = true; member.disabled = item.source_kind === "commitment_proposal";
   grid.append(field("Household member", member));
 
   const candidate = item.candidate || {};
-  if (item.target_kind === "commitment") {
-    const owed = document.createElement("input"); owed.name = "owed_to_party_id"; owed.value = candidate.owed_to_party_id || ""; owed.placeholder = "Required party ID";
-    grid.append(field("Owed to", owed));
+  const targetSchema = schema.targets?.[item.target_kind] || {};
+  const fieldSchema = targetSchema.fields_from ? schema.targets?.[targetSchema.fields_from] : targetSchema;
+  const activeProvider = item.route?.provider || "";
+  for (const spec of fieldSchema?.fields || []) {
+    if (spec.provider && spec.provider !== activeProvider) continue;
+    const currentCandidate = { ...candidate };
+    if (spec.name === "due_date" && !currentCandidate.due_date) currentCandidate.due_date = candidate.due || candidate.due_at;
+    if (spec.name === "notes" && currentCandidate.notes == null) currentCandidate.notes = candidate.description;
+    if (spec.name === "start" && item.target_kind === "calendar_event" && !currentCandidate.start) currentCandidate.start = candidate.due;
+    const effectiveSpec = activeProvider === "google_tasks"
+      && ["reminder", "list_item"].includes(item.target_kind)
+      && spec.name === "due"
+      ? { ...spec, label: "Scheduled date", date_only: true }
+      : spec;
+    grid.append(field(effectiveSpec.label, triageFieldControl(effectiveSpec, currentCandidate, data), effectiveSpec.control === "textarea" ? "field-span" : ""));
   }
-  if (item.target_kind === "party_candidate") {
-    const kind = selectControl([{ value: "person", label: "Person" }, { value: "organization", label: "Organization" }], candidate.kind || "person", ""); kind.name = "kind";
-    const displayName = document.createElement("input"); displayName.name = "display_name"; displayName.value = candidate.display_name || item.title || "";
-    const identifierKind = document.createElement("input"); identifierKind.name = "identifier_kind"; identifierKind.value = candidate.identifier_kind || ""; identifierKind.placeholder = "Optional: email, phone, or handle";
-    const identifierValue = document.createElement("input"); identifierValue.name = "identifier_value"; identifierValue.value = candidate.identifier_value || ""; identifierValue.placeholder = "Optional observed endpoint";
-    const identifierNormalized = document.createElement("input"); identifierNormalized.name = "identifier_value_normalized"; identifierNormalized.value = candidate.identifier_value_normalized || ""; identifierNormalized.placeholder = "Normalized endpoint";
-    grid.append(field("Party kind", kind), field("Display name", displayName), field("Endpoint kind", identifierKind), field("Endpoint", identifierValue), field("Normalized endpoint", identifierNormalized));
-  } else if (item.target_kind === "party_relationship") {
-    const partyA = document.createElement("input"); partyA.name = "party_a"; partyA.value = candidate.party_a || "";
-    const partyB = document.createElement("input"); partyB.name = "party_b"; partyB.value = candidate.party_b || "";
-    const label = document.createElement("input"); label.name = "label"; label.value = candidate.label || ""; label.placeholder = "For example: coparent";
-    const direction = selectControl(["a_to_b", "b_to_a", "mutual"].map((value) => ({ value, label: titleCase(value) })), candidate.direction || "mutual", ""); direction.name = "direction";
-    grid.append(field("First Party", partyA), field("Second Party", partyB), field("Relationship", label), field("Direction", direction));
-  } else if (item.target_kind === "relationship_fact") {
-    const partyId = document.createElement("input"); partyId.name = "party_id"; partyId.value = candidate.party_id || "";
-    const factKind = selectControl(["birthday", "important_date", "employer", "role", "preference", "address", "context"].map((value) => ({ value, label: titleCase(value) })), candidate.kind || "context", ""); factKind.name = "kind";
-    const value = document.createElement("input"); value.name = "value"; value.value = candidate.value || "";
-    const factLabel = document.createElement("input"); factLabel.name = "label"; factLabel.value = candidate.label || "";
-    grid.append(field("Person", partyId), field("Fact kind", factKind), field("Confirmed value", value), field("Label", factLabel));
-  }
-  if (item.target_kind === "calendar_event") {
-    const start = document.createElement("input"); start.name = "start"; start.value = candidate.start || candidate.due || ""; start.placeholder = "ISO 8601 with time zone";
-    const end = document.createElement("input"); end.name = "end"; end.value = candidate.end || ""; end.placeholder = "ISO 8601 with time zone";
-    grid.append(field("Starts", start), field("Ends", end));
-  } else if (item.target_kind === "recurrence") {
-    const rrule = document.createElement("input"); rrule.name = "rrule"; rrule.value = candidate.rrule || ""; rrule.placeholder = "For example: FREQ=WEEKLY;BYDAY=FR";
-    const next = document.createElement("input"); next.name = "next_occurrence"; next.value = candidate.next_occurrence || ""; next.placeholder = "ISO 8601 with time zone";
-    const recurrenceText = document.createElement("input"); recurrenceText.name = "recurrence_text"; recurrenceText.value = candidate.recurrence_text || ""; recurrenceText.placeholder = "Source wording, if useful";
-    const notes = document.createElement("input"); notes.name = "notes"; notes.value = candidate.notes || ""; notes.placeholder = "Optional context";
-    grid.append(field("Recurrence rule", rrule), field("Next occurrence", next), field("Source wording", recurrenceText), field("Notes", notes));
-  } else if (["task", "commitment", "reminder", "list_item"].includes(item.target_kind)) {
-    const due = document.createElement("input"); due.name = "due"; due.value = candidate.due || candidate.due_at || ""; due.placeholder = "Optional ISO 8601 date/time";
-    grid.append(field("Due", due));
-  }
+  if (targetSchema.capability_note) grid.append(text("p", targetSchema.capability_note, "state-note field-span"));
+  if (activeProvider && schema.provider_notes?.[activeProvider]) grid.append(text("p", schema.provider_notes[activeProvider], "state-note field-span"));
 
   const external = ["calendar_event", "reminder", "list", "list_item"].includes(item.target_kind);
   if (external) {
@@ -339,8 +445,9 @@ function triageDetail(item, data, readOnly = false) {
       replaceSelectOptions(account, options, selectedAccount, "Choose account…");
       refreshContainers(selectedContainer);
     };
-    provider.addEventListener("change", () => refreshAccounts());
-    account.addEventListener("change", () => refreshContainers());
+    provider.addEventListener("change", () => { refreshAccounts(); form.dataset.structuralChanged = "true"; });
+    account.addEventListener("change", () => { refreshContainers(); form.dataset.structuralChanged = "true"; });
+    container.addEventListener("change", () => { form.dataset.structuralChanged = "true"; });
     refreshAccounts(item.route?.provider_account_id || "", item.route?.container_external_id || "");
     grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
   }
@@ -372,7 +479,21 @@ function triageDetail(item, data, readOnly = false) {
   const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
   const buttons = [save, approve, dismiss];
   form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
-  approve.addEventListener("click", () => decideTriage(item, "approve", buttons));
+  const markDirty = () => { form.dataset.dirty = "true"; approve.textContent = form.dataset.structuralChanged ? "Save destination" : "Save & confirm"; };
+  target.addEventListener("change", () => { form.dataset.structuralChanged = "true"; markDirty(); });
+  member.addEventListener("change", () => { form.dataset.structuralChanged = "true"; markDirty(); });
+  form.addEventListener("input", markDirty);
+  form.addEventListener("change", markDirty);
+  approve.addEventListener("click", async () => {
+    if (form.dataset.dirty) {
+      const structuralChange = Boolean(form.dataset.structuralChanged);
+      const saved = await saveTriageForm(item, form, { reload: structuralChange });
+      if (!saved || structuralChange) return;
+      await decideTriage(saved, "approve", buttons);
+      return;
+    }
+    await decideTriage(item, "approve", buttons);
+  });
   dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
   evidence.addEventListener("click", () => showEvidence(item.source_event_id));
   row.append(save, approve, dismiss, evidence); form.append(row); section.append(form);
@@ -1010,8 +1131,8 @@ function commsReadingPane(thread) {
   quiet.addEventListener("click", () => runCommsCommand(thread, thread.quieted ? "unquiet" : "quiet")); actions.append(quiet);
   pane.append(actions);
   const compose = document.createElement("form"); compose.className = "comms-compose";
-  compose.append(text("label", "Reply in this thread"));
-  const input = document.createElement("textarea"); input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(input);
+  const replyLabel = text("label", "Reply in this thread"); replyLabel.htmlFor = "comms-reply";
+  const input = document.createElement("textarea"); input.id = "comms-reply"; input.rows = 4; input.maxLength = 20000; input.placeholder = "Write the reply you intend to send…"; compose.append(replyLabel, input);
   if (thread.capabilities.reply) {
     compose.append(text("p", "This saves your exact reply as a pending provider action. OpenClaw asks for its own one-time approval before delivery.", "state-note"));
     const send = text("button", "Save reply for approval", "button button-primary"); send.type = "submit";
@@ -1091,6 +1212,88 @@ async function runReminderCommand(item, operation, payload = {}) {
   } catch (error) {
     setBanner(`${error.message} Nothing was changed or implied.`);
   }
+}
+
+async function runTaskLifecycle(item, action, extras = {}) {
+  setBanner(`Recording task ${action}…`);
+  try {
+    await api("/api/member/v1/lifecycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        item_kind: "task", item_id: item.task_id, action,
+        expected_last_event_id: item.last_event_id, request_id: crypto.randomUUID(),
+        until: extras.until || null, reason: extras.reason || null, note: extras.note || null,
+      }),
+    });
+    setBanner(action === "complete" ? "Done. The canonical task completion is recorded." : `Task ${action} recorded.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The task was not changed.`);
+  }
+}
+
+function taskPropertiesForm(initial, { create = false } = {}) {
+  const form = document.createElement("form"); form.className = "dialog-form task-properties-form";
+  const title = document.createElement("input"); title.name = "title"; title.required = true; title.maxLength = 1000; title.value = initial.title || "";
+  const dueParts = triageDateTimeParts(initial.due_date);
+  const due = document.createElement("div"); due.className = "date-time-control";
+  const dueDate = document.createElement("input"); dueDate.type = "date"; dueDate.name = "due_date"; dueDate.value = dueParts.date; dueDate.setAttribute("aria-label", "Due date");
+  const dueTime = document.createElement("input"); dueTime.type = "time"; dueTime.name = "due_time"; dueTime.value = dueParts.time; dueTime.setAttribute("aria-label", "Due time (optional)"); due.append(dueDate, dueTime);
+  const availableParts = triageDateTimeParts(initial.available_from);
+  const available = document.createElement("div"); available.className = "date-time-control";
+  const availableDate = document.createElement("input"); availableDate.type = "date"; availableDate.name = "available_date"; availableDate.value = availableParts.date; availableDate.setAttribute("aria-label", "Available from date");
+  const availableTime = document.createElement("input"); availableTime.type = "time"; availableTime.name = "available_time"; availableTime.value = availableParts.time; availableTime.setAttribute("aria-label", "Available from time (optional)"); available.append(availableDate, availableTime);
+  const energy = selectControl(["low", "medium", "high"].map((value) => ({ value, label: titleCase(value) })), initial.energy || "", "Not set"); energy.name = "energy";
+  const effort = selectControl(["tiny", "small", "medium", "large"].map((value) => ({ value, label: titleCase(value) })), initial.effort || "", "Not set"); effort.name = "effort";
+  const itemType = selectControl(["task", "purchase", "appointment", "research", "decision", "chore", "maintenance"].map((value) => ({ value, label: titleCase(value) })), initial.item_type || "task", ""); itemType.name = "item_type";
+  const domain = document.createElement("input"); domain.name = "domain"; domain.maxLength = 120; domain.value = initial.domain || "tasks";
+  const micro = document.createElement("textarea"); micro.name = "micro_script"; micro.rows = 2; micro.maxLength = 2000; micro.value = initial.micro_script || "";
+  const notes = document.createElement("textarea"); notes.name = "notes"; notes.rows = 4; notes.maxLength = 20000; notes.value = initial.notes || "";
+  form.append(
+    field("Task", title), field("Due", due), field("Available from", available), field("Energy needed", energy),
+    field("Effort", effort), field("Work type", itemType), field("Area", domain),
+    field("First tiny step", micro), field("Notes", notes),
+  );
+  const submit = text("button", create ? "Add task" : "Save task", "button button-primary"); submit.type = "submit"; form.append(submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true;
+    const values = new FormData(form); const dateValue = String(values.get("due_date") || ""); const timeValue = String(values.get("due_time") || "");
+    const availableDateValue = String(values.get("available_date") || ""); const availableTimeValue = String(values.get("available_time") || "");
+    const payload = {
+      request_id: crypto.randomUUID(), title: String(values.get("title") || "").trim(),
+      due_date: dateValue ? (timeValue ? `${dateValue}T${timeValue}` : dateValue) : null,
+      available_from: availableDateValue ? (availableTimeValue ? `${availableDateValue}T${availableTimeValue}` : availableDateValue) : null,
+      energy: String(values.get("energy") || "") || null, effort: String(values.get("effort") || "") || null,
+      item_type: String(values.get("item_type") || "task"), domain: String(values.get("domain") || "tasks").trim(),
+      micro_script: String(values.get("micro_script") || "").trim() || null,
+      notes: String(values.get("notes") || "").trim() || null,
+    };
+    if (!create) payload.expected_last_event_id = initial.last_event_id;
+    try {
+      const result = await api(create ? "/api/member/v1/tasks" : `/api/member/v1/tasks/${encodeURIComponent(initial.task_id)}`, {
+        method: create ? "POST" : "PATCH", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(payload),
+      });
+      closeActionDialog(); state.reminderItem = `task:${result.task.task_id}`; setBanner(create ? "Task added to Reminders." : "Task properties saved."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} The task was not saved.`); submit.disabled = false; }
+  });
+  return form;
+}
+
+function deferTaskDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const until = document.createElement("input"); until.type = "datetime-local"; until.required = true;
+  const submit = text("button", "Defer task", "button button-primary"); submit.type = "submit"; form.append(field("Hide until", until), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, "defer", { until: until.value }); });
+  openActionDialog("Defer this task", form);
+}
+
+function blockTaskDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const reason = document.createElement("input"); reason.required = true; reason.maxLength = 500; reason.placeholder = "What are you waiting for?";
+  const submit = text("button", "Mark waiting", "button button-primary"); submit.type = "submit"; form.append(field("Waiting on", reason), submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, "block", { reason: reason.value.trim() }); });
+  openActionDialog("Mark task as waiting", form);
 }
 
 function openActionDialog(title, content) {
@@ -1234,13 +1437,26 @@ function reminderMatches(item) {
     && (state.remindersList === "all" || item.list_external_id === state.remindersList);
 }
 
+function reminderDate(value, dateStyle = "medium") {
+  if (!value) return "No date";
+  const raw = String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle,
+    ...(raw.includes("T") ? { timeStyle: "short" } : {}),
+  }).format(raw.includes("T") ? new Date(raw) : calendarDate(raw));
+}
+
+function taskStatusLabel(value) {
+  return ({ inbox: "Open", next: "Next", in_progress: "In progress", waiting_on: "Waiting", deferred: "Deferred", done: "Completed" })[value] || titleCase(value);
+}
+
 function remindersHero(cockpit) {
   const hero = document.createElement("section"); hero.className = "hero-card reminders-hero";
   const nowCount = cockpit.counts.now || 0;
   hero.append(
-    text("p", "REMINDERS COCKPIT", "eyebrow"),
-    text("h2", nowCount ? `${nowCount} reminder${nowCount === 1 ? " is" : "s are"} active now.` : "Nothing is asking to be remembered right now.", "action-title"),
-    text("p", "Time, place, and context cues are deterministic lenses over provider-owned reminders. A reminder never silently becomes a task, promise, or calendar event.", "brief-summary"),
+    text("p", "TASKS & REMINDERS", "eyebrow"),
+    text("h2", nowCount ? `${nowCount} item${nowCount === 1 ? " needs" : "s need"} attention now.` : "Nothing is asking for attention right now.", "action-title"),
+    text("p", "Canonical household tasks and provider-owned reminders share one calm workspace while retaining separate truth, provenance, and write paths.", "brief-summary"),
   );
   const stats = document.createElement("dl"); stats.className = "brief-stats reminder-stats";
   for (const [label, value] of [["Now", cockpit.counts.now], ["Scheduled", cockpit.counts.scheduled], ["Places", cockpit.counts.places], ["Anytime", cockpit.counts.anytime]]) {
@@ -1252,7 +1468,7 @@ function remindersHero(cockpit) {
 function remindersControls(cockpit, data) {
   const controls = document.createElement("section"); controls.className = "card reminder-controls";
   const views = document.createElement("div"); views.className = "comms-filter-row"; views.setAttribute("role", "group"); views.setAttribute("aria-label", "Reminder activation lens");
-  for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["completed", "Completed"]]) {
+  for (const [value, label] of [["now", "Now"], ["scheduled", "Scheduled"], ["places", "Places"], ["anytime", "Anytime"], ["waiting", "Waiting"], ["completed", "Completed"]]) {
     const button = text("button", `${label} ${cockpit.counts[value] || 0}`, "comms-filter"); button.type = "button";
     button.setAttribute("aria-pressed", String(state.remindersView === value));
     button.addEventListener("click", () => { state.remindersView = value; replaceQuery({ view: value }); renderReminders(data); }); views.append(button);
@@ -1278,19 +1494,49 @@ function reminderItemButton(item) {
   const heading = document.createElement("span"); heading.className = "reminder-item-heading";
   heading.append(text("strong", item.title), text("span", `${item.account_label} · ${item.list_name}`, "meta"));
   button.append(heading, text("span", item.why?.[0] || "Available", "focus-explanation"));
-  if (item.due_at) button.append(text("span", new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(item.due_at)), "meta"));
+  if (item.due_at) button.append(text("span", reminderDate(item.due_at), "meta"));
   button.addEventListener("click", () => { state.reminderItem = item.id; replaceQuery({ item: item.id }); renderReminders(state.surface); });
   return button;
 }
 
+function taskDetail(item) {
+  const pane = document.createElement("section"); pane.className = "card reminder-detail task-detail";
+  pane.append(text("p", "ADMINISTRATEME TASK · CANONICAL HOUSEHOLD WORK", "eyebrow"), text("h2", item.title));
+  if (item.notes) pane.append(text("p", item.notes));
+  const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode((item.why || []).join(" · "))); pane.append(why);
+  const facts = document.createElement("dl"); facts.className = "reminder-facts";
+  for (const [label, value] of [
+    ["Status", taskStatusLabel(item.status)], ["Due", reminderDate(item.due_date, "full")],
+    ["Available from", item.available_from ? reminderDate(item.available_from, "full") : "Now"],
+    ["Energy", item.energy ? titleCase(item.energy) : "Not set"], ["Effort", item.effort ? titleCase(item.effort) : "Not set"],
+    ["Work type", titleCase(item.item_type || "task")], ["Area", titleCase(item.domain || "tasks")],
+  ]) facts.append(text("dt", label), text("dd", value));
+  pane.append(facts);
+  if (item.micro_script) pane.append(text("p", `First tiny step: ${item.micro_script}`, "state-note"));
+  pane.append(text("p", "This is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.", "meta"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  if (item.status !== "done") {
+    const done = text("button", "Done", "button button-primary"); done.type = "button"; done.addEventListener("click", () => runTaskLifecycle(item, "complete")); actions.append(done);
+    const edit = text("button", "Edit properties", "button button-quiet"); edit.type = "button"; edit.addEventListener("click", () => openActionDialog("Edit household task", taskPropertiesForm(item))); actions.append(edit);
+    const defer = text("button", "Defer", "button button-quiet"); defer.type = "button"; defer.addEventListener("click", () => deferTaskDialog(item)); actions.append(defer);
+    if (item.status === "waiting_on") {
+      const unblock = text("button", "No longer waiting", "button button-quiet"); unblock.type = "button"; unblock.addEventListener("click", () => runTaskLifecycle(item, "unblock")); actions.append(unblock);
+    } else {
+      const block = text("button", "Waiting on…", "button button-quiet"); block.type = "button"; block.addEventListener("click", () => blockTaskDialog(item)); actions.append(block);
+    }
+  }
+  pane.append(actions); return pane;
+}
+
 function reminderDetail(item, cockpit) {
+  if (item?.record_kind === "task") return taskDetail(item);
   const pane = document.createElement("section"); pane.className = "card reminder-detail";
   if (!item) { pane.append(text("h2", "Choose one reminder"), text("p", "The cockpit carries the remembering. You only need to decide about one item at a time.", "empty")); return pane; }
   pane.append(text("p", `${item.account_label} · ${item.list_name}`, "eyebrow"), text("h2", item.title));
   if (item.notes) pane.append(text("p", item.notes));
   const why = document.createElement("p"); why.className = "focus-reason"; why.append(text("strong", "Why it is here: "), document.createTextNode((item.why || []).join(" · "))); pane.append(why);
   const facts = document.createElement("dl"); facts.className = "reminder-facts";
-  const fields = [["Provider", item.account_label], ["Scheduled", item.due_at ? new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(new Date(item.due_at)) : "No date"], ["Priority", item.priority === 1 ? "High" : item.priority === 5 ? "Medium" : item.priority === 9 ? "Low" : "None"], ["Repeats", item.recurrence_rules?.length ? item.recurrence_rules.join(", ") : "No"], ["Context cues", item.cues?.length || 0]];
+  const fields = [["Provider", item.account_label], ["Scheduled", reminderDate(item.due_at, "full")], ["Priority", item.priority === 1 ? "High" : item.priority === 5 ? "Medium" : item.priority === 9 ? "Low" : "None"], ["Repeats", item.recurrence_rules?.length ? item.recurrence_rules.join(", ") : "No"], ["Context cues", item.cues?.length || 0]];
   for (const [label, value] of fields) facts.append(text("dt", label), text("dd", value)); pane.append(facts);
   if (item.read_only_reason) pane.append(text("p", item.read_only_reason, "state-note"));
   if (item.possible_copy) pane.append(text("p", `${item.possible_copy.count} possible copies are preserved across provider lists. Review each source before changing or completing anything.`, "possible-copy"));
@@ -1315,7 +1561,7 @@ function reminderDetail(item, cockpit) {
 }
 
 function reminderQuickAdd(cockpit) {
-  const cardNode = document.createElement("section"); cardNode.className = "card reminder-quick-add"; cardNode.append(text("h2", "Quick add"), text("p", "Capture it now; enrich it only if useful.", "state-note"));
+  const cardNode = document.createElement("section"); cardNode.className = "card reminder-quick-add"; cardNode.append(text("h2", "Add to a connected provider"), text("p", "Write directly only to the selected Apple Reminders or Google Tasks list.", "state-note"));
   const writable = (cockpit.accounts || []).filter((account) => account.state !== "read_only" && account.operations?.some((operation) => ["create_task", "create_reminder"].includes(operation)));
   if (!writable.length) { cardNode.append(text("p", "Connect a writable Apple Reminders or Google Tasks account in Settings.", "empty")); return cardNode; }
   const form = document.createElement("form"); form.className = "reminder-add-form";
@@ -1329,6 +1575,12 @@ function reminderQuickAdd(cockpit) {
   const submit = text("button", "Add reminder", "button button-primary"); submit.type = "submit"; form.append(title, accountSelect, listSelect, due, submit);
   form.addEventListener("submit", (event) => { event.preventDefault(); const [provider, providerAccountId] = accountSelect.value.split("|"); runReminderCommand({ provider, provider_account_id: providerAccountId, list_external_id: listSelect.value }, provider === "google_tasks" ? "create_task" : "create_reminder", { title: title.value.trim(), ...(due.value ? { due: due.value } : {}) }); });
   cardNode.append(form); return cardNode;
+}
+
+function taskQuickAdd() {
+  const cardNode = document.createElement("section"); cardNode.className = "card task-quick-add";
+  cardNode.append(text("h2", "Add household work"), text("p", "Create an explicit canonical task. It appears here immediately and remains separate from provider truth.", "state-note"));
+  const button = text("button", "New task", "button button-primary"); button.type = "button"; button.addEventListener("click", () => openActionDialog("New household task", taskPropertiesForm({}, { create: true }))); cardNode.append(button); return cardNode;
 }
 
 function reminderProviderTruth(cockpit) {
@@ -1629,15 +1881,15 @@ function renderCalendar(data) {
 
 function renderReminders(data) {
   const root = $("#surface"); root.replaceChildren(); const cockpit = data.cockpit;
-  $("#mode-label").textContent = "Private · provider-backed · deterministic";
+  $("#mode-label").textContent = "Private · canonical tasks + provider truth · deterministic";
   root.append(freshnessStrip(data), remindersHero(cockpit), remindersControls(cockpit, data));
   const visible = cockpit.items.filter(reminderMatches);
   if (!state.reminderItem || !visible.some((item) => item.id === state.reminderItem)) state.reminderItem = visible[0]?.id || null;
   const selected = visible.find((item) => item.id === state.reminderItem);
   const workspace = document.createElement("div"); workspace.className = "reminder-workspace";
-  const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} reminders`));
+  const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} tasks & reminders`));
   if (!visible.length) list.append(text("p", "Nothing in this lens. Your provider truth is unchanged.", "empty")); else { const items = document.createElement("ol"); items.className = "reminder-items"; for (const item of visible) { const li = document.createElement("li"); li.append(reminderItemButton(item)); items.append(li); } list.append(items); }
-  workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
+  workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, taskQuickAdd(), reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
 }
 
 function peopleMatchesLens(person) {
@@ -2471,7 +2723,7 @@ async function initialize() {
       state.commsThread = params.get("thread");
     }
     if (active === "reminders") {
-      if (["now", "scheduled", "places", "anytime", "completed"].includes(requestedView)) state.remindersView = requestedView;
+      if (["now", "scheduled", "places", "anytime", "waiting", "completed"].includes(requestedView)) state.remindersView = requestedView;
       state.remindersAccount = params.get("account") || "all";
       state.remindersList = params.get("list") || "all";
       state.reminderItem = params.get("item");

@@ -23,7 +23,7 @@ from adminme.projections.commitments.queries import active_for_member
 from adminme.projections.lists.queries import open_items_for_member
 from adminme.projections.recurrences.queries import for_member as recurrences_for_member
 from adminme.projections.recurrences.queries import routine_occurrences_at
-from adminme.projections.tasks.queries import open_for_member as open_tasks
+from adminme.projections.tasks.queries import actionable_for_member
 from adminme.projections.triage.queries import pending_for_member as pending_triage
 from adminme.what_now import rank_what_now
 
@@ -53,15 +53,17 @@ def _what_now(
 ) -> dict[str, Any]:
     if runtime.projections is None:
         raise HTTPException(503, "work projections unavailable")
+    as_of = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     commitments = active_for_member(
         runtime.projections.connection("commitments"),
         session,
         member_party_id=session.view_member_id,
     )
-    tasks = open_tasks(
+    tasks = actionable_for_member(
         runtime.projections.connection("tasks"),
         session,
         member_party_id=session.view_member_id,
+        as_of_iso=as_of.isoformat(),
     )
     list_items = (
         effective_list_items
@@ -77,7 +79,6 @@ def _what_now(
         session,
         member_party_id=session.view_member_id,
     )
-    as_of = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     routines = routine_occurrences_at(
         runtime.projections.connection("recurrences"),
         session,

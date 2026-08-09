@@ -15,7 +15,7 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 2
+    version = 3
     subscribes_to = [
         "task.created",
         "task.completed",
@@ -29,6 +29,15 @@ class TasksProjection(Projection):
 
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         handlers.apply_event(envelope, conn)
+
+    def migrate_schema(self, conn: Any) -> None:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+        if "available_from" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN available_from TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_available "
+            "ON tasks(tenant_id, available_from)"
+        )
 
 
 __all__ = ["TasksProjection"]

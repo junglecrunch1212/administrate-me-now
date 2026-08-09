@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -392,6 +393,25 @@ def test_lifecycle_and_approval_are_durable_scope_filtered_and_exactly_once(
             .fetchone()
         )
         assert task_row is not None
+
+        original_due = task_row["due_date"]
+        deferred = _post(
+            client,
+            "/api/openclaw/v1/tools/lifecycle",
+            {
+                "provenance": _provenance("defer-secondary"),
+                "request_id": "defer-secondary",
+                "item_kind": "task",
+                "item_id": "task_fixture_secondary",
+                "action": "defer",
+                "expected_last_event_id": task_row["last_event_id"],
+                "until": "2099-08-10T09:30",
+            },
+        )
+        assert deferred["task"]["status"] == "deferred"
+        assert deferred["task"]["due_date"] == original_due
+        assert datetime.fromisoformat(deferred["task"]["available_from"]).tzinfo
+        task_row = deferred["task"]
 
         from adminme.products.openclaw import main as openclaw_main
 

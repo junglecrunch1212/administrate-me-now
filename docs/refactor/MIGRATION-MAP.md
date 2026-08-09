@@ -1,5 +1,20 @@
 # Migration map
 
+CO-009 update (2026-08-09): Reminders composition is **MODERNIZED** from a
+Lists-only cockpit to a typed read-time union of scope-filtered Tasks and
+provider items. No event or projection is merged. Existing Task and
+Lists databases remain authoritative for their own record kinds; the browser
+routes local actions to `task.*` and provider actions to the existing governed
+external-write seam. `task.created@v1` gains optional property fields already
+represented by the Tasks projection. Tasks projection v3 adds nullable
+`available_from` so a deadline and defer/snooze activation are no longer the
+same field; its migration is additive and old defer events fall back to their
+historical due-date meaning at read time. Old events remain valid and replay
+with their prior defaults. Triage candidate enrichment is **HARDENED** behind the
+published `triage-enrichment-v3` allowlist. Rollback ignores no new event kind
+and needs no destructive data conversion; older code safely ignores the new
+optional payload/property while the additive projection column remains.
+
 CO-008 upgrade-controller repair (2026-08-08): the ordinary updater's use of
 the active release controller is **SUPERSEDED**. Every reviewed candidate now
 self-hosts its upgrade policy in a commit-versioned controller. Same-baseline

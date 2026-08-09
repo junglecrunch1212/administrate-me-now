@@ -46,6 +46,7 @@ def _compose(
     *,
     cues: list[dict[str, object]] | None = None,
     signals: list[dict[str, object]] | None = None,
+    tasks: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return compose_reminders_cockpit(
         member_id="member-a",
@@ -63,6 +64,7 @@ def _compose(
         cues=cues or [],
         signals=signals or [],
         now=NOW,
+        tasks=tasks or [],
     )
 
 
@@ -91,9 +93,43 @@ def test_fixed_lenses_preserve_distinct_list_item_truth() -> None:
     assert result["contract"] == {  # type: ignore[index]
         "provider_is_source_of_truth": True,
         "list_items_are_not_tasks": True,
+        "tasks_are_not_provider_items": True,
+        "union_is_read_time_only": True,
         "model_ranking": False,
         "cue_evaluation": "typed operator against latest unexpired scoped fact",
     }
+
+
+def test_canonical_tasks_share_the_workspace_without_becoming_provider_items() -> None:
+    result = _compose(
+        [_item("provider-item", title="Provider truth")],
+        tasks=[
+            {
+                "task_id": "triage-task",
+                "title": "Confirmed from email",
+                "status": "inbox",
+                "assignee_party": "member-a",
+                "domain": "administrative",
+                "energy": "low",
+                "effort": "small",
+                "item_type": "task",
+                "due_date": None,
+                "created_at": "2026-08-06T13:00:00Z",
+                "last_event_id": "event-task",
+            }
+        ],
+    )
+    assert len(result["items"]) == 2
+    task = next(item for item in result["items"] if item["record_kind"] == "task")
+    provider = next(
+        item for item in result["items"] if item["record_kind"] == "provider_item"
+    )
+    assert task["bucket"] == "anytime"
+    assert task["provider"] == "administrateme"
+    assert task["surface_link"]["href"].endswith("item=task%3Atriage-task")
+    assert provider["provider"] == "google_tasks"
+    assert result["tasks"] == [task]
+    assert result["provider_items"] == [provider]
 
 
 def test_fresh_typed_context_match_activates_now_with_explanation() -> None:
