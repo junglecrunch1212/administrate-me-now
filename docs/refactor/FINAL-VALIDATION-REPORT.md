@@ -1,5 +1,28 @@
 # Gate 8 final validation report
 
+## 2026-08-08 CO-008 source-throughput amendment
+
+The third guarded activation selected merged `5c85b05` after encrypted backup
+and correctly restored `c484f0a` when source settlement remained incomplete.
+Both services are healthy after rollback and observation mode prevented any
+provider effect. A content-free encrypted-log audit counted 355 Gmail source
+facts: 316 private-member and 39 legacy household-shared. Only 18 v8 terminal
+assessments were retained, proving that the remaining failure was executable
+throughput and ordering rather than an empty mailbox.
+
+The repair makes scope/member refusal pre-NLP, adds opt-in eight-way delivery
+for the idempotent v9 message assessor, preserves an ordered-prefix checkpoint
+on mid-batch failure, widens the 4.0.4 skill timeout to 30 seconds, and permits
+one slow readiness document only while runtime liveness remains true. Focused
+bus, pipeline, updater, pack, and integration tests pass with Ruff. The full
+release matrix, review, merge, activation, terminal source accounting, and
+portal proof remain pending. The exact candidate matrix passes 37 strict
+acceptance tests, 1,681 root/pack tests, 60 bridge tests, and 15 pinned OpenClaw
+plugin tests, plus Ruff/format, mypy, Pyright, invariant and architecture
+checks, performance budgets, dependency audits, root/bridge builds, clean
+install, tenant isolation, backup/restore, plugin build/package/audit, shell
+validation, and diff hygiene under Python 3.14 and Node 24.
+
 ## 2026-08-08 CO-008 replay-settlement amendment
 
 The second guarded activation created an encrypted backup, selected merged

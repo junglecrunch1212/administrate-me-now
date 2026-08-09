@@ -41,7 +41,12 @@ def _settings(instance_dir: Path) -> RuntimeSettings:
 
 
 def _message(
-    *, tenant_id: str, key: str, body: str, sensitivity: str = "normal"
+    *,
+    tenant_id: str,
+    key: str,
+    body: str,
+    sensitivity: str = "normal",
+    owner_scope: str = f"private:{MEMBER}",
 ) -> EventEnvelope:
     now = "2026-08-08T12:00:00Z"
     return EventEnvelope(
@@ -52,8 +57,8 @@ def _message(
         occurred_at=now,
         source_adapter="gmail",
         source_account_id="fixture-account",
-        owner_scope=f"private:{MEMBER}",
-        visibility_scope=f"private:{MEMBER}",
+        owner_scope=owner_scope,
+        visibility_scope=owner_scope,
         sensitivity=sensitivity,  # type: ignore[arg-type]
         idempotency_key=f"source-assurance:{key}",
         payload={
@@ -98,12 +103,36 @@ def test_every_source_reaches_an_audited_disposition_in_production_composition(
                 sensitivity="privileged",
             ),
         )
-        for event_id in (harmless_id, privileged_id):
+        shared_scope_id = client.portal.call(
+            runtime.events.write,
+            _message(
+                tenant_id=runtime.settings.instance.tenant_id,
+                key="shared-scope",
+                body="Pay the fixture bill tomorrow.",
+                owner_scope="shared:household",
+            ),
+        )
+        for event_id in (harmless_id, privileged_id, shared_scope_id):
             client.portal.call(
                 runtime.wait_for_subscriber,
                 "pipeline:pipeline:noise_filtering",
                 event_id,
             )
+        shared_related = client.portal.call(
+            runtime.event_log.get_by_causation, shared_scope_id
+        )
+        assert not any(
+            event["type"].startswith("skill.call.") for event in shared_related
+        )
+        shared_assessment = next(
+            event
+            for event in shared_related
+            if event["type"] == "triage.intent.features_extracted"
+        )
+        assert shared_assessment["payload"]["assessment_outcome"] == "quarantined"
+        assert shared_assessment["payload"]["reason_codes"] == [
+            "source_scope_is_not_private_member"
+        ]
 
         for index, kind in enumerate(sorted(KINDS)):
             response = client.post(
@@ -165,7 +194,7 @@ def test_every_source_reaches_an_audited_disposition_in_production_composition(
         assert counts["failed"] == 0
         assert counts["pending"] == 0
         assert counts["no_candidate"] >= 1
-        assert counts["quarantined"] >= 1
+        assert counts["quarantined"] >= 2
         assert counts["eligible_candidates"] >= len(KINDS)
         assert counts["accounted"] == counts["obligations"]
 

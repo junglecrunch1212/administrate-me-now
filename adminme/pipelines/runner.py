@@ -190,6 +190,7 @@ class PipelineRunner:
                 self._make_callback(pack),
                 consumer_version=pack.version,
                 replay_on_version_change=pack.replay_on_version_change,
+                delivery_concurrency=pack.delivery_concurrency,
             )
         # `EventBus.start()` is a no-op if already running, so this is
         # safe for both test and production wiring orderings.

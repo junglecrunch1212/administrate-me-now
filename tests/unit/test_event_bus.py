@@ -385,6 +385,80 @@ async def test_concurrent_appends_all_delivered(rig) -> None:
     assert set(seen) == all_ids
 
 
+async def test_opt_in_delivery_concurrency_is_bounded_and_checkpoints_batch(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    bus = EventBus(log, tmp_path / "bus.db")
+    event_ids = [await log.append(_event(i)) for i in range(8)]
+    active = 0
+    maximum_active = 0
+    completed: list[str] = []
+
+    async def concurrent(event: dict) -> None:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        await asyncio.sleep(0.03)
+        completed.append(event["event_id"])
+        active -= 1
+
+    bus.subscribe("bounded", "*", concurrent, delivery_concurrency=4)
+    await bus.start()
+    await _wait_for(lambda: len(completed) == len(event_ids), timeout=5.0)
+    status = await bus.subscriber_status("bounded")
+
+    assert maximum_active == 4
+    assert status["delivery_concurrency"] == 4
+    assert status["checkpoint_event_id"] == event_ids[-1]
+    assert status["lag_count"] == 0
+    await bus.stop()
+    await log.close()
+
+
+async def test_concurrent_failure_advances_only_successful_ordered_prefix(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    bus = EventBus(log, tmp_path / "bus.db", failure_threshold=1)
+    event_ids = [await log.append(_event(i)) for i in range(3)]
+    seen: list[str] = []
+
+    async def fail_middle(event: dict) -> None:
+        seen.append(event["event_id"])
+        await asyncio.sleep(0.01)
+        if event["event_id"] == event_ids[1]:
+            raise RuntimeError("ordered failure")
+
+    bus.subscribe("ordered", "*", fail_middle, delivery_concurrency=3)
+    await bus.start()
+    await _wait_for(lambda: bus._subscribers["ordered"].degraded)
+    status = await bus.subscriber_status("ordered")
+
+    assert set(seen) == set(event_ids)
+    assert status["checkpoint_event_id"] == event_ids[0]
+    assert status["poison_event_id"] == event_ids[1]
+    assert status["lag_count"] == 2
+    await bus.stop()
+    await log.close()
+
+
+@pytest.mark.parametrize("value", [0, -1, 17, True, 1.5])
+async def test_delivery_concurrency_rejects_unsafe_values(
+    tmp_path: Path, value: object
+) -> None:
+    log = EventLog(tmp_path / "events.db", TEST_KEY)
+    bus = EventBus(log, tmp_path / "bus.db")
+
+    async def callback(_event: dict) -> None:
+        return None
+
+    with pytest.raises(ValueError, match="delivery_concurrency"):
+        bus.subscribe("invalid", "*", callback, delivery_concurrency=value)  # type: ignore[arg-type]
+    await bus.stop()
+    await log.close()
+
+
 async def test_subscriber_status_reflects_lag(rig) -> None:
     log, bus, _ = rig
     block = asyncio.Event()

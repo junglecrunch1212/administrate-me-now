@@ -42,6 +42,7 @@ DEFAULT_FAILURE_THRESHOLD = 5
 LAG_WARN_THRESHOLD = 10_000
 RETRY_BACKOFF_S = 0.2
 READ_BATCH_SIZE = 500
+MAX_DELIVERY_CONCURRENCY = 16
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -52,6 +53,7 @@ class _SubscriberState:
     types: list[str] | Literal["*"]
     callback: EventCallback
     consumer_version: str | None
+    delivery_concurrency: int
     checkpoint: str | None
     degraded: bool
     consecutive_failures: int = 0
@@ -134,6 +136,7 @@ class EventBus:
         *,
         consumer_version: str | None = None,
         replay_on_version_change: bool = False,
+        delivery_concurrency: int = 1,
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -143,6 +146,15 @@ class EventBus:
             raise ValueError(f"subscriber_id already registered: {subscriber_id}")
         if types != "*" and not isinstance(types, list):
             raise TypeError('types must be list[str] or "*"')
+        if (
+            not isinstance(delivery_concurrency, int)
+            or isinstance(delivery_concurrency, bool)
+            or not 1 <= delivery_concurrency <= MAX_DELIVERY_CONCURRENCY
+        ):
+            raise ValueError(
+                "delivery_concurrency must be an integer between 1 and "
+                f"{MAX_DELIVERY_CONCURRENCY}"
+            )
 
         row = self._ckpt_conn.execute(
             "SELECT * FROM bus_consumer_offsets WHERE subscriber_id = ?",
@@ -216,6 +228,7 @@ class EventBus:
             types=types,
             callback=callback,
             consumer_version=consumer_version,
+            delivery_concurrency=delivery_concurrency,
             checkpoint=checkpoint,
             degraded=degraded,
             consecutive_failures=failures,
@@ -324,6 +337,7 @@ class EventBus:
             "degraded": state.degraded,
             "poison_event_id": state.poison_event_id,
             "consumer_version": state.consumer_version,
+            "delivery_concurrency": state.delivery_concurrency,
             "retry_policy": {
                 "delivery": "at_least_once",
                 "failure_threshold": self._failure_threshold,
@@ -349,6 +363,7 @@ class EventBus:
 
     async def _drain_once(self, state: _SubscriberState) -> None:
         try:
+            batch: list[dict[str, Any]] = []
             async for event in self._log.read_since(
                 state.checkpoint,
                 types=state.types_filter,
@@ -358,34 +373,15 @@ class EventBus:
                     return
                 if state.degraded:
                     return
-                try:
-                    await state.callback(event)
-                except Exception:
-                    state.consecutive_failures += 1
-                    state.last_failure_at_ms = int(time.time() * 1000)
-                    _log.exception(
-                        "subscriber %s callback raised; checkpoint not advanced",
-                        state.subscriber_id,
-                    )
-                    if state.consecutive_failures >= self._failure_threshold:
-                        state.degraded = True
-                        state.poison_event_id = event["event_id"]
-                        await self._persist_state(state)
-                        _log.error(
-                            "subscriber %s degraded after %d consecutive failures",
-                            state.subscriber_id,
-                            state.consecutive_failures,
-                        )
-                        return
-                    await self._persist_state(state)
-                    await asyncio.sleep(RETRY_BACKOFF_S)
-                    state.trigger.set()
+                batch.append(event)
+                if len(batch) < state.delivery_concurrency:
+                    continue
+                if not await self._deliver_batch(state, batch):
                     return
+                batch = []
 
-                state.checkpoint = event["event_id"]
-                state.consecutive_failures = 0
-                state.last_success_at_ms = int(time.time() * 1000)
-                await self._persist_state(state)
+            if batch and not await self._deliver_batch(state, batch):
+                return
 
             # drained; warn on lag (events mismatched by filter still count as lag)
             lag = await self._log.count_since(
@@ -410,6 +406,69 @@ class EventBus:
             state.degraded = True
             state.poison_event_id = state.checkpoint
             await self._persist_state(state)
+
+    async def _deliver_batch(
+        self,
+        state: _SubscriberState,
+        events: list[dict[str, Any]],
+    ) -> bool:
+        """Deliver one bounded batch and advance only its successful prefix.
+
+        Concurrency is opt-in. A failure never advances the durable checkpoint
+        past the failed event. Later callbacks in the same batch may already
+        have completed, but their idempotent effects are safely replayed after
+        recovery. This preserves at-least-once delivery while allowing
+        language-bound source assessors to clear a bounded historical backlog.
+        """
+
+        results = await asyncio.gather(
+            *(state.callback(event) for event in events),
+            return_exceptions=True,
+        )
+        failed_index = next(
+            (
+                index
+                for index, result in enumerate(results)
+                if isinstance(result, BaseException)
+            ),
+            None,
+        )
+        successful_count = len(events) if failed_index is None else failed_index
+        if successful_count:
+            state.checkpoint = events[successful_count - 1]["event_id"]
+            state.consecutive_failures = 0
+            state.last_success_at_ms = int(time.time() * 1000)
+
+        if failed_index is None:
+            await self._persist_state(state)
+            return True
+
+        failure = results[failed_index]
+        if isinstance(failure, asyncio.CancelledError):
+            raise failure
+        state.consecutive_failures += 1
+        state.last_failure_at_ms = int(time.time() * 1000)
+        failed_event = events[failed_index]
+        _log.error(
+            "subscriber %s callback raised %s; checkpoint not advanced past %s",
+            state.subscriber_id,
+            type(failure).__name__,
+            failed_event["event_id"],
+        )
+        if state.consecutive_failures >= self._failure_threshold:
+            state.degraded = True
+            state.poison_event_id = failed_event["event_id"]
+            await self._persist_state(state)
+            _log.error(
+                "subscriber %s degraded after %d consecutive failures",
+                state.subscriber_id,
+                state.consecutive_failures,
+            )
+            return False
+        await self._persist_state(state)
+        await asyncio.sleep(RETRY_BACKOFF_S)
+        state.trigger.set()
+        return False
 
     async def _persist_state(self, state: _SubscriberState) -> None:
         async with self._ckpt_lock:

@@ -1,6 +1,6 @@
 # CO-008 — Source assurance and universal member capture
 
-Status: **APPROVED; MERGED — TWO GUARDED ACTIVATIONS ROLLED BACK; REPLAY-SETTLEMENT REPAIR IN REVIEW**
+Status: **APPROVED; MERGED — THREE GUARDED ACTIVATIONS ROLLED BACK; SOURCE-THROUGHPUT REPAIR IN REVIEW**
 
 Date: 2026-08-08
 
@@ -54,6 +54,11 @@ no obligations. It was a compound observability and eligibility failure:
 7. Doctor and Settings could report a healthy adapter/pipeline/projection while
    a particular source fact had no assessment. Queue emptiness was still being
    mistaken for source completeness.
+8. Retained live replay evidence then showed that 39 legacy Gmail facts were
+   household-shared and 316 were correctly member-private. Scope refusal ran
+   after NLP, so a shared fact could consume the serial language worker before
+   being quarantined. A five-second readiness request could also expire while
+   the live runtime was calculating its content-free audit.
 
 The repair therefore addresses the class of failure, not one mailbox or one
 message pattern.
@@ -131,7 +136,7 @@ separate high-signal fallback:
 - never infer member ownership from an inbound sender's promise;
 - never create canonical truth or a provider command.
 
-The reviewed v8 Gmail replay reuses any prior successful exact-input
+The reviewed v9 Gmail replay reuses any prior successful exact-input
 interpretation. A separate explicit retry-generation flag permits one retry of
 a causal terminal failure; that retry receives a fingerprint-qualified failed
 terminal so later replay cannot call the model repeatedly. Changing a success
@@ -147,6 +152,14 @@ assessment on every add/update/correction branch, removes the confidence
 threshold, requires an exact quote, and uses a reviewed invocation generation.
 Deleted Notes remain projection/revocation facts and are not candidate
 sources.
+
+Live v9 adds no semantic authority. It moves Gmail privacy/member checks before
+NLP, gives only this idempotent language-bound subscriber eight bounded
+concurrent deliveries, and checkpoints only the contiguous successful source
+prefix. `classify_message_nature` 4.0.4 uses a 30-second bounded timeout that
+matches the pinned OpenClaw completion envelope. These are throughput and
+failure-isolation controls, not permission to batch source text, skip a source,
+or treat a model result as truth.
 
 ## 6. Universal adult capture
 

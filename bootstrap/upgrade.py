@@ -184,9 +184,13 @@ class UpgradeManager:
             if "source_assurance_terminal_dispositions" in failed:
                 diagnostics = self.services.runtime_diagnostics()
                 if diagnostics is None:
-                    # ServiceManager already exhausted its bounded liveness and
-                    # readiness windows before post-switch Doctor. An absent
-                    # document here is not evidence of advancing replay.
+                    # A first source audit or saturated language-bound replay
+                    # may briefly outlive one diagnostics request. Keep waiting
+                    # only while the intentionally cheap liveness proof remains
+                    # true; loss of liveness is structural and returns at once.
+                    if self.services.runtime_is_live() and time.monotonic() < deadline:
+                        time.sleep(POST_SWITCH_POLL_SECONDS)
+                        continue
                     return last
                 settled, _evidence = source_assurance_terminal_evidence(diagnostics)
                 if not settled and time.monotonic() < deadline:

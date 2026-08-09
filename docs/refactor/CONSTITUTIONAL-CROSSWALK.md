@@ -1,5 +1,16 @@
 # Constitutional crosswalk
 
+CO-008 source-throughput amendment (2026-08-08): C001/C002/C007/C009/C010/
+C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
+**PRESERVED/HARDENED** after retained live evidence showed that correct
+per-source disposition can still fail operationally when unsafe scope is
+checked after NLP or an idempotent language-bound replay is forced through one
+serial callback. Scope/member refusal now precedes the model. Explicit bounded
+concurrency preserves at-least-once delivery by checkpointing only the ordered
+successful prefix. A slow readiness document is tolerated only alongside an
+independent liveness proof; it never counts as settlement. Fixed code continues
+to own privacy, grounding, eligibility, routing, truth, and human gating.
+
 CO-008 replay-settlement amendment (2026-08-08): C001/C002/C007/C009/C010/
 C035/C044-C046/C050/C053/C055/C056/C071/C076 and C101 are
 **PRESERVED/HARDENED** after live evidence distinguished incomplete historical

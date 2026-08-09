@@ -33,6 +33,7 @@ from typing import Any
 
 import yaml
 
+from adminme.events.bus import MAX_DELIVERY_CONCURRENCY
 from adminme.pipelines.base import Pipeline, PipelinePackLoadError, Triggers
 
 _log = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class LoadedPipelinePack:
     instance: Pipeline
     pack_root: Path
     replay_on_version_change: bool = False
+    delivery_concurrency: int = 1
 
 
 _cache: dict[tuple[str, str], LoadedPipelinePack] = {}
@@ -180,6 +182,20 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
             "pipeline.yaml: replay.on_version_change must be 'none' or 'full'"
         )
 
+    delivery_block = manifest.get("delivery") or {}
+    if not isinstance(delivery_block, dict):
+        raise PipelinePackLoadError("pipeline.yaml: delivery must be a mapping")
+    delivery_concurrency = delivery_block.get("concurrency", 1)
+    if (
+        not isinstance(delivery_concurrency, int)
+        or isinstance(delivery_concurrency, bool)
+        or not 1 <= delivery_concurrency <= MAX_DELIVERY_CONCURRENCY
+    ):
+        raise PipelinePackLoadError(
+            "pipeline.yaml: delivery.concurrency must be an integer between 1 "
+            f"and {MAX_DELIVERY_CONCURRENCY}"
+        )
+
     loaded = LoadedPipelinePack(
         pack_id=pack_id,
         version=version,
@@ -189,6 +205,7 @@ def load_pipeline_pack(pack_root: Path) -> LoadedPipelinePack:
         instance=instance,
         pack_root=pack_root,
         replay_on_version_change=replay_mode == "full",
+        delivery_concurrency=delivery_concurrency,
     )
     _cache[cache_key] = loaded
     return loaded
