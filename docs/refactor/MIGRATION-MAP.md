@@ -114,6 +114,14 @@ fail-closed; success ends retries and shutdown cancels them. This does not
 change event schemas, consumer versions, source facts, projections, runtime
 baselines, provider authority, or rollback compatibility.
 
+Immutable plugin-selection reconciliation (2026-08-09): native-plugin
+registration is **HARDENED** from plugin-name discovery to exact immutable
+release identity. Upgrade and rollback now link the corresponding reviewed
+plugin while services are stopped and validate its install/runtime source.
+Stale same-version paths are **SUPERSEDED** as acceptable health evidence. No
+event or consumer migration is required; prior immutable releases remain
+retained for rollback.
+
 Pinned language execution repair (2026-08-08): OpenClaw `2026.7.2` commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61` **SUPERSEDES** only the declared
 defective same-version snapshot. The updater installs and atomically selects

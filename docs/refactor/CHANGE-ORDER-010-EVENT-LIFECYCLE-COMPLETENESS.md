@@ -434,3 +434,22 @@ health. Unit evidence covers the start-before-runtime race, exact pinned
 payload, successful convergence, and terminal unavailable report. Phase-B
 evidence additionally requires an attested upgrade and controlled service
 restart to reach healthy Doctor without a manual POST.
+
+### 11.8 Active-release plugin identity
+
+PR #308 merged and deployed as `43cd565`; Doctor was otherwise healthy at
+61,335/61,335 source obligations, with 31 candidate-bearing facts and zero
+pending, missing, or failed outcomes. Direct inspection then showed that the
+configured local plugin still resolved to old release `d52050b`. Consequently,
+PR #308's startup-health service existed on disk but had not become the running
+plugin, and the successful deployment could not count as reboot proof.
+
+The follow-up makes plugin runtime identity part of the attested upgrade and
+Doctor contract. It replaces only bounded AdministrateMe registrations while
+services are stopped, links the plugin from the exact candidate release,
+validates through OpenClaw, and requires discovered, loaded, install-path, and
+runtime-source equality. Rollback performs the same reconciliation toward the
+previous immutable release. Process evidence proves the candidate controller
+invokes this seam; focused tests prove stale same-version refusal, relinking,
+runtime-source validation, and Doctor failure. No event, projection, candidate,
+member decision, provider authority, or runtime baseline changes.

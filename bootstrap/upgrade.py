@@ -20,7 +20,10 @@ from bootstrap.contracts import (
 )
 from bootstrap.doctor import Doctor
 from bootstrap.keychain_probe import configured_keychain_references
-from bootstrap.openclaw_tools import configure_required_llm_tool
+from bootstrap.openclaw_tools import (
+    configure_required_llm_tool,
+    reconcile_administrateme_plugin,
+)
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 from bootstrap.wizard import install_launch_agents, service_environment_path
 
@@ -397,11 +400,18 @@ class UpgradeManager:
         was_running = self.services.status().status != "stopped"
         pointer_switched = False
         openclaw_switched = False
+        plugin_registration_attempted = False
         try:
             self._install_reviewed_openclaw(release)
             openclaw_switched = True
             if was_running:
                 self.services.stop()
+            plugin_registration_attempted = True
+            reconcile_administrateme_plugin(
+                self.paths,
+                release,
+                test_mode=self.test_mode,
+            )
             atomic_write(
                 pointer,
                 json.dumps(
@@ -440,6 +450,12 @@ class UpgradeManager:
             if openclaw_switched and previous_release is not None:
                 try:
                     self._install_reviewed_openclaw(previous_release)
+                    if plugin_registration_attempted:
+                        reconcile_administrateme_plugin(
+                            self.paths,
+                            previous_release,
+                            test_mode=self.test_mode,
+                        )
                 except Exception as exc:
                     rollback_error = exc
             if was_running:
@@ -480,12 +496,17 @@ class UpgradeManager:
             allow_openclaw_rollback=True,
         )
         current_release = self._active_release_root()
-        self._install_reviewed_openclaw(release)
         stopped = self.services.status().status == "stopped"
-        if not stopped:
-            self.services.stop()
-        atomic_write(pointer, json.dumps(previous, indent=2).encode("utf-8"))
         try:
+            self._install_reviewed_openclaw(release)
+            if not stopped:
+                self.services.stop()
+            reconcile_administrateme_plugin(
+                self.paths,
+                release,
+                test_mode=self.test_mode,
+            )
+            atomic_write(pointer, json.dumps(previous, indent=2).encode("utf-8"))
             install_launch_agents(self.paths, release, test_mode=self.test_mode)
             self.services.start()
             result = self._post_switch_doctor(release)
@@ -500,6 +521,11 @@ class UpgradeManager:
             self.services.stop()
             atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
             self._install_reviewed_openclaw(current_release)
+            reconcile_administrateme_plugin(
+                self.paths,
+                current_release,
+                test_mode=self.test_mode,
+            )
             install_launch_agents(
                 self.paths,
                 ensure_within(Path(current["path"]), self.paths.app_dir / "releases"),

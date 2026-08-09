@@ -3,19 +3,49 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_010_DEPLOYED_PLUGIN_HEALTH_RECONCILIATION_IN_REVIEW
+gate_result: CO_010_DEPLOYED_STALE_PLUGIN_SELECTION_REPAIR_IN_REVIEW
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
 branch: main
-candidate_commit_resolution: pr_307_merged_and_deployed_cbc6cc9_plugin_health_candidate
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/308
+candidate_commit_resolution: pr_308_merged_and_deployed_43cd565_stale_plugin_selection_candidate
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: review_merge_deploy_verify_reboot_health_then_member_triage_review
+next_phase: review_merge_deploy_exact_plugin_then_verify_reboot_and_triage
 ---
 
 # Release handoff
+
+## 2026-08-09 immutable OpenClaw plugin-selection candidate
+
+PR #308 passed both hosted gates, merged as `43cd565`, and deployed through
+the attested updater after encrypted backup
+`administrateme-20260809T182639Z.ambackup`. Status and full Doctor are healthy:
+the runtime is observation-only; all fourteen projections and eight required
+pipelines are healthy; five OpenClaw jobs reconcile; and source assurance is
+settled at 61,335/61,335 with 31 candidate-bearing facts and zero pending,
+missing, or failed outcomes.
+
+The requested reboot proof was not accepted. Direct OpenClaw inspection showed
+that its linked AdministrateMe install and loaded module still came from old
+release `d52050b`. The candidate plugin had been built in `43cd565`, but upgrade
+selected only the OpenClaw executable and launch definitions. Name-only Doctor
+discovery allowed the same-version old plugin to pass, so PR #308's health retry
+was not actually running.
+
+This repair stops services, removes only bounded stale AdministrateMe
+registrations, links the candidate plugin through the reviewed OpenClaw CLI,
+validates config, and requires install path plus runtime source to resolve in
+the selected immutable release. Rollback symmetrically restores the previous
+plugin link with its executable, pointer, and launch definitions. Focused unit
+and production-composition tests pass. The complete candidate matrix also
+passes: 46 strict acceptance tests, 1,724 root/pack tests, 60 isolated bridge
+tests, 17 native plugin tests, lint/types/security/invariants, performance,
+build/package, clean install, isolation, and encrypted backup/restore. Review,
+merge, attested deployment, exact runtime-source proof, controlled full
+restart, Doctor, idle CPU, and authenticated Triage browser proof remain
+required.
 
 ## 2026-08-09 OpenClaw startup-health reconciliation candidate
 

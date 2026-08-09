@@ -38,7 +38,11 @@ from bootstrap.contracts import (
 from bootstrap.openclaw_activation import model_provider_configured
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import reviewed_source_status
-from bootstrap.openclaw_tools import probe_required_llm_tool, required_llm_tool_status
+from bootstrap.openclaw_tools import (
+    administrateme_plugin_status,
+    probe_required_llm_tool,
+    required_llm_tool_status,
+)
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 
@@ -621,23 +625,12 @@ class Doctor:
                 "gateway": compat.get("minGatewayVersion"),
                 "commit": build.get("openclawCommit"),
             }
-            discovery_output = (
-                '{"id":"administrateme","state":"active"}'
-                if self.test_mode
-                else _command_output(
-                    [
-                        "openclaw",
-                        "plugins",
-                        "inspect",
-                        "administrateme",
-                        "--runtime",
-                        "--json",
-                    ]
-                )
+            release_status = administrateme_plugin_status(
+                self.paths,
+                self.root,
+                test_mode=self.test_mode,
             )
-            plugin_evidence["discovered"] = bool(
-                discovery_output and "administrateme" in discovery_output
-            )
+            plugin_evidence.update(release_status)
             llm_tool = required_llm_tool_status(self.paths, test_mode=self.test_mode)
             plugin_evidence["required_llm_tool"] = llm_tool
             if model_configured and include_synthetic_proof:
@@ -660,7 +653,7 @@ class Doctor:
             plugin_ok = (
                 compat.get("pluginApi") == versions["openclaw"]["plugin_api"]
                 and build.get("openclawCommit") == versions["openclaw"]["commit"]
-                and plugin_evidence["discovered"]
+                and release_status["ok"]
                 and llm_tool["ok"]
                 and execution_probe["ok"]
             )

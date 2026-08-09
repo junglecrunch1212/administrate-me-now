@@ -126,6 +126,14 @@ shutdown, logs no response body or secret, and never turns configuration into
 domain health. This **SUPERSEDES** only the one-shot report that could leave a
 healthy reboot administratively stale until manual intervention.
 
+Immutable plugin-selection amendment (2026-08-09): C046/C050/C082 are
+**PRESERVED/HARDENED**. Discovery is healthy only when OpenClaw's install path
+and loaded AdministrateMe module resolve inside the exact active immutable
+release. Candidate upgrade and rollback symmetrically reconcile the reviewed
+local link while services are stopped. This **SUPERSEDES** name-only discovery
+that allowed a stale same-version plugin to survive several otherwise correct
+release switches.
+
 Pinned `llm-task` execution amendment (2026-08-08): C001/C002/C007/C035/
 C046/C050/C055/C071/C076 are **PRESERVED/HARDENED** after authenticated live
 execution proved the former exact OpenClaw snapshot's bundled tool was
@@ -354,7 +362,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 |---|---|---|---|---|---|
 | C048 | OpenClaw owns generic channels/conversations/sessions/memory/model routing/cron/orchestration/tools/nodes/admin | BUILD OpenClaw; CLAW; ARCH §5; ADR-0001 | Exact plugin, member chat relay, skill seam and standing orders call OpenClaw-owned services; architecture-negative tests prohibit duplicate model/channel/memory/scheduler runtimes | PRESERVE/HARDEN COMPLETE | AC-12, AC-22 |
 | C049 | AdministrateMe owns household truth, scopes, review, outcomes, workbooks | BUILD/MENTAL/ARCH | Production root composes typed log/projections/Triage/outcomes/workbooks under AdministrateMe while OpenClaw retains generic runtime concerns | PRESERVE/HARDEN COMPLETE | AC-02–AC-18 |
-| C050 | One current native TypeScript plugin | Current OpenClaw docs + v2 contract; baseline README says Python | Exact-pinned package, manifest, source build, registration, bounded startup-health reconciliation, live discovery/health, fixture/process tests; Python placeholders deleted | SUPERSEDE/HARDEN COMPLETE | AC-12, AC-21 |
+| C050 | One current native TypeScript plugin | Current OpenClaw docs + v2 contract; baseline README says Python | Exact-pinned package, manifest, source build, active-release registration/runtime-source equality, bounded startup-health reconciliation, live discovery/health, fixture/process tests; Python placeholders deleted | SUPERSEDE/HARDEN COMPLETE | AC-12, AC-21 |
 | C051 | Typed skills seam | BUILD skill runner; CLAW Q1; EXAMPLES skill shape | OpenClaw-format skill plus one-call schema wrapper and durable actual provenance | PRESERVE/HARDEN COMPLETE | AC-12 |
 | C052 | Slash-command seam | BUILD products/OpenClaw; CLAW | seven authenticated native commands dispatch to typed handlers | PRESERVE COMPLETE | AC-12 |
 | C053 | Proactive standing-order seam | BUILD L4/bootstrap; CLAW Q3 | Five cross-checked OpenClaw declarations plus owned, timezone-explicit, idempotent live reconciliation, duplicate/drift refusal, rollback, and Doctor evidence | PRESERVE/HARDEN COMPLETE | AC-12, AC-21 |
