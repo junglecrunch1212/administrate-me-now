@@ -3,21 +3,21 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_011_CANDIDATE_IDENTIFICATION_REVIEW_PENDING
+gate_result: CO_011_DEPLOYED_LIVE_VERIFIED
 verified_local_date: 2026-08-09
 verified_github_date: 2026-08-09
-branch: codex/candidate-identification-controls
-candidate_commit_resolution: local_candidate_under_validation
-pull_request_url: pending
+branch: main
+candidate_commit_resolution: cd49c60d608c1acf3e0baf9aa5f000c982382a66
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/311
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
-next_phase: review_merge_guarded_deploy_and_authenticated_browser_proof
+next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
 
-## 2026-08-09 CO-011 candidate identification and Triage context candidate
+## 2026-08-09 CO-011 deployed and live verified
 
 `CHANGE-ORDER-011-CANDIDATE-IDENTIFICATION-AND-TRIAGE-CONTEXT.md` now governs
 the member-facing candidate source policy and decision context. The candidate
@@ -40,9 +40,31 @@ Local evidence passes: 1,740 root/pack Python tests, 60 isolated bridge tests,
 and 17 plugin tests. A disposable authenticated browser saved/reloaded/restored
 Gmail policy, rendered exact message context in Triage, reflowed Settings and
 Triage without horizontal overflow at 390×844, and reported no browser errors.
-PR review, hosted checks, merge, guarded deployment, final Doctor,
-source settlement, and authenticated live proof remain pending. No live runtime
-or provider state has changed.
+
+PR #311 passed the constitutional cascade and macOS credential-free rehearsal,
+merged as `cd49c60d608c1acf3e0baf9aa5f000c982382a66`, and deployed through the
+attested same-runtime updater after encrypted backup
+`administrateme-20260809T204055Z.ambackup`. Rollback remains available and
+observation remains active. The active release stayed on Python 3.14.6, Node
+24.19.0, and pinned OpenClaw 2026.7.2; this was not a runtime migration.
+
+The intentional replay converged with zero consecutive pipeline failures and
+zero lag. Live pipeline versions are noise filtering 11.0.0, Notes indexing
+5.0.0, and deterministic structured sources 2.0.0. Final Doctor is healthy:
+14/14 projections, 8/8 pipelines, authenticated `llm-task`, 5/5 managed jobs,
+and the canonical synthetic round trip pass with zero external effects. Source
+assurance is current and settled at 61,335/61,335 obligations: 28 source facts
+have candidates, 309 have explicit no-candidate dispositions, 39 are safely
+quarantined, and pending, missing, and failed are all zero.
+
+Authenticated live browser proof renders the 33-row current/future source
+matrix and its eleven candidate types in Settings. Triage renders 100 visible
+records (15 ready and 85 needing details), including reviewed Gmail billing and
+payment actions. The selected live candidate exposes channel, direction,
+adapter/account provenance, sender, subject, observed time, possible target
+type, literal source evidence, and extraction-method badges beside the human
+gate. The live browser console has no warnings or errors. No candidate was
+confirmed or dismissed and no provider write was authorized.
 
 ## 2026-08-09 CO-010 deployed and live verified
 
