@@ -1,7 +1,7 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 4.0.4
+version: 5.0.0
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -81,8 +81,10 @@ fields are typed evidence consumed by deterministic code. The model does not
 rank messages or authorize a write.
 
 Possible tasks, outbound member commitments, calendar events, reminders,
-recurrences, list items, lists, and party identifiers are returned as
-candidates. Direction is derived from the event type or immutable provider
+recurrences, list items, lists, party identifiers, new party candidates,
+party relationships, and relationship facts are returned as candidates.
+People output remains unresolved evidence for human review; the model never
+selects an existing party or asserts identity. Direction is derived from the event type or immutable provider
 `SENT` label, so another person's inbound promise is never attributed to the
 member. Every admitted candidate
 must carry a verbatim source quote; deterministic code rejects ungrounded

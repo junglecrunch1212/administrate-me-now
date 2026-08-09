@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 9.0.0
+  version: 10.0.0
   kind: pipeline
 runtime:
   language: python
@@ -21,7 +21,7 @@ delivery:
   concurrency: 8
 depends_on:
   skills:
-    - classify_message_nature@^4.0.0
+    - classify_message_nature@^5.0.0
   projections: []
 events_emitted:
   - messaging.classified

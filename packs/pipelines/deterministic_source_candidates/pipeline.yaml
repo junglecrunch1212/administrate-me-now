@@ -1,0 +1,26 @@
+pack:
+  id: pipeline:deterministic_source_candidates
+  name: Deterministic structured-source candidates
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.14,<3.15"
+  entrypoint: handler.py
+  class: DeterministicSourceCandidatesPipeline
+triggers:
+  events:
+    - money_flow.provider_observed
+    - money_flow.provider_removed
+    - financial.account_observed
+    - context.signal.observed
+replay:
+  on_version_change: full
+delivery:
+  concurrency: 1
+depends_on:
+  skills: []
+  projections: []
+events_emitted:
+  - triage.intent.features_extracted
+  - triage.item.proposed

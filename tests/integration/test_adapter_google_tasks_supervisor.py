@@ -332,7 +332,7 @@ def test_supervisor_inbound_poll_emits_list_item_added() -> None:
     assert instance.priority == 0
     assert instance.provider == "google_tasks"
     assert instance.completed is False
-    assert instance.sync_cycle_id == "corr-integration-1"
+    assert instance.sync_cycle_id.startswith("google-tasks-revision:")
     # Re-poll on the same id is a no-op per the inbound dedupe gate
     # (F-3 of c2): _seen_inbound populated → no second emit.
     service._list_pages = [{"items": [google_task]}]

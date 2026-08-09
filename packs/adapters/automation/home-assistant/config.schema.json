@@ -35,7 +35,31 @@
           "signal_key": { "type": "string", "minLength": 1 },
           "kind": { "type": "string", "enum": ["location", "presence", "weather", "device_state", "network_presence", "calendar_transition", "energy", "capacity"] },
           "ttl_seconds": { "type": "integer", "minimum": 10, "maximum": 86400, "default": 300 },
-          "attribute_allowlist": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "default": [] }
+          "attribute_allowlist": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "default": [] },
+          "triage_rules": {
+            "type": "array",
+            "maxItems": 10,
+            "default": [],
+            "description": "Reviewed deterministic rules. A matching typed signal may only propose a human-gated Triage item; it never creates work directly.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rule_id", "target_kind", "title", "operator"],
+              "properties": {
+                "rule_id": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[A-Za-z0-9._:-]+$" },
+                "target_kind": { "type": "string", "enum": ["task", "reminder", "recurrence"] },
+                "title": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                "operator": { "type": "string", "enum": ["equals", "not_equals", "above", "below", "entered", "left", "present"] },
+                "expected_state": { "type": "string", "maxLength": 500 },
+                "expected_number": { "type": "number" },
+                "candidate": { "type": "object", "maxProperties": 20, "default": {} }
+              },
+              "allOf": [
+                { "if": { "properties": { "operator": { "enum": ["equals", "not_equals"] } } }, "then": { "required": ["expected_state"] } },
+                { "if": { "properties": { "operator": { "enum": ["above", "below"] } } }, "then": { "required": ["expected_number"] } }
+              ]
+            }
+          }
         }
       }
     },

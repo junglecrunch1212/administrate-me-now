@@ -81,12 +81,44 @@ class RoutineStepOutcomeRecordedV1(BaseModel):
     recorded_by_member_id: str = Field(min_length=1, max_length=160)
 
 
+class RoutinePausedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    routine_id: str = Field(min_length=1, max_length=160)
+    paused_at: str = Field(min_length=1)
+    paused_by_member_id: str = Field(min_length=1, max_length=160)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RoutineResumedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    routine_id: str = Field(min_length=1, max_length=160)
+    resumed_at: str = Field(min_length=1)
+    resumed_by_member_id: str = Field(min_length=1, max_length=160)
+
+
+class RoutineEndedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    routine_id: str = Field(min_length=1, max_length=160)
+    ended_at: str = Field(min_length=1)
+    ended_by_member_id: str = Field(min_length=1, max_length=160)
+    reason: str | None = Field(default=None, max_length=500)
+
+
 registry.register("routine.defined", 1, RoutineDefinedV1)
 registry.register("routine.step_outcome_recorded", 1, RoutineStepOutcomeRecordedV1)
+registry.register("routine.paused", 1, RoutinePausedV1)
+registry.register("routine.resumed", 1, RoutineResumedV1)
+registry.register("routine.ended", 1, RoutineEndedV1)
 
 
 __all__ = [
     "RoutineDefinedV1",
+    "RoutineEndedV1",
+    "RoutinePausedV1",
+    "RoutineResumedV1",
     "RoutineStepOutcomeRecordedV1",
     "RoutineStepV1",
 ]

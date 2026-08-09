@@ -21,9 +21,11 @@ from adminme.lib.session import Session, build_internal_session
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.recurrences.queries import (
     all_active,
+    completion_history_for_member,
     due_within,
     for_member,
     get_recurrence,
+    get_routine,
     routine_occurrences_at,
 )
 from adminme.projections.runner import ProjectionRunner
@@ -157,6 +159,67 @@ async def test_recurrence_completed_advances_next_occurrence(
     assert row is not None
     # Daily RRULE from 2026-04-24T08:00:00Z, completed at 08:30 → next is 04-25T08:00.
     assert row["next_occurrence"] == "2026-04-25T08:00:00Z"
+    [history] = completion_history_for_member(
+        conn, _S("tenant-a"), member_party_id="m1"
+    )
+    assert history["kind"] == "recurrence"
+    assert history["status"] == "completed"
+    assert history["last_event_id"] == last
+
+
+async def test_recurrence_pause_resume_end_is_typed_and_replayable(
+    rig: dict[str, Any],
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(_envelope("recurrence.added", _daily_payload()))
+    for event_type, payload, status in (
+        (
+            "recurrence.paused",
+            {
+                "recurrence_id": "rec-daily",
+                "paused_at": "2026-04-24T10:00:00Z",
+                "paused_by_member_id": "m1",
+                "reason": "Away this week",
+            },
+            "paused",
+        ),
+        (
+            "recurrence.resumed",
+            {
+                "recurrence_id": "rec-daily",
+                "resumed_at": "2026-04-25T10:00:00Z",
+                "resumed_by_member_id": "m1",
+            },
+            "active",
+        ),
+        (
+            "recurrence.ended",
+            {
+                "recurrence_id": "rec-daily",
+                "ended_at": "2026-04-26T10:00:00Z",
+                "ended_by_member_id": "m1",
+                "reason": "No longer applicable",
+            },
+            "ended",
+        ),
+    ):
+        event_id = await log.append(_envelope(event_type, payload))
+        await bus.notify(event_id)
+        await _wait_for_checkpoint(bus, "projection:recurrences", event_id)
+        row = get_recurrence(
+            runner.connection("recurrences"), _S("tenant-a"), recurrence_id="rec-daily"
+        )
+        assert row is not None
+        assert row["status"] == status
+        assert row["last_event_id"] == event_id
+    assert all_active(runner.connection("recurrences"), _S("tenant-a")) == []
+    await runner.rebuild("recurrences")
+    rebuilt = get_recurrence(
+        runner.connection("recurrences"), _S("tenant-a"), recurrence_id="rec-daily"
+    )
+    assert rebuilt is not None and rebuilt["status"] == "ended"
 
 
 async def test_recurrence_completed_weekly_advances_by_week(
@@ -586,3 +649,31 @@ async def test_ordered_routine_occurrence_progress_and_rebuild(
         include_closed=True,
     )[0]
     assert rebuilt == closed
+
+    paused = await log.append(
+        _envelope(
+            "routine.paused",
+            {
+                "routine_id": "routine-evening",
+                "paused_at": "2034-03-03T12:00:00Z",
+                "paused_by_member_id": "test_actor",
+                "reason": "Travel",
+            },
+            owner_scope=owner,
+        )
+    )
+    await bus.notify(paused)
+    await _wait_for_checkpoint(bus, "projection:recurrences", paused)
+    routine = get_routine(
+        runner.connection("recurrences"), _S(), routine_id="routine-evening"
+    )
+    assert routine is not None and routine["status"] == "paused"
+    assert (
+        routine_occurrences_at(
+            runner.connection("recurrences"),
+            _S(),
+            member_party_id="test_actor",
+            as_of_iso="2034-03-03T19:15:00Z",
+        )
+        == []
+    )

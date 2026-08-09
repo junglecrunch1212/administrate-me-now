@@ -30,6 +30,7 @@ from adminme.projections.places_assets_accounts.queries import (
     list_accounts_by_kind,
     list_assets_for_place,
     list_places,
+    registry_items,
 )
 from adminme.projections.runner import ProjectionRunner
 
@@ -324,6 +325,67 @@ async def test_account_updated_changes_fields(rig: dict[str, Any]) -> None:
     row = get_account(conn, _S("tenant-a"), account_id="ac1")
     assert row is not None
     assert row["status"] == "dormant"
+
+
+@pytest.mark.parametrize(
+    ("kind", "added_type", "added_payload", "object_id"),
+    [
+        ("place", "place.added", _place_payload(), "pl1"),
+        ("asset", "asset.added", _asset_payload(), "a1"),
+        ("account", "account.added", _account_payload(), "ac1"),
+    ],
+)
+async def test_registry_archive_and_restore_are_reversible_and_replayable(
+    rig: dict[str, Any],
+    kind: str,
+    added_type: str,
+    added_payload: dict[str, Any],
+    object_id: str,
+) -> None:
+    log = rig["log"]
+    bus = rig["bus"]
+    runner = rig["runner"]
+    await log.append(_envelope(added_type, added_payload))
+    archived = await log.append(
+        _envelope(
+            f"{kind}.archived",
+            {
+                f"{kind}_id": object_id,
+                "archived_at": "2026-04-23T14:00:00Z",
+                "archived_by_party_id": "m1",
+                "reason": "No longer active",
+            },
+        )
+    )
+    await bus.notify(archived)
+    await _wait_for_checkpoint(bus, "projection:places_assets_accounts", archived)
+    conn = runner.connection("places_assets_accounts")
+    [row] = registry_items(conn, _S("tenant-a"))[f"{kind}s"]
+    assert row["lifecycle_status"] == "archived"
+    assert row["archive_reason"] == "No longer active"
+
+    restored = await log.append(
+        _envelope(
+            f"{kind}.restored",
+            {
+                f"{kind}_id": object_id,
+                "restored_at": "2026-04-24T14:00:00Z",
+                "restored_by_party_id": "m1",
+            },
+        )
+    )
+    await bus.notify(restored)
+    await _wait_for_checkpoint(bus, "projection:places_assets_accounts", restored)
+    [row] = registry_items(conn, _S("tenant-a"))[f"{kind}s"]
+    assert row["lifecycle_status"] == "active"
+    assert row["archived_at"] is None
+
+    pre = tuple(row.values())
+    await runner.rebuild("places_assets_accounts")
+    [rebuilt] = registry_items(
+        runner.connection("places_assets_accounts"), _S("tenant-a")
+    )[f"{kind}s"]
+    assert tuple(rebuilt.values()) == pre
 
 
 # ------------------------------------------------------------------

@@ -131,7 +131,7 @@ async def test_exact_evidence_candidate_is_sanitized_and_sent_only_to_triage() -
         assert skill_id == "skill:extract_note_semantics"
         assert inputs["body_text"] == "Please return the school form by Friday."
         assert skill_ctx.owner_scope == "private:member-a"
-        assert skill_ctx.invocation_idempotency_key == "note-semantics:v3:note-event-1"
+        assert skill_ctx.invocation_idempotency_key == "note-semantics:v4:note-event-1"
         return {
             "candidates": [
                 {

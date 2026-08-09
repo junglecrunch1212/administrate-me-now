@@ -39,12 +39,14 @@ def list_places(
 ) -> list[dict[str, Any]]:
     if kind is None:
         rows = conn.execute(
-            "SELECT * FROM places WHERE tenant_id = ? ORDER BY display_name ASC",
+            "SELECT * FROM places WHERE tenant_id = ? AND lifecycle_status='active' "
+            "ORDER BY display_name ASC",
             (session.tenant_id,),
         ).fetchall()
     else:
         rows = conn.execute(
             "SELECT * FROM places WHERE tenant_id = ? AND kind = ? "
+            "AND lifecycle_status='active' "
             "ORDER BY display_name ASC",
             (session.tenant_id, kind),
         ).fetchall()
@@ -72,6 +74,7 @@ def list_assets_for_place(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM assets WHERE tenant_id = ? AND linked_place = ? "
+        "AND lifecycle_status='active' "
         "ORDER BY display_name ASC",
         (session.tenant_id, place_id),
     ).fetchall()
@@ -99,6 +102,7 @@ def list_accounts_by_kind(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT * FROM accounts WHERE tenant_id = ? AND kind = ? "
+        "AND lifecycle_status='active' "
         "ORDER BY display_name ASC",
         (session.tenant_id, kind),
     ).fetchall()
@@ -117,6 +121,7 @@ def accounts_renewing_before(
         SELECT * FROM accounts
          WHERE tenant_id = ?
            AND status = 'active'
+           AND lifecycle_status = 'active'
            AND next_renewal IS NOT NULL
            AND next_renewal <= ?
          ORDER BY next_renewal ASC
@@ -138,6 +143,7 @@ def linked_to_party(
           FROM place_associations pa
           JOIN places p ON p.tenant_id = pa.tenant_id AND p.place_id = pa.place_id
          WHERE pa.tenant_id = ? AND pa.party_id = ?
+           AND p.lifecycle_status = 'active'
          ORDER BY p.display_name ASC
         """,
         (session.tenant_id, party_id),
@@ -148,12 +154,14 @@ def linked_to_party(
           FROM asset_owners ao
           JOIN assets a ON a.tenant_id = ao.tenant_id AND a.asset_id = ao.asset_id
          WHERE ao.tenant_id = ? AND ao.party_id = ?
+           AND a.lifecycle_status = 'active'
          ORDER BY a.display_name ASC
         """,
         (session.tenant_id, party_id),
     ).fetchall()
     accounts = conn.execute(
         "SELECT * FROM accounts WHERE tenant_id = ? AND organization = ? "
+        "AND lifecycle_status='active' "
         "ORDER BY display_name ASC",
         (session.tenant_id, party_id),
     ).fetchall()
@@ -162,3 +170,24 @@ def linked_to_party(
         "assets": filter_rows(session, [dict(row) for row in assets]),
         "accounts": filter_rows(session, [dict(row) for row in accounts]),
     }
+
+
+def registry_items(
+    conn: sqlcipher3.Connection,
+    session: Session,
+) -> dict[str, list[dict[str, Any]]]:
+    """All visible registry objects, including explicitly archived history."""
+    result: dict[str, list[dict[str, Any]]] = {}
+    for kind, table, id_column in (
+        ("places", "places", "place_id"),
+        ("assets", "assets", "asset_id"),
+        ("accounts", "accounts", "account_id"),
+    ):
+        rows = conn.execute(
+            f"""SELECT * FROM {table}
+                 WHERE tenant_id=?
+                 ORDER BY lifecycle_status ASC, display_name ASC, {id_column} ASC""",
+            (session.tenant_id,),
+        ).fetchall()
+        result[kind] = filter_rows(session, [dict(row) for row in rows])
+    return result

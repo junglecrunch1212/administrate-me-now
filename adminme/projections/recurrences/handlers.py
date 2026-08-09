@@ -49,10 +49,14 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         apply_recurrence_completed(envelope, conn)
     elif event_type == "recurrence.updated":
         apply_recurrence_updated(envelope, conn)
+    elif event_type in {"recurrence.paused", "recurrence.resumed", "recurrence.ended"}:
+        apply_recurrence_lifecycle(envelope, conn)
     elif event_type == "routine.defined":
         apply_routine_defined(envelope, conn)
     elif event_type == "routine.step_outcome_recorded":
         apply_routine_step_outcome(envelope, conn)
+    elif event_type in {"routine.paused", "routine.resumed", "routine.ended"}:
+        apply_routine_lifecycle(envelope, conn)
 
 
 def apply_recurrence_added(
@@ -121,6 +125,28 @@ def apply_recurrence_completed(
     dtstart = _parse_iso(row["next_occurrence"])
     after = _parse_iso(p["completed_at"])
     next_occ = _advance_rrule(rrule_str, dtstart, after)
+    occurrence_date = str(p.get("occurrence_date") or row["next_occurrence"])[:10]
+    conn.execute(
+        """
+        INSERT INTO recurrence_occurrences (
+            tenant_id, recurrence_id, occurrence_date, outcome,
+            recorded_at, recorded_by_member_id, last_event_id
+        ) VALUES (?, ?, ?, 'completed', ?, ?, ?)
+        ON CONFLICT(tenant_id, recurrence_id, occurrence_date) DO UPDATE SET
+            outcome = excluded.outcome,
+            recorded_at = excluded.recorded_at,
+            recorded_by_member_id = excluded.recorded_by_member_id,
+            last_event_id = excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            p["recurrence_id"],
+            occurrence_date,
+            p["completed_at"],
+            p.get("completed_by_party_id"),
+            envelope["event_id"],
+        ),
+    )
     conn.execute(
         """
         UPDATE recurrences
@@ -174,6 +200,54 @@ def apply_recurrence_updated(
         f"UPDATE recurrences SET {assignments} "
         "WHERE tenant_id = ? AND recurrence_id = ?",
         params,
+    )
+
+
+def apply_recurrence_lifecycle(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    action = str(envelope["type"]).removeprefix("recurrence.")
+    p = envelope["payload"]
+    status = {"paused": "paused", "resumed": "active", "ended": "ended"}[action]
+    at = p[f"{action}_at"]
+    conn.execute(
+        """
+        UPDATE recurrences
+           SET status = ?, lifecycle_at = ?, lifecycle_reason = ?, last_event_id = ?
+         WHERE tenant_id = ? AND recurrence_id = ?
+        """,
+        (
+            status,
+            at,
+            p.get("reason"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["recurrence_id"],
+        ),
+    )
+
+
+def apply_routine_lifecycle(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    action = str(envelope["type"]).removeprefix("routine.")
+    p = envelope["payload"]
+    status = {"paused": "paused", "resumed": "active", "ended": "ended"}[action]
+    at = p[f"{action}_at"]
+    conn.execute(
+        """
+        UPDATE routines
+           SET status = ?, lifecycle_at = ?, lifecycle_reason = ?, last_event_id = ?
+         WHERE tenant_id = ? AND routine_id = ?
+        """,
+        (
+            status,
+            at,
+            p.get("reason"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p["routine_id"],
+        ),
     )
 
 

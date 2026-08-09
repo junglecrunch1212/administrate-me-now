@@ -50,6 +50,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.events.registry import registry
 from adminme.events.schemas.lists import ListItemAddedV1, ListItemV3
 from adminme.lib.adapters import (
@@ -724,7 +725,48 @@ async def test_poll_emit_payload_validates_against_list_item_added_v1() -> None:
     assert instance.due is not None and instance.due.day == 20
     assert instance.priority == 0
     assert instance.completed is False
-    assert instance.sync_cycle_id == "corr-gtasks-test"
+    assert instance.sync_cycle_id.startswith("google-tasks-revision:")
+
+
+async def test_provider_revision_dedupe_survives_adapter_restart(
+    tmp_path: Path,
+) -> None:
+    task = _make_task(
+        task_id="gtask-restart-001",
+        title="Stable provider task",
+        status="needsAction",
+        updated="2026-05-18T11:00:00.000Z",
+    )
+    cursor_store = AdapterCursorStore(tmp_path / "google-tasks-cursors.sqlite3")
+    event_log = _FakeEventLog()
+
+    first = _make_adapter(service=_FakeTasksService(list_pages=[{"items": [task]}]))
+    first.instance_name = "google-tasks-primary"
+    first_ctx = AdapterContext(
+        event_sink=event_log,  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "first-cycle",
+        now_factory=lambda: _FROZEN_NOW,
+        cursor_store=cursor_store,
+    )
+    assert await first._poll_once(ctx=first_ctx) == 2
+
+    restarted = _make_adapter(service=_FakeTasksService(list_pages=[{"items": [task]}]))
+    restarted.instance_name = "google-tasks-primary"
+    restarted_ctx = AdapterContext(
+        event_sink=event_log,  # type: ignore[arg-type]
+        config={},
+        correlation_id_factory=lambda: "restart-cycle",
+        now_factory=lambda: _FROZEN_NOW,
+        cursor_store=cursor_store,
+    )
+    assert await restarted._poll_once(ctx=restarted_ctx) == 0
+    assert restarted.status().extra["restart_dedupe"] == "durable"
+    assert (
+        len([call for call in event_log.calls if call["type"] == "list_item.added"])
+        == 1
+    )
+    cursor_store.close()
 
 
 async def test_poll_emit_priority_is_unspecified_per_google_contract() -> None:

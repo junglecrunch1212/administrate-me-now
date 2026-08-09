@@ -13,7 +13,7 @@ import hmac
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
@@ -143,11 +143,21 @@ class LifecycleRequest(ContextRequest):
     request_id: str = Field(min_length=1, max_length=120)
     item_kind: Literal["task", "commitment"]
     item_id: str = Field(min_length=1)
-    action: Literal["complete", "defer", "snooze", "block", "unblock"]
+    action: Literal[
+        "complete",
+        "defer",
+        "snooze",
+        "block",
+        "unblock",
+        "cancel",
+        "reopen",
+        "delegate",
+    ]
     expected_last_event_id: str = Field(min_length=1)
     until: str | None = None
     reason: str | None = Field(default=None, max_length=500)
     note: str | None = Field(default=None, max_length=500)
+    delegate_to_party_id: str | None = Field(default=None, min_length=1)
 
 
 class CorrectionRequest(ContextRequest):
@@ -866,7 +876,16 @@ async def _task_lifecycle(
     body: LifecycleRequest, request: Request, session: Session
 ) -> dict[str, Any]:
     runtime = _runtime(request)
-    event_type = "task.completed" if body.action == "complete" else "task.updated"
+    event_types = {
+        "complete": "task.completed",
+        "defer": "task.deferred",
+        "snooze": "task.snoozed",
+        "block": "task.blocked",
+        "unblock": "task.unblocked",
+        "cancel": "task.cancelled",
+        "reopen": "task.reopened",
+    }
+    event_type = event_types[body.action]
     append_request_id = f"{body.item_id}:{body.request_id}"
     request_fingerprint = _fingerprint(
         body.model_dump(mode="json", exclude={"provenance"})
@@ -899,55 +918,84 @@ async def _task_lifecycle(
         )
     now = EventEnvelope.now_utc_iso()
     payload: dict[str, Any]
+    active_states = {"inbox", "next", "in_progress", "waiting_on", "deferred"}
     if body.action == "complete":
+        if row["status"] not in active_states:
+            raise HTTPException(409, "only active tasks can be completed")
         payload = {
             "task_id": body.item_id,
             "completed_by_member_id": session.auth_member_id,
             "completed_at": now,
             "note": body.note,
         }
-    else:
-        statuses = {
-            "defer": "deferred",
-            "snooze": "deferred",
-            "block": "waiting_on",
-            "unblock": "next",
-        }
+    elif body.action in {"defer", "snooze"}:
+        if row["status"] not in active_states:
+            raise HTTPException(409, "only active tasks can be held")
         if body.action in {"defer", "snooze"} and not body.until:
             raise HTTPException(409, "until is required")
-        if body.action == "block" and not body.reason:
-            raise HTTPException(409, "reason is required")
-        updates: dict[str, Any] = {}
-        if body.until:
+        try:
+            activation = datetime.fromisoformat(
+                cast(str, body.until).strip().replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                422, "until must be a valid date or date and time"
+            ) from exc
+        if activation.tzinfo is None:
             try:
-                activation = datetime.fromisoformat(
-                    body.until.strip().replace("Z", "+00:00")
+                activation = activation.replace(
+                    tzinfo=ZoneInfo(runtime.settings.instance.timezone)
                 )
-            except ValueError as exc:
-                raise HTTPException(
-                    422, "until must be a valid date or date and time"
-                ) from exc
-            if activation.tzinfo is None:
-                try:
-                    activation = activation.replace(
-                        tzinfo=ZoneInfo(runtime.settings.instance.timezone)
-                    )
-                except ZoneInfoNotFoundError as exc:
-                    raise HTTPException(
-                        503, "instance timezone is unavailable"
-                    ) from exc
-            updates["available_from"] = activation.isoformat()
-        if body.action == "block":
-            updates["waiting_on"] = body.reason
-        if body.action == "unblock":
-            updates["waiting_on"] = None
+            except ZoneInfoNotFoundError as exc:
+                raise HTTPException(503, "instance timezone is unavailable") from exc
+        prefix = "deferred" if body.action == "defer" else "snoozed"
         payload = {
             "task_id": body.item_id,
-            "updated_at": now,
-            "updated_by_party_id": session.auth_member_id,
+            f"{prefix}_at": now,
+            f"{prefix}_until": activation.isoformat(),
+            f"{prefix}_by_member_id": session.auth_member_id,
+        }
+        if body.action == "defer":
+            payload["reason"] = body.reason
+    elif body.action == "block":
+        if row["status"] not in {"inbox", "next", "in_progress"}:
+            raise HTTPException(409, "only executable tasks can be blocked")
+        if not body.reason:
+            raise HTTPException(409, "reason is required")
+        payload = {
+            "task_id": body.item_id,
+            "blocked_at": now,
+            "blocked_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+    elif body.action == "unblock":
+        if row["status"] != "waiting_on":
+            raise HTTPException(409, "task is not blocked")
+        payload = {
+            "task_id": body.item_id,
+            "unblocked_at": now,
+            "unblocked_by_member_id": session.auth_member_id,
+            "note": body.note,
+        }
+    elif body.action == "cancel":
+        if row["status"] not in active_states:
+            raise HTTPException(409, "only active tasks can be abandoned")
+        payload = {
+            "task_id": body.item_id,
+            "cancelled_at": now,
+            "cancelled_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+    else:
+        if row["status"] not in {"done", "cancelled", "dismissed"}:
+            raise HTTPException(
+                409, "only completed or abandoned tasks can be reopened"
+            )
+        payload = {
+            "task_id": body.item_id,
+            "reopened_at": now,
+            "reopened_by_member_id": session.auth_member_id,
             "previous_status": row["status"],
-            "new_status": statuses[body.action],
-            "field_updates": updates,
         }
     await _guard(runtime, session, event_type, payload)
     event_id, duplicate = await _append(
@@ -981,6 +1029,10 @@ async def lifecycle(body: LifecycleRequest, request: Request) -> dict[str, Any]:
     if session.auth_role == "child" and body.item_kind != "task":
         raise HTTPException(403, "child chat may update only the child's own tasks")
     if body.item_kind == "task":
+        if body.action == "delegate":
+            raise HTTPException(
+                422, "task delegation is not a commitment lifecycle action"
+            )
         result = await _task_lifecycle(body, request, session)
     else:
         result = await core.lifecycle(
@@ -992,6 +1044,7 @@ async def lifecycle(body: LifecycleRequest, request: Request) -> dict[str, Any]:
                 until=body.until,
                 reason=body.reason,
                 note=body.note,
+                delegate_to_party_id=body.delegate_to_party_id,
             ),
             request,
             session,

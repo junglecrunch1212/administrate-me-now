@@ -359,6 +359,19 @@ async def _seed_finance_truth(runtime: Any) -> None:
                 "active": True,
             },
         ),
+        (
+            "finance.goal_set",
+            {
+                "goal_id": "fixture-emergency-fund",
+                "name": "Emergency fund",
+                "target_minor": 1_000_000,
+                "current_minor": 250_000,
+                "target_date": "2027-08-01",
+                "priority": 10,
+                "status": "active",
+                "notes": "Reviewed household plan",
+            },
+        ),
     ):
         last = await runtime.events.write(
             EventEnvelope(
@@ -686,6 +699,7 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert cockpit["summary"]["base_monthly_expenses_minor"] == 400_000
         assert cockpit["budgets"][0]["state"] == "watch"
         assert cockpit["focus"]["state"] == "budget_watch"
+        assert cockpit["goals"][0]["status"] == "active"
         assert data["contract"] == {
             "workbook_planning_inputs_authoritative": True,
             "provider_observations_protected": True,
@@ -705,6 +719,59 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert other_adult["data_health"]["account_count"] == 0
         assert other_adult["summary"]["cash_minor"] == 0
 
+        goal = cockpit["goals"][0]
+        paused = client.post(
+            f"/api/member/v1/finance/goals/{goal['goal_id']}/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-finance-goal-pause",
+                "expected_last_event_id": goal["last_event_id"],
+                "action": "pause",
+                "reason": "Review next quarter",
+            },
+        )
+        assert paused.status_code == 200, paused.text
+        assert paused.json()["goal"]["status"] == "paused"
+        completed_while_paused = client.post(
+            f"/api/member/v1/finance/goals/{goal['goal_id']}/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-finance-goal-invalid-complete",
+                "expected_last_event_id": paused.json()["goal"]["last_event_id"],
+                "action": "complete",
+            },
+        )
+        assert completed_while_paused.status_code == 409
+        reopened = client.post(
+            f"/api/member/v1/finance/goals/{goal['goal_id']}/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-finance-goal-reopen",
+                "expected_last_event_id": paused.json()["goal"]["last_event_id"],
+                "action": "reopen",
+            },
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["goal"]["status"] == "active"
+        completed = client.post(
+            f"/api/member/v1/finance/goals/{goal['goal_id']}/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "gate7-finance-goal-complete",
+                "expected_last_event_id": reopened.json()["goal"]["last_event_id"],
+                "action": "complete",
+                "reason": "Target reached",
+            },
+        )
+        assert completed.status_code == 200, completed.text
+        assert completed.json()["goal"]["status"] == "complete"
+        assert (
+            client.get(
+                "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+            ).json()["cockpit"]["goals"][0]["status"]
+            == "complete"
+        )
+
         assert runtime.xlsx_projection is not None
         assert runtime.xlsx_reverse is not None
         client.portal.call(
@@ -717,6 +784,14 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         budget_sheet = workbook["Budget vs Actual"]
         assert budget_sheet.cell(5, 2).value == "Groceries"
         budget_sheet.cell(5, 3, value=150)
+        goal_sheet = workbook["Goals"]
+        goal_headers = {
+            str(cell.value): index
+            for index, cell in enumerate(goal_sheet[4], start=1)
+            if cell.value is not None
+        }
+        assert goal_sheet.cell(5, goal_headers["status"]).value == "complete"
+        goal_sheet.cell(5, goal_headers["status"], value="active")
         workbook.save(workbook_path)
         workbook.close()
         client.portal.call(runtime.xlsx_reverse.run_cycle_now, FINANCE_WORKBOOK_NAME)
@@ -729,6 +804,13 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         ).json()["cockpit"]
         assert after_valid_save["budgets"][0]["planned_minor"] == 15_000
         assert after_valid_save["workbook"]["validation_state"] == "valid"
+        assert after_valid_save["goals"][0]["status"] == "active"
+        assert (
+            client.portal.call(_events, runtime, "finance.goal_reopened")[-1][
+                "payload"
+            ]["previous_status"]
+            == "complete"
+        )
 
         # A reviewed workbook import is one principal action surface, but its
         # rows remain distinct typed facts.  Prove the xlsx daemon's scoped
@@ -1369,6 +1451,23 @@ def test_reminders_surface_replays_context_and_refuses_unconfigured_writes(
         assert completed.status_code == 200, completed.text
         assert completed.json()["commitment"]["status"] == "done"
         assert completed.json()["next_action"] != before
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:reward_dispatch",
+            completed.json()["event_id"],
+        )
+        scoreboard = client.get(
+            "/api/member/v1/surfaces/scoreboard", headers=HEADERS[PRINCIPAL]
+        ).json()["scoreboard"]
+        reward = next(
+            item
+            for item in scoreboard["reward_evidence"]
+            if item["triggering_commitment_id"] == commitment_id
+        )
+        assert (
+            reward["reason"] == f"Completion evidence: {completed.json()['event_id']}"
+        )
+        assert scoreboard["dual_path_reward_evidence"] is True
 
 
 def test_comms_is_member_isolated_deterministic_and_locally_controllable(
@@ -1470,6 +1569,120 @@ def test_comms_is_member_isolated_deterministic_and_locally_controllable(
         )
 
 
+def test_confirmed_commitments_can_be_cancelled_or_delegated_without_reassigning(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        delegate_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_050_000_100,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="party.created",
+                schema_version=1,
+                occurred_at="2026-08-06T12:00:01Z",
+                source_adapter="gate7-fixture-crm",
+                source_account_id=PRINCIPAL,
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                idempotency_key="gate7:commitment-delegate-party",
+                payload={
+                    "party_id": ADULT,
+                    "kind": "person",
+                    "display_name": "Fixture second adult",
+                    "sort_name": "Adult, Fixture",
+                    "nickname": None,
+                    "pronouns": None,
+                    "notes": None,
+                    "attributes": {},
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "parties", delegate_event_id)
+
+        def seed_and_approve(suffix: str) -> dict[str, Any]:
+            seeded = client.post(
+                "/api/comms/v1/demo/canonical-message",
+                headers=HEADERS[PRINCIPAL],
+                json={
+                    "request_id": f"gate7-commitment-{suffix}",
+                    "native_message_id": f"gate7-commitment-native-{suffix}",
+                    "body": "Could you reply today with the household update?",
+                    "received_at": "2026-08-04T12:05:00Z",
+                },
+            )
+            assert seeded.status_code == 200, seeded.text
+            commitment_id = seeded.json()["output"]["commitment_id"]
+            pending = client.get(
+                "/api/comms/v1/commitments/pending", headers=HEADERS[PRINCIPAL]
+            ).json()["items"]
+            proposal = next(
+                item for item in pending if item["commitment_id"] == commitment_id
+            )
+            approved = client.post(
+                f"/api/comms/v1/commitments/{commitment_id}/approve",
+                headers=HEADERS[PRINCIPAL],
+                json={
+                    "request_id": f"gate7-commitment-approve-{suffix}",
+                    "expected_last_event_id": proposal["last_event_id"],
+                    "send_acknowledgement": False,
+                },
+            )
+            assert approved.status_code == 200, approved.text
+            return approved.json()["commitment"]
+
+        cancelled = seed_and_approve("cancel")
+        cancelled_response = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "commitment",
+                "item_id": cancelled["commitment_id"],
+                "action": "cancel",
+                "expected_last_event_id": cancelled["last_event_id"],
+                "request_id": "gate7-commitment-cancel-action",
+                "reason": "Promise explicitly released",
+            },
+        )
+        assert cancelled_response.status_code == 200, cancelled_response.text
+        assert cancelled_response.json()["commitment"]["status"] == "cancelled"
+        assert cancelled_response.json()["commitment"]["completed_at"] is None
+
+        delegated = seed_and_approve("delegate")
+        delegated_response = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "commitment",
+                "item_id": delegated["commitment_id"],
+                "action": "delegate",
+                "expected_last_event_id": delegated["last_event_id"],
+                "request_id": "gate7-commitment-delegate-action",
+                "delegate_to_party_id": ADULT,
+            },
+        )
+        assert delegated_response.status_code == 200, delegated_response.text
+        result = delegated_response.json()["commitment"]
+        assert result["status"] == "delegated"
+        assert result["owed_by_party"] == PRINCIPAL
+        assert result["delegated_to_party"] == ADULT
+
+        scoreboard = client.get(
+            "/api/member/v1/surfaces/scoreboard", headers=HEADERS[PRINCIPAL]
+        )
+        assert scoreboard.status_code == 200, scoreboard.text
+        outcomes = scoreboard.json()["scoreboard"]["recent_outcomes"]
+        by_id = {item.get("commitment_id"): item for item in outcomes}
+        assert by_id[cancelled["commitment_id"]]["outcome_kind"] == "cancelled"
+        assert by_id[delegated["commitment_id"]]["outcome_kind"] == "delegated"
+
+
 def test_today_is_one_deterministic_brief_with_typed_member_actions(
     tmp_path: Path,
 ) -> None:
@@ -1494,7 +1707,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         assert any(
             item["id"] == "gate7-morning-reset"
             and item["kind"] == "recurrence"
-            and item["actions"] == ["complete", "evidence"]
+            and item["actions"] == ["complete", "pause", "evidence"]
             for item in brief["plan"]
         )
         routine_item = next(
@@ -1505,6 +1718,7 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         assert routine_item["actions"] == [
             "complete_step",
             "skip_step",
+            "pause",
             "evidence",
         ]
         view_as_headers = {
@@ -1556,6 +1770,38 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         )
         assert retry.status_code == 200, retry.text
         assert retry.json()["duplicate"] is True
+
+        paused_recurrence = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "recurrence",
+                "item_id": "gate7-morning-reset",
+                "action": "pause",
+                "expected_last_event_id": completed.json()["recurrence"][
+                    "last_event_id"
+                ],
+                "request_id": "gate7-today-recurrence-pause",
+                "reason": "Temporary pause",
+            },
+        )
+        assert paused_recurrence.status_code == 200, paused_recurrence.text
+        assert paused_recurrence.json()["recurrence"]["status"] == "paused"
+        resumed_recurrence = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "recurrence",
+                "item_id": "gate7-morning-reset",
+                "action": "resume",
+                "expected_last_event_id": paused_recurrence.json()["recurrence"][
+                    "last_event_id"
+                ],
+                "request_id": "gate7-today-recurrence-resume",
+            },
+        )
+        assert resumed_recurrence.status_code == 200, resumed_recurrence.text
+        assert resumed_recurrence.json()["recurrence"]["status"] == "active"
 
         first_routine_step = client.post(
             "/api/member/v1/routines/gate7-evening-landing/occurrences/"
@@ -1611,6 +1857,48 @@ def test_today_is_one_deterministic_brief_with_typed_member_actions(
         assert all(
             item["id"] != "gate7-evening-landing"
             for item in final_routine_step.json()["brief"]["plan"]
+        )
+        paused_routine = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "routine",
+                "item_id": "gate7-evening-landing",
+                "action": "pause",
+                "expected_last_event_id": seeded["routine"],
+                "request_id": "gate7-today-routine-pause",
+                "reason": "Travel",
+            },
+        )
+        assert paused_routine.status_code == 200, paused_routine.text
+        assert paused_routine.json()["routine"]["status"] == "paused"
+        ended_routine = client.post(
+            "/api/member/v1/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "item_kind": "routine",
+                "item_id": "gate7-evening-landing",
+                "action": "end",
+                "expected_last_event_id": paused_routine.json()["routine"][
+                    "last_event_id"
+                ],
+                "request_id": "gate7-today-routine-end",
+                "reason": "Replaced by another routine",
+            },
+        )
+        assert ended_routine.status_code == 200, ended_routine.text
+        assert ended_routine.json()["routine"]["status"] == "ended"
+
+        scoreboard = client.get(
+            "/api/member/v1/surfaces/scoreboard", headers=HEADERS[PRINCIPAL]
+        ).json()["scoreboard"]
+        assert any(
+            item["id"] == "gate7-evening-landing" and item["status"] == "ended"
+            for item in scoreboard["rhythms"]
+        )
+        assert any(
+            item["id"] == "gate7-morning-reset" and item["status"] == "completed"
+            for item in scoreboard["rhythm_outcomes"]
         )
 
         outcome = client.post(
@@ -2191,6 +2479,36 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
     instance.mkdir()
     app = create_application(_settings_control_fixture(instance))
     with TestClient(app) as client:
+        runtime = app.state.runtime
+        registry_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_050_000_300,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="account.added",
+                schema_version=1,
+                occurred_at="2026-08-06T12:00:03Z",
+                source_adapter="gate7-settings-fixture",
+                source_account_id=PRINCIPAL,
+                owner_scope=f"private:{PRINCIPAL}",
+                visibility_scope=f"private:{PRINCIPAL}",
+                sensitivity="normal",
+                idempotency_key="gate7:settings-registry-account",
+                payload={
+                    "account_id": "gate7-household-utility",
+                    "display_name": "Fixture utility",
+                    "organization_party_id": "fixture-utility-provider",
+                    "kind": "utility",
+                    "status": "active",
+                    "attributes": {},
+                },
+            ),
+        )
+        client.portal.call(
+            runtime.wait_for_projection,
+            "places_assets_accounts",
+            registry_event_id,
+        )
         bootstrap = client.get("/api/member/v1/bootstrap", headers=HEADERS[PRINCIPAL])
         assert bootstrap.status_code == 200
         assert bootstrap.json()["member"] == {
@@ -2212,6 +2530,8 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
         settings = settings_response.json()
         assert settings["control"]["identity"]["can_mutate"] is True
         assert settings["system"]["runtime"]["projection_count"] == 14
+        [registry_account] = settings["registry"]["accounts"]
+        assert registry_account["lifecycle_status"] == "active"
         [connection] = settings["control"]["connections"]
         assert connection["id"] == "gmail-fixture"
         assert connection["setup"] == "configured"
@@ -2377,6 +2697,32 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
             },
         )
         assert stale.status_code == 409
+
+        archived = client.post(
+            "/api/member/v1/registry/account/gate7-household-utility/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac31-registry-archive",
+                "expected_last_event_id": registry_account["last_event_id"],
+                "action": "archive",
+                "reason": "Fixture account retired",
+            },
+        )
+        assert archived.status_code == 202, archived.text
+        archived_item = archived.json()["item"]
+        assert archived_item["lifecycle_status"] == "archived"
+        assert archived_item["status"] == "active"
+        restored = client.post(
+            "/api/member/v1/registry/account/gate7-household-utility/lifecycle",
+            headers=HEADERS[PRINCIPAL],
+            json={
+                "request_id": "ac31-registry-restore",
+                "expected_last_event_id": archived_item["last_event_id"],
+                "action": "restore",
+            },
+        )
+        assert restored.status_code == 202, restored.text
+        assert restored.json()["item"]["lifecycle_status"] == "active"
 
         events = client.portal.call(
             _events,

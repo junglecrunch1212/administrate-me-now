@@ -1,5 +1,19 @@
 # Migration map
 
+CO-010 update (2026-08-09): whole-life source and lifecycle coverage is
+**HARDENED IN THE REVIEWED CANDIDATE**. Existing immutable source and domain
+events are preserved. Message and Notes pipeline version changes request a
+full durable replay, so retained facts are reassessed without becoming new
+source observations. Tasks, Commitments, Recurrences, Routines, Places,
+Assets, Accounts, and Finance Goals gain additive event schemas and additive
+projection columns/tables only. Google Tasks persists content fingerprints
+beside its durable cursor so an unchanged restart emits nothing. Finance
+workbook goal status changes are modernized into typed pause/complete/reopen
+events; Plaid facts and workbook planning authority remain separate. Older
+code safely ignores the new event types, but rollback after new lifecycle
+actions will not project those states; the immutable prior release therefore
+remains available and forward reactivation must replay from event zero.
+
 CO-009 update (2026-08-09): Reminders composition is **MODERNIZED** from a
 Lists-only cockpit to a typed read-time union of scope-filtered Tasks and
 provider items. No event or projection is merged. Existing Task and

@@ -15,10 +15,16 @@ from adminme.projections.tasks import handlers
 
 class TasksProjection(Projection):
     name = "tasks"
-    version = 3
+    version = 4
     subscribes_to = [
         "task.created",
         "task.completed",
+        "task.deferred",
+        "task.snoozed",
+        "task.blocked",
+        "task.unblocked",
+        "task.cancelled",
+        "task.reopened",
         "task.updated",
         "task.deleted",
         "list_item.completed",
@@ -34,6 +40,12 @@ class TasksProjection(Projection):
         columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
         if "available_from" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN available_from TEXT")
+        if "lifecycle_action" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN lifecycle_action TEXT")
+        if "lifecycle_at" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN lifecycle_at TEXT")
+        if "lifecycle_reason" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN lifecycle_reason TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_available "
             "ON tasks(tenant_id, available_from)"

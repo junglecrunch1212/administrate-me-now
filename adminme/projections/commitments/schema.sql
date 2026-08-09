@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS commitments (
     kind                  TEXT NOT NULL,
     description           TEXT NOT NULL,
     due_at                TEXT,
-    status                TEXT NOT NULL,          -- pending | snoozed | deferred | blocked | done | cancelled | delegated
+    status                TEXT NOT NULL,          -- pending | snoozed | deferred | blocked | done | cancelled | delegated | expired
     confidence            REAL,
     source_interaction_id TEXT,                   -- REFERENCES interactions(interaction_id)
     source_skill          TEXT,
@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     deferred_until        TEXT,
     lifecycle_at          TEXT,
     lifecycle_actor       TEXT,
+    lifecycle_reason      TEXT,
+    delegated_to_party    TEXT,                   -- original obligation remains owed_by its author
     owner_scope           TEXT NOT NULL,
     visibility_scope      TEXT NOT NULL,
     sensitivity           TEXT NOT NULL DEFAULT 'normal'

@@ -53,8 +53,16 @@ Also extract possible household candidates for human review:
   appointment, or household rhythm;
 - commitment — only for an outbound message where the member explicitly says
   they will, promise to, agree to, or commit to take an action;
-- list, list_item, or party_identifier only when the language explicitly
-  supports that type.
+- list or list_item only when the language explicitly supports that type;
+- party_identifier — an email address, phone number, or handle explicitly
+  associated with an identifiable person already in household context;
+- party_candidate — a named person or organization that may belong in People;
+- party_relationship — an explicit relationship between two named parties;
+- relationship_fact — an explicit birthday, important date, employer, role,
+  preference, address, or other person fact.
+
+People candidates must remain proposals. Do not resolve identity, choose an
+existing party, or infer a relationship beyond the exact words supplied.
 
 Do not treat an already-paid receipt, a one-time security code, or marketing
 copy as an action unless the text separately asks the member to act. For an
@@ -76,7 +84,7 @@ Return ONLY valid JSON matching this schema:
   "person_to_person": <boolean>,
   "deadline": <string or null>,
   "candidates": [{
-    "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "recurrence" | "list" | "list_item" | "party_identifier",
+    "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "recurrence" | "list" | "list_item" | "party_identifier" | "party_candidate" | "party_relationship" | "relationship_fact",
     "title": <short review title>,
     "evidence_quote": <exact verbatim substring from subject or body>,
     "candidate": <object containing only grounded typed fields>,

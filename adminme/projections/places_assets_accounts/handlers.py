@@ -69,10 +69,16 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     dispatch = {
         "place.added": apply_place_added,
         "place.updated": apply_place_updated,
+        "place.archived": apply_place_archived,
+        "place.restored": apply_place_restored,
         "asset.added": apply_asset_added,
         "asset.updated": apply_asset_updated,
+        "asset.archived": apply_asset_archived,
+        "asset.restored": apply_asset_restored,
         "account.added": apply_account_added,
         "account.updated": apply_account_updated,
+        "account.archived": apply_account_archived,
+        "account.restored": apply_account_restored,
     }
     handler = dispatch.get(event_type)
     if handler is None:
@@ -265,3 +271,81 @@ def apply_account_updated(
         f"UPDATE accounts SET {assignments} WHERE tenant_id = ? AND account_id = ?",
         params,
     )
+
+
+def _apply_archived(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    table: str,
+    id_column: str,
+) -> None:
+    p = envelope["payload"]
+    prefix = id_column.removesuffix("_id")
+    conn.execute(
+        f"""UPDATE {table}
+               SET lifecycle_status='archived', archived_at=?, archived_by=?,
+                   archive_reason=?, last_event_id=?
+             WHERE tenant_id=? AND {id_column}=? AND last_event_id < ?""",
+        (
+            p["archived_at"],
+            p["archived_by_party_id"],
+            p.get("reason"),
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p[f"{prefix}_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _apply_restored(
+    envelope: dict[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    table: str,
+    id_column: str,
+) -> None:
+    p = envelope["payload"]
+    prefix = id_column.removesuffix("_id")
+    conn.execute(
+        f"""UPDATE {table}
+               SET lifecycle_status='active', archived_at=NULL, archived_by=NULL,
+                   archive_reason=NULL, last_event_id=?
+             WHERE tenant_id=? AND {id_column}=?
+               AND lifecycle_status='archived' AND last_event_id < ?""",
+        (
+            envelope["event_id"],
+            envelope["tenant_id"],
+            p[f"{prefix}_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def apply_place_archived(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_archived(envelope, conn, table="places", id_column="place_id")
+
+
+def apply_place_restored(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_restored(envelope, conn, table="places", id_column="place_id")
+
+
+def apply_asset_archived(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_archived(envelope, conn, table="assets", id_column="asset_id")
+
+
+def apply_asset_restored(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    _apply_restored(envelope, conn, table="assets", id_column="asset_id")
+
+
+def apply_account_archived(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    _apply_archived(envelope, conn, table="accounts", id_column="account_id")
+
+
+def apply_account_restored(
+    envelope: dict[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    _apply_restored(envelope, conn, table="accounts", id_column="account_id")

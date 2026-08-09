@@ -15,7 +15,7 @@ from adminme.projections.money import handlers
 
 class MoneyProjection(Projection):
     name = "money"
-    version = 2
+    version = 3
     subscribes_to = [
         "money_flow.recorded",
         "money_flow.manually_added",
@@ -29,6 +29,9 @@ class MoneyProjection(Projection):
         "finance.budget_set",
         "finance.scenario_set",
         "finance.goal_set",
+        "finance.goal_paused",
+        "finance.goal_completed",
+        "finance.goal_reopened",
         "finance.workbook_published",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
@@ -63,6 +66,18 @@ class MoneyProjection(Projection):
             "ON money_flows(tenant_id, source_adapter, provider_transaction_id) "
             "WHERE provider_transaction_id IS NOT NULL"
         )
+        goal_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(finance_goals)")
+        }
+        for name, declaration in {
+            "lifecycle_at": "TEXT",
+            "lifecycle_actor": "TEXT",
+            "lifecycle_reason": "TEXT",
+        }.items():
+            if name not in goal_columns:
+                conn.execute(
+                    f"ALTER TABLE finance_goals ADD COLUMN {name} {declaration}"
+                )
 
 
 __all__ = ["MoneyProjection"]

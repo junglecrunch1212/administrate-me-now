@@ -1,5 +1,13 @@
 # UX behavior contract
 
+CO-010 amendment (2026-08-09): every visible source detail that may contain
+derivative work offers an exact source-linked Triage action; it never copies
+the source into truth. Reminders owns member-facing Recurrence and ordered
+Routine definition/edit/pause/resume/end controls. Scoreboard retains terminal
+outcomes and linked reward evidence. Finance Goal status changes are explicit,
+optimistic lifecycle actions and never move money. Empty Triage copy depends
+on audited source disposition, not queue length.
+
 CO-009 amendment (2026-08-09): canonical Tasks and provider-owned reminders
 share one Reminders workspace only as a typed read-time union. They retain
 separate identity, authority, lifecycle events, revisions, and write paths.
@@ -150,6 +158,10 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-41 | Every adult surface exposes the same Add for review action with all eleven non-authorizing kinds. Triage and Settings show content-free per-source assurance totals and distinguish explicit no-candidate, quarantine, failed, pending, and missing from empty; source content and account identifiers never enter these diagnostics. |
 | UX-42 | A confirmed canonical Task returns an exact Reminders destination receipt and appears under the same Task ID in Reminders, Today, and Scoreboard. Opening that receipt selects the exact Task, activates its deterministic Reminders lens, and clears incompatible presentation filters; later member-selected filters clear the stale item selection. The Reminders union labels the record as AdministrateMe-owned and routes complete/edit/defer/block through `task.*`; a Task deadline and available-from/defer activation are separate, and an elapsed activation re-enters executable reads without rewriting stored lifecycle truth. Provider items retain provider/account/list/revision identity and the governed external-write path. Neither record kind is copied or promoted implicitly, and deep-link state never authorizes or mutates truth. |
 | UX-43 | Triage enrichment is rendered from the server-published `triage-enrichment-v3` contract. Dates and times use native pickers plus the reviewed instance timezone; repetition uses a bounded builder; Parties and external routes use authorized selectors; provider-only fields follow the selected route ceiling. Google Tasks is date-only and cannot expose Apple-only start, priority, alarm, recurrence, URL, or geofence controls. The API rejects fields outside the same target contract before append. Immediate and refreshed confirmation feedback names and links the resulting local surface or pending provider path. |
+| UX-44 | A Comms message, Note, Calendar detail, or provider Reminder detail can submit its exact visible source to Triage. The request preserves the source event ID, scope, sensitivity, and evidence; it does not authorize, materialize, schedule, or write anything. |
+| UX-45 | Reminders presents canonical Recurrences and ordered Routines as separate structures with add/edit/pause/resume/end controls, optimistic concurrency, member/household scope disclosure, accessible repeat/window/step inputs, and retained occurrence history. Ending is not deletion and Routine steps never imply Task completion. |
+| UX-46 | Scoreboard presents typed completed, abandoned, cancelled, delegated, expired, recurrence, and Routine outcomes. Immediate completion feedback and asynchronous reward delivery link to the same immutable completion evidence and render once. |
+| UX-47 | Finance Goal definition and lifecycle remain separate. Pause, complete, and reopen controls disclose that they change planning state only, use optimistic concurrency, retain history, and never transfer money; reviewed workbook status edits emit the same typed lifecycle. |
 
 ## State model
 

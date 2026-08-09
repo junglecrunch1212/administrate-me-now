@@ -489,9 +489,15 @@ def compose_canonical_tasks(
         available = _instant(row.get("available_from"), tz)
         status = str(row.get("status") or "inbox")
         why: list[str]
-        if status == "done":
+        if status in {"done", "cancelled", "dismissed"}:
             bucket = "completed"
-            why = ["Completed in AdministrateMe"]
+            why = [
+                "Completed in AdministrateMe"
+                if status == "done"
+                else "Abandoned by the member"
+                if status == "cancelled"
+                else "Removed through a reviewed workbook change"
+            ]
         elif status == "deferred":
             activation = available or due  # replay compatibility for old defer events
             if activation is not None and activation <= now:
@@ -546,9 +552,16 @@ def compose_canonical_tasks(
                 "why": why,
                 "due_at": row.get("due_date"),
                 "due_sort": due.isoformat() if due else None,
-                "completed": status == "done",
-                "can_complete": status != "done",
-                "can_edit": status != "done",
+                "completed": status in {"done", "cancelled", "dismissed"},
+                "terminal_kind": (
+                    "completed"
+                    if status == "done"
+                    else "abandoned"
+                    if status in {"cancelled", "dismissed"}
+                    else None
+                ),
+                "can_complete": status not in {"done", "cancelled", "dismissed"},
+                "can_edit": status not in {"done", "cancelled", "dismissed"},
                 "alarms": [],
                 "recurrence_rules": [],
                 "source_links": [],

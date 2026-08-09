@@ -18,6 +18,19 @@ def _response(request: httpx.Request) -> httpx.Response:
     title = str(args["schema"].get("title", ""))
     inputs = args["input"]
     message_text = str(inputs.get("message_text", ""))
+    triage_kinds = (
+        "task",
+        "commitment",
+        "calendar_event",
+        "reminder",
+        "list",
+        "list_item",
+        "recurrence",
+        "party_identifier",
+        "party_candidate",
+        "party_relationship",
+        "relationship_fact",
+    )
     if "[fixture:malformed]" in message_text:
         return httpx.Response(200, json={"ok": True, "result": {"details": {}}})
     if "[fixture:unreachable]" in message_text:
@@ -43,7 +56,26 @@ def _response(request: httpx.Request) -> httpx.Response:
     elif title.startswith("classify_message_nature"):
         body_text = str(inputs.get("body_text", ""))
         candidates = []
-        if "[fixture:recurring-bill]" in body_text:
+        fixture_kind = next(
+            (
+                kind
+                for kind in triage_kinds
+                if f"[fixture:triage-kind={kind}]" in body_text
+            ),
+            None,
+        )
+        if fixture_kind is not None:
+            candidates = [
+                {
+                    "target_kind": fixture_kind,
+                    "title": body_text,
+                    "evidence_quote": body_text,
+                    "candidate": {},
+                    "confidence": 0.99,
+                    "reasons": ["fixture exact-evidence candidate"],
+                }
+            ]
+        elif "[fixture:recurring-bill]" in body_text:
             candidates = [
                 {
                     "target_kind": "task",
@@ -82,6 +114,44 @@ def _response(request: httpx.Request) -> httpx.Response:
             "person_to_person": not candidates,
             "deadline": "2026-08-15T17:00:00Z" if candidates else None,
             "candidates": candidates,
+        }
+    elif title.startswith("extract_note_semantics"):
+        body_text = str(inputs.get("body_text", ""))
+        candidates = []
+        fixture_kind = next(
+            (
+                kind
+                for kind in triage_kinds
+                if f"[fixture:triage-kind={kind}]" in body_text
+            ),
+            None,
+        )
+        if fixture_kind is not None:
+            candidates = [
+                {
+                    "target_kind": fixture_kind,
+                    "title": body_text,
+                    "candidate": {},
+                    "evidence_quote": body_text,
+                    "confidence": 0.99,
+                    "reasons": ["fixture exact-evidence candidate"],
+                }
+            ]
+        elif "[fixture:member-intent]" in body_text:
+            quote = "The school needs an answer by Friday"
+            candidates = [
+                {
+                    "target_kind": "task",
+                    "title": "Answer the school",
+                    "candidate": {"due": "2026-08-14"},
+                    "evidence_quote": quote,
+                    "confidence": 0.98,
+                    "reasons": ["explicit requested decision"],
+                }
+            ]
+        output = {
+            "candidates": candidates,
+            "reasons": ["fixture member knowledge extraction"],
         }
     elif title.startswith("classify_thank_you_candidate"):
         output = {"is_candidate": False, "confidence": 0.02, "reasons": ["request"]}

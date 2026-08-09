@@ -1071,18 +1071,21 @@ class XlsxReverseDaemon:
 
     async def _emit_goals(self, result: DiffResult, session: Session) -> list[str]:
         emitted: list[str] = []
-        for row in [*result.added, *(value for value, _changes in result.updated)]:
+
+        async def emit_goal(row: dict[str, Any], *, prior_status: str | None) -> None:
             goal_id = row.get("goal_id") or _mint_id("goal_")
             if not row.get("name"):
                 _log.warning("[reverse] Goal row missing name; skipping")
-                continue
+                return
             try:
                 target_minor = abs(self._money_minor(row.get("target_amount")))
                 current_minor = abs(self._money_minor(row.get("current_amount")))
                 priority = int(row.get("priority") or 100)
             except (TypeError, ValueError):
                 _log.warning("[reverse] Goal numeric value invalid; skipping")
-                continue
+                return
+            requested_status = str(row.get("status") or "active")
+            preserved_status = prior_status or "active"
             event_id = await self._append(
                 session=session,
                 event_type="finance.goal_set",
@@ -1095,13 +1098,73 @@ class XlsxReverseDaemon:
                     if row.get("target_date")
                     else None,
                     "priority": priority,
-                    "status": str(row.get("status") or "active"),
+                    # Goal definition and lifecycle remain distinct. Existing
+                    # status is preserved here; a typed event below records a
+                    # reviewed workbook status transition.
+                    "status": preserved_status,
                     "notes": str(row["notes"]) if row.get("notes") else None,
                 },
                 sensitivity="sensitive",
             )
-            if event_id is not None:
-                emitted.append(event_id)
+            if event_id is None:
+                return
+            emitted.append(event_id)
+            if requested_status == preserved_status:
+                return
+            now = EventEnvelope.now_utc_iso()
+            lifecycle_type: str
+            lifecycle_payload: dict[str, Any]
+            if preserved_status == "active" and requested_status == "paused":
+                lifecycle_type = "finance.goal_paused"
+                lifecycle_payload = {
+                    "goal_id": str(goal_id),
+                    "paused_at": now,
+                    "paused_by_member_id": session.auth_member_id,
+                    "reason": "Reviewed Finance workbook status change",
+                }
+            elif preserved_status == "active" and requested_status == "complete":
+                lifecycle_type = "finance.goal_completed"
+                lifecycle_payload = {
+                    "goal_id": str(goal_id),
+                    "completed_at": now,
+                    "completed_by_member_id": session.auth_member_id,
+                    "note": "Reviewed Finance workbook status change",
+                }
+            elif (
+                preserved_status in {"paused", "complete"}
+                and requested_status == "active"
+            ):
+                lifecycle_type = "finance.goal_reopened"
+                lifecycle_payload = {
+                    "goal_id": str(goal_id),
+                    "reopened_at": now,
+                    "reopened_by_member_id": session.auth_member_id,
+                    "previous_status": preserved_status,
+                }
+            else:
+                _log.warning(
+                    "[reverse] unsupported direct Goal status transition %s -> %s; "
+                    "definition saved with prior status",
+                    preserved_status,
+                    requested_status,
+                )
+                return
+            lifecycle_id = await self._append(
+                session=session,
+                event_type=lifecycle_type,
+                payload=lifecycle_payload,
+                sensitivity="sensitive",
+            )
+            if lifecycle_id is not None:
+                emitted.append(lifecycle_id)
+
+        for row in result.added:
+            await emit_goal(row, prior_status="active")
+        for row, changes in result.updated:
+            prior_status = str(
+                changes.get("status", (row.get("status"),))[0] or "active"
+            )
+            await emit_goal(row, prior_status=prior_status)
         return emitted
 
     async def _emit_money_flow_deleted(self, flow_id: str, session: Session) -> None:

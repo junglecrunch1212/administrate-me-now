@@ -38,6 +38,19 @@ def get_money_flow(
     return filter_one(session, dict(row) if row is not None else None)
 
 
+def get_finance_goal(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    goal_id: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM finance_goals WHERE tenant_id = ? AND goal_id = ?",
+        (session.tenant_id, goal_id),
+    ).fetchone()
+    return filter_one(session, dict(row) if row is not None else None)
+
+
 def flows_in_range(
     conn: sqlcipher3.Connection,
     session: Session,

@@ -79,3 +79,7 @@ source_assurance:
   - source_events: [context.signal.observed]
     mode: canonical_projection
     projections: [lists]
+  - source_events: [context.signal.observed]
+    mode: candidate_assessment
+    terminal_events: [triage.intent.features_extracted]
+    assessor: pipeline:deterministic_source_candidates

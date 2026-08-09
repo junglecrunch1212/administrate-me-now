@@ -112,7 +112,7 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
     li.className = "item";
     li.append(text("strong", item.title || item.display_name || item.description || item.text || item.name || item.kind || "Household item"));
     const status = item.status || item.state;
-    const meta = text("span", status || item.occurred_at || item.due_at || item.due_date || "Ready", "meta");
+    const meta = text("span", status ? memberStatusLabel(status) : item.occurred_at || item.due_at || item.due_date || "Ready", "meta");
     if (status) meta.classList.add("state-label", `state-${String(status).replaceAll("_", "-")}`);
     li.append(meta);
     if (item.reason) li.append(text("small", item.reason));
@@ -581,11 +581,14 @@ function whatNowCard(value, mode) {
   section.append(progress);
   if (item.last_event_id && item.id && ["task", "commitment"].includes(item.kind)) {
     const row = document.createElement("div"); row.className = "button-row";
-    for (const action of ["complete", "defer", "block"].filter((value) => (item.actions || []).includes(value))) {
+    for (const action of ["complete", "defer", "block"].filter((value) => (item.actions || []).includes(value) && (item.kind === "task" || value === "complete"))) {
       const button = text("button", action[0].toUpperCase() + action.slice(1), action === "complete" ? "button button-primary" : "button button-quiet");
       button.type = "button";
       button.addEventListener("click", () => advanceAction(item, action, section));
       row.append(button);
+    }
+    if (item.kind === "commitment" && (item.actions || []).some((action) => ["defer", "block", "unblock", "cancel", "delegate"].includes(action))) {
+      const manage = text("button", "Manage promise…", "button button-quiet"); manage.type = "button"; manage.addEventListener("click", () => commitmentManageDialog(item)); row.append(manage);
     }
     section.append(row);
   }
@@ -620,8 +623,12 @@ function titleCase(value) {
   return String(value || "").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function memberStatusLabel(value) {
+  return value === "inbox" ? "Open" : titleCase(value);
+}
+
 function todayItemMeta(item) {
-  return [item.time_label, item.context, item.status ? titleCase(item.status) : null]
+  return [item.time_label, item.context, item.status ? memberStatusLabel(item.status) : null]
     .filter(Boolean)
     .join(" · ");
 }
@@ -652,6 +659,10 @@ async function executeTodayAction(item, action, container) {
   }
   if (action === "open_chat") {
     $("#chat-open").click();
+    return;
+  }
+  if (item.kind === "commitment" && action === "manage_commitment") {
+    commitmentManageDialog(item);
     return;
   }
   const buttons = container.querySelectorAll("button");
@@ -697,6 +708,9 @@ async function executeTodayAction(item, action, container) {
         }),
       });
       setBanner(action === "complete_step" ? "Step recorded. Here is the next one." : "Step skipped without changing any linked task.");
+    } else if (["recurrence", "routine"].includes(item.kind) && action === "pause") {
+      await runRhythmLifecycle({ ...item, object_kind: item.kind }, "pause");
+      return;
     } else if (item.kind === "list_item" && action === "complete_external") {
       setBanner("Requesting completion through the reminder provider…");
       await api("/api/member/v1/reminders/commands", {
@@ -729,6 +743,7 @@ function actionButton(item, action, container) {
     complete_external: "Done",
     complete_step: "Step done",
     skip_step: "Skip step",
+    pause: "Pause",
     attended: "Attended",
     missed: "Missed",
     open_triage: "Review",
@@ -737,6 +752,7 @@ function actionButton(item, action, container) {
     open_calendar: "Open calendar",
     open_chat: "Talk it through",
     evidence: "Why this is here",
+    manage_commitment: "Manage promise…",
   };
   const primary = ["complete", "complete_external", "complete_step", "attended", "open_triage"].includes(action);
   const button = text("button", labels[action] || titleCase(action), action === "evidence" ? "link-button" : `button ${primary ? "button-primary" : "button-quiet"}`);
@@ -776,7 +792,8 @@ function todayItem(item, { interactive = true } = {}) {
   if (interactive) {
     const row = document.createElement("div");
     row.className = "day-item-actions";
-    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat", "evidence"].includes(action));
+    const actions = (item.actions || []).filter((action) => ["complete", "complete_external", "complete_step", "skip_step", "pause", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat", "evidence"].includes(action));
+    if (item.kind === "commitment" && (item.actions || []).some((action) => ["defer", "block", "unblock", "cancel", "delegate"].includes(action))) actions.splice(Math.max(actions.length - Number(actions.includes("evidence")), 0), 0, "manage_commitment");
     for (const action of actions) row.append(actionButton(item, action, li));
     if (actions.length) li.append(row);
   }
@@ -941,7 +958,9 @@ function renderCarousel(brief) {
   section.append(progress);
   const row = document.createElement("div");
   row.className = "button-row carousel-actions";
-  for (const action of (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat"].includes(value))) {
+  const carouselActions = (item.actions || []).filter((value) => ["complete", "complete_external", "complete_step", "skip_step", "pause", "attended", "missed", "open_triage", "open_comms", "open_reminder", "open_calendar", "open_chat"].includes(value));
+  if (item.kind === "commitment" && (item.actions || []).some((action) => ["defer", "block", "unblock", "cancel", "delegate"].includes(action))) carouselActions.push("manage_commitment");
+  for (const action of carouselActions) {
     row.append(actionButton(item, action, section));
   }
   if (items.length > 1) {
@@ -1083,6 +1102,13 @@ function messageBubble(message) {
   if (message.evidence_event_ids?.[0]) {
     const evidence = text("button", "Why this is here", "link-button"); evidence.type = "button";
     evidence.addEventListener("click", () => showEvidence(message.evidence_event_ids[0])); item.append(evidence);
+    const triage = text("button", "Send to Triage", "link-button"); triage.type = "button";
+    triage.addEventListener("click", () => openAddForReview({
+      exactText: [message.subject, message.body || message.preview].filter(Boolean).join("\n\n"),
+      sourceEventId: message.evidence_event_ids[0], sourceSurface: "comms",
+      dialogTitle: "Extract work from this message",
+    }));
+    item.append(triage);
   }
   return item;
 }
@@ -1227,11 +1253,245 @@ async function runTaskLifecycle(item, action, extras = {}) {
         until: extras.until || null, reason: extras.reason || null, note: extras.note || null,
       }),
     });
-    setBanner(action === "complete" ? "Done. The canonical task completion is recorded." : `Task ${action} recorded.`);
+    const confirmations = {
+      complete: "Done. The canonical task completion is recorded.",
+      cancel: "Abandoned. The task remains in history with your reason and evidence.",
+      reopen: "Reopened. The task is active again without erasing its prior history.",
+      snooze: "Snoozed. It will become actionable again at the time you chose.",
+      defer: "Deferred. The reason and return time are recorded separately from a snooze.",
+    };
+    setBanner(confirmations[action] || `Task ${action} recorded.`);
     await reloadActiveSurface();
   } catch (error) {
     setBanner(`${error.message} The task was not changed.`);
   }
+}
+
+async function runCommitmentLifecycle(item, action, extras = {}) {
+  setBanner(`Recording ${action} for this promise…`);
+  try {
+    await api("/api/member/v1/lifecycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        item_kind: "commitment", item_id: item.id || item.commitment_id, action,
+        expected_last_event_id: item.last_event_id, request_id: crypto.randomUUID(),
+        until: extras.until || null, reason: extras.reason || null, note: extras.note || null,
+        delegate_to_party_id: extras.delegate_to_party_id || null,
+      }),
+    });
+    const confirmations = {
+      complete: "Done. The promise is recorded as completed.",
+      unblock: "Unblocked. The promise is eligible for Today again.",
+      defer: "Deferred. Its return time remains distinct from its due date.",
+      block: "Waiting condition recorded. The promise remains visible in history.",
+      cancel: "Released. The promise is closed with your reason and evidence.",
+      delegate: "Hand-off recorded. The original promise remains yours in history; no obligation was silently assigned to the other person.",
+    };
+    setBanner(confirmations[action] || `Promise ${action} recorded.`);
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The promise was not changed.`);
+  }
+}
+
+function commitmentReasonDialog(item, action) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const reason = document.createElement("textarea"); reason.rows = 3; reason.maxLength = 500; reason.required = action === "block";
+  const copy = {
+    block: ["What are you waiting on?", "Record waiting condition"],
+    cancel: ["Why is this promise being released? (optional)", "Release promise"],
+  }[action];
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep it", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const submit = text("button", copy[1], "button button-primary"); submit.type = "submit"; buttons.append(keep, submit);
+  form.append(field(copy[0], reason), buttons);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runCommitmentLifecycle(item, action, { reason: reason.value.trim() || null }); });
+  openActionDialog(action === "block" ? "Put this promise in Waiting" : "Release this promise?", form);
+}
+
+function commitmentDelegateDialog(item) {
+  const options = state.surface?.lifecycle_options?.commitment_delegates || [];
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "This records that you handed off your original promise. It does not create or assign a new obligation to the other person without their consent.", "state-note"));
+  const delegate = selectControl(options.map((person) => ({ value: person.party_id, label: `${person.label} · ${titleCase(person.kind)}` })), "", "Choose a confirmed person…"); delegate.required = true;
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep it", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const submit = text("button", "Record hand-off", "button button-primary"); submit.type = "submit"; submit.disabled = !options.length; buttons.append(keep, submit);
+  form.append(field("Handed off to", delegate), buttons);
+  if (!options.length) form.prepend(text("p", "No other confirmed Party is visible. Confirm the person in People before recording a hand-off.", "state-note"));
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runCommitmentLifecycle(item, "delegate", { delegate_to_party_id: delegate.value }); });
+  openActionDialog("Hand off this promise?", form);
+}
+
+function commitmentManageDialog(item) {
+  const content = document.createElement("div"); content.className = "dialog-form";
+  content.append(text("p", "Choose the exact state change. AdministrateMe will preserve the original promise and its evidence.", "state-note"));
+  const actions = document.createElement("div"); actions.className = "button-row";
+  const available = new Set(item.actions || []);
+  if (available.has("unblock")) {
+    const button = text("button", "No longer waiting", "button button-primary"); button.type = "button"; button.addEventListener("click", async () => { closeActionDialog(); await runCommitmentLifecycle(item, "unblock"); }); actions.append(button);
+  }
+  if (available.has("defer")) {
+    const button = text("button", "Return tomorrow", "button button-quiet"); button.type = "button"; button.addEventListener("click", async () => { closeActionDialog(); await runCommitmentLifecycle(item, "defer", { until: new Date(Date.now() + 86400000).toISOString() }); }); actions.append(button);
+  }
+  if (available.has("block")) {
+    const button = text("button", "Waiting on…", "button button-quiet"); button.type = "button"; button.addEventListener("click", () => { closeActionDialog(); commitmentReasonDialog(item, "block"); }); actions.append(button);
+  }
+  if (available.has("delegate")) {
+    const button = text("button", "Hand off…", "button button-quiet"); button.type = "button"; button.addEventListener("click", () => { closeActionDialog(); commitmentDelegateDialog(item); }); actions.append(button);
+  }
+  if (available.has("cancel")) {
+    const button = text("button", "Release promise…", "button button-quiet"); button.type = "button"; button.addEventListener("click", () => { closeActionDialog(); commitmentReasonDialog(item, "cancel"); }); actions.append(button);
+  }
+  const close = text("button", "Close", "button button-quiet"); close.type = "button"; close.addEventListener("click", closeActionDialog); actions.append(close);
+  content.append(actions);
+  openActionDialog("Manage this promise", content);
+}
+
+async function runRhythmLifecycle(item, action, extras = {}) {
+  setBanner(`Recording ${action} for this ${item.object_kind || item.kind}…`);
+  try {
+    await api("/api/member/v1/lifecycle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        item_kind: item.object_kind || item.kind, item_id: item.id, action,
+        expected_last_event_id: item.last_event_id, request_id: crypto.randomUUID(),
+        reason: extras.reason || null,
+      }),
+    });
+    setBanner(action === "end" ? "Ended and retained in history." : action === "pause" ? "Paused. It will not enter Today until resumed." : "Resumed from the existing definition.");
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The recurring structure was not changed.`);
+  }
+}
+
+function endRhythmDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "Ending stops future occurrences but retains the definition and completed history.", "state-note"));
+  const reason = document.createElement("textarea"); reason.rows = 3; reason.maxLength = 500;
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep it", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const end = text("button", "End recurring item", "button button-primary"); end.type = "submit"; buttons.append(keep, end);
+  form.append(field("Reason (optional)", reason), buttons);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runRhythmLifecycle(item, "end", { reason: reason.value.trim() || null }); });
+  openActionDialog("End this recurring structure?", form);
+}
+
+function rhythmRuleEditor(initial = "FREQ=DAILY") {
+  const presets = [
+    { value: "FREQ=DAILY", label: "Every day" },
+    { value: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", label: "Weekdays" },
+    { value: "FREQ=WEEKLY", label: "Every week" },
+    { value: "FREQ=MONTHLY", label: "Every month" },
+    { value: "FREQ=YEARLY", label: "Every year" },
+  ];
+  const exact = presets.some((item) => item.value === initial);
+  const select = selectControl([...presets, { value: "custom", label: "Custom rule" }], exact ? initial : "custom", "");
+  const custom = document.createElement("input"); custom.value = exact ? "" : initial; custom.maxLength = 1000; custom.placeholder = "FREQ=MONTHLY;INTERVAL=3"; custom.hidden = exact;
+  select.addEventListener("change", () => { custom.hidden = select.value !== "custom"; });
+  const node = document.createElement("div"); node.className = "date-time-control"; node.append(select, custom);
+  return { node, value: () => select.value === "custom" ? custom.value.trim() : select.value };
+}
+
+function recurrenceDefinitionDialog(item = null) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "A recurrence is a repeating fact or trackable rhythm. It does not silently create a task until a reviewed rule says it should.", "state-note"));
+  const name = document.createElement("input"); name.required = true; name.maxLength = 160; name.value = item?.kind || "";
+  const rule = rhythmRuleEditor(item?.rrule || "FREQ=WEEKLY");
+  const parts = triageDateTimeParts(item?.next_occurrence || new Date().toISOString());
+  const due = document.createElement("div"); due.className = "date-time-control";
+  const dueDate = document.createElement("input"); dueDate.type = "date"; dueDate.required = true; dueDate.value = parts.date;
+  const dueTime = document.createElement("input"); dueTime.type = "time"; dueTime.required = true; dueTime.value = parts.time || "09:00"; due.append(dueDate, dueTime);
+  const scope = selectControl([{ value: "member", label: "Only me" }, { value: "household", label: "Household" }], item?.linked_kind === "household" ? "household" : "member", ""); scope.disabled = Boolean(item);
+  const lead = document.createElement("input"); lead.type = "number"; lead.min = "0"; lead.max = "365"; lead.value = String(item?.lead_time_days || 0);
+  const trackable = document.createElement("input"); trackable.type = "checkbox"; trackable.checked = Boolean(item?.trackable);
+  const trackWrap = document.createElement("label"); trackWrap.className = "check-control"; trackWrap.append(trackable, document.createTextNode(" Track each occurrence"));
+  const notes = document.createElement("textarea"); notes.rows = 3; notes.maxLength = 5000; notes.value = item?.notes || "";
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const cancel = text("button", "Cancel", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+  const submit = text("button", item ? "Save recurrence" : "Add recurrence", "button button-primary"); submit.type = "submit"; buttons.append(cancel, submit);
+  form.append(field("Name", name), field("Repeats", rule.node), field("Next occurrence", due), field("Visible to", scope), field("Lead time in days", lead), trackWrap, field("Notes (optional)", notes), buttons);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const rrule = rule.value();
+    if (!rrule) { setBanner("Choose a repeat pattern or enter a valid custom rule."); return; }
+    const recurrenceId = item?.id || `recurrence_${crypto.randomUUID().replaceAll("-", "")}`;
+    closeActionDialog(); setBanner(item ? "Saving recurrence…" : "Adding recurrence…");
+    try {
+      await api(`/api/member/v1/recurrences/${encodeURIComponent(recurrenceId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item?.last_event_id || null, scope: scope.value, kind: name.value.trim(), rrule, next_occurrence: new Date(`${dueDate.value}T${dueTime.value}`).toISOString(), lead_time_days: Number(lead.value || 0), trackable: trackable.checked, notes: notes.value.trim() || null }),
+      });
+      setBanner(item ? "Recurrence updated with its prior history intact." : "Recurrence added."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} The recurrence was not saved.`); }
+  });
+  openActionDialog(item ? "Edit recurrence" : "Add a recurrence", form);
+}
+
+function routineDefinitionDialog(item = null) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "A routine is an ordered sequence inside a repeat window. Put one step per line; add a tiny-start cue after a vertical bar.", "state-note"));
+  const title = document.createElement("input"); title.required = true; title.maxLength = 500; title.value = item?.title || "";
+  const rule = rhythmRuleEditor(item?.rrule || "FREQ=DAILY");
+  const starts = document.createElement("input"); starts.type = "date"; starts.required = true; starts.value = item?.starts_on || new Date().toISOString().slice(0, 10);
+  const window = document.createElement("div"); window.className = "date-time-control";
+  const startTime = document.createElement("input"); startTime.type = "time"; startTime.required = true; startTime.value = item?.window_start_local || "08:00";
+  const endTime = document.createElement("input"); endTime.type = "time"; endTime.required = true; endTime.value = item?.window_end_local || "09:00"; window.append(startTime, endTime);
+  const steps = document.createElement("textarea"); steps.rows = 7; steps.required = true; steps.maxLength = 10000; steps.placeholder = "Put medication by water | Start by filling the glass\nReview Today | Open the first card"; steps.value = (item?.steps || []).map((step) => `${step.title}${step.micro_step ? ` | ${step.micro_step}` : ""}`).join("\n");
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const cancel = text("button", "Cancel", "button button-quiet"); cancel.type = "button"; cancel.addEventListener("click", closeActionDialog);
+  const submit = text("button", item ? "Save routine" : "Add routine", "button button-primary"); submit.type = "submit"; buttons.append(cancel, submit);
+  form.append(field("Routine name", title), field("Repeats", rule.node), field("Starts", starts), field("Daily window", window), field("Ordered steps", steps), buttons);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const lines = steps.value.split("\n").map((line) => line.trim()).filter(Boolean);
+    const rrule = rule.value();
+    if (!lines.length || !rrule) { setBanner("Add at least one routine step and a repeat pattern."); return; }
+    const routineId = item?.id || `routine_${crypto.randomUUID().replaceAll("-", "")}`;
+    const priorSteps = item?.steps || [];
+    const definitions = lines.map((line, position) => { const parts = line.split("|"); return { step_id: priorSteps[position]?.step_id || `step_${position + 1}`, title: parts.shift().trim(), position, micro_step: parts.join("|").trim() || null, linked_task_id: priorSteps[position]?.linked_task_id || null }; });
+    closeActionDialog(); setBanner(item ? "Saving routine…" : "Adding routine…");
+    try {
+      await api(`/api/member/v1/routines/${encodeURIComponent(routineId)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item?.last_event_id || null, title: title.value.trim(), timezone: item?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone, starts_on: starts.value, rrule, window_start_local: startTime.value, window_end_local: endTime.value, steps: definitions }),
+      });
+      setBanner(item ? "Routine updated with its outcome history intact." : "Routine added."); await reloadActiveSurface();
+    } catch (error) { setBanner(`${error.message} The routine was not saved.`); }
+  });
+  openActionDialog(item ? "Edit routine" : "Add a routine", form);
+}
+
+function rhythmDefinitionsCard(items) {
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Recurring structures"));
+  const createActions = document.createElement("div"); createActions.className = "button-row";
+  const addRecurrence = text("button", "Add recurrence", "button button-quiet"); addRecurrence.type = "button"; addRecurrence.addEventListener("click", () => recurrenceDefinitionDialog());
+  const addRoutine = text("button", "Add routine", "button button-primary"); addRoutine.type = "button"; addRoutine.addEventListener("click", () => routineDefinitionDialog()); createActions.append(addRecurrence, addRoutine); section.append(createActions);
+  if (!items?.length) { section.append(text("p", "No recurring structures are recorded.", "empty")); return section; }
+  const list = document.createElement("ul"); list.className = "item-list";
+  for (const item of items) {
+    const li = document.createElement("li"); li.className = "item";
+    li.append(text("strong", item.title), text("span", `${titleCase(item.object_kind)} · ${titleCase(item.status || "active")}`, `meta state-label state-${item.status || "active"}`));
+    if (item.next_occurrence) li.append(text("small", `Next: ${reminderDate(item.next_occurrence)}`));
+    const actions = document.createElement("div"); actions.className = "button-row";
+    if (item.status !== "ended") {
+      const edit = text("button", "Edit", "button button-quiet"); edit.type = "button"; edit.addEventListener("click", () => item.object_kind === "routine" ? routineDefinitionDialog(item) : recurrenceDefinitionDialog(item)); actions.append(edit);
+    }
+    if ((item.status || "active") === "active") {
+      const pause = text("button", "Pause", "button button-quiet"); pause.type = "button"; pause.addEventListener("click", () => runRhythmLifecycle(item, "pause")); actions.append(pause);
+    } else if (item.status === "paused") {
+      const resume = text("button", "Resume", "button button-primary"); resume.type = "button"; resume.addEventListener("click", () => runRhythmLifecycle(item, "resume")); actions.append(resume);
+    }
+    if (item.status !== "ended") {
+      const end = text("button", "End…", "button button-quiet"); end.type = "button"; end.addEventListener("click", () => endRhythmDialog(item)); actions.append(end);
+    }
+    if (item.last_event_id) { const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.last_event_id)); actions.append(evidence); }
+    li.append(actions); list.append(li);
+  }
+  section.append(list); return section;
 }
 
 function taskPropertiesForm(initial, { create = false } = {}) {
@@ -1281,12 +1541,17 @@ function taskPropertiesForm(initial, { create = false } = {}) {
   return form;
 }
 
-function deferTaskDialog(item) {
+function deferTaskDialog(item, action = "defer") {
   const form = document.createElement("form"); form.className = "dialog-form";
   const until = document.createElement("input"); until.type = "datetime-local"; until.required = true;
-  const submit = text("button", "Defer task", "button button-primary"); submit.type = "submit"; form.append(field("Hide until", until), submit);
-  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, "defer", { until: until.value }); });
-  openActionDialog("Defer this task", form);
+  const reason = document.createElement("input"); reason.maxLength = 500; reason.placeholder = "Why is this being deferred?";
+  const isSnooze = action === "snooze";
+  const submit = text("button", isSnooze ? "Snooze task" : "Defer task", "button button-primary"); submit.type = "submit";
+  form.append(field(isSnooze ? "Bring back at" : "Defer until", until));
+  if (!isSnooze) form.append(field("Reason (optional)", reason));
+  form.append(submit);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, action, { until: until.value, reason: reason.value.trim() || null }); });
+  openActionDialog(isSnooze ? "Snooze this task" : "Defer this task", form);
 }
 
 function blockTaskDialog(item) {
@@ -1295,6 +1560,18 @@ function blockTaskDialog(item) {
   const submit = text("button", "Mark waiting", "button button-primary"); submit.type = "submit"; form.append(field("Waiting on", reason), submit);
   form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, "block", { reason: reason.value.trim() }); });
   openActionDialog("Mark task as waiting", form);
+}
+
+function abandonTaskDialog(item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "Abandoning removes this from active work but keeps an auditable history. You can reopen it later.", "state-note"));
+  const reason = document.createElement("textarea"); reason.rows = 3; reason.maxLength = 500; reason.placeholder = "Optional: why is this no longer worth doing?";
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep task", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const abandon = text("button", "Abandon task", "button button-primary"); abandon.type = "submit";
+  buttons.append(keep, abandon); form.append(field("Reason", reason), buttons);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runTaskLifecycle(item, "cancel", { reason: reason.value.trim() || null }); });
+  openActionDialog("Abandon this task?", form);
 }
 
 function openActionDialog(title, content) {
@@ -1307,13 +1584,14 @@ function openActionDialog(title, content) {
 
 function closeActionDialog() { $("#action-dialog").close(); }
 
-function openAddForReview() {
+function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface = null, dialogTitle = "Add for review" } = {}) {
   const form = document.createElement("form");
   form.className = "triage-review-form add-for-review-form";
   form.append(text("p", "This saves your thought in Triage. Nothing becomes a task, event, reminder, or provider change until you confirm it.", "state-note"));
   const input = document.createElement("textarea");
   input.name = "text"; input.rows = 5; input.maxLength = 2000; input.required = true;
   input.placeholder = "What just came up?";
+  input.value = exactText.slice(0, 2000);
   form.append(field("Thought to hold", input));
   const hints = [
     { value: "", label: "Let Triage identify possible types" },
@@ -1343,16 +1621,16 @@ function openAddForReview() {
     submit.disabled = true;
     setBanner("Saving your exact words before interpretation…");
     const allowedSurfaces = new Set(["today", "triage", "comms", "reminders", "calendar", "people", "notes", "finance", "scoreboard", "settings"]);
-    const sourceSurface = allowedSurfaces.has(currentSurface()) ? currentSurface() : "today";
+    const capturedSurface = allowedSurfaces.has(sourceSurface) ? sourceSurface : allowedSurfaces.has(currentSurface()) ? currentSurface() : "today";
     try {
       const result = await api("/api/member/v1/triage/intents", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
         body: JSON.stringify({
           text: exactText,
-          source_surface: sourceSurface,
+          source_surface: capturedSurface,
           kind_hint: hint.value || null,
-          source_event_id: null,
+          source_event_id: sourceEventId,
           client_request_id: crypto.randomUUID(),
         }),
       });
@@ -1370,7 +1648,7 @@ function openAddForReview() {
       input.focus();
     }
   });
-  openActionDialog("Add for review", form);
+  openActionDialog(dialogTitle, form);
 }
 
 function configureReminderCue(item) {
@@ -1448,7 +1726,7 @@ function reminderDate(value, dateStyle = "medium") {
 }
 
 function taskStatusLabel(value) {
-  return ({ inbox: "Open", next: "Next", in_progress: "In progress", waiting_on: "Waiting", deferred: "Deferred", done: "Completed" })[value] || titleCase(value);
+  return ({ inbox: "Open", next: "Next", in_progress: "In progress", waiting_on: "Waiting", deferred: "Deferred", done: "Completed", cancelled: "Abandoned", dismissed: "Removed" })[value] || memberStatusLabel(value);
 }
 
 function remindersHero(cockpit) {
@@ -1516,15 +1794,20 @@ function taskDetail(item) {
   if (item.micro_script) pane.append(text("p", `First tiny step: ${item.micro_script}`, "state-note"));
   pane.append(text("p", "This is an AdministrateMe task, not a provider reminder. Provider copies require an explicit, separately governed route.", "meta"));
   const actions = document.createElement("div"); actions.className = "button-row";
-  if (item.status !== "done") {
+  const terminal = ["done", "cancelled", "dismissed"].includes(item.status);
+  if (!terminal) {
     const done = text("button", "Done", "button button-primary"); done.type = "button"; done.addEventListener("click", () => runTaskLifecycle(item, "complete")); actions.append(done);
     const edit = text("button", "Edit properties", "button button-quiet"); edit.type = "button"; edit.addEventListener("click", () => openActionDialog("Edit household task", taskPropertiesForm(item))); actions.append(edit);
     const defer = text("button", "Defer", "button button-quiet"); defer.type = "button"; defer.addEventListener("click", () => deferTaskDialog(item)); actions.append(defer);
+    const snooze = text("button", "Snooze", "button button-quiet"); snooze.type = "button"; snooze.addEventListener("click", () => deferTaskDialog(item, "snooze")); actions.append(snooze);
     if (item.status === "waiting_on") {
       const unblock = text("button", "No longer waiting", "button button-quiet"); unblock.type = "button"; unblock.addEventListener("click", () => runTaskLifecycle(item, "unblock")); actions.append(unblock);
     } else {
       const block = text("button", "Waiting on…", "button button-quiet"); block.type = "button"; block.addEventListener("click", () => blockTaskDialog(item)); actions.append(block);
     }
+    const abandon = text("button", "Abandon…", "button button-quiet"); abandon.type = "button"; abandon.addEventListener("click", () => abandonTaskDialog(item)); actions.append(abandon);
+  } else {
+    const reopen = text("button", "Reopen", "button button-primary"); reopen.type = "button"; reopen.addEventListener("click", () => runTaskLifecycle(item, "reopen")); actions.append(reopen);
   }
   pane.append(actions); return pane;
 }
@@ -1556,6 +1839,13 @@ function reminderDetail(item, cockpit) {
   }
   const cue = text("button", "Add context cue", "button button-quiet"); cue.type = "button";
   cue.addEventListener("click", () => configureReminderCue(item)); actions.append(cue);
+  if (item.last_event_id) {
+    const triage = text("button", "Extract related work", "button button-quiet"); triage.type = "button";
+    triage.addEventListener("click", () => openAddForReview({
+      exactText: [item.title, item.notes].filter(Boolean).join("\n\n"), sourceEventId: item.last_event_id,
+      sourceSurface: "reminders", dialogTitle: "Extract related work from this reminder",
+    })); actions.append(triage);
+  }
   pane.append(actions);
   if (item.source_links?.length) { const links = document.createElement("div"); links.className = "source-links"; for (const link of item.source_links) { const anchor = text("a", link.description || "Open source", "link-button"); anchor.href = link.url; anchor.target = "_blank"; anchor.rel = "noreferrer"; links.append(anchor); } pane.append(links); }
   return pane;
@@ -1777,6 +2067,7 @@ function calendarEventDetail(cockpit) {
   if (event.duplicate_collapsed) pane.append(text("p", `${event.copy_count} provider copies are grouped here; none were deleted.`, "calendar-duplicate"));
   const actions = document.createElement("div"); actions.className = "button-row";
   if (event.last_event_id) { const evidence = text("button", "View evidence", "button button-quiet"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(event.last_event_id)); actions.append(evidence); }
+  if (event.last_event_id) { const triage = text("button", "Extract related work", "button button-quiet"); triage.type = "button"; triage.addEventListener("click", () => openAddForReview({ exactText: [event.title, event.description, event.location].filter(Boolean).join("\n\n"), sourceEventId: event.last_event_id, sourceSurface: "calendar", dialogTitle: "Extract related work from this event" })); actions.append(triage); }
   if (event.html_link) { const provider = text("a", "Open in provider", "button button-quiet"); provider.href = event.html_link; provider.target = "_blank"; provider.rel = "noreferrer"; actions.append(provider); }
   pane.append(actions); return pane;
 }
@@ -1900,7 +2191,7 @@ function renderReminders(data) {
   const workspace = document.createElement("div"); workspace.className = "reminder-workspace";
   const list = document.createElement("section"); list.className = "card reminder-list"; list.append(text("h2", `${titleCase(state.remindersView)} tasks & reminders`));
   if (!visible.length) list.append(text("p", "Nothing in this lens. Your provider truth is unchanged.", "empty")); else { const items = document.createElement("ol"); items.className = "reminder-items"; for (const item of visible) { const li = document.createElement("li"); li.append(reminderItemButton(item)); items.append(li); } list.append(items); }
-  workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, taskQuickAdd(), reminderQuickAdd(cockpit), reminderProviderTruth(cockpit));
+  workspace.append(list, reminderDetail(selected, cockpit)); root.append(workspace, taskQuickAdd(), reminderQuickAdd(cockpit), rhythmDefinitionsCard(cockpit.rhythms), reminderProviderTruth(cockpit));
 }
 
 function peopleMatchesLens(person) {
@@ -2025,7 +2316,7 @@ function peopleDetail(person, detail) {
   const activity = document.createElement("section"); activity.className = "people-detail-section"; activity.append(text("h3", "Visible activity"));
   const combined = [...(detail.commitments || []).map((value) => ({ ...value, _kind: "Commitment" })), ...(detail.interactions || []).slice(0, 8).map((value) => ({ ...value, _kind: titleCase(value.channel || value.kind || "Interaction") }))];
   if (!combined.length) activity.append(text("p", "No visible commitments or interactions. AdministrateMe does not invent relationship history.", "empty"));
-  else { const list = document.createElement("ul"); list.className = "item-list"; for (const value of combined.slice(0, 12)) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", value.title || value.subject || value.description || value._kind), text("small", value.occurred_at || value.due_at || value.status || value._kind)); list.append(item); } activity.append(list); }
+  else { const list = document.createElement("ul"); list.className = "item-list"; for (const value of combined.slice(0, 12)) { const item = document.createElement("li"); item.className = "item"; item.append(text("strong", value.title || value.subject || value.description || value._kind), text("small", value.occurred_at || value.due_at || (value.status ? memberStatusLabel(value.status) : value._kind))); list.append(item); } activity.append(list); }
   section.append(factSection, activity); return section;
 }
 
@@ -2245,6 +2536,7 @@ function noteDetail(note, data) {
   const actions = document.createElement("div"); actions.className = "button-row";
   if (note.source_url && /^https?:\/\//i.test(note.source_url)) { const open = text("a", "Open in source", "button button-quiet"); open.href = note.source_url; open.target = "_blank"; open.rel = "noopener noreferrer"; actions.append(open); }
   if (note.triage_href) { const triage = text("a", `Review ${note.triage_count} in Triage`, "button button-primary"); triage.href = note.triage_href; actions.append(triage); }
+  if (note.last_event_id) { const extract = text("button", "Send to Triage", "button button-quiet"); extract.type = "button"; extract.addEventListener("click", () => openAddForReview({ exactText: [note.title, notePlainBody(note)].filter(Boolean).join("\n\n"), sourceEventId: note.last_event_id, sourceSurface: "notes", dialogTitle: "Extract work from this note" })); actions.append(extract); }
   if (note.last_event_id) { const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(note.last_event_id)); actions.append(evidence); }
   section.append(actions);
   const facts = document.createElement("dl"); facts.className = "notes-facts";
@@ -2361,9 +2653,48 @@ function financeGoals(cockpit) {
     const target = Number(goal.target_minor || 0); const current = Number(goal.current_minor || 0); const ratio = target > 0 ? Math.min(1, current / target) : 0;
     const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); fill.style.width = `${ratio * 100}%`; progress.append(fill);
     const due = goal.target_date ? ` · target ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(`${goal.target_date}T00:00:00`))}` : "";
-    row.append(heading, progress, text("small", `${moneyMinor(current)} of ${moneyMinor(target)}${due}`)); if (goal.notes) row.append(text("small", goal.notes)); list.append(row);
+    row.append(heading, progress, text("small", `${moneyMinor(current)} of ${moneyMinor(target)}${due}`)); if (goal.notes) row.append(text("small", goal.notes));
+    const actions = document.createElement("div"); actions.className = "button-row";
+    if (goal.status === "active") {
+      const pause = text("button", "Pause", "button button-quiet"); pause.type = "button"; pause.addEventListener("click", () => financeGoalLifecycleDialog(goal, "pause")); actions.append(pause);
+      const complete = text("button", "Mark complete", "button button-primary"); complete.type = "button"; complete.addEventListener("click", () => financeGoalLifecycleDialog(goal, "complete")); actions.append(complete);
+    } else if (["paused", "complete"].includes(goal.status)) {
+      const reopen = text("button", "Reopen", "button button-primary"); reopen.type = "button"; reopen.addEventListener("click", () => runFinanceGoalLifecycle(goal, "reopen")); actions.append(reopen);
+    }
+    if (goal.last_event_id) { const evidence = text("button", "View evidence", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(goal.last_event_id)); actions.append(evidence); }
+    row.append(actions); list.append(row);
   }
   section.append(list); return section;
+}
+
+async function runFinanceGoalLifecycle(goal, action, reason = null) {
+  setBanner(`Recording ${action} for this finance goal…`);
+  try {
+    await api(`/api/member/v1/finance/goals/${encodeURIComponent(goal.goal_id)}/lifecycle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        action, reason, expected_last_event_id: goal.last_event_id,
+        request_id: crypto.randomUUID(),
+      }),
+    });
+    setBanner(action === "complete" ? "Goal completed and retained in history." : action === "pause" ? "Goal paused without changing the plan or moving money." : "Goal reopened from its existing definition.");
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The finance goal was not changed.`);
+  }
+}
+
+function financeGoalLifecycleDialog(goal, action) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", action === "complete" ? "This records the planning outcome. It does not move funds." : "Pausing removes the goal from active attention without deleting its plan or evidence.", "state-note"));
+  const reason = document.createElement("textarea"); reason.rows = 3; reason.maxLength = 500;
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep active", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const submit = text("button", action === "complete" ? "Mark complete" : "Pause goal", "button button-primary"); submit.type = "submit"; buttons.append(keep, submit);
+  form.append(field(action === "complete" ? "Outcome note (optional)" : "Reason (optional)", reason), buttons);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runFinanceGoalLifecycle(goal, action, reason.value.trim() || null); });
+  openActionDialog(action === "complete" ? "Complete this goal?" : "Pause this goal?", form);
 }
 
 function financeTransactions(cockpit) {
@@ -2413,6 +2744,7 @@ const SETTINGS_SECTIONS = [
   ["behavior", "CoS behavior"],
   ["connections", "Connections"],
   ["bridges", "Bridges & devices"],
+  ["registry", "Places, assets & accounts"],
   ["privacy", "Household & privacy"],
   ["system", "Safety & system"],
 ];
@@ -2521,6 +2853,55 @@ function privacySettings(data) {
   const household = document.createElement("section"); household.className = "card"; household.append(text("h2", "Household portal identities")); const members = document.createElement("ul"); members.className = "household-settings-list"; for (const member of data.control.household) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", member.label), text("small", titleCase(member.role))); item.append(body, text("span", member.portal_identity_bound ? "Tailscale bound" : "No portal login", `pill state-label state-${member.portal_identity_bound ? "healthy" : "not-configured"}`)); members.append(item); } household.append(members); fragment.append(household); return fragment;
 }
 
+async function runRegistryLifecycle(kind, item, action, reason = null) {
+  const id = item[`${kind}_id`];
+  setBanner(`${action === "archive" ? "Archiving" : "Restoring"} ${item.display_name}…`);
+  try {
+    await api(`/api/member/v1/registry/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/lifecycle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, action, reason }),
+    });
+    setBanner(action === "archive" ? "Archived without erasing history. Linked records remain intact." : "Restored as an active household record.");
+    await reloadActiveSurface();
+  } catch (error) {
+    setBanner(`${error.message} The household record was not changed.`);
+  }
+}
+
+function archiveRegistryDialog(kind, item) {
+  const form = document.createElement("form"); form.className = "dialog-form";
+  form.append(text("p", "Archiving removes this record from active planning while preserving its links and complete event history.", "state-note"));
+  const reason = document.createElement("textarea"); reason.rows = 3; reason.maxLength = 500;
+  const buttons = document.createElement("div"); buttons.className = "button-row";
+  const keep = text("button", "Keep active", "button button-quiet"); keep.type = "button"; keep.addEventListener("click", closeActionDialog);
+  const archive = text("button", "Archive record", "button button-primary"); archive.type = "submit"; buttons.append(keep, archive);
+  form.append(field("Reason (optional)", reason), buttons);
+  form.addEventListener("submit", async (event) => { event.preventDefault(); closeActionDialog(); await runRegistryLifecycle(kind, item, "archive", reason.value.trim() || null); });
+  openActionDialog(`Archive ${item.display_name}?`, form);
+}
+
+function registrySettings(data) {
+  const fragment = document.createDocumentFragment();
+  const intro = document.createElement("section"); intro.className = "state-card"; intro.append(text("strong", "Household objects have a reversible lifecycle."), text("p", "Archive stale places, assets, or service accounts without deleting evidence. Provider financial accounts remain read-only provider facts and are managed under Connections.")); fragment.append(intro);
+  const registry = data.registry || {};
+  for (const [plural, label] of [["places", "Places"], ["assets", "Assets"], ["accounts", "Household service accounts"]]) {
+    const kind = plural.slice(0, -1); const section = document.createElement("section"); section.className = "card"; section.append(text("h2", label));
+    const rows = registry[plural] || [];
+    if (!rows.length) section.append(text("p", `No ${label.toLowerCase()} are recorded.`, "empty"));
+    const list = document.createElement("ul"); list.className = "household-settings-list";
+    for (const item of rows) {
+      const row = document.createElement("li"); const body = document.createElement("div"); const status = item.lifecycle_status || "active";
+      body.append(text("strong", item.display_name), text("small", `${titleCase(item.kind)} · ${titleCase(status)}${item.archive_reason ? ` · ${item.archive_reason}` : ""}`));
+      const button = text("button", status === "archived" ? "Restore" : "Archive…", status === "archived" ? "button button-primary" : "button button-quiet"); button.type = "button"; button.disabled = !data.control.identity.can_mutate;
+      button.addEventListener("click", () => status === "archived" ? runRegistryLifecycle(kind, item, "restore") : archiveRegistryDialog(kind, item));
+      row.append(body, button); list.append(row);
+    }
+    section.append(list); fragment.append(section);
+  }
+  return fragment;
+}
+
 function systemSettings(data) {
   const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 14)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
   const assuranceCapability = data.system.capabilities.find((value) => value.name === "source-assurance");
@@ -2541,6 +2922,7 @@ function renderSettings(data) {
   else if (state.settingsSection === "behavior") content.append(behaviorSettings(data));
   else if (state.settingsSection === "connections") content.append(renderConnections(data));
   else if (state.settingsSection === "bridges") content.append(bridgeSettings(data));
+  else if (state.settingsSection === "registry") content.append(registrySettings(data));
   else if (state.settingsSection === "privacy") content.append(privacySettings(data));
   else content.append(systemSettings(data));
   root.append(content);
@@ -2589,7 +2971,19 @@ function renderSurface(data) {
     const score = data.scoreboard || {};
     const hero = document.createElement("section"); hero.className = "hero-card";
     hero.append(text("p", "YOUR RHYTHM", "eyebrow"), text("h2", `${score.open_count || 0} gentle next steps`, "action-title"), text("p", score.reward_language === "warm" ? "Every small finish counts. You’re building momentum." : "Progress is evidence, not pressure."));
-    root.append(hero, card("Up next", score.next_steps));
+    const stats = document.createElement("dl"); stats.className = "brief-stats";
+    for (const [label, value] of [["Active", score.open_count], ["Completed", score.completed_count], ["Closed", score.closed_count], ["Redirected", score.redirected_count]]) {
+      const stat = text("div", "", "stat"); stat.append(text("dt", label), text("dd", value || 0)); stats.append(stat);
+    }
+    hero.append(stats);
+    root.append(
+      hero,
+      card("Up next", score.next_steps),
+      card("Outcomes and evidence", score.recent_outcomes, "No completed, closed, or redirected work has been recorded yet."),
+      card("Completion reinforcement", score.reward_evidence, "No completion reinforcement event has been recorded yet."),
+      rhythmDefinitionsCard(score.rhythms),
+      card("Routine and recurrence history", score.rhythm_outcomes, "No recurring occurrence has been completed yet."),
+    );
   } else if (data.surface === "settings") {
     renderSettings(data);
   }

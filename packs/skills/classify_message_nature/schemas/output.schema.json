@@ -41,7 +41,7 @@
     "deadline": { "type": ["string", "null"] },
     "candidates": {
       "type": "array",
-      "maxItems": 10,
+      "maxItems": 20,
       "items": {
         "type": "object",
         "required": ["target_kind", "title", "evidence_quote", "candidate", "confidence", "reasons"],
@@ -49,7 +49,7 @@
         "properties": {
           "target_kind": {
             "type": "string",
-            "enum": ["task", "commitment", "calendar_event", "reminder", "recurrence", "list", "list_item", "party_identifier"]
+            "enum": ["task", "commitment", "calendar_event", "reminder", "recurrence", "list", "list_item", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"]
           },
           "title": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "evidence_quote": { "type": "string", "minLength": 1, "maxLength": 1000 },

@@ -1,0 +1,23 @@
+pack:
+  id: pipeline:lifecycle_maintenance
+  name: Deterministic lifecycle maintenance
+  version: 1.0.0
+  kind: pipeline
+runtime:
+  language: python
+  python_version: ">=3.14,<3.15"
+  entrypoint: handler.py
+  class: LifecycleMaintenancePipeline
+triggers:
+  events:
+    - openclaw.standing_order.triggered
+replay:
+  on_version_change: full
+delivery:
+  concurrency: 1
+depends_on:
+  skills: []
+  projections:
+    - commitments
+events_emitted:
+  - commitment.expired

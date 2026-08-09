@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from dateutil.rrule import rrulestr
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
@@ -19,7 +20,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from adminme.comms import validate_outbound_communication
 from adminme.events.envelope import EventEnvelope, Sensitivity
@@ -36,6 +37,7 @@ from adminme.events.schemas.reminder_context import (
     ContextSource,
     CueOperator,
 )
+from adminme.events.schemas.routines import RoutineDefinedV1
 from adminme.events.schemas.calendar_policy import (
     CalendarRuleConfiguredV1,
     CalendarSchedulePolicyConfiguredV1,
@@ -43,6 +45,17 @@ from adminme.events.schemas.calendar_policy import (
 )
 from adminme.lib.scope import allowed_read, filter_one
 from adminme.lib.session import Session
+from adminme.lib.skill_runner import (
+    OpenClawResponseMalformed,
+    OpenClawTimeout,
+    OpenClawUnreachable,
+    SkillContext,
+    SkillHandlerError,
+    SkillInputInvalid,
+    SkillOutputInvalid,
+    SkillScopeInsufficient,
+    SkillSensitivityRefused,
+)
 from adminme.member_chat import MemberChatError
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.comms import main as comms
@@ -65,6 +78,11 @@ from adminme.products.openclaw.main import (
     _task_lifecycle,
 )
 from adminme.projections.parties.queries import get_party
+from adminme.projections.places_assets_accounts.queries import (
+    get_account,
+    get_asset,
+    get_place,
+)
 from adminme.projections.interactions.queries import get_interaction, participants_for
 from adminme.projections.calendars.queries import (
     get_calendar_event,
@@ -72,6 +90,7 @@ from adminme.projections.calendars.queries import (
 )
 from adminme.projections.recurrences.queries import (
     get_recurrence,
+    get_routine,
     get_routine_occurrence,
 )
 from adminme.projections.member_knowledge.queries import (
@@ -82,6 +101,7 @@ from adminme.projections.member_knowledge.queries import (
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
 from adminme.projections.tasks.queries import get_task
+from adminme.projections.money.queries import get_finance_goal
 from adminme.settings_control import (
     compose_connections,
     member_label,
@@ -98,7 +118,11 @@ from adminme.temporary_surfaces import (
     TemporarySurfaceError,
     TemporarySurfaceSpec,
 )
-from adminme.triage_intent import EXTRACTOR_ID, extract_intent_candidates
+from adminme.triage_intent import (
+    extract_grounded_nlp_candidates,
+    extract_intent_candidates,
+    merge_intent_candidates,
+)
 from adminme.triage_contract import candidate_update_fields, triage_destination
 
 
@@ -169,7 +193,13 @@ class PromotionRequest(BaseModel):
 class TemporaryActionRequest(BaseModel):
     model_config = {"extra": "forbid"}
     verb: Literal[
-        "task.complete", "task.defer", "task.snooze", "task.block", "task.unblock"
+        "task.complete",
+        "task.defer",
+        "task.snooze",
+        "task.block",
+        "task.unblock",
+        "task.cancel",
+        "task.reopen",
     ]
     item_id: str = Field(min_length=1, max_length=160)
     expected_last_event_id: str = Field(min_length=1)
@@ -181,14 +211,70 @@ class TemporaryActionRequest(BaseModel):
 
 class MemberLifecycleRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    item_kind: Literal["task", "commitment", "recurrence"]
+    item_kind: Literal["task", "commitment", "recurrence", "routine"]
     item_id: str = Field(min_length=1, max_length=160)
-    action: Literal["complete", "defer", "snooze", "block", "unblock"]
+    action: Literal[
+        "complete",
+        "defer",
+        "snooze",
+        "block",
+        "unblock",
+        "cancel",
+        "reopen",
+        "pause",
+        "resume",
+        "end",
+        "delegate",
+    ]
     expected_last_event_id: str = Field(min_length=1)
     request_id: str = Field(min_length=1, max_length=120)
     until: str | None = None
     reason: str | None = Field(default=None, max_length=500)
     note: str | None = Field(default=None, max_length=500)
+    delegate_to_party_id: str | None = Field(default=None, min_length=1)
+
+
+class FinanceGoalLifecycleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal["pause", "complete", "reopen"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RecurrenceDefinitionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str | None = Field(default=None, min_length=1)
+    scope: Literal["member", "household"] = "member"
+    kind: str = Field(min_length=1, max_length=160)
+    rrule: str = Field(min_length=1, max_length=1000)
+    next_occurrence: str = Field(min_length=1, max_length=80)
+    lead_time_days: int = Field(default=0, ge=0, le=365)
+    trackable: bool = False
+    notes: str | None = Field(default=None, max_length=5000)
+
+
+class RoutineStepRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    step_id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=500)
+    position: int = Field(ge=0, le=49)
+    micro_step: str | None = Field(default=None, max_length=500)
+    linked_task_id: str | None = Field(default=None, max_length=160)
+
+
+class RoutineDefinitionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str | None = Field(default=None, min_length=1)
+    title: str = Field(min_length=1, max_length=500)
+    timezone: str = Field(min_length=1, max_length=100)
+    starts_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    rrule: str = Field(min_length=1, max_length=1000)
+    window_start_local: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    window_end_local: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    steps: list[RoutineStepRequest] = Field(min_length=1, max_length=50)
 
 
 class CalendarOutcomeRequest(BaseModel):
@@ -506,6 +592,14 @@ class PeopleProfileRequest(BaseModel):
 
 
 class PeopleLifecycleRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+    action: Literal["archive", "restore"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RegistryLifecycleRequest(BaseModel):
     model_config = {"extra": "forbid"}
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1, max_length=240)
@@ -2195,35 +2289,112 @@ async def submit_triage_intent(
         # The holding state exists before any extraction result is recorded.
         await runtime.wait_for_projection("triage", intent_event_id)
 
-    candidates = extract_intent_candidates(
+    deterministic_candidates = extract_intent_candidates(
         body.text,
         submitted_at=submitted_at,
         kind_hint=body.kind_hint,
     )
+    language_state = "complete"
+    language_reason = "bounded_language_assessment_completed"
+    skill_call_event_id: str | None = None
+    grounded_candidates = []
+    try:
+        skill_result = await runtime.run_skill_fn(
+            "skill:extract_note_semantics",
+            {
+                "title": None,
+                "body_text": body.text,
+                "body_format": "plain",
+                "source_kind": "member_intent",
+                "content_sha256": hashlib.sha256(body.text.encode()).hexdigest(),
+            },
+            SkillContext(
+                session=session,
+                correlation_id=session.correlation_id,
+                triggering_event_id=intent_event_id,
+                invocation_idempotency_key=f"triage-intent:v2:{intent_event_id}",
+                owner_scope=f"private:{session.auth_member_id}",
+                visibility_scope=f"private:{session.auth_member_id}",
+                sensitivity=sensitivity,
+            ),
+            input_sensitivities={"body_text": sensitivity},
+        )
+        raw_output = getattr(skill_result, "output", skill_result)
+        if isinstance(raw_output, dict):
+            grounded_candidates = extract_grounded_nlp_candidates(
+                body.text,
+                raw_output.get("candidates"),
+                source_rule_id="explicit_member_intent_v2",
+            )
+    except (
+        RuntimeError,
+        SkillInputInvalid,
+        SkillOutputInvalid,
+        SkillSensitivityRefused,
+        SkillScopeInsufficient,
+        SkillHandlerError,
+        OpenClawTimeout,
+        OpenClawUnreachable,
+        OpenClawResponseMalformed,
+    ) as exc:
+        language_state = "defensive_default"
+        language_reason = f"language_seam_{type(exc).__name__}"
+    if body.kind_hint is not None:
+        grounded_candidates = [
+            candidate
+            for candidate in grounded_candidates
+            if candidate.target_kind == body.kind_hint
+        ]
+    candidates = merge_intent_candidates(
+        deterministic_candidates,
+        grounded_candidates,
+    )
+    related_skill_events = await runtime.event_log.get_by_causation(intent_event_id)
+    skill_call = next(
+        (
+            event
+            for event in reversed(related_skill_events)
+            if event.get("type") == "skill.call.recorded"
+            and (event.get("payload") or {}).get("skill_name")
+            == "skill:extract_note_semantics"
+        ),
+        None,
+    )
+    if skill_call is not None:
+        skill_call_event_id = str(skill_call["event_id"])
     extracted_at = EventEnvelope.now_utc_iso()
     feature_payload = {
         "intent_id": intent_id,
         "source_event_id": intent_event_id,
-        "skill_call_event_id": None,
-        "extractor_id": EXTRACTOR_ID,
+        "skill_call_event_id": skill_call_event_id,
+        "extractor_id": "member-intent-hybrid-v2",
         "language": "en",
         "candidates": [candidate.feature_payload() for candidate in candidates],
         # The deterministic assessor completed even when it could not derive
         # a typed candidate. The exact text remains in the Triage holding
         # state for human interpretation; this is not a model failure.
-        "extraction_state": "complete",
+        "extraction_state": language_state,
         "extracted_at": extracted_at,
-        "assessment_outcome": ("eligible_candidates" if candidates else "no_candidate"),
+        "assessment_outcome": (
+            "eligible_candidates"
+            if candidates
+            else "failed"
+            if language_state != "complete"
+            else "no_candidate"
+        ),
         "reason_codes": [
             "member_kind_or_text_rule_matched"
-            if candidates
-            else "member_text_requires_human_interpretation"
+            if deterministic_candidates
+            else "bounded_language_candidate_found"
+            if grounded_candidates
+            else "member_text_requires_human_interpretation",
+            language_reason,
         ],
     }
     feature_fingerprint = hashlib.sha256(
         json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    feature_key = f"triage-intent-features:{intent_event_id}:{EXTRACTOR_ID}"
+    feature_key = f"triage-intent-features:{intent_event_id}:member-intent-hybrid-v2"
     prior_feature = await runtime.event_log.get_by_idempotency(
         session.tenant_id, feature_key
     )
@@ -2235,16 +2406,16 @@ async def submit_triage_intent(
                 event_at_ms=int(time.time() * 1000),
                 tenant_id=session.tenant_id,
                 type="triage.intent.features_extracted",
-                schema_version=2,
+                schema_version=3,
                 occurred_at=extracted_at,
-                source_adapter=EXTRACTOR_ID,
+                source_adapter="member-intent-hybrid-v2",
                 source_account_id=session.auth_member_id,
                 owner_scope=f"private:{session.auth_member_id}",
                 visibility_scope=f"private:{session.auth_member_id}",
                 sensitivity=sensitivity,
                 correlation_id=session.correlation_id,
                 causation_id=intent_event_id,
-                actor_identity=f"pipeline:{EXTRACTOR_ID}",
+                actor_identity="pipeline:member-intent-hybrid-v2",
                 idempotency_key=feature_key,
                 raw_ref=f"features-sha256:{feature_fingerprint}",
                 payload=feature_payload,
@@ -2299,14 +2470,14 @@ async def submit_triage_intent(
                     type="triage.item.proposed",
                     schema_version=2,
                     occurred_at=extracted_at,
-                    source_adapter=EXTRACTOR_ID,
+                    source_adapter="member-intent-hybrid-v2",
                     source_account_id=session.auth_member_id,
                     owner_scope=f"private:{session.auth_member_id}",
                     visibility_scope=f"private:{session.auth_member_id}",
                     sensitivity=sensitivity,
                     correlation_id=session.correlation_id,
                     causation_id=feature_event_id,
-                    actor_identity=f"pipeline:{EXTRACTOR_ID}",
+                    actor_identity="pipeline:member-intent-hybrid-v2",
                     idempotency_key=proposal_key,
                     raw_ref=f"candidate-sha256:{candidate_fingerprint}",
                     payload=proposal_payload,
@@ -2876,7 +3047,7 @@ def _member_command_event(
     payload: dict[str, Any],
     request_id: str,
     fingerprint: str,
-    causation_id: str,
+    causation_id: str | None,
     owner_scope: str,
     visibility_scope: str,
     sensitivity: Sensitivity,
@@ -2903,21 +3074,27 @@ def _member_command_event(
     )
 
 
-async def _complete_recurrence(
+async def _recurrence_lifecycle(
     body: MemberLifecycleRequest, request: Request, session: Session
 ) -> dict[str, Any]:
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(
-            403, "routine completion is unavailable while viewing another member"
+            403, "recurrence changes are unavailable while viewing another member"
         )
-    if body.action != "complete":
-        raise HTTPException(422, "trackable recurrences support completion only")
+    if body.action not in {"complete", "pause", "resume", "end"}:
+        raise HTTPException(422, "unsupported recurrence lifecycle action")
     runtime = _runtime(request)
+    event_type = {
+        "complete": "recurrence.completed",
+        "pause": "recurrence.paused",
+        "resume": "recurrence.resumed",
+        "end": "recurrence.ended",
+    }[body.action]
     fingerprint = _member_command_fingerprint("recurrence", body.item_id, body)
     prior = await _prior_member_command(
         runtime,
         session,
-        event_type="recurrence.completed",
+        event_type=event_type,
         request_id=body.request_id,
         fingerprint=fingerprint,
     )
@@ -2942,21 +3119,54 @@ async def _complete_recurrence(
     owned = (
         row["linked_kind"] == "party" and row["linked_id"] == session.auth_member_id
     ) or (row["linked_kind"] == "household" and session.auth_role == "principal")
-    if not owned or not row.get("trackable"):
-        raise HTTPException(404, "trackable recurrence not found")
+    if not owned:
+        raise HTTPException(404, "recurrence not found")
+    if body.action == "complete" and not row.get("trackable"):
+        raise HTTPException(409, "this recurrence does not track completion")
     if row["last_event_id"] != body.expected_last_event_id:
-        raise HTTPException(409, "recurrence changed; refresh before completing it")
+        raise HTTPException(409, "recurrence changed; refresh before changing it")
     now = EventEnvelope.now_utc_iso()
-    payload = {
-        "recurrence_id": body.item_id,
-        "completed_at": now,
-        "completed_by_party_id": session.auth_member_id,
-        "occurrence_date": str(row["next_occurrence"])[:10],
-    }
-    await _guard_member_write(runtime, session, "recurrence.completed", payload)
+    status = str(row.get("status") or "active")
+    payload: dict[str, Any]
+    if body.action == "complete":
+        if status != "active":
+            raise HTTPException(409, "only active recurrences can be completed")
+        payload = {
+            "recurrence_id": body.item_id,
+            "completed_at": now,
+            "completed_by_party_id": session.auth_member_id,
+            "occurrence_date": str(row["next_occurrence"])[:10],
+        }
+    elif body.action == "pause":
+        if status != "active":
+            raise HTTPException(409, "only active recurrences can be paused")
+        payload = {
+            "recurrence_id": body.item_id,
+            "paused_at": now,
+            "paused_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+    elif body.action == "resume":
+        if status != "paused":
+            raise HTTPException(409, "only paused recurrences can be resumed")
+        payload = {
+            "recurrence_id": body.item_id,
+            "resumed_at": now,
+            "resumed_by_member_id": session.auth_member_id,
+        }
+    else:
+        if status not in {"active", "paused"}:
+            raise HTTPException(409, "recurrence is already ended")
+        payload = {
+            "recurrence_id": body.item_id,
+            "ended_at": now,
+            "ended_by_member_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+    await _guard_member_write(runtime, session, event_type, payload)
     event = _member_command_event(
         session,
-        event_type="recurrence.completed",
+        event_type=event_type,
         payload=payload,
         request_id=body.request_id,
         fingerprint=fingerprint,
@@ -2979,6 +3189,88 @@ async def _complete_recurrence(
             runtime.projections.connection("recurrences"),
             session,
             recurrence_id=body.item_id,
+        ),
+        "what_now": core._what_now(runtime, session),
+    }
+
+
+async def _routine_lifecycle(
+    body: MemberLifecycleRequest, request: Request, session: Session
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "routine changes are unavailable while viewing another member"
+        )
+    if body.action not in {"pause", "resume", "end"}:
+        raise HTTPException(422, "unsupported routine lifecycle action")
+    runtime = _runtime(request)
+    event_type = f"routine.{ {'pause': 'paused', 'resume': 'resumed', 'end': 'ended'}[body.action] }"
+    fingerprint = _member_command_fingerprint("routine", body.item_id, body)
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type=event_type,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    row = get_routine(
+        runtime.projections.connection("recurrences"),
+        session,
+        routine_id=body.item_id,
+    )
+    if row is None or row.get("member_id") != session.auth_member_id:
+        raise HTTPException(404, "routine not found")
+    if prior is not None:
+        return {
+            "event_id": prior["event_id"],
+            "duplicate": True,
+            "routine": row,
+            "what_now": core._what_now(runtime, session),
+        }
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, "routine changed; refresh before changing it")
+    status = str(row.get("status") or "active")
+    if body.action == "pause" and status != "active":
+        raise HTTPException(409, "only active routines can be paused")
+    if body.action == "resume" and status != "paused":
+        raise HTTPException(409, "only paused routines can be resumed")
+    if body.action == "end" and status not in {"active", "paused"}:
+        raise HTTPException(409, "routine is already ended")
+    now = EventEnvelope.now_utc_iso()
+    prefix = {"pause": "paused", "resume": "resumed", "end": "ended"}[body.action]
+    payload: dict[str, Any] = {
+        "routine_id": body.item_id,
+        f"{prefix}_at": now,
+        f"{prefix}_by_member_id": session.auth_member_id,
+    }
+    if body.action in {"pause", "end"}:
+        payload["reason"] = body.reason
+    await _guard_member_write(runtime, session, event_type, payload)
+    event = _member_command_event(
+        session,
+        event_type=event_type,
+        payload=payload,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+        causation_id=row["last_event_id"],
+        owner_scope=row["owner_scope"],
+        visibility_scope=row["visibility_scope"],
+        sensitivity=cast(Sensitivity, row.get("sensitivity") or "normal"),
+    )
+    try:
+        event_id = await runtime.events.write(event)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior action body"
+        ) from exc
+    await runtime.wait_for_projection("recurrences", event_id)
+    return {
+        "event_id": event_id,
+        "duplicate": False,
+        "routine": get_routine(
+            runtime.projections.connection("recurrences"),
+            session,
+            routine_id=body.item_id,
         ),
         "what_now": core._what_now(runtime, session),
     }
@@ -3208,8 +3500,24 @@ async def _execute_lifecycle(
             f"{session.tenant_id}:recurrence:{body.item_id}", asyncio.Lock()
         )
         async with lock:
-            return await _complete_recurrence(body, request, session)
+            return await _recurrence_lifecycle(body, request, session)
+    if body.item_kind == "routine":
+        lock = runtime.today_command_locks.setdefault(
+            f"{session.tenant_id}:routine:{body.item_id}:definition", asyncio.Lock()
+        )
+        async with lock:
+            return await _routine_lifecycle(body, request, session)
     if body.item_kind == "task":
+        if body.action not in {
+            "complete",
+            "defer",
+            "snooze",
+            "block",
+            "unblock",
+            "cancel",
+            "reopen",
+        }:
+            raise HTTPException(422, "unsupported task lifecycle action")
         actor_id, signed_session_key = runtime.member_chat_binding(
             session.auth_member_id
         )
@@ -3235,7 +3543,18 @@ async def _execute_lifecycle(
                 request_id=body.request_id,
                 item_kind="task",
                 item_id=body.item_id,
-                action=body.action,
+                action=cast(
+                    Literal[
+                        "complete",
+                        "defer",
+                        "snooze",
+                        "block",
+                        "unblock",
+                        "cancel",
+                        "reopen",
+                    ],
+                    body.action,
+                ),
                 expected_last_event_id=body.expected_last_event_id,
                 until=body.until,
                 reason=body.reason,
@@ -3253,6 +3572,7 @@ async def _execute_lifecycle(
             until=body.until,
             reason=body.reason,
             note=body.note,
+            delegate_to_party_id=body.delegate_to_party_id,
         ),
         request,
         session,
@@ -3373,13 +3693,39 @@ async def surface(
             "deprecated_alias": "knowledge",
             "canonical_path": "/api/member/v1/surfaces/notes",
         }
-    return build_surface(
+    result = build_surface(
         runtime,
         session,
         surface,
         calendar_anchor=calendar_date,
         calendar_view=view,
     )
+    if surface == "scoreboard" and runtime.event_log is not None:
+        rewards: list[dict[str, Any]] = []
+        async for event in runtime.event_log.read_since(types=["reward.ready"]):
+            visible = filter_one(session, event)
+            if visible is None:
+                continue
+            payload = visible.get("payload") or {}
+            if payload.get("member_id") != session.view_member_id:
+                continue
+            rewards.append(
+                {
+                    "title": str(payload.get("template_text") or "✓"),
+                    "status": f"{str(payload.get('tier') or 'done').title()} reinforcement",
+                    "reason": (
+                        "Completion evidence: "
+                        + str(visible.get("causation_id") or "unlinked")
+                    ),
+                    "triggering_task_id": payload.get("triggering_task_id"),
+                    "triggering_commitment_id": payload.get("triggering_commitment_id"),
+                    "last_event_id": visible["event_id"],
+                    "occurred_at": visible["occurred_at"],
+                }
+            )
+        result["scoreboard"]["reward_evidence"] = list(reversed(rewards[-50:]))
+        result["scoreboard"]["dual_path_reward_evidence"] = True
+    return result
 
 
 @router.post("/api/member/v1/settings/profile", status_code=202)
@@ -4603,6 +4949,118 @@ async def people_search(
     return crm_search(_runtime(request), session, query)
 
 
+@router.post(
+    "/api/member/v1/registry/{object_kind}/{object_id}/lifecycle",
+    status_code=202,
+)
+async def change_registry_lifecycle(
+    object_kind: Literal["place", "asset", "account"],
+    object_id: str,
+    body: RegistryLifecycleRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403,
+            "Household registry changes are unavailable while viewing another member",
+        )
+    runtime = _runtime(request)
+    if (
+        runtime.projections is None
+        or runtime.events is None
+        or runtime.event_log is None
+    ):
+        raise HTTPException(503, "household registry is unavailable")
+    conn = runtime.projections.connection("places_assets_accounts")
+
+    def current_item() -> dict[str, Any] | None:
+        if object_kind == "place":
+            return get_place(conn, session, place_id=object_id)
+        if object_kind == "asset":
+            return get_asset(conn, session, asset_id=object_id)
+        return get_account(conn, session, account_id=object_id)
+
+    row = current_item()
+    if row is None:
+        raise HTTPException(404, f"{object_kind} not found")
+    event_type = (
+        f"{object_kind}.{'archived' if body.action == 'archive' else 'restored'}"
+    )
+    fingerprint = hashlib.sha256(
+        json.dumps(body.model_dump(mode="json"), sort_keys=True).encode()
+    ).hexdigest()
+    idempotency_key = (
+        f"registry-lifecycle:{object_kind}:{object_id}:{session.auth_member_id}:"
+        f"{body.request_id}"
+    )
+    prior = await runtime.event_log.get_by_idempotency(
+        session.tenant_id, idempotency_key
+    )
+    if prior is not None:
+        if prior.get("raw_ref") != f"request-sha256:{fingerprint}":
+            raise HTTPException(
+                409, "request id conflicts with another registry action"
+            )
+        return {
+            "accepted": True,
+            "duplicate": True,
+            "event_id": prior["event_id"],
+            "item": current_item(),
+        }
+    if row["last_event_id"] != body.expected_last_event_id:
+        raise HTTPException(409, f"{object_kind} changed; refresh before acting")
+    current = str(row.get("lifecycle_status") or "active")
+    if body.action == "archive" and current == "archived":
+        raise HTTPException(409, f"{object_kind} is already archived")
+    if body.action == "restore" and current != "archived":
+        raise HTTPException(409, f"{object_kind} is not archived")
+    now = EventEnvelope.now_utc_iso()
+    payload = (
+        {
+            f"{object_kind}_id": object_id,
+            "archived_at": now,
+            "archived_by_party_id": session.auth_member_id,
+            "reason": body.reason,
+        }
+        if body.action == "archive"
+        else {
+            f"{object_kind}_id": object_id,
+            "restored_at": now,
+            "restored_by_party_id": session.auth_member_id,
+        }
+    )
+    await _guard_member_write(runtime, session, event_type, payload)
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type=event_type,
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-settings",
+            source_account_id=session.auth_member_id,
+            owner_scope=cast(str, row["owner_scope"]),
+            visibility_scope=cast(str, row["visibility_scope"]),
+            sensitivity=cast(Sensitivity, row.get("sensitivity") or "normal"),
+            correlation_id=session.correlation_id,
+            causation_id=row["last_event_id"],
+            actor_identity=session.auth_member_id,
+            idempotency_key=idempotency_key,
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=payload,
+        )
+    )
+    await runtime.wait_for_projection("places_assets_accounts", event_id)
+    return {
+        "accepted": True,
+        "duplicate": False,
+        "event_id": event_id,
+        "item": current_item(),
+    }
+
+
 @router.get("/api/member/v1/people/{party_id}")
 async def person_detail(
     party_id: str, request: Request, session: SessionDep
@@ -4764,6 +5222,314 @@ async def member_lifecycle(
     result = await _execute_lifecycle(body, request, session)
     brief = build_surface(_runtime(request), session, "today")["brief"]
     return {**result, "next_action": result.get("what_now"), "brief": brief}
+
+
+@router.put("/api/member/v1/recurrences/{recurrence_id}")
+async def define_recurrence(
+    recurrence_id: str,
+    body: RecurrenceDefinitionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "recurrence changes are unavailable while viewing another member"
+        )
+    try:
+        next_occurrence = datetime.fromisoformat(
+            body.next_occurrence.replace("Z", "+00:00")
+        )
+        if next_occurrence.tzinfo is None:
+            raise ValueError("timezone required")
+        rule = rrulestr(body.rrule, dtstart=next_occurrence)
+        if rule.after(next_occurrence, inc=True) is None:
+            raise ValueError("rule has no occurrence")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            422, "repeat rule and next occurrence must form a valid dated schedule"
+        ) from exc
+    if body.scope == "household" and session.auth_role != "principal":
+        raise HTTPException(403, "only a principal can define a household recurrence")
+    runtime = _runtime(request)
+    event_type = (
+        "recurrence.added"
+        if body.expected_last_event_id is None
+        else "recurrence.updated"
+    )
+    fingerprint = _member_command_fingerprint("recurrence", recurrence_id, body)
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type=event_type,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    conn = runtime.projections.connection("recurrences")
+    row = get_recurrence(conn, session, recurrence_id=recurrence_id)
+    if prior is not None:
+        return {
+            "event_id": prior["event_id"],
+            "duplicate": True,
+            "recurrence": row,
+        }
+    if event_type == "recurrence.added":
+        if row is not None:
+            raise HTTPException(
+                409, "recurrence already exists; refresh before editing"
+            )
+        linked_kind = "household" if body.scope == "household" else "party"
+        linked_id = (
+            "household" if linked_kind == "household" else session.auth_member_id
+        )
+        payload: dict[str, Any] = {
+            "recurrence_id": recurrence_id,
+            "linked_kind": linked_kind,
+            "linked_id": linked_id,
+            "kind": body.kind,
+            "rrule": body.rrule,
+            "next_occurrence": body.next_occurrence,
+            "lead_time_days": body.lead_time_days,
+            "trackable": body.trackable,
+            "notes": body.notes,
+        }
+        owner_scope = (
+            "shared:household"
+            if linked_kind == "household"
+            else f"private:{session.auth_member_id}"
+        )
+        visibility_scope = owner_scope
+        sensitivity: Sensitivity = "normal"
+        causation_id = None
+    else:
+        if row is None:
+            raise HTTPException(404, "recurrence not found")
+        owned = (
+            row["linked_kind"] == "party" and row["linked_id"] == session.auth_member_id
+        ) or (row["linked_kind"] == "household" and session.auth_role == "principal")
+        if not owned:
+            raise HTTPException(404, "recurrence not found")
+        row_scope = "household" if row["linked_kind"] == "household" else "member"
+        if body.scope != row_scope:
+            raise HTTPException(409, "editing cannot move a recurrence between scopes")
+        if row.get("status") == "ended":
+            raise HTTPException(409, "an ended recurrence cannot be edited")
+        if row["last_event_id"] != body.expected_last_event_id:
+            raise HTTPException(409, "recurrence changed; refresh before editing")
+        payload = {
+            "recurrence_id": recurrence_id,
+            "updated_at": EventEnvelope.now_utc_iso(),
+            "field_updates": {
+                "kind": body.kind,
+                "rrule": body.rrule,
+                "next_occurrence": body.next_occurrence,
+                "lead_time_days": body.lead_time_days,
+                "trackable": body.trackable,
+                "notes": body.notes,
+            },
+        }
+        owner_scope = row["owner_scope"]
+        visibility_scope = row["visibility_scope"]
+        sensitivity = cast(Sensitivity, row.get("sensitivity") or "normal")
+        causation_id = row["last_event_id"]
+    await _guard_member_write(runtime, session, event_type, payload)
+    event = _member_command_event(
+        session,
+        event_type=event_type,
+        payload=payload,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+        causation_id=causation_id,
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
+        sensitivity=sensitivity,
+    )
+    try:
+        event_id = await runtime.events.write(event)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior recurrence definition"
+        ) from exc
+    await runtime.wait_for_projection("recurrences", event_id)
+    return {
+        "event_id": event_id,
+        "duplicate": False,
+        "recurrence": get_recurrence(conn, session, recurrence_id=recurrence_id),
+    }
+
+
+@router.put("/api/member/v1/routines/{routine_id}")
+async def define_routine(
+    routine_id: str,
+    body: RoutineDefinitionRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "routine changes are unavailable while viewing another member"
+        )
+    runtime = _runtime(request)
+    payload = {
+        "routine_id": routine_id,
+        "member_id": session.auth_member_id,
+        "title": body.title,
+        "timezone": body.timezone,
+        "starts_on": body.starts_on,
+        "rrule": body.rrule,
+        "window_start_local": body.window_start_local,
+        "window_end_local": body.window_end_local,
+        "steps": [step.model_dump(mode="json") for step in body.steps],
+    }
+    try:
+        RoutineDefinedV1.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            422, f"invalid routine definition: {exc.errors()[0]['msg']}"
+        ) from exc
+    fingerprint = _member_command_fingerprint("routine", routine_id, body)
+    prior = await _prior_member_command(
+        runtime,
+        session,
+        event_type="routine.defined",
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+    )
+    conn = runtime.projections.connection("recurrences")
+    row = get_routine(conn, session, routine_id=routine_id)
+    if prior is not None:
+        return {"event_id": prior["event_id"], "duplicate": True, "routine": row}
+    if body.expected_last_event_id is None:
+        if row is not None:
+            raise HTTPException(409, "routine already exists; refresh before editing")
+        causation_id = None
+        owner_scope = f"private:{session.auth_member_id}"
+        visibility_scope = owner_scope
+        sensitivity: Sensitivity = "normal"
+    else:
+        if row is None or row.get("member_id") != session.auth_member_id:
+            raise HTTPException(404, "routine not found")
+        if row.get("status") == "ended":
+            raise HTTPException(409, "an ended routine cannot be edited")
+        if row["last_event_id"] != body.expected_last_event_id:
+            raise HTTPException(409, "routine changed; refresh before editing")
+        causation_id = row["last_event_id"]
+        owner_scope = row["owner_scope"]
+        visibility_scope = row["visibility_scope"]
+        sensitivity = cast(Sensitivity, row.get("sensitivity") or "normal")
+    await _guard_member_write(runtime, session, "routine.defined", payload)
+    event = _member_command_event(
+        session,
+        event_type="routine.defined",
+        payload=payload,
+        request_id=body.request_id,
+        fingerprint=fingerprint,
+        causation_id=causation_id,
+        owner_scope=owner_scope,
+        visibility_scope=visibility_scope,
+        sensitivity=sensitivity,
+    )
+    try:
+        event_id = await runtime.events.write(event)
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            409, "idempotency key conflicts with prior routine definition"
+        ) from exc
+    await runtime.wait_for_projection("recurrences", event_id)
+    return {
+        "event_id": event_id,
+        "duplicate": False,
+        "routine": get_routine(conn, session, routine_id=routine_id),
+    }
+
+
+@router.post("/api/member/v1/finance/goals/{goal_id}/lifecycle")
+async def finance_goal_lifecycle(
+    goal_id: str,
+    body: FinanceGoalLifecycleRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(403, "Finance changes are unavailable in view-as mode")
+    runtime = _runtime(request)
+    lock = runtime.today_command_locks.setdefault(
+        f"{session.tenant_id}:finance-goal:{goal_id}", asyncio.Lock()
+    )
+    async with lock:
+        event_type = {
+            "pause": "finance.goal_paused",
+            "complete": "finance.goal_completed",
+            "reopen": "finance.goal_reopened",
+        }[body.action]
+        fingerprint = _member_command_fingerprint("finance_goal", goal_id, body)
+        prior = await _prior_member_command(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+        )
+        row = get_finance_goal(
+            runtime.projections.connection("money"), session, goal_id=goal_id
+        )
+        if row is None:
+            raise HTTPException(404, "finance goal not found")
+        if prior is not None:
+            return {"event_id": prior["event_id"], "duplicate": True, "goal": row}
+        if row["last_event_id"] != body.expected_last_event_id:
+            raise HTTPException(409, "finance goal changed; refresh before changing it")
+        status = str(row.get("status") or "active")
+        if body.action in {"pause", "complete"} and status != "active":
+            raise HTTPException(409, "only active finance goals can be changed")
+        if body.action == "reopen" and status not in {"paused", "complete"}:
+            raise HTTPException(409, "only paused or completed goals can be reopened")
+        now = EventEnvelope.now_utc_iso()
+        payload: dict[str, Any] = {"goal_id": goal_id}
+        if body.action == "pause":
+            payload.update(
+                paused_at=now,
+                paused_by_member_id=session.auth_member_id,
+                reason=body.reason,
+            )
+        elif body.action == "complete":
+            payload.update(
+                completed_at=now,
+                completed_by_member_id=session.auth_member_id,
+                note=body.reason,
+            )
+        else:
+            payload.update(
+                reopened_at=now,
+                reopened_by_member_id=session.auth_member_id,
+                previous_status=status,
+            )
+        await _guard_member_write(runtime, session, event_type, payload)
+        event = _member_command_event(
+            session,
+            event_type=event_type,
+            payload=payload,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+            causation_id=row["last_event_id"],
+            owner_scope=row["owner_scope"],
+            visibility_scope=row["visibility_scope"],
+            sensitivity=cast(Sensitivity, row.get("sensitivity") or "privileged"),
+        )
+        try:
+            event_id = await runtime.events.write(event)
+        except IdempotencyConflict as exc:
+            raise HTTPException(
+                409, "idempotency key conflicts with prior finance-goal action"
+            ) from exc
+        await runtime.wait_for_projection("money", event_id)
+        return {
+            "event_id": event_id,
+            "duplicate": False,
+            "goal": get_finance_goal(
+                runtime.projections.connection("money"), session, goal_id=goal_id
+            ),
+        }
 
 
 @router.post("/api/member/v1/calendar/{calendar_event_id}/outcome")

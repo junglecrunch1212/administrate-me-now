@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_id           TEXT NOT NULL,
     tenant_id         TEXT NOT NULL,
     title             TEXT NOT NULL,
-    status            TEXT NOT NULL,          -- inbox | next | in_progress | waiting_on | deferred | done | dismissed
+    status            TEXT NOT NULL,          -- inbox | next | in_progress | waiting_on | deferred | done | cancelled | dismissed
     assignee_party    TEXT,                   -- REFERENCES parties(party_id); NULL = household-shared
     domain            TEXT NOT NULL,
     energy            TEXT,                   -- low | medium | high
@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_by        TEXT,
     completed_at      TEXT,
     completed_by      TEXT,
+    lifecycle_action  TEXT,
+    lifecycle_at      TEXT,
+    lifecycle_reason  TEXT,
     source_system     TEXT,
     notes             TEXT,
     owner_scope       TEXT NOT NULL,

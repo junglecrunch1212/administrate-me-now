@@ -12,8 +12,12 @@ or create anything. Extract only facts stated in the content.
 {{ body_text | truncate(12000) }}
 </untrusted_note>
 
-Return possible task, calendar_event, reminder, list, list_item, or recurrence
-candidates. Every candidate requires an exact verbatim `evidence_quote` copied
+Return possible task, commitment, calendar_event, reminder, list, list_item,
+recurrence, party_identifier, party_candidate, party_relationship, or
+relationship_fact candidates. People candidates may preserve explicit names,
+identifiers, relationships, birthdays, important dates, employers, roles,
+preferences, or addresses, but must never resolve identity or choose an
+existing party. Every candidate requires an exact verbatim `evidence_quote` copied
 from the note. Do not infer dates, owners, locations, recurrence rules, or
 priorities that are not grounded. For ambiguous natural-language recurrence,
 return the phrase as `recurrence_text`; include `rrule` and `next_occurrence`
@@ -22,7 +26,7 @@ only when the note states enough information to calculate them exactly.
 Return only JSON:
 {
   "candidates": [{
-    "target_kind": "task" | "calendar_event" | "reminder" | "list" | "list_item" | "recurrence",
+    "target_kind": "task" | "commitment" | "calendar_event" | "reminder" | "list" | "list_item" | "recurrence" | "party_identifier" | "party_candidate" | "party_relationship" | "relationship_fact",
     "title": "short review title",
     "candidate": {},
     "evidence_quote": "exact text copied from the note",

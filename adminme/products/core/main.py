@@ -21,6 +21,7 @@ from adminme.products.commitment_service import (
 )
 from adminme.projections.commitments.queries import active_for_member
 from adminme.projections.lists.queries import open_items_for_member
+from adminme.projections.parties.queries import get_party
 from adminme.projections.recurrences.queries import for_member as recurrences_for_member
 from adminme.projections.recurrences.queries import routine_occurrences_at
 from adminme.projections.tasks.queries import actionable_for_member
@@ -38,6 +39,7 @@ class LifecycleRequest(BaseModel):
     until: str | None = None
     reason: str | None = Field(default=None, max_length=500)
     note: str | None = Field(default=None, max_length=500)
+    delegate_to_party_id: str | None = Field(default=None, min_length=1)
 
 
 @router.get("/status")
@@ -244,6 +246,8 @@ async def lifecycle(
         "unblock": "commitment.unblocked",
         "snooze": "commitment.snoozed",
         "defer": "commitment.deferred",
+        "cancel": "commitment.cancelled",
+        "delegate": "commitment.delegated",
     }
     event_type = event_types.get(action)
     if event_type is None:
@@ -316,6 +320,38 @@ async def lifecycle(
             "deferred_until": body.until,
             "deferred_by_party_id": actor,
             "reason": body.reason,
+        }
+    elif action == "cancel":
+        if row["status"] in {"done", "cancelled", "delegated", "expired"}:
+            raise HTTPException(409, "commitment is terminal")
+        payload = {
+            "commitment_id": commitment_id,
+            "cancelled_at": now,
+            "cancelled_by_party_id": actor,
+            "reason": body.reason,
+        }
+    elif action == "delegate":
+        if row["status"] in {"done", "cancelled", "delegated", "expired"}:
+            raise HTTPException(409, "commitment is terminal")
+        if not body.delegate_to_party_id:
+            raise HTTPException(422, "delegate_to_party_id is required")
+        if body.delegate_to_party_id == actor:
+            raise HTTPException(422, "choose another person for delegation")
+        if (
+            runtime.projections is None
+            or get_party(
+                runtime.projections.connection("parties"),
+                session,
+                party_id=body.delegate_to_party_id,
+            )
+            is None
+        ):
+            raise HTTPException(422, "delegation requires a visible confirmed Party")
+        payload = {
+            "commitment_id": commitment_id,
+            "delegated_at": now,
+            "delegated_by_party_id": actor,
+            "delegated_to_party_id": body.delegate_to_party_id,
         }
     else:  # event_type validation above keeps this unreachable at runtime.
         raise AssertionError(f"unhandled lifecycle action: {action}")

@@ -163,13 +163,14 @@ def test_ranker_preserves_list_and_recurrence_semantics() -> None:
     by_kind = {item["kind"]: item for item in ranked["ranked"]}
     assert set(by_kind) == {"list_item", "recurrence", "routine"}
     assert by_kind["list_item"]["actions"] == ["complete_external", "evidence"]
-    assert by_kind["recurrence"]["actions"] == ["complete", "evidence"]
+    assert by_kind["recurrence"]["actions"] == ["complete", "pause", "evidence"]
     assert by_kind["recurrence"]["id"] == "rec-medicine"
     assert by_kind["list_item"]["id"] == "groceries:milk"
     assert by_kind["routine"]["id"] == "routine-leaving"
     assert by_kind["routine"]["actions"] == [
         "complete_step",
         "skip_step",
+        "pause",
         "evidence",
     ]
     assert by_kind["routine"]["current_step"]["step_id"] == "keys"

@@ -207,6 +207,33 @@ class FinanceGoalSetV1(BaseModel):
     notes: str | None = None
 
 
+class FinanceGoalPausedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    goal_id: str = Field(min_length=1)
+    paused_at: str = Field(min_length=1)
+    paused_by_member_id: str = Field(min_length=1)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class FinanceGoalCompletedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    goal_id: str = Field(min_length=1)
+    completed_at: str = Field(min_length=1)
+    completed_by_member_id: str = Field(min_length=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class FinanceGoalReopenedV1(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    goal_id: str = Field(min_length=1)
+    reopened_at: str = Field(min_length=1)
+    reopened_by_member_id: str = Field(min_length=1)
+    previous_status: Literal["paused", "complete"]
+
+
 class FinanceWorkbookPublishedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -229,4 +256,7 @@ registry.register("finance.assumption_set", 1, FinanceAssumptionSetV1)
 registry.register("finance.budget_set", 1, FinanceBudgetSetV1)
 registry.register("finance.scenario_set", 1, FinanceScenarioSetV1)
 registry.register("finance.goal_set", 1, FinanceGoalSetV1)
+registry.register("finance.goal_paused", 1, FinanceGoalPausedV1)
+registry.register("finance.goal_completed", 1, FinanceGoalCompletedV1)
+registry.register("finance.goal_reopened", 1, FinanceGoalReopenedV1)
 registry.register("finance.workbook_published", 1, FinanceWorkbookPublishedV1)
