@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 14.0.0
+  version: 15.0.0
   kind: pipeline
 runtime:
   language: python
@@ -18,8 +18,8 @@ replay:
 delivery:
   # The handler is idempotent; EventBus checkpoints only the ordered success
   # prefix if one of these bounded language calls fails. Eight-way delivery is
-  # the reviewed maximum for context-linked messages that can share durable
-  # idempotency identities.
+  # the reviewed maximum for context-linked messages. Deliberately shared
+  # cross-source identities use atomic first-equivalent-writer handling.
   concurrency: 8
 depends_on:
   skills:

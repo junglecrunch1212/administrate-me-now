@@ -84,11 +84,21 @@ retained here.
   retained generation-13 idempotency conflict from the rejected sixteen-way
   attempt, the controller immediately ran full Doctor, reported pipeline and
   source-assurance failure together, and rolled back. No history was deleted.
-- Final replay candidate: `noise_filtering` v14/generation 14 preserves the
+- Generation-14 live evidence: replay cleared the retained generation-13
+  conflict and processed more than 1,080 message facts, raising eligible
+  accounting to at least 133, before a later context-equivalent pair exposed
+  that proposal-key read-before-append deduplication could race even at width
+  eight. The fail-fast controller reported pipeline and source-assurance
+  failure together and rolled back without deleting evidence.
+- Final replay candidate: `noise_filtering` v15/generation 15 preserves the
   reviewed width, semantics, source facts, prior terminal evidence, member
-  decisions, and one-hour guard while using fresh durable identities. Review,
-  merge, activation, settlement, Doctor, and authenticated proof remain
-  pending.
+  decisions, and one-hour guard. Deliberately shared proposal and supersession
+  identities now accept the first equivalent event only after the atomic event
+  log arbitrates the race; non-equivalent reuse still raises. One transient
+  OpenClaw timeout/unreachable result is retried once under the same private
+  invocation fingerprint, while persistent failure remains auditable and
+  health-degrading. Review, merge, activation, settlement, Doctor, and
+  authenticated proof remain pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.

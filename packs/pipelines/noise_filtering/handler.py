@@ -22,6 +22,7 @@ SDKs.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -35,6 +36,7 @@ from adminme.candidate_policy import (
     source_id_for_event,
 )
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import IdempotencyConflict
 from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
@@ -65,7 +67,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 14
+_REPLAY_GENERATION = 15
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -81,6 +83,8 @@ _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     # extraction and a defensive classification can still proceed safely.
     RuntimeError,
 )
+
+_TRANSIENT_SKILL_FAILURE_TYPES = (OpenClawTimeout, OpenClawUnreachable)
 
 
 def _versioned_idempotency_keys(prefix: str, source_event_id: str) -> list[str]:
@@ -117,6 +121,64 @@ async def _select_payload_idempotency_key(
     raise RuntimeError(
         f"{prefix} exhausted reviewed replay generations for {source_event_id}"
     )
+
+
+async def _write_first_equivalent_event(
+    *,
+    ctx: PipelineContext,
+    envelope: EventEnvelope,
+    correlation_id: str | None,
+    causation_id: str | None,
+    ignored_payload_fields: frozenset[str],
+) -> str:
+    """Make deliberate cross-source deduplication safe under concurrency.
+
+    A read-before-append check is useful for avoiding work but cannot be the
+    correctness boundary: two context-linked sources can observe the same
+    absent key before either append commits.  The event log remains the atomic
+    arbiter.  If another writer wins, accept only an equivalent domain event;
+    unrelated reuse of the key remains a hard ``IdempotencyConflict``.
+    """
+
+    try:
+        return await ctx.event_sink.write(
+            envelope,
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+        )
+    except IdempotencyConflict:
+        key = envelope.idempotency_key
+        existing = (
+            await ctx.event_log.get_by_idempotency(envelope.tenant_id, key)
+            if key is not None
+            else None
+        )
+        if existing is None:
+            raise
+        stable_envelope = {
+            "type": envelope.type,
+            "schema_version": envelope.schema_version,
+            "owner_scope": envelope.owner_scope,
+            "visibility_scope": envelope.visibility_scope,
+            "sensitivity": envelope.sensitivity,
+            "source_adapter": envelope.source_adapter,
+            "source_account_id": envelope.source_account_id,
+        }
+        if any(existing.get(name) != value for name, value in stable_envelope.items()):
+            raise
+        existing_payload = {
+            name: value
+            for name, value in (existing.get("payload") or {}).items()
+            if name not in ignored_payload_fields
+        }
+        incoming_payload = {
+            name: value
+            for name, value in envelope.payload.items()
+            if name not in ignored_payload_fields
+        }
+        if existing_payload != incoming_payload:
+            raise
+        return str(existing["event_id"])
 
 
 def _extract_text_and_inputs(
@@ -162,7 +224,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "14.0.0"
+    version: str = "15.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -292,7 +354,15 @@ class NoiseFilteringPipeline:
         )
 
         try:
-            result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+            try:
+                result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+            except _TRANSIENT_SKILL_FAILURE_TYPES as exc:
+                _log.warning(
+                    "noise_filtering transient skill failure (%s); retrying once",
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(0.5)
+                result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
                 "noise_filtering skill failure (%s); emitting defensive default",
@@ -711,10 +781,14 @@ class NoiseFilteringPipeline:
                     "interpretation": candidate.interpretation,
                 },
             )
-            await ctx.event_sink.write(
-                envelope,
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=envelope,
                 correlation_id=ctx.correlation_id,
                 causation_id=extraction_event_id,
+                ignored_payload_fields=frozenset(
+                    {"proposal_id", "source_event_id", "extraction_event_id"}
+                ),
             )
 
     async def _reconcile_thread_candidates(
@@ -794,8 +868,9 @@ class NoiseFilteringPipeline:
             proposal_id = str(payload.get("proposal_id") or "")
             if not proposal_id:
                 continue
-            await ctx.event_sink.write(
-                EventEnvelope(
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=EventEnvelope(
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
@@ -827,6 +902,9 @@ class NoiseFilteringPipeline:
                 ),
                 correlation_id=ctx.correlation_id,
                 causation_id=prior["event_id"],
+                ignored_payload_fields=frozenset(
+                    {"superseded_at", "replacement_source_event_id"}
+                ),
             )
         return [
             candidate
@@ -878,8 +956,9 @@ class NoiseFilteringPipeline:
             proposal_id = str(payload.get("proposal_id") or "")
             if not proposal_id:
                 continue
-            await ctx.event_sink.write(
-                EventEnvelope(
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=EventEnvelope(
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
@@ -902,6 +981,9 @@ class NoiseFilteringPipeline:
                 ),
                 correlation_id=ctx.correlation_id,
                 causation_id=proposal["event_id"],
+                ignored_payload_fields=frozenset(
+                    {"superseded_at", "replacement_source_event_id"}
+                ),
             )
 
     async def _emit_triage_assessment(
