@@ -17,6 +17,35 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-10 CO-013 bounded Gmail history candidate
+
+Live investigation after CO-012 found the missing-source cause: Gmail's first
+poll intentionally snapshotted the current history cursor and imported zero
+existing mail. The healthy downstream system therefore had no source facts
+for a pre-launch multi-message obligation. CO-013 makes first-use acquisition
+finite, durable, and explicit while retaining the provider as source and
+Triage as a human gate.
+
+Gmail adapter v1.1 snapshots the incremental cursor first, lists up to 1,000
+non-draft messages from the prior 730 days by default, and feeds each through
+the existing account-bound direction/dedupe/quarantine path. Validated hard
+ceilings are 3,650 days and 5,000 messages; zero disables acquisition. A
+content-free policy-digest cursor makes restart idempotent and status reports
+the exact bounds, counts, completion, and truncation without source content.
+
+Focused adapter and production-supervisor tests pass, including paging, hard
+caps, invalid-value refusal, normal typed emission, durable replacement-
+instance idempotency, and preservation of incremental cursor ordering. The full
+candidate matrix passes: 1,753 root/pack tests, 60 isolated bridge tests, 47
+strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
+architecture/invariant checks, performance budgets, builds/packages, clean
+install, tenant isolation, encrypted backup/restore, the exact pinned native
+OpenClaw contract, and all 17 plugin tests. Reviewed merge, guarded deployment,
+settled source assurance, Doctor, and authenticated proof that the previously
+absent obligation produces distinct private Triage candidates remain required
+before this section may claim deployment. No candidate was confirmed and no
+provider effect was authorized.
+
 ## 2026-08-10 CO-012 contextual-message candidate
 
 The observed legal-message failure is now represented by

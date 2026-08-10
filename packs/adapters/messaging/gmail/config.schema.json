@@ -46,6 +46,20 @@
       "default": false,
       "description": "Request Gmail modify/send scopes and expose reply/read/archive actions. Requires fresh OAuth consent."
     },
+    "initial_backfill_days": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3650,
+      "default": 730,
+      "description": "Bounded initial mailbox acquisition window. Zero disables history acquisition; incremental history remains enabled."
+    },
+    "initial_backfill_max_messages": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5000,
+      "default": 1000,
+      "description": "Hard cap for the durable initial mailbox acquisition. Zero disables history acquisition."
+    },
     "sensitivity_floor": {
       "type": "string",
       "enum": ["normal", "privileged"],

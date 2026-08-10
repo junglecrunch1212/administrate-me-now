@@ -10,4 +10,6 @@ member_id: member_example
 workspace: personal
 account_label: Personal Gmail
 enable_writes: false
+initial_backfill_days: 730
+initial_backfill_max_messages: 1000
 sensitivity_floor: normal
