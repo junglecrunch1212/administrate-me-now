@@ -2,8 +2,7 @@
 
 Date: 2026-08-10
 
-Status: deployed acquisition and liveness repair; reviewed context-vocabulary
-repair and final live fields pending
+Status: deployed and live verified in observation mode
 
 ## Failure evidence
 
@@ -129,8 +128,7 @@ retained here.
   collapses a repeated typed candidate identity within
   one recorded interpretation to its first occurrence before emitting the
   assessment/proposal pair; confidence neither ranks nor authorizes the choice.
-  Persistent failure remains auditable and health-degrading. Review, merge,
-  activation, settlement, Doctor, and authenticated proof remain pending.
+  Persistent failure remains auditable and health-degrading.
 - The first generation-19 guarded activation was correctly rejected before
   replay settlement because a Gmail message disappeared between provider
   discovery and `messages.get`. The record already received an append-only
@@ -144,9 +142,33 @@ retained here.
   architecture/invariant/clean-install/tenant-isolation/encrypted-backup gates,
   17 OpenClaw plugin tests/build/package/audit, the 69-test Apple-silicon
   bootstrap rehearsal, and the exact OpenClaw 2026.7.2 source build/attestation.
-- Guarded observation deployment and encrypted backup receipt: pending.
-- Settled source assurance and full Doctor: pending.
-- Authenticated Comms/Triage proof of recovered multi-message context: pending.
+- PR #325 passed both hosted gates and merged as
+  `b58e09dab80df4161f7314a541f5657b46677fbb`. The attested updater activated
+  that exact commit, created encrypted backup
+  `administrateme-20260810T213412Z.ambackup`, retained rollback, and reported no
+  runtime or OpenClaw migration.
+- Live generation-19 replay recovered the retained failed source, crossed both
+  historical idempotency-collision points with zero subscriber failure or
+  poison, and exercised the full bounded recovery: one source timed out, its
+  first recovery was unreachable, and its second recovery succeeded under a
+  distinct durable identity. The checkpoint advanced and the failed count
+  remained zero.
+- Final source assurance is fresh and settled: 62,553 source facts, 62,553
+  obligations, 62,553 accounted, 225 candidate-bearing, 1,289 no-candidate, 39
+  quarantined, and zero pending, missing, or failed. Gmail adapter v1.1.1 is
+  running with its transport-error cursor at zero after audited list/get 404
+  quarantines.
+- Full live Doctor passed every check: 14/14 projections and checkpoints, 8/8
+  required pipelines with `noise_filtering` v19 healthy, exact pinned OpenClaw
+  discovery plus synthetic `llm-task` execution, five reconciled schedules,
+  launchd/loopback health, secure references, encrypted event log, and
+  observation mode.
+- Authenticated Triage displayed 100 current human-gated records: 33 Ready, 67
+  Needs Details, zero Needs Interpretation, and 50 Recent. Read-only browser
+  inspection verified tasks, decisions, commitments, reminders, recurrences,
+  money-related follow-ups, source direction/provenance, bounded context,
+  evidence, typed destination fields, and explicit observation controls. No
+  candidate was confirmed or dismissed and no provider effect was authorized.
 
 ## Safety assertions
 

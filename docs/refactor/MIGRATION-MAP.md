@@ -32,7 +32,7 @@ still reused the base durable invocation identity, so the wrapper correctly
 replayed the recorded failure without making a second call. Generation 18
 proved the separate identity recovered one retained failure, then one later
 OpenClaw stream reached its real terminal timeout. The final
-v19/generation-19 consumer is **HARDENED** so
+v19/generation-19 consumer is **HARDENED AND LIVE VERIFIED** so
 deliberately shared proposal/supersession identities accept only the first
 equivalent event at the atomic event-log boundary; non-equivalent reuse still
 fails. Ordinary width-eight delivery remains parallel, while only transient
@@ -535,4 +535,4 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 |---|---|---|---|
 | OpenClaw local plugin selection | Same-version discovery could continue loading a reviewed but stale immutable release after an otherwise successful upgrade. | The updater reconciles the bounded AdministrateMe registration while stopped; Doctor requires the registered path and loaded module to resolve in the selected release. Live release `e908ee5d93944da41a5d0dfbd3dd2f16fad5ba4a` satisfies both. | HARDEN |
 | Startup health | The new retry implementation could exist only in the inactive candidate tree, leaving successful startup dependent on an operator health request. | A controlled Gateway-before-runtime restart used the active plugin's bounded automatic retry and reached healthy Doctor without a manual POST. | MODERNIZE |
-| Source-to-Triage proof | Source retention and subscriber checkpoints previously allowed a false-empty member queue. | The settled proof accounts for 61,335/61,335 obligations with 31 candidate-bearing facts and zero pending, missing, or failed outcomes; authenticated Triage renders 77 needs-details and 13 ready items. | SUPERSEDE |
+| Source-to-Triage proof | Source retention and subscriber checkpoints previously allowed a false-empty member queue. | The final CO-013 proof accounts for 62,553/62,553 obligations with 225 candidate-bearing facts and zero pending, missing, or failed outcomes; authenticated Triage renders 67 Needs Details and 33 Ready current records under observation. | SUPERSEDE |

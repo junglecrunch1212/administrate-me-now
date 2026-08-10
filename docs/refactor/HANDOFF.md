@@ -109,6 +109,14 @@ reported the whole source in backoff. Adapter v1.1.1 HARDENS that distinction:
 record-level quarantine remains audited while a successful polling cycle stays
 healthy; real transport, rate-limit, authentication, and API errors retain
 their existing degraded/fatal paths.
+PR #325 merged that v1.1.1 repair as
+`b58e09dab80df4161f7314a541f5657b46677fbb`. Guarded activation of the exact
+merge settled 62,553/62,553 source obligations with 225 candidate-bearing
+facts and zero pending, missing, or failed. Generation 19 recovered the retained
+failure, crossed both historical collision points, and live-proved its second
+bounded recovery after a base timeout and unreachable first recovery. Full
+Doctor is healthy; authenticated Triage shows 33 Ready and 67 Needs Details
+records under observation. No member decision or provider write occurred.
 Deliberately shared proposal and supersession
 identities let the SQLCipher event log atomically select the first equivalent
 writer, while any non-equivalent key reuse remains a hard conflict. Ordinary
@@ -121,9 +129,10 @@ recorded interpretation, fixed code collapses repeated typed
 candidate identities to the first recorded occurrence before emitting the
 terminal assessment or proposal; confidence never ranks that choice. A
 persistent failure still emits an auditable failed disposition and fails
-Doctor. The one-hour guard remains unchanged. Final settlement, Doctor, and
-authenticated Triage proof are still required. No candidate has been confirmed
-and no provider effect has been authorized.
+Doctor. The one-hour guard remains unchanged. No candidate has been confirmed
+and no provider effect has been authorized. Final settlement, Doctor, and
+authenticated Triage proof are complete; the exact content-free evidence is
+retained in `docs/refactor/evidence/co-013-bounded-mailbox-history-acquisition.md`.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
