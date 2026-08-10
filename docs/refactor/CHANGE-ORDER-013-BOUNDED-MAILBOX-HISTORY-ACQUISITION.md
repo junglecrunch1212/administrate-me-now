@@ -1,6 +1,6 @@
 # CO-013 — Bounded, durable mailbox history acquisition
 
-Status: **MERGED; STARTUP-LIVENESS REPAIR CANDIDATE; LIVE EVIDENCE PENDING**
+Status: **DEPLOYED; CONTEXT-VOCABULARY REPAIR CANDIDATE; FINAL LIVE EVIDENCE PENDING**
 
 Date: 2026-08-10
 
@@ -54,6 +54,11 @@ model as household truth:
    thread. The one central asyncio runtime must continue serving health and
    scheduling unrelated work while provider I/O is in flight; the worker has
    no alternate event, projection, or authority path.
+8. Treat every deterministic context reason as one atomic cross-layer
+   vocabulary. A reason emitted by context assembly must be admitted by the
+   pinned skill input schema and the typed Triage context schema in the same
+   reviewed change. A reviewed pipeline version advances the replay generation
+   so immutable source facts rejected by a stale schema are reassessed.
 
 The backfill emits source observations only. It does not invoke a provider
 write, confirm a candidate, or create a Task, Commitment, Calendar event,
@@ -102,9 +107,12 @@ AC-38 requires:
    cursor, and message-level dedupe tests;
 4. a held-open synchronous provider-call test proving acquisition cannot block
    the central runtime event loop or health surface;
-5. full release gates, reviewed merge, guarded observation deployment, source
+5. cross-layer schema proof that exact authored participant-reference context
+   reaches both the pinned language seam and typed Triage explanation, plus
+   reviewed full replay of prior schema-rejected source facts;
+6. full release gates, reviewed merge, guarded observation deployment, source
    settlement, Doctor, and authenticated Comms/Triage proof;
-6. live proof that a previously absent multi-message obligation is now present
+7. live proof that a previously absent multi-message obligation is now present
    as source context and produces separate human-gated candidates without a
    canonical or provider effect.
 

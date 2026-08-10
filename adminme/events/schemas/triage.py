@@ -85,6 +85,7 @@ class TriageContextSourceV1(BaseModel):
         Literal[
             "provider_thread_id",
             "participant_overlap",
+            "participant_reference_overlap",
             "subject_token_overlap",
             "attachment_token_overlap",
         ]

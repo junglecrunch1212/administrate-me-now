@@ -42,7 +42,7 @@ durable replacement-instance idempotency, and preservation of incremental
 cursor ordering. The synchronous Gmail acquisition batch now executes outside
 the central asyncio loop; a held-open provider call proves runtime health and
 unrelated scheduling remain responsive. The full
-candidate matrix passes: 1,762 root/pack tests, 60 isolated bridge tests, 47
+candidate matrix passes: 1,764 root/pack tests, 60 isolated bridge tests, 47
 strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
 architecture/invariant checks, performance budgets, builds/packages, clean
 install, tenant isolation, encrypted backup/restore, the exact pinned native
@@ -50,11 +50,25 @@ OpenClaw contract, and all 17 plugin tests. PR #314 merged after its hosted
 constitutional cascade and Apple-silicon rehearsal passed. Its first guarded
 activation correctly rolled back when the synchronous history batch starved
 the health surface; the older release is healthy and its incompatible private
-settings were removed. Review and merge of the narrow liveness repair, guarded
-redeployment, settled source assurance, Doctor, and authenticated proof that
-the previously absent obligation produces distinct private Triage candidates
-remain required before this section may claim deployment. No candidate was
-confirmed and no provider effect was authorized.
+settings were removed. At that checkpoint the narrow liveness repair still
+required review, merge, and guarded redeployment. No candidate was confirmed
+and no provider effect was authorized.
+
+PR #315 subsequently passed the hosted constitutional cascade and 17m24s
+Apple-silicon rehearsal, merged as `7d750cd8811dbed1b84fc104d3a66f2fa791b91e`,
+and deployed through the attested updater with an encrypted backup and rollback
+retained. Live acquisition raised source facts from 61,398 to 62,526 while the
+runtime liveness surface remained responsive, and candidate-eligible facts rose
+from 13 to at least 18. The expanded facts then exposed a cross-layer schema
+defect: deterministic context assembly emitted
+`participant_reference_overlap`, but the pinned skill input and typed Triage
+context schemas rejected it. Forty-five retained failures share that content-
+free cause; the model was never called for them. The follow-up advances
+`classify_message_nature` to 6.0.1 and `noise_filtering` to 13.0.0, admits the
+reason in both schemas, and performs reviewed full replay under the next
+idempotency generation. Final settlement, Doctor, and authenticated Triage
+proof are still required. No candidate has been confirmed and no provider
+effect has been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
