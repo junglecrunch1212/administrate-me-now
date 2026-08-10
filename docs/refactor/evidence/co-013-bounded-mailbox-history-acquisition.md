@@ -96,16 +96,24 @@ retained here.
   batch exposed that several immediate transient retries could synchronize
   against the pinned Gateway and leave failed terminal assessments even though
   the subscriber remained healthy.
-- Final replay candidate: `noise_filtering` v16/generation 16 preserves the
+- Later generation-15 live evidence: a distinct conflict occurred after one
+  assessment and its first three proposals appended. Content-free encrypted
+  metadata showed the next candidate reused an earlier candidate's
+  `(target_kind, candidate_key)` with a different payload inside the same
+  recorded interpretation. The event log correctly refused the ambiguous key
+  reuse and the controller rolled back.
+- Final replay candidate: `noise_filtering` v17/generation 17 preserves the
   reviewed ordinary width, semantics, source facts, prior terminal evidence,
   member decisions, and one-hour guard. Deliberately shared proposal and
   supersession identities accept the first equivalent event only after the
   atomic event log arbitrates the race; non-equivalent reuse still raises. Only
   transient OpenClaw timeout/unreachable recovery serializes behind one
   runtime-local lock before one retry under the same private invocation
-  fingerprint. Persistent failure remains auditable and health-degrading.
-  Review, merge, activation, settlement, Doctor, and authenticated proof remain
-  pending.
+  fingerprint. Fixed code collapses a repeated typed candidate identity within
+  one recorded interpretation to its first occurrence before emitting the
+  assessment/proposal pair; confidence neither ranks nor authorizes the choice.
+  Persistent failure remains auditable and health-degrading. Review, merge,
+  activation, settlement, Doctor, and authenticated proof remain pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.
