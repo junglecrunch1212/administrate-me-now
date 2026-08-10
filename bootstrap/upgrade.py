@@ -42,7 +42,11 @@ _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
         "source_assurance_terminal_dispositions",
     }
 )
-POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 30 * 60
+# A full reviewed language-bound replay can traverse more than one thousand
+# immutable message facts on a household instance.  Keep this bounded, but do
+# not make a healthy, advancing replay race an unrealistically short rollback
+# clock.
+POST_SWITCH_REPLAY_SETTLEMENT_SECONDS = 60 * 60
 POST_SWITCH_POLL_SECONDS = 2
 
 

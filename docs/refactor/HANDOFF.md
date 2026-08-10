@@ -66,9 +66,16 @@ context schemas rejected it. Forty-five retained failures share that content-
 free cause; the model was never called for them. The follow-up advances
 `classify_message_nature` to 6.0.1 and `noise_filtering` to 13.0.0, admits the
 reason in both schemas, and performs reviewed full replay under the next
-idempotency generation. Final settlement, Doctor, and authenticated Triage
-proof are still required. No candidate has been confirmed and no provider
-effect has been authorized.
+idempotency generation. PR #316 passed both hosted gates and merged as
+`6cc627ffca4ef11bf9670e440d5eee82bfbdff11`. Guarded activation proved the
+schema repair: replay advanced without new failures and began superseding the
+retained failures, but the real 1,500-message language-bound backlog progressed
+too slowly for the 30-minute controller ceiling. The follow-up keeps v13
+semantics and ordered-prefix durability unchanged, uses the bus's supported
+maximum sixteen-way bounded delivery, and gives a still-bounded one-hour
+settlement window. Final settlement, Doctor, and authenticated Triage proof are
+still required. No candidate has been confirmed and no provider effect has
+been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 

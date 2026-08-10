@@ -38,7 +38,12 @@ from bootstrap.services import (
     ServiceStatus,
 )
 from bootstrap.state import EncryptedStateStore
-from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
+from bootstrap.upgrade import (
+    POST_SWITCH_REPLAY_SETTLEMENT_SECONDS,
+    UpgradeError,
+    UpgradeManager,
+    validate_candidate,
+)
 from bootstrap.wizard import BootstrapInterrupted, BootstrapWizard, WizardFailure
 import bootstrap.openclaw_service as openclaw_service
 import bootstrap.runtime_service as runtime_service
@@ -1876,6 +1881,10 @@ def test_upgrade_polls_lightweight_source_settlement_before_full_doctor(
     result = manager._post_switch_doctor(REPO_ROOT)
     assert result["status"] == "healthy"
     assert include_synthetic == [False, False, True]
+
+
+def test_upgrade_replay_settlement_window_covers_household_language_backlog() -> None:
+    assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 60 * 60
 
 
 def test_upgrade_does_not_treat_absent_readiness_as_advancing_replay(
