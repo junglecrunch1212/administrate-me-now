@@ -299,9 +299,10 @@ def _related_score(
     if attachment_overlap:
         score += min(attachment_overlap, 3) * 3
         reasons.append("attachment_token_overlap")
-    # A single shared mailbox address is not enough to relate every email in
-    # an account. Require a second independent signal or two shared parties.
-    if participant_overlap < 2 and not (subject_overlap or attachment_overlap):
+    # A single shared mailbox address plus one generic subject word is not
+    # enough to relate two threads. Require two shared subject tokens, a shared
+    # attachment token, or two shared parties (normally member + counterparty).
+    if participant_overlap < 2 and not (subject_overlap >= 2 or attachment_overlap):
         return 0, ()
     return score, tuple(reasons)
 

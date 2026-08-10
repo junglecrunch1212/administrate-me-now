@@ -74,7 +74,8 @@ Exact scope equality is mandatory for tenant, owner, visibility, sensitivity,
 provider account, and workspace. A candidate event whose payload member
 conflicts with the current member is excluded. Privileged or cross-member data
 cannot enter the pack. A single shared mailbox address cannot relate two
-threads without a second subject/attachment signal or a second shared party.
+threads without at least two shared subject tokens, a shared attachment token,
+or a second shared party.
 
 `triage.item.proposed@v3` adds `triage-context-interpretation-v1`. It is a
 private derived proposal, not household truth. It retains the context

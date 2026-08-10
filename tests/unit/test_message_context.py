@@ -114,6 +114,13 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
         sender="store@example.invalid",
         subject="Weekly store offers",
     )
+    generic_subject_overlap = _message(
+        "source-generic-overlap",
+        "A generic package update is available.",
+        thread_id="thread-generic-package",
+        sender="notifications@example.invalid",
+        subject="Package update",
+    )
     wrong_member = _message(
         "source-private-other",
         "Please sign the legal authorization package.",
@@ -140,6 +147,7 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
                 *messages,
                 related,
                 unrelated,
+                generic_subject_overlap,
                 wrong_member,
                 wrong_workspace,
                 privileged,
@@ -159,6 +167,9 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
     }
     assert "source-work" not in {value.source_event_id for value in pack.messages}
     assert "source-privileged" not in {value.source_event_id for value in pack.messages}
+    assert "source-generic-overlap" not in {
+        value.source_event_id for value in pack.messages
+    }
 
     same_content = _message(
         "source-same-content",
