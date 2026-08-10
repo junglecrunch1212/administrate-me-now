@@ -5,10 +5,12 @@ on:
     paths:
       - "bootstrap/**"
       - "adminme/**"
+      - "packs/adapters/**"
       - "openclaw/administrateme/**"
       - "scripts/acceptance/**"
       - "scripts/verify_invariants.sh"
       - "tests/acceptance/test_macos_bootstrap_operations.py"
+      - "tests/integration/test_adapter_supervisor_gmail.py"
       - "tests/unit/bootstrap/**"
       - ".github/workflows/macos-bootstrap.yml"
   workflow_dispatch:

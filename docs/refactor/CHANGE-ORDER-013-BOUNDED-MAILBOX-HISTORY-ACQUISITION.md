@@ -92,3 +92,8 @@ AC-38 requires:
 Repository fixtures use fictional identities and `.test` addresses. Live
 household content may be inspected only through authorized private surfaces and
 must not enter commits, logs, screenshots, or release evidence.
+
+The macOS rehearsal path filter includes adapter packs and the Gmail supervisor
+composition test. An adapter-only acquisition change therefore cannot evade the
+Apple-silicon bootstrap/recovery gate merely because it does not touch central
+runtime files.
