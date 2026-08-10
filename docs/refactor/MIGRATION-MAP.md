@@ -2,7 +2,7 @@
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable
-message facts, and member decisions are preserved. Adapter v1.1 snapshots the
+message facts, and member decisions are preserved. Adapter v1.1.1 snapshots the
 current provider cursor before a bounded acquisition. Optional private
 historical seeds run before deterministic exact-participant/date expansion and
 recent-history fill, all inside one global cap. The additive metadata-only
@@ -15,6 +15,10 @@ object, or runtime version migrates. The v13 operational replay remains
 semantically unchanged at the reviewed eight-way context-safe width while the
 guarded settlement ceiling moves from 30 minutes to one hour. A new non-source
 capability degradation during that wait now triggers immediate full Doctor;
+an individual Gmail record that disappears between provider discovery and get
+is terminally quarantined while the successfully advanced adapter remains
+healthy, rather than being mislabeled as provider backoff. This HARDENS health
+truth and changes no source fact or provider object.
 ordered-prefix checkpoints, terminal equality, and rollback remain. The final
 consumer first advanced to v14/generation 14 because the rejected sixteen-way
 live attempt durably occupied generation-13 identities. Live generation 14

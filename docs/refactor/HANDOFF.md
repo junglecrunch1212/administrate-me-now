@@ -102,6 +102,13 @@ terminal timeout. That pass also crossed both retained idempotency-collision
 sources without a subscriber failure and increased the eligible-candidate count
 to 166, proving the atomic and same-interpretation identity repairs. The final
 candidate is therefore v19/generation 19.
+The first generation-19 activation also exposed a provider list/get deletion
+race: Gmail returned one discovered id as 404 after it had disappeared. The
+record was already quarantined and the cursor advanced, but adapter v1.1.0
+reported the whole source in backoff. Adapter v1.1.1 HARDENS that distinction:
+record-level quarantine remains audited while a successful polling cycle stays
+healthy; real transport, rate-limit, authentication, and API errors retain
+their existing degraded/fatal paths.
 Deliberately shared proposal and supersession
 identities let the SQLCipher event log atomically select the first equivalent
 writer, while any non-equivalent key reuse remains a hard conflict. Ordinary

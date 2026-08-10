@@ -79,7 +79,7 @@ def test_pack_manifest_loads_cleanly() -> None:
 
     assert manifest["pack"]["id"] == "adapter:messaging-gmail-api"
     assert manifest["pack"]["kind"] == "adapter"
-    assert manifest["pack"]["version"] == "1.1.0"
+    assert manifest["pack"]["version"] == "1.1.1"
     assert manifest["runtime"]["entrypoint"] == "adapter.py"
     assert manifest["runtime"]["class"] == "GmailAdapter"
     assert manifest["family"] == "messaging"
@@ -112,7 +112,7 @@ def test_gmail_adapter_satisfies_protocol() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "messaging-gmail-api"
     assert adapter.family == "messaging"
-    assert adapter.version == "1.1.0"
+    assert adapter.version == "1.1.1"
     assert adapter.sensitivity_floor == "normal"
 
 
