@@ -83,15 +83,20 @@ that retained identity and processed more than 1,080 message facts, raising
 eligible accounting to at least 133, before a later pair of context-equivalent
 sources exposed the underlying read-before-append race even at width eight.
 The fail-fast gate again rejected and rolled back the release without deleting
-evidence. The final consumer is therefore v15/generation 15: deliberately
-shared proposal and supersession identities now let the SQLCipher event log
-atomically select the first equivalent writer, while any non-equivalent key
-reuse remains a hard conflict. One transient OpenClaw timeout/unreachable result
-is retried once under the same private fingerprint; a persistent failure still
-emits an auditable failed disposition and fails Doctor. Width eight and the
-one-hour guard remain unchanged. Final settlement, Doctor, and authenticated
-Triage proof are still required. No candidate has been confirmed and no
-provider effect has been authorized.
+evidence. Generation 15 then proved the atomic first-equivalent-writer repair:
+it crossed the exact later collision with zero subscriber failures or poison.
+That live pass also exposed a retry herd when several retained language
+failures reached the pinned Gateway together; parallel immediate retries could
+still leave failed terminal assessments. The final consumer is therefore
+v16/generation 16. Deliberately shared proposal and supersession identities let
+the SQLCipher event log atomically select the first equivalent writer, while
+any non-equivalent key reuse remains a hard conflict. Ordinary delivery retains
+width eight, but only a transient OpenClaw timeout/unreachable recovery attempt
+serializes behind a runtime-local lock and retries once under the same private
+fingerprint. A persistent failure still emits an auditable failed disposition
+and fails Doctor. The one-hour guard remains unchanged. Final settlement,
+Doctor, and authenticated Triage proof are still required. No candidate has
+been confirmed and no provider effect has been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
