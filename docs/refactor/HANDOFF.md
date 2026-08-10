@@ -95,15 +95,22 @@ payload. That is an intra-interpretation duplicate, not a cross-source race.
 Generation 17 fixed that boundary, but its guarded live replay exposed that the
 queued recovery reused the base durable invocation identity. The skill wrapper
 correctly replayed the current generation's recorded failure instead of issuing
-an unbounded second call, so the source remained failed. The final candidate is
-therefore v18/generation 18. Deliberately shared proposal and supersession
+an unbounded second call, so the source remained failed. Generation 18 gave the
+recovery its own durable identity and live replay proved the first retained
+failure recovered, but one later OpenClaw stream reached its real 60-second
+terminal timeout. That pass also crossed both retained idempotency-collision
+sources without a subscriber failure and increased the eligible-candidate count
+to 166, proving the atomic and same-interpretation identity repairs. The final
+candidate is therefore v19/generation 19.
+Deliberately shared proposal and supersession
 identities let the SQLCipher event log atomically select the first equivalent
 writer, while any non-equivalent key reuse remains a hard conflict. Ordinary
-delivery retains width eight. A transient OpenClaw timeout/unreachable recovery
-serializes behind a runtime-local lock and uses exactly one separate,
-deterministic `:recovery-1` invocation identity; success is reusable on replay
-and failure cannot trigger another provider attempt without a new reviewed
-change. Within one recorded interpretation, fixed code collapses repeated typed
+delivery retains width eight. Transient OpenClaw timeout/unreachable recovery
+serializes behind a runtime-local lock and uses at most two separate,
+deterministic `:recovery-1` / `:recovery-2` invocation identities. A prior
+success is reusable on replay, while exhausting both attempts remains terminal
+and cannot trigger more provider work without a new reviewed change. Within one
+recorded interpretation, fixed code collapses repeated typed
 candidate identities to the first recorded occurrence before emitting the
 terminal assessment or proposal; confidence never ranks that choice. A
 persistent failure still emits an auditable failed disposition and fails

@@ -67,7 +67,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 18
+_REPLAY_GENERATION = 19
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -85,6 +85,7 @@ _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
 )
 
 _TRANSIENT_SKILL_FAILURE_TYPES = (OpenClawTimeout, OpenClawUnreachable)
+_TRANSIENT_RECOVERY_DELAYS_SECONDS = (0.5, 2.0)
 
 
 def _versioned_idempotency_keys(prefix: str, source_event_id: str) -> list[str]:
@@ -244,7 +245,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "18.0.0"
+    version: str = "19.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -270,7 +271,7 @@ class NoiseFilteringPipeline:
         except _TRANSIENT_SKILL_FAILURE_TYPES as exc:
             _log.warning(
                 "noise_filtering transient skill failure (%s); "
-                "queueing one recovery attempt",
+                "queueing bounded recovery",
                 type(exc).__name__,
             )
             invocation_identity = skill_ctx.invocation_idempotency_key
@@ -279,14 +280,31 @@ class NoiseFilteringPipeline:
                 # message fingerprint. Without it, a second provider attempt
                 # could not be durably bounded or replayed.
                 raise
-            recovery_ctx = replace(
-                skill_ctx,
-                invocation_idempotency_key=f"{invocation_identity}:recovery-1",
-                retry_prior_failure=True,
-            )
             async with self._transient_retry_lock:
-                await asyncio.sleep(0.5)
-                return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
+                for attempt, delay_seconds in enumerate(
+                    _TRANSIENT_RECOVERY_DELAYS_SECONDS, start=1
+                ):
+                    recovery_ctx = replace(
+                        skill_ctx,
+                        invocation_idempotency_key=(
+                            f"{invocation_identity}:recovery-{attempt}"
+                        ),
+                        retry_prior_failure=True,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                    try:
+                        return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
+                    except _TRANSIENT_SKILL_FAILURE_TYPES as recovery_exc:
+                        if attempt == len(_TRANSIENT_RECOVERY_DELAYS_SECONDS):
+                            raise
+                        _log.warning(
+                            "noise_filtering recovery attempt %s failed (%s); "
+                            "queueing final recovery",
+                            attempt,
+                            type(recovery_exc).__name__,
+                        )
+
+            raise AssertionError("unreachable transient recovery state")
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")

@@ -21,6 +21,7 @@ from adminme.events.envelope import EventEnvelope
 from adminme.events.log import IdempotencyConflict
 from adminme.lib.skill_runner import (
     OpenClawTimeout,
+    OpenClawUnreachable,
     SkillContext,
     SkillInputInvalid,
     SkillResult,
@@ -120,7 +121,7 @@ class _RacingProposalEventLog(_FakeEventLog):
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
             existing is None
-            and idempotency_key.startswith("triage:message-candidate:v18:")
+            and idempotency_key.startswith("triage:message-candidate:v19:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -378,9 +379,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transient_language_failure_retries_once_before_terminal_failure() -> (
-    None
-):
+async def test_transient_language_failure_recovers_before_terminal_failure() -> None:
     log = _FakeEventLog()
     calls = 0
     invocation_keys: list[str] = []
@@ -410,6 +409,35 @@ async def test_transient_language_failure_retries_once_before_terminal_failure()
     assert assessments[-1].payload["reason_codes"][0] == (
         "language_assessment_completed"
     )
+
+
+@pytest.mark.asyncio
+async def test_second_recovery_uses_its_own_durable_invocation_identity() -> None:
+    log = _FakeEventLog()
+    invocation_keys: list[str] = []
+
+    async def recover_on_final_attempt(
+        _skill_id: str, _inputs: dict[str, Any], skill_ctx: SkillContext
+    ) -> SkillResult:
+        invocation_keys.append(str(skill_ctx.invocation_idempotency_key))
+        if len(invocation_keys) == 1:
+            raise OpenClawUnreachable("base failure")
+        if len(invocation_keys) == 2:
+            raise OpenClawTimeout("first recovery stream timed out")
+        return _make_skill_result(classification="transactional", confidence=0.9)
+
+    await NoiseFilteringPipeline().handle(
+        _messaging_received_event(), _make_ctx(log, recover_on_final_attempt)
+    )
+
+    assert invocation_keys[1] == f"{invocation_keys[0]}:recovery-1"
+    assert invocation_keys[2] == f"{invocation_keys[0]}:recovery-2"
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
 
 
 @pytest.mark.asyncio
@@ -784,7 +812,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v18:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v19:")
 
 
 @pytest.mark.asyncio
@@ -898,7 +926,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v18:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v19:")
         for proposal in proposals
     )
 
@@ -992,7 +1020,7 @@ def test_repeated_candidate_alias_keeps_first_recorded_identity() -> None:
 @pytest.mark.asyncio
 async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
     log = _RacingProposalEventLog()
-    key = "triage:message-candidate:v18:collision:task-key:task"
+    key = "triage:message-candidate:v19:collision:task-key:task"
     base_payload = {
         "proposal_id": "proposal-first",
         "target_kind": "task",
