@@ -1,9 +1,20 @@
 # Product thesis and domain map
 
+CO-013 clarification: “Observe” begins with source acquisition, not merely a
+healthy forward cursor. When an adapter would otherwise omit useful
+pre-install history, fixed code must acquire a finite reviewed window, preserve
+provider identity and scope, durably report completion or truncation, and then
+continue incrementally. A member-private historical seed may identify an old
+named matter; fixed code—not a model—owns seed priority, exact-participant/date
+expansion, caps, and scope. Source coverage may never be inferred by a model,
+and acquisition alone grants no truth, routing, confirmation, or write
+authority.
+
 CO-012 clarification: “Understand” may use a bounded, privacy-scoped
 conversation context rather than one isolated message body. Deterministic code
 alone selects same-member/account/workspace sources and explains thread,
-participant, subject, or attachment edges. The language seam may describe
+header-participant, exact authored participant-reference, subject, or
+attachment edges. The language seam may describe
 asks, apparent owners, linguistic state, and review aids, but exact-alias/quote
 validation and fixed eligibility reject closed, other-owned, related-only, or
 ungrounded output. Each surviving ask remains a separate Triage decision; a

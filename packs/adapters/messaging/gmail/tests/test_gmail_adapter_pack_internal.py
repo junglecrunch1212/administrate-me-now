@@ -29,6 +29,7 @@ import pytest
 import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -76,7 +77,7 @@ def test_pack_manifest_loads_cleanly() -> None:
 
     assert manifest["pack"]["id"] == "adapter:messaging-gmail-api"
     assert manifest["pack"]["kind"] == "adapter"
-    assert manifest["pack"]["version"] == "1.0.0"
+    assert manifest["pack"]["version"] == "1.1.0"
     assert manifest["runtime"]["entrypoint"] == "adapter.py"
     assert manifest["runtime"]["class"] == "GmailAdapter"
     assert manifest["family"] == "messaging"
@@ -109,7 +110,7 @@ def test_gmail_adapter_satisfies_protocol() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "messaging-gmail-api"
     assert adapter.family == "messaging"
-    assert adapter.version == "1.0.0"
+    assert adapter.version == "1.1.0"
     assert adapter.sensitivity_floor == "normal"
 
 
@@ -140,6 +141,7 @@ def _ctx(
     event_log: _FakeEventLog,
     *,
     now: datetime | None = None,
+    cursor_store: AdapterCursorStore | None = None,
 ) -> AdapterContext:
     """Build an AdapterContext with deterministic clock + correlation id."""
     fixed_now = now or _FROZEN_NOW
@@ -148,6 +150,7 @@ def _ctx(
         config={},
         correlation_id_factory=lambda: "corr-test",
         now_factory=lambda: fixed_now,
+        cursor_store=cursor_store,
     )
 
 
@@ -162,6 +165,7 @@ class _FakeGmailService:
         *,
         profile: dict[str, Any] | None = None,
         history_pages: list[dict[str, Any]] | None = None,
+        backfill_pages: list[dict[str, Any]] | None = None,
         messages: dict[str, dict[str, Any]] | None = None,
         history_raises: Exception | None = None,
         get_profile_raises: Exception | None = None,
@@ -169,10 +173,12 @@ class _FakeGmailService:
         self._profile = profile
         # Use a queue of responses so paging is testable.
         self._history_pages = list(history_pages or [])
+        self._backfill_pages = list(backfill_pages or [])
         self._messages = dict(messages or {})
         self._history_raises = history_raises
         self._get_profile_raises = get_profile_raises
         self.history_list_calls: list[dict[str, Any]] = []
+        self.messages_list_calls: list[dict[str, Any]] = []
         self.messages_get_calls: list[dict[str, Any]] = []
         self.get_profile_calls: list[dict[str, Any]] = []
 
@@ -208,6 +214,10 @@ class _FakeMessages:
     def __init__(self, service: _FakeGmailService) -> None:
         self._service = service
 
+    def list(self, **kwargs: Any) -> Any:
+        self._service.messages_list_calls.append(kwargs)
+        return _FakeExecute(self._service, kind="messages.list")
+
     def get(self, **kwargs: Any) -> Any:
         self._service.messages_get_calls.append(kwargs)
         return _FakeExecute(self._service, kind="messages.get", params=kwargs)
@@ -236,6 +246,10 @@ class _FakeExecute:
             if not self._service._history_pages:
                 return {"historyId": "0"}
             return self._service._history_pages.pop(0)
+        if self._kind == "messages.list":
+            if not self._service._backfill_pages:
+                return {"messages": []}
+            return self._service._backfill_pages.pop(0)
         if self._kind == "messages.get":
             msg_id = self._params.get("id")
             if msg_id not in self._service._messages:
@@ -409,8 +423,9 @@ def test_sensitivity_floor_rejects_unknown_value() -> None:
 
 async def test_first_poll_cycle_bootstraps_cursor_via_get_profile() -> None:
     """On the first cycle (no cursor), the adapter MUST snapshot the
-    mailbox's current historyId via users.getProfile and emit zero
-    messages — pre-existing mail is not back-flooded into the event log."""
+    mailbox's current historyId before it performs the bounded recent-history
+    query.  The snapshot closes the race with mail that arrives during the
+    backfill."""
     service = _FakeGmailService(profile=_fixture("profile_response.json"))
     adapter = GmailAdapter(
         config={
@@ -427,10 +442,259 @@ async def test_first_poll_cycle_bootstraps_cursor_via_get_profile() -> None:
     assert adapter._cursor == "9000"
     assert len(service.get_profile_calls) == 1
     assert service.get_profile_calls[0]["userId"] == "me"
-    # No messages fetched on bootstrap; no events emitted.
+    # The bounded query runs after the cursor snapshot. This empty fixture
+    # emits no message observations and does not perform incremental history.
     assert service.history_list_calls == []
     assert service.messages_get_calls == []
+    assert service.messages_list_calls == [
+        {
+            "userId": "me",
+            "q": "newer_than:730d -label:drafts",
+            "includeSpamTrash": False,
+            "maxResults": 500,
+        }
+    ]
     assert event_log.calls == []
+
+
+async def test_initial_backfill_pages_emits_and_is_durable(tmp_path: Path) -> None:
+    """The initial mailbox query pages to its configured cap, emits normal
+    typed observations, and never runs again once its content-free durable
+    policy marker has been recorded."""
+    store = AdapterCursorStore(tmp_path / "gmail-cursors.sqlite3")
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        backfill_pages=[
+            {"messages": [{"id": "msg-alice"}], "nextPageToken": "page-2"},
+            {"messages": [{"id": "msg-bob"}]},
+        ],
+        history_pages=[{"historyId": "9000", "history": []}],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+    )
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            "initial_backfill_days": 365,
+            "initial_backfill_max_messages": 2,
+        },
+    )
+    adapter._service = service
+    adapter._cursor_id = "gmail-test"
+    adapter._last_advance_at = _FROZEN_NOW
+    event_log = _FakeEventLog()
+    ctx = _ctx(event_log, cursor_store=store)
+
+    assert await adapter._run_poll_cycle(ctx=ctx) == 2
+    assert adapter._cursor == "9000"
+    assert [call["maxResults"] for call in service.messages_list_calls] == [2, 1]
+    assert service.messages_list_calls[0]["q"] == "newer_than:365d -label:drafts"
+    assert sorted(
+        call["payload"]["native_message_id"]
+        for call in event_log.calls
+        if call["type"] == "messaging.received"
+    ) == ["msg-alice", "msg-bob"]
+    policy = adapter._initial_backfill_settings()
+    backfill_id = adapter._backfill_cursor_id("gmail-test", policy=policy)
+    assert store.get(backfill_id).provider_watermark == "complete"
+    assert adapter.status().extra["initial_backfill"] == {
+        "contract": "gmail-initial-backfill-v2",
+        "state": "complete",
+        "recent_days": 365,
+        "max_messages": 2,
+        "seed_query_count": 0,
+        "discovered": 2,
+        "emitted": 2,
+        "quarantined": 0,
+        "seed_discovered": 0,
+        "related_discovered": 0,
+        "recent_discovered": 2,
+        "related_participant_count": 0,
+        "related_participants_truncated": False,
+        "truncated": False,
+    }
+
+    # The next cycle uses incremental history and does not list or re-fetch
+    # any backfill message.
+    assert await adapter._run_poll_cycle(ctx=ctx) == 0
+    assert len(service.messages_list_calls) == 2
+    assert len(service.messages_get_calls) == 2
+    assert len(service.history_list_calls) == 1
+    store.close()
+
+
+async def test_initial_backfill_hard_cap_reports_truncation() -> None:
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        backfill_pages=[
+            {
+                "messages": [{"id": "msg-alice"}, {"id": "msg-bob"}],
+                "nextPageToken": "more",
+            }
+        ],
+        messages={"msg-alice": _fixture("message_alice.json")},
+    )
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            "initial_backfill_days": 30,
+            "initial_backfill_max_messages": 1,
+        },
+    )
+    adapter._service = service
+    adapter._last_advance_at = _FROZEN_NOW
+
+    assert await adapter._run_poll_cycle(ctx=_ctx(_FakeEventLog())) == 1
+    assert adapter.status().extra["initial_backfill"]["truncated"] is True
+    assert [call["id"] for call in service.messages_get_calls] == ["msg-alice"]
+
+
+async def test_initial_backfill_repeated_page_token_fails_bounded() -> None:
+    service = _FakeGmailService(
+        backfill_pages=[
+            {"messages": [], "nextPageToken": "same"},
+            {"messages": [], "nextPageToken": "same"},
+        ]
+    )
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+    )
+    adapter._service = service
+
+    message_ids, truncated = adapter._list_message_ids(query="newer_than:30d", limit=10)
+
+    assert message_ids == []
+    assert truncated is True
+    assert len(service.messages_list_calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("initial_backfill_days", True),
+        ("initial_backfill_days", 3651),
+        ("initial_backfill_max_messages", False),
+        ("initial_backfill_max_messages", 5001),
+        ("historical_seed_queries", "subject:fixture"),
+        ("historical_seed_queries", ["line one\nline two"]),
+        ("historical_seed_max_messages_per_query", 501),
+        ("historical_related_max_participants", True),
+        ("historical_related_messages_per_participant", 101),
+        ("historical_related_context_days", 3651),
+    ],
+)
+def test_initial_backfill_config_rejects_unsafe_values(key: str, value: object) -> None:
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            key: value,
+        },
+    )
+    with pytest.raises(ValueError, match=key):
+        adapter._initial_backfill_settings()
+
+
+async def test_historical_seed_precedes_related_context_and_recent_fill(
+    tmp_path: Path,
+) -> None:
+    """A reviewed old matter wins the cap, expands through exact participants,
+    and leaves only the remaining capacity for generic recent mail. Private
+    query text is absent from both the policy cursor and runtime status.
+    """
+    store = AdapterCursorStore(tmp_path / "gmail-seed-cursors.sqlite3")
+    fixture_messages = {
+        "msg-alice": _fixture("message_alice.json"),
+        "msg-bob": _fixture("message_bob.json"),
+        "msg-related": {**_fixture("message_alice.json"), "id": "msg-related"},
+        "msg-recent": {**_fixture("message_bob.json"), "id": "msg-recent"},
+    }
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        backfill_pages=[
+            # Gmail search commonly returns newest-first.
+            {"messages": [{"id": "msg-bob"}, {"id": "msg-alice"}]},
+            {"messages": [{"id": "msg-related"}]},
+            {"messages": [{"id": "msg-recent"}]},
+        ],
+        messages=fixture_messages,
+    )
+    private_query = "subject:fixture-matter"
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            "initial_backfill_days": 10,
+            "initial_backfill_max_messages": 4,
+            "historical_seed_queries": [private_query],
+            "historical_seed_max_messages_per_query": 2,
+            "historical_related_max_participants": 1,
+            "historical_related_messages_per_participant": 1,
+            "historical_related_context_days": 30,
+        },
+    )
+    adapter._service = service
+    adapter._cursor_id = "gmail-private-fixture"
+    adapter._last_advance_at = _FROZEN_NOW
+    event_log = _FakeEventLog()
+
+    assert await adapter._run_poll_cycle(ctx=_ctx(event_log, cursor_store=store)) == 4
+    assert [call["q"] for call in service.messages_list_calls] == [
+        f"{private_query} -label:drafts",
+        'after:2024/05/06 before:2024/07/06 "alice@example.test" -label:drafts',
+        "newer_than:10d -label:drafts",
+    ]
+    assert [call["id"] for call in service.messages_get_calls] == [
+        "msg-bob",
+        "msg-alice",
+        "msg-related",
+        "msg-recent",
+    ]
+    assert [
+        call["payload"]["native_message_id"]
+        for call in event_log.calls
+        if call["type"] == "messaging.received"
+    ] == ["msg-recent", "msg-related", "msg-alice", "msg-bob"]
+    status = adapter.status().extra["initial_backfill"]
+    assert status == {
+        "contract": "gmail-initial-backfill-v2",
+        "state": "complete",
+        "recent_days": 10,
+        "max_messages": 4,
+        "seed_query_count": 1,
+        "discovered": 4,
+        "emitted": 4,
+        "quarantined": 0,
+        "seed_discovered": 2,
+        "related_discovered": 1,
+        "recent_discovered": 1,
+        "related_participant_count": 1,
+        "related_participants_truncated": True,
+        "truncated": True,
+    }
+    policy = adapter._initial_backfill_settings()
+    backfill_id = adapter._backfill_cursor_id("gmail-private-fixture", policy=policy)
+    assert private_query not in backfill_id
+    assert private_query not in json.dumps(status, sort_keys=True)
+    changed_query_adapter = GmailAdapter(
+        config={**adapter._config, "historical_seed_queries": ["subject:other"]}
+    )
+    assert (
+        changed_query_adapter._backfill_cursor_id(
+            "gmail-private-fixture",
+            policy=changed_query_adapter._initial_backfill_settings(),
+        )
+        != backfill_id
+    )
+    assert store.get(backfill_id).provider_watermark == "complete"
+    store.close()
 
 
 async def test_history_sync_emits_messaging_received_per_added_message() -> None:

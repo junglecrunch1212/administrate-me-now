@@ -105,12 +105,15 @@ class _FakeGmailService:
         *,
         profile: dict[str, Any] | None = None,
         history_pages: list[dict[str, Any]] | None = None,
+        backfill_pages: list[dict[str, Any]] | None = None,
         messages: dict[str, Any] | None = None,
     ) -> None:
         self._profile = profile
         self._history_pages = list(history_pages or [])
+        self._backfill_pages = list(backfill_pages or [])
         self._messages = dict(messages or {})
         self.history_list_calls: list[dict[str, Any]] = []
+        self.messages_list_calls: list[dict[str, Any]] = []
         self.messages_get_calls: list[dict[str, Any]] = []
         self.get_profile_calls: list[dict[str, Any]] = []
 
@@ -146,6 +149,10 @@ class _FakeMessages:
     def __init__(self, service: _FakeGmailService) -> None:
         self._service = service
 
+    def list(self, **kwargs: Any) -> Any:
+        self._service.messages_list_calls.append(kwargs)
+        return _FakeExecute(self._service, kind="messages.list")
+
     def get(self, **kwargs: Any) -> Any:
         self._service.messages_get_calls.append(kwargs)
         return _FakeExecute(self._service, kind="messages.get", params=kwargs)
@@ -170,6 +177,10 @@ class _FakeExecute:
             if not self._service._history_pages:
                 return {"historyId": "0"}
             return self._service._history_pages.pop(0)
+        if self._kind == "messages.list":
+            if not self._service._backfill_pages:
+                return {"messages": []}
+            return self._service._backfill_pages.pop(0)
         if self._kind == "messages.get":
             msg_id = self._params.get("id")
             if msg_id not in self._service._messages:
@@ -199,6 +210,11 @@ def _build_gmail_adapter(
     op_ref: str = "op://test/vault/gmail/sa",
     user_email: str = "sandbox@example.test",
     poll_interval_s: float = 0.0,
+    initial_backfill_days: int = 0,
+    initial_backfill_max_messages: int = 0,
+    historical_seed_queries: list[str] | None = None,
+    historical_seed_max_messages_per_query: int = 100,
+    historical_related_max_participants: int = 20,
 ) -> Any:
     """Construct a real ``GmailAdapter`` with an injected fake service +
     deterministic credentials resolver. The adapter is otherwise the
@@ -221,6 +237,15 @@ def _build_gmail_adapter(
         config={
             "service_account_key_ref": op_ref,
             "user_email": user_email,
+            "initial_backfill_days": initial_backfill_days,
+            "initial_backfill_max_messages": initial_backfill_max_messages,
+            "historical_seed_queries": historical_seed_queries or [],
+            "historical_seed_max_messages_per_query": (
+                historical_seed_max_messages_per_query
+            ),
+            "historical_related_max_participants": (
+                historical_related_max_participants
+            ),
         },
         credentials_resolver=_resolver,
         service_factory=_factory,
@@ -383,6 +408,95 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
         await sup.stop()
         snap_after = sup.snapshot()
         assert snap_after["adapters"]["messaging-gmail-api"]["state"] == "stopped"
+
+
+async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
+    tmp_path: Path,
+) -> None:
+    """Production composition proof for the source-acquisition repair.
+
+    The supervisor authenticates the real adapter with an already durable
+    incremental cursor, still acquires two old pre-existing messages through a
+    private reviewed seed, and records a content-free durable policy marker.
+    A replacement adapter using the same cursor store does not list or emit
+    that history again.
+    """
+    channels = tmp_path / "channels.yaml"
+    _write_channels_yaml(channels)
+    cursor_store = AdapterCursorStore(tmp_path / "adapter-cursors.sqlite3")
+    cursor_id = "messaging-gmail-api:unbound:sandbox@example.test"
+    cursor_store.record_success(cursor_id, provider_watermark="9000")
+    first_service = _FakeGmailService(
+        backfill_pages=[
+            {
+                "messages": [{"id": "msg-alice"}, {"id": "msg-bob"}],
+                "nextPageToken": "bounded-out",
+            }
+        ],
+        messages={
+            "msg-alice": _fixture("message_alice.json"),
+            "msg-bob": _fixture("message_bob.json"),
+        },
+        history_pages=[{"historyId": "9000", "history": []}],
+    )
+    first_adapter = _build_gmail_adapter(
+        service=first_service,
+        initial_backfill_days=0,
+        initial_backfill_max_messages=2,
+        historical_seed_queries=["subject:fixture-matter"],
+        historical_seed_max_messages_per_query=2,
+        historical_related_max_participants=0,
+    )
+    first_log = _RecordingEventLog()
+    first = _supervisor(
+        config_path=channels,
+        event_log=first_log,
+        adapters=[first_adapter],
+        cursor_store=cursor_store,
+    )
+    await first.start()
+    try:
+        await _wait_for(lambda: len(first_log.by_type("messaging.received")) == 2)
+        await _wait_for(lambda: len(first_service.history_list_calls) == 1)
+        assert first_service.get_profile_calls == []
+        assert first_service.messages_list_calls == [
+            {
+                "userId": "me",
+                "q": "subject:fixture-matter -label:drafts",
+                "includeSpamTrash": False,
+                "maxResults": 2,
+            }
+        ]
+        assert first_adapter.status().extra["initial_backfill"]["truncated"] is True
+    finally:
+        await first.stop()
+
+    second_service = _FakeGmailService(
+        history_pages=[{"historyId": "9000", "history": []}],
+    )
+    second_adapter = _build_gmail_adapter(
+        service=second_service,
+        initial_backfill_days=0,
+        initial_backfill_max_messages=2,
+        historical_seed_queries=["subject:fixture-matter"],
+        historical_seed_max_messages_per_query=2,
+        historical_related_max_participants=0,
+    )
+    second_log = _RecordingEventLog()
+    second = _supervisor(
+        config_path=channels,
+        event_log=second_log,
+        adapters=[second_adapter],
+        cursor_store=cursor_store,
+    )
+    await second.start()
+    try:
+        await _wait_for(lambda: len(second_service.history_list_calls) == 1)
+        assert second_service.messages_list_calls == []
+        assert second_log.by_type("messaging.received") == []
+    finally:
+        await second.stop()
+        cursor_store.close()
 
 
 async def test_durable_cursor_and_dedupe_survive_supervisor_restart(

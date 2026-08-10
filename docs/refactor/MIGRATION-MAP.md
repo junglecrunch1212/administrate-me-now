@@ -1,5 +1,18 @@
 # Migration map
 
+CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
+REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable
+message facts, and member decisions are preserved. Adapter v1.1 snapshots the
+current provider cursor before a bounded acquisition. Optional private
+historical seeds run before deterministic exact-participant/date expansion and
+recent-history fill, all inside one global cap. The additive metadata-only
+completion cursor is keyed by a policy digest containing hashed—not plaintext—
+seed queries. Existing installations acquire once because they have no such
+marker; a reviewed policy change creates a new bounded obligation and restarts
+reuse its marker. Rollback may ignore the marker and new source observations,
+but must not delete either. No schema, credential, canonical object, provider
+object, or runtime version migrates.
+
 CO-012 update (2026-08-10): contextual message reasoning is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing message facts and candidate decisions are never
 rewritten. `triage.item.proposed@v3` adds a private bounded interpretation;
@@ -425,7 +438,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Adapter pack registry/validator/CLI | `adminme/lib/pack_registry/`, `adminme/cli/commands/adapters*` | useful validation; Windows-invalid `<NAME>` tracked templates | HARDEN | Portable template names/placeholders, all six pack lifecycle stages, atomic rollback/install events. |
 | Central adapter supervisor | `adminme/daemons/adapter_supervisor.py` | restart/status primitive; error emit uses ambiguous call shape; not composed | HARDEN | Construct real packs/contexts, retain tasks, durable state, orderly drain, composition status. |
 | Bridge package/runtime | `bridge/adminme_bridge/`, `adminme/products/bridge/`, `bootstrap/bridge_enrollment.py` | Central ingest and owner-scoped knowledge are retained; reviewed bootstrap adds encrypted export, identity/release/expiry validation, per-member launchd, real enrollment proof, finalization/revocation, and durable idempotent commands for Apple Calendar, Reminders, and Notes | HARDEN COMPLETE FOR ENROLLMENT AND PRIMARY APP COMMANDS | Live opt-in pack configuration, Apple grants, and iCloud propagation remain separate evidence. |
-| Gmail Cat-A | `packs/adapters/messaging/gmail/` | account-bound v3 inbound, v2 outbound, direction-preserving history sync (`SENT` never becomes inbound), provider labels, reply headers, read/archive mutations, dynamic OAuth scopes and tests | HARDEN COMPLETE IN CODE | Live account remains read-only until fresh modify/send OAuth consent; historical v3 `SENT` labels remain usable for direction-aware replay; Pub/Sub watch/fallback remains operational follow-up. |
+| Gmail Cat-A | `packs/adapters/messaging/gmail/` | account-bound v3 inbound, v2 outbound, direction-preserving incremental history (`SENT` never becomes inbound), private-seed-first bounded/durable `messages.list` acquisition with exact-participant/date expansion and recent fill, content-free policy-digest receipt, provider labels, reply headers, read/archive mutations, dynamic OAuth scopes and tests | HARDEN COMPLETE IN CO-013 CANDIDATE | Guarded live acquisition, source settlement, and contextual Triage proof remain. Live account remains read-only until fresh modify/send OAuth consent; Pub/Sub remains an optional latency follow-up, not a completeness substitute. |
 | Cat-B calendar/reminder/task packs | `packs/adapters/{calendaring,reminders,tasks}/` | Google/Apple Calendar and Apple Reminders now cover supported native fields, calendars/lists, recurrences, alarms/geofences, completions, change feedback, durable cursors, restart-stable Google calendar-source observations, future-only elapsed transitions, and central/bridge command paths | HARDEN COMPLETE IN CODE | Retain external authority, observation/governance, idempotent writes, and require live OAuth/EventKit propagation evidence. Historical provider events remain facts; initial discovery must not reinterpret already-past history as a new outcome. |
 | Plaid Cat-C | `packs/adapters/financial/plaid/` | detailed private account/transaction/removal events, terminal summary, sign normalization, secret references, durable per-member/item cursor, restart/supervisor tests | KEEP/HARDEN CODE LIVE; PROVIDER ACTIVATION PENDING | Compose read-only; advance cursor only after accepted details and receipt; retain provider identity/revision/removal; require separate live Link/consent evidence. |
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |

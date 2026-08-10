@@ -21,6 +21,7 @@ is OpenClaw's territory — adapters emit events only).
 Gmail API endpoints used (see ``docs/reference/google-gmail/gmail-v1.ts``):
 
   - ``users.getProfile``    — bootstrap cursor (gmail-v1.ts line 1082)
+  - ``users.messages.list`` — bounded initial history acquisition
   - ``users.history.list``  — incremental sync (gmail-v1.ts line 2603)
   - ``users.messages.get``  — per-message fetch (gmail-v1.ts line 4219)
   - ``users.watch``         — push-notification setup (gmail-v1.ts line 1360; deferred)
@@ -41,7 +42,8 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.utils import formatdate, getaddresses
 from typing import Any, Callable, ClassVar, Literal
@@ -51,6 +53,7 @@ from adminme.adapters.base import (
     AdapterStatus,
     SensitivityFloor,
 )
+from adminme.adapters.gmail_backfill import GmailInitialBackfillPolicy
 from adminme.adapters.emission import write_adapter_event
 from adminme.adapters.credentials import resolve_json_credentials
 from adminme.events.registry import EventValidationError
@@ -148,7 +151,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.0.0"
+    version: ClassVar[str] = "1.1.0"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -176,6 +179,9 @@ class GmailAdapter(CommunicationAdapter):
 
     CURSOR_MILESTONE_EVENTS: ClassVar[int] = 100
     CURSOR_MILESTONE_INTERVAL_S: ClassVar[int] = 300
+    INITIAL_BACKFILL_DAYS: ClassVar[int] = 730
+    INITIAL_BACKFILL_MAX_MESSAGES: ClassVar[int] = 1000
+    INITIAL_BACKFILL_MAX_PAGES: ClassVar[int] = 100
     """Cursor-advance emission is gated on whichever milestone fires
     first — 100 events processed OR 5 minutes of wall clock. Avoids the
     anti-vision pattern of one ``adapter.cursor_advanced`` per message."""
@@ -212,6 +218,7 @@ class GmailAdapter(CommunicationAdapter):
         self._service: Any = None
         self._cursor: str | None = None
         self._cursor_id: str | None = None
+        self._initial_backfill_complete = False
         self._lease_owner = f"gmail-{uuid.uuid4()}"
         self._events_since_advance: int = 0
         self._last_advance_at: datetime | None = None
@@ -348,11 +355,11 @@ class GmailAdapter(CommunicationAdapter):
         """Run a single poll cycle. Returns the number of
         ``messaging.received`` events emitted.
 
-        On first cycle (cursor uninitialized) the adapter bootstraps via
-        ``users.getProfile`` and emits zero messages — the historyId
-        snapshot becomes the cursor floor. Subsequent cycles call
-        ``users.history.list(startHistoryId=...)`` and fetch each added
-        message via ``users.messages.get(format=full)``.
+        On first cycle the adapter snapshots ``users.getProfile`` before a
+        bounded, durable, idempotent acquisition of recent mailbox history.
+        The snapshot remains the incremental cursor floor, so mail arriving
+        during backfill is fetched by ``users.history.list`` afterward rather
+        than falling into a bootstrap gap.
         """
         if self._service is None:
             raise RuntimeError("Gmail service not initialized; call start() first")
@@ -370,77 +377,42 @@ class GmailAdapter(CommunicationAdapter):
         try:
             if store is not None:
                 self._cursor = store.get(cursor_id).provider_watermark
+            bootstrapped = False
             if self._cursor is None:
                 self._cursor = self._bootstrap_cursor()
+                bootstrapped = True
                 if store is not None:
                     store.record_success(cursor_id, provider_watermark=self._cursor)
                     self._status.extra["durable_cursor"] = store.get(cursor_id).public()
-                return 0
+
+            backfill_emitted, backfill_quarantined = await self._run_initial_backfill(
+                ctx=ctx,
+                store=store,
+                cursor_id=cursor_id,
+            )
+            if bootstrapped:
+                self._status.extra["last_poll"] = {
+                    "emitted": backfill_emitted,
+                    "quarantined": backfill_quarantined,
+                    "provider_watermark": self._cursor,
+                }
+                self._status.state = "backoff" if backfill_quarantined else "running"
+                await self._maybe_emit_cursor_advance(
+                    ctx=ctx, cursor_value=str(self._cursor)
+                )
+                return backfill_emitted
 
             new_history_id, history_records = self._fetch_history(self._cursor)
             message_ids = self._extract_added_message_ids(history_records)
-            emitted = 0
-            quarantined = 0
-            for msg_id in message_ids:
-                try:
-                    full_msg = self._fetch_message(msg_id)
-                except Exception as exc:
-                    _, error_kind, _ = self._classify_gmail_error(exc)
-                    if error_kind != "api_changed":
-                        raise
-                    quarantined += 1
-                    fingerprint = hashlib.sha256(
-                        f"gmail-message-id:{msg_id}".encode()
-                    ).hexdigest()
-                    quarantine_event_id = await self._emit_quarantine(
-                        ctx=ctx,
-                        external_id=msg_id,
-                        fingerprint=fingerprint,
-                        error=exc,
-                        provider_watermark=new_history_id,
-                    )
-                    if store is not None:
-                        store.record_success(
-                            cursor_id,
-                            external_id=msg_id,
-                            fingerprint=fingerprint,
-                            event_id=quarantine_event_id,
-                        )
-                    continue
-                fingerprint = self._message_fingerprint(full_msg)
-                if store is not None and store.dedupe_event(
-                    cursor_id, msg_id, fingerprint
-                ):
-                    continue
-                try:
-                    event_id = await self._emit_message_observation(
-                        ctx=ctx, message=full_msg, fingerprint=fingerprint
-                    )
-                    if store is not None:
-                        store.record_success(
-                            cursor_id,
-                            external_id=msg_id,
-                            fingerprint=fingerprint,
-                            event_id=event_id,
-                        )
-                    emitted += 1
-                    self._events_since_advance += 1
-                except EventValidationError as exc:
-                    quarantined += 1
-                    quarantine_event_id = await self._emit_quarantine(
-                        ctx=ctx,
-                        external_id=msg_id,
-                        fingerprint=fingerprint,
-                        error=exc,
-                        provider_watermark=new_history_id,
-                    )
-                    if store is not None:
-                        store.record_success(
-                            cursor_id,
-                            external_id=msg_id,
-                            fingerprint=fingerprint,
-                            event_id=quarantine_event_id,
-                        )
+            emitted, quarantined = await self._ingest_message_ids(
+                ctx=ctx,
+                store=store,
+                cursor_id=cursor_id,
+                message_ids=message_ids,
+                provider_watermark=new_history_id,
+            )
+            emitted += backfill_emitted
+            quarantined += backfill_quarantined
 
             if new_history_id and new_history_id != self._cursor:
                 self._cursor = new_history_id
@@ -460,6 +432,478 @@ class GmailAdapter(CommunicationAdapter):
         finally:
             if store is not None:
                 store.release(cursor_id, self._lease_owner)
+
+    def _initial_backfill_settings(self) -> GmailInitialBackfillPolicy:
+        days = self._config.get("initial_backfill_days", self.INITIAL_BACKFILL_DAYS)
+        limit = self._config.get(
+            "initial_backfill_max_messages", self.INITIAL_BACKFILL_MAX_MESSAGES
+        )
+        seed_queries = self._config.get("historical_seed_queries", [])
+        seed_limit = self._config.get("historical_seed_max_messages_per_query", 100)
+        related_participants = self._config.get(
+            "historical_related_max_participants", 20
+        )
+        related_limit = self._config.get(
+            "historical_related_messages_per_participant", 25
+        )
+        related_days = self._config.get("historical_related_context_days", 730)
+        if isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= 3650:
+            raise ValueError("initial_backfill_days must be an integer from 0 to 3650")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 0 <= limit <= 5000
+        ):
+            raise ValueError(
+                "initial_backfill_max_messages must be an integer from 0 to 5000"
+            )
+        if not isinstance(seed_queries, list) or len(seed_queries) > 20:
+            raise ValueError("historical_seed_queries must be a list of at most 20")
+        normalized_queries: list[str] = []
+        for value in seed_queries:
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value.strip()) > 500
+                or any(character in value for character in ("\x00", "\r", "\n"))
+            ):
+                raise ValueError(
+                    "historical_seed_queries entries must be 1-500 characters "
+                    "without control newlines"
+                )
+            normalized_queries.append(value.strip())
+        integer_bounds = {
+            "historical_seed_max_messages_per_query": (seed_limit, 0, 500),
+            "historical_related_max_participants": (
+                related_participants,
+                0,
+                50,
+            ),
+            "historical_related_messages_per_participant": (
+                related_limit,
+                0,
+                100,
+            ),
+            "historical_related_context_days": (related_days, 0, 3650),
+        }
+        for name, (value, minimum, maximum) in integer_bounds.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(
+                    f"{name} must be an integer from {minimum} to {maximum}"
+                )
+        return GmailInitialBackfillPolicy(
+            recent_days=days,
+            max_messages=limit,
+            seed_queries=tuple(normalized_queries),
+            seed_max_messages_per_query=seed_limit,
+            related_max_participants=related_participants,
+            related_messages_per_participant=related_limit,
+            related_context_days=related_days,
+        )
+
+    @staticmethod
+    def _backfill_cursor_id(
+        cursor_id: str, *, policy: GmailInitialBackfillPolicy
+    ) -> str:
+        return f"{cursor_id}:initial-backfill:{policy.receipt_digest()}"
+
+    async def _run_initial_backfill(
+        self,
+        *,
+        ctx: AdapterContext,
+        store: Any,
+        cursor_id: str,
+    ) -> tuple[int, int]:
+        policy = self._initial_backfill_settings()
+        if policy.max_messages == 0 or (
+            policy.recent_days == 0 and not policy.seed_queries
+        ):
+            self._initial_backfill_complete = True
+            self._status.extra["initial_backfill"] = {
+                "contract": "gmail-initial-backfill-v2",
+                "state": "disabled",
+                "recent_days": policy.recent_days,
+                "max_messages": policy.max_messages,
+                "seed_query_count": len(policy.seed_queries),
+            }
+            return 0, 0
+        backfill_id = self._backfill_cursor_id(cursor_id, policy=policy)
+        if self._initial_backfill_complete or (
+            store is not None
+            and store.get(backfill_id).provider_watermark == "complete"
+        ):
+            self._initial_backfill_complete = True
+            self._status.extra["initial_backfill"] = {
+                "contract": "gmail-initial-backfill-v2",
+                "state": "complete",
+                "recent_days": policy.recent_days,
+                "max_messages": policy.max_messages,
+                "seed_query_count": len(policy.seed_queries),
+                "durable_receipt_reused": True,
+            }
+            return 0, 0
+
+        message_ids, prefetched, acquisition = self._fetch_initial_backfill_ids(policy)
+        emitted, quarantined = await self._ingest_message_ids(
+            ctx=ctx,
+            store=store,
+            cursor_id=cursor_id,
+            message_ids=message_ids,
+            provider_watermark=self._cursor,
+            prefetched_messages=prefetched,
+        )
+        if store is not None:
+            store.record_success(backfill_id, provider_watermark="complete")
+        self._initial_backfill_complete = True
+        self._status.extra["initial_backfill"] = {
+            "contract": "gmail-initial-backfill-v2",
+            "state": "complete",
+            "recent_days": policy.recent_days,
+            "max_messages": policy.max_messages,
+            "seed_query_count": len(policy.seed_queries),
+            "discovered": len(message_ids),
+            "emitted": emitted,
+            "quarantined": quarantined,
+            **acquisition,
+        }
+        return emitted, quarantined
+
+    def _fetch_initial_backfill_ids(
+        self, policy: GmailInitialBackfillPolicy
+    ) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, Any]]:
+        """Acquire explicit historical seeds, their bounded context, then recency.
+
+        Seed query text is member-private configuration and is never returned in
+        status.  Priority order is intentional: an old explicitly reviewed
+        matter cannot be crowded out by the newest generic messages.
+        """
+        if self._service is None:
+            raise RuntimeError("Gmail service not initialized; call start() first")
+        message_ids: list[str] = []
+        prefetched: dict[str, dict[str, Any]] = {}
+        seed_ids: list[str] = []
+        related_ids: list[str] = []
+        truncated = False
+
+        for query in policy.seed_queries:
+            if len(message_ids) >= policy.max_messages:
+                truncated = True
+                break
+            ids, query_truncated = self._list_message_ids(
+                query=query,
+                limit=min(
+                    policy.seed_max_messages_per_query,
+                    policy.max_messages - len(message_ids),
+                ),
+            )
+            truncated = truncated or query_truncated
+            for message_id in ids:
+                if message_id not in message_ids:
+                    message_ids.append(message_id)
+                    seed_ids.append(message_id)
+
+        for message_id in seed_ids:
+            try:
+                prefetched[message_id] = self._fetch_message(message_id)
+            except Exception as exc:
+                _, error_kind, _ = self._classify_gmail_error(exc)
+                if error_kind != "api_changed":
+                    raise
+
+        seed_ids = self._chronological_message_ids(seed_ids, prefetched)
+        seed_messages = [
+            prefetched[message_id]
+            for message_id in seed_ids
+            if message_id in prefetched
+        ]
+        participants, participants_truncated = self._historical_seed_participants(
+            seed_messages,
+            maximum=policy.related_max_participants,
+        )
+        truncated = truncated or participants_truncated
+        date_clause = self._historical_related_date_clause(
+            seed_messages, context_days=policy.related_context_days
+        )
+        for participant_index, participant in enumerate(participants):
+            if len(message_ids) >= policy.max_messages:
+                truncated = truncated or participant_index < len(participants)
+                break
+            if policy.related_messages_per_participant == 0:
+                break
+            ids, query_truncated = self._list_message_ids(
+                query=(f'{date_clause} "{participant}"').strip(),
+                limit=min(
+                    policy.related_messages_per_participant,
+                    policy.max_messages - len(message_ids),
+                ),
+            )
+            truncated = truncated or query_truncated
+            for message_id in ids:
+                if message_id not in message_ids:
+                    message_ids.append(message_id)
+                    related_ids.append(message_id)
+
+        recent_ids: list[str] = []
+        if policy.recent_days and len(message_ids) < policy.max_messages:
+            ids, recent_truncated = self._list_message_ids(
+                query=f"newer_than:{policy.recent_days}d",
+                limit=policy.max_messages - len(message_ids),
+            )
+            truncated = truncated or recent_truncated
+            for message_id in ids:
+                if message_id not in message_ids:
+                    message_ids.append(message_id)
+                    recent_ids.append(message_id)
+        elif policy.recent_days and len(message_ids) >= policy.max_messages:
+            truncated = True
+
+        # Acquire every body before append, then place generic/relation context
+        # ahead of the reviewed seed matters and order each group oldest-first.
+        # Gmail search commonly returns newest-first; without this deterministic
+        # batch order, the newest seed could be assessed before its older thread
+        # facts existed in the event log and never receive a complete reassessment.
+        for message_id in message_ids:
+            if message_id in prefetched:
+                continue
+            try:
+                prefetched[message_id] = self._fetch_message(message_id)
+            except Exception as exc:
+                _, error_kind, _ = self._classify_gmail_error(exc)
+                if error_kind != "api_changed":
+                    raise
+        ordered_ids = [
+            *self._chronological_message_ids(recent_ids, prefetched),
+            *self._chronological_message_ids(related_ids, prefetched),
+            *self._chronological_message_ids(seed_ids, prefetched),
+        ]
+        return (
+            ordered_ids,
+            prefetched,
+            {
+                "seed_discovered": len(seed_ids),
+                "related_discovered": len(related_ids),
+                "recent_discovered": len(recent_ids),
+                "related_participant_count": len(participants),
+                "related_participants_truncated": participants_truncated,
+                "truncated": truncated,
+            },
+        )
+
+    def _list_message_ids(self, *, query: str, limit: int) -> tuple[list[str], bool]:
+        if self._service is None:
+            raise RuntimeError("Gmail service not initialized; call start() first")
+        if limit <= 0:
+            return [], False
+        page_token: str | None = None
+        seen_page_tokens: set[str] = set()
+        pages = 0
+        truncated = False
+        message_ids: list[str] = []
+        while len(message_ids) < limit and pages < self.INITIAL_BACKFILL_MAX_PAGES:
+            params: dict[str, Any] = {
+                "userId": "me",
+                "q": f"{query.strip()} -label:drafts".strip(),
+                "includeSpamTrash": False,
+                "maxResults": min(500, limit - len(message_ids)),
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            response = self._service.users().messages().list(**params).execute()
+            pages += 1
+            for value in response.get("messages") or []:
+                message_id = value.get("id") if isinstance(value, dict) else None
+                if (
+                    isinstance(message_id, str)
+                    and message_id
+                    and message_id not in message_ids
+                ):
+                    message_ids.append(message_id)
+                    if len(message_ids) >= limit:
+                        break
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+            if page_token in seen_page_tokens:
+                truncated = True
+                break
+            seen_page_tokens.add(page_token)
+        if page_token:
+            truncated = True
+        return message_ids, truncated
+
+    def _historical_seed_participants(
+        self,
+        messages: Iterable[dict[str, Any]],
+        *,
+        maximum: int,
+    ) -> tuple[tuple[str, ...], bool]:
+        if maximum == 0:
+            return (), False
+        own_addresses = {
+            address.casefold()
+            for _, address in getaddresses([str(self._config.get("user_email") or "")])
+            if address
+        }
+        result: list[str] = []
+        for message in messages:
+            payload = message.get("payload") or {}
+            headers = self._headers_to_map(payload.get("headers"))
+            participant_headers = [
+                value
+                for value in (
+                    headers.get("from") or "",
+                    headers.get("to") or "",
+                    headers.get("cc") or "",
+                    headers.get("bcc") or "",
+                    headers.get("reply-to") or "",
+                )
+                if value
+            ]
+            for _, address in getaddresses(participant_headers):
+                normalized = address.casefold()
+                if (
+                    normalized
+                    and normalized not in own_addresses
+                    and normalized not in result
+                ):
+                    if len(result) >= maximum:
+                        return tuple(result), True
+                    result.append(normalized)
+        return tuple(result), False
+
+    @classmethod
+    def _chronological_message_ids(
+        cls,
+        message_ids: Iterable[str],
+        messages: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        indexed = list(enumerate(message_ids))
+        return [
+            message_id
+            for _, message_id in sorted(
+                indexed,
+                key=lambda value: (
+                    cls._internal_date_ms(messages.get(value[1])) is None,
+                    cls._internal_date_ms(messages.get(value[1])) or 0,
+                    value[0],
+                ),
+            )
+        ]
+
+    @staticmethod
+    def _internal_date_ms(message: dict[str, Any] | None) -> int | None:
+        raw_internal_date = (message or {}).get("internalDate")
+        if isinstance(raw_internal_date, bool) or not isinstance(
+            raw_internal_date, (str, int)
+        ):
+            return None
+        try:
+            return int(raw_internal_date)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _historical_related_date_clause(
+        messages: Iterable[dict[str, Any]], *, context_days: int
+    ) -> str:
+        if context_days == 0:
+            return ""
+        dates: list[datetime] = []
+        for message in messages:
+            internal_date_ms = GmailAdapter._internal_date_ms(message)
+            if internal_date_ms is None:
+                continue
+            try:
+                dates.append(
+                    datetime.fromtimestamp(
+                        internal_date_ms / 1000,
+                        tz=timezone.utc,
+                    )
+                )
+            except (ValueError, OverflowError):
+                continue
+        if not dates:
+            return ""
+        after = (min(dates) - timedelta(days=context_days)).strftime("%Y/%m/%d")
+        before = (max(dates) + timedelta(days=context_days + 1)).strftime("%Y/%m/%d")
+        return f"after:{after} before:{before}"
+
+    async def _ingest_message_ids(
+        self,
+        *,
+        ctx: AdapterContext,
+        store: Any,
+        cursor_id: str,
+        message_ids: list[str],
+        provider_watermark: str | None,
+        prefetched_messages: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[int, int]:
+        emitted = 0
+        quarantined = 0
+        prefetched = prefetched_messages or {}
+        for msg_id in message_ids:
+            try:
+                full_msg = prefetched.get(msg_id) or self._fetch_message(msg_id)
+            except Exception as exc:
+                _, error_kind, _ = self._classify_gmail_error(exc)
+                if error_kind != "api_changed":
+                    raise
+                quarantined += 1
+                fingerprint = hashlib.sha256(
+                    f"gmail-message-id:{msg_id}".encode()
+                ).hexdigest()
+                quarantine_event_id = await self._emit_quarantine(
+                    ctx=ctx,
+                    external_id=msg_id,
+                    fingerprint=fingerprint,
+                    error=exc,
+                    provider_watermark=provider_watermark,
+                )
+                if store is not None:
+                    store.record_success(
+                        cursor_id,
+                        external_id=msg_id,
+                        fingerprint=fingerprint,
+                        event_id=quarantine_event_id,
+                    )
+                continue
+            fingerprint = self._message_fingerprint(full_msg)
+            if store is not None and store.dedupe_event(cursor_id, msg_id, fingerprint):
+                continue
+            try:
+                event_id = await self._emit_message_observation(
+                    ctx=ctx, message=full_msg, fingerprint=fingerprint
+                )
+                if store is not None:
+                    store.record_success(
+                        cursor_id,
+                        external_id=msg_id,
+                        fingerprint=fingerprint,
+                        event_id=event_id,
+                    )
+                emitted += 1
+                self._events_since_advance += 1
+            except EventValidationError as exc:
+                quarantined += 1
+                quarantine_event_id = await self._emit_quarantine(
+                    ctx=ctx,
+                    external_id=msg_id,
+                    fingerprint=fingerprint,
+                    error=exc,
+                    provider_watermark=provider_watermark,
+                )
+                if store is not None:
+                    store.record_success(
+                        cursor_id,
+                        external_id=msg_id,
+                        fingerprint=fingerprint,
+                        event_id=quarantine_event_id,
+                    )
+        return emitted, quarantined
 
     async def stop(self) -> None:
         """Release the Gmail service handle. Idempotent."""

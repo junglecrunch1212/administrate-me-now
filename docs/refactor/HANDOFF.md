@@ -17,14 +17,48 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-10 CO-013 bounded Gmail history candidate
+
+Live investigation after CO-012 found the missing-source cause: Gmail's first
+poll intentionally snapshotted the current history cursor and imported zero
+existing mail. The healthy downstream system therefore had no source facts
+for a pre-launch multi-message obligation. CO-013 makes first-use acquisition
+finite, durable, and explicit while retaining the provider as source and
+Triage as a human gate.
+
+Gmail adapter v1.1 snapshots the incremental cursor first. Optional private
+historical seeds run before deterministic exact-participant/date expansion;
+any remaining capacity is filled by up to 1,000 non-draft messages from the
+prior 730 days by default. Global hard ceilings remain 3,650 days and 5,000
+messages. Query text never enters an event, status, or cursor ID. A content-
+free policy-digest cursor makes restart idempotent and status reports only
+bounds, counts, completion, and truncation.
+
+Focused adapter, contextual-reasoning, and production-supervisor tests pass,
+including seed-first priority, exact participant/date expansion, Python 3.14
+address parsing, context-before-seed chronological emission from newest-first
+results, paging, hard caps, private-query non-disclosure, normal typed emission,
+durable replacement-instance idempotency, and preservation of incremental
+cursor ordering. The full
+candidate matrix passes: 1,761 root/pack tests, 60 isolated bridge tests, 47
+strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
+architecture/invariant checks, performance budgets, builds/packages, clean
+install, tenant isolation, encrypted backup/restore, the exact pinned native
+OpenClaw contract, and all 17 plugin tests. Reviewed merge, guarded deployment,
+settled source assurance, Doctor, and authenticated proof that the previously
+absent obligation produces distinct private Triage candidates remain required
+before this section may claim deployment. No candidate was confirmed and no
+provider effect was authorized.
+
 ## 2026-08-10 CO-012 contextual-message candidate
 
 The observed legal-message failure is now represented by
 `CHANGE-ORDER-012-CONTEXTUAL-MESSAGE-REASONING.md` and AC-37. The candidate
 replaces isolated-body candidate interpretation with a bounded private context
 pack assembled only from immutable same-member/account/workspace facts. Exact
-provider-thread, participant, normalized-subject, and attachment-filename
-edges are code-owned and disclosed. Quoted history is removed before the
+provider-thread, header-participant, authored participant-reference,
+normalized-subject, and attachment-filename edges are code-owned and
+disclosed. Quoted history is removed before the
 pinned skill receives the pack. Content deduplication is bound to tenant,
 member owner, visibility, sensitivity, provider account, workspace, and thread
 identity so identical notices cannot collide across private member scopes.

@@ -10,4 +10,14 @@ member_id: member_example
 workspace: personal
 account_label: Personal Gmail
 enable_writes: false
+initial_backfill_days: 730
+# Global cap shared by historical seeds, related expansion, and recent fill.
+initial_backfill_max_messages: 1000
+# Private instance configuration may add member-reviewed Gmail search syntax.
+# The query itself is never emitted in adapter status or event payloads.
+historical_seed_queries: []
+historical_seed_max_messages_per_query: 100
+historical_related_max_participants: 20
+historical_related_messages_per_participant: 25
+historical_related_context_days: 730
 sensitivity_floor: normal
