@@ -35,10 +35,13 @@ model as household truth:
    from a recent window. Drafts and spam/trash remain excluded everywhere.
    Defaults are 730 recent days and 1,000 total messages; hard ceilings remain
    3,650 days and 5,000 messages.
-4. Fetch and append each listed message through the existing account-bound,
-   direction-preserving `messaging.received@v3` / `messaging.sent@v2` path.
-   Existing content fingerprints and native message IDs provide per-message
-   replay deduplication and quarantine semantics.
+4. Fetch the bounded batch before append. Append generic and related context
+   before reviewed seeds, and each group oldest-first, so Gmail's common
+   newest-first search order cannot cause a thread anchor to be assessed before
+   its acquired context exists. Then use the existing account-bound, direction-
+   preserving `messaging.received@v3` / `messaging.sent@v2` path. Existing
+   content fingerprints and native message IDs provide per-message replay
+   deduplication and quarantine semantics.
 5. Record a content-free durable completion cursor keyed by an irreversible
    digest of the adapter ID and acquisition policy. A restart with the same
    policy does not relist or re-emit history. A reviewed policy change creates
@@ -59,7 +62,7 @@ the human gate remain downstream under CO-012.
 |---|---|---|---|
 | Provider cursor snapshot | Owns ordering and durable watermark | No role | May inspect content-free health |
 | History query and cap | Owns seed-first priority, validated bounds, exact-participant/date expansion, exclusions, paging, and truncation | No role | May provide or remove a private reviewed seed policy |
-| Message identity/direction | Existing native ID, label, account, workspace, owner, scope, and fingerprint rules | No role | Can inspect the exact authorized source in Comms |
+| Message identity/direction/order | Existing native ID, label, account, workspace, owner, scope, fingerprint rules, and context-before-seed chronological batch order | No role | Can inspect the exact authorized source in Comms |
 | Candidate meaning | Admits only grounded typed output under existing rules | Interprets only appended authorized facts | Reviews each proposal in Triage |
 | Canonical/provider effect | Existing confirmation, allowlist, governance, approval, privacy, and observation controls | No authority | Explicit later authorization remains required |
 
@@ -84,8 +87,9 @@ substitute.
 AC-38 requires:
 
 1. adapter-level proof of cursor-before-list ordering, historical-seed priority,
-   exact-participant/date expansion, recent-cap fill, paging, hard caps,
-   validation, normal typed emission, and content-free status;
+   exact-participant/date expansion, recent-cap fill, newest-first provider
+   normalization into context-before-seed chronological emission, paging, hard
+   caps, validation, normal typed emission, and content-free status;
 2. production-supervisor proof that two old pre-existing messages are emitted
    from a reviewed seed on first composition and never relisted after a fresh
    adapter instance reuses the durable cursor store;

@@ -619,7 +619,8 @@ async def test_historical_seed_precedes_related_context_and_recent_fill(
     service = _FakeGmailService(
         profile=_fixture("profile_response.json"),
         backfill_pages=[
-            {"messages": [{"id": "msg-alice"}, {"id": "msg-bob"}]},
+            # Gmail search commonly returns newest-first.
+            {"messages": [{"id": "msg-bob"}, {"id": "msg-alice"}]},
             {"messages": [{"id": "msg-related"}]},
             {"messages": [{"id": "msg-recent"}]},
         ],
@@ -651,11 +652,16 @@ async def test_historical_seed_precedes_related_context_and_recent_fill(
         "newer_than:10d -label:drafts",
     ]
     assert [call["id"] for call in service.messages_get_calls] == [
-        "msg-alice",
         "msg-bob",
+        "msg-alice",
         "msg-related",
         "msg-recent",
     ]
+    assert [
+        call["payload"]["native_message_id"]
+        for call in event_log.calls
+        if call["type"] == "messaging.received"
+    ] == ["msg-recent", "msg-related", "msg-alice", "msg-bob"]
     status = adapter.status().extra["initial_backfill"]
     assert status == {
         "contract": "gmail-initial-backfill-v2",

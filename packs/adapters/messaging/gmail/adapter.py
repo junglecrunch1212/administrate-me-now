@@ -614,13 +614,19 @@ class GmailAdapter(CommunicationAdapter):
                 if error_kind != "api_changed":
                     raise
 
+        seed_ids = self._chronological_message_ids(seed_ids, prefetched)
+        seed_messages = [
+            prefetched[message_id]
+            for message_id in seed_ids
+            if message_id in prefetched
+        ]
         participants, participants_truncated = self._historical_seed_participants(
-            prefetched.values(),
+            seed_messages,
             maximum=policy.related_max_participants,
         )
         truncated = truncated or participants_truncated
         date_clause = self._historical_related_date_clause(
-            prefetched.values(), context_days=policy.related_context_days
+            seed_messages, context_days=policy.related_context_days
         )
         for participant_index, participant in enumerate(participants):
             if len(message_ids) >= policy.max_messages:
@@ -655,8 +661,27 @@ class GmailAdapter(CommunicationAdapter):
         elif policy.recent_days and len(message_ids) >= policy.max_messages:
             truncated = True
 
+        # Acquire every body before append, then place generic/relation context
+        # ahead of the reviewed seed matters and order each group oldest-first.
+        # Gmail search commonly returns newest-first; without this deterministic
+        # batch order, the newest seed could be assessed before its older thread
+        # facts existed in the event log and never receive a complete reassessment.
+        for message_id in message_ids:
+            if message_id in prefetched:
+                continue
+            try:
+                prefetched[message_id] = self._fetch_message(message_id)
+            except Exception as exc:
+                _, error_kind, _ = self._classify_gmail_error(exc)
+                if error_kind != "api_changed":
+                    raise
+        ordered_ids = [
+            *self._chronological_message_ids(recent_ids, prefetched),
+            *self._chronological_message_ids(related_ids, prefetched),
+            *self._chronological_message_ids(seed_ids, prefetched),
+        ]
         return (
-            message_ids,
+            ordered_ids,
             prefetched,
             {
                 "seed_discovered": len(seed_ids),
@@ -750,6 +775,37 @@ class GmailAdapter(CommunicationAdapter):
                     result.append(normalized)
         return tuple(result), False
 
+    @classmethod
+    def _chronological_message_ids(
+        cls,
+        message_ids: Iterable[str],
+        messages: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        indexed = list(enumerate(message_ids))
+        return [
+            message_id
+            for _, message_id in sorted(
+                indexed,
+                key=lambda value: (
+                    cls._internal_date_ms(messages.get(value[1])) is None,
+                    cls._internal_date_ms(messages.get(value[1])) or 0,
+                    value[0],
+                ),
+            )
+        ]
+
+    @staticmethod
+    def _internal_date_ms(message: dict[str, Any] | None) -> int | None:
+        raw_internal_date = (message or {}).get("internalDate")
+        if isinstance(raw_internal_date, bool) or not isinstance(
+            raw_internal_date, (str, int)
+        ):
+            return None
+        try:
+            return int(raw_internal_date)
+        except ValueError:
+            return None
+
     @staticmethod
     def _historical_related_date_clause(
         messages: Iterable[dict[str, Any]], *, context_days: int
@@ -758,19 +814,17 @@ class GmailAdapter(CommunicationAdapter):
             return ""
         dates: list[datetime] = []
         for message in messages:
-            raw_internal_date = message.get("internalDate")
-            if isinstance(raw_internal_date, bool) or not isinstance(
-                raw_internal_date, (str, int)
-            ):
+            internal_date_ms = GmailAdapter._internal_date_ms(message)
+            if internal_date_ms is None:
                 continue
             try:
                 dates.append(
                     datetime.fromtimestamp(
-                        int(raw_internal_date) / 1000,
+                        internal_date_ms / 1000,
                         tz=timezone.utc,
                     )
                 )
-            except (TypeError, ValueError, OverflowError):
+            except (ValueError, OverflowError):
                 continue
         if not dates:
             return ""

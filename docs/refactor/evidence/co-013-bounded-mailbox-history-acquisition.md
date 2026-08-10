@@ -23,7 +23,8 @@ retained here.
 
 - Focused Gmail adapter, contextual reasoning, and production-supervisor suite:
   47 passed after adding historical-seed, exact-participant/date expansion,
-  private-query non-disclosure, Python 3.14 parsing, and durable-restart proof.
+  private-query non-disclosure, Python 3.14 parsing, newest-first normalization,
+  and durable-restart proof.
 - Full root/pack/bridge/acceptance release matrix: 1,761 root/pack, 60 isolated
   bridge, and 47 strict acceptance tests passed; Ruff/format/mypy/Pyright,
   dependency/security/architecture/invariant checks, performance budgets,
@@ -42,6 +43,9 @@ retained here.
 - Private reviewed seeds win the global cap; fixed code derives exact non-
   member participants and a bounded date window before recent-history fill.
 - Seed query text is absent from events, status, and durable cursor IDs.
+- The bounded batch appends generic/related facts before reviewed seeds and
+  each group oldest-first, making complete seed-thread assessment independent
+  of Gmail's search-result order.
 - Per-message event identity, scope, direction, dedupe, and quarantine are
   unchanged.
 - Completion state is metadata-only and policy-digest scoped.

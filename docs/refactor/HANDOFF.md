@@ -36,9 +36,10 @@ bounds, counts, completion, and truncation.
 
 Focused adapter, contextual-reasoning, and production-supervisor tests pass,
 including seed-first priority, exact participant/date expansion, Python 3.14
-address parsing, paging, hard caps, private-query non-disclosure, normal typed
-emission, durable replacement-instance idempotency, and preservation of
-incremental cursor ordering. The full
+address parsing, context-before-seed chronological emission from newest-first
+results, paging, hard caps, private-query non-disclosure, normal typed emission,
+durable replacement-instance idempotency, and preservation of incremental
+cursor ordering. The full
 candidate matrix passes: 1,761 root/pack tests, 60 isolated bridge tests, 47
 strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
 architecture/invariant checks, performance budgets, builds/packages, clean
