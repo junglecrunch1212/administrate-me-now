@@ -15,7 +15,10 @@ object, or runtime version migrates. The v13 operational replay remains
 semantically unchanged at the reviewed eight-way context-safe width while the
 guarded settlement ceiling moves from 30 minutes to one hour. A new non-source
 capability degradation during that wait now triggers immediate full Doctor;
-ordered-prefix checkpoints, terminal equality, and rollback remain.
+ordered-prefix checkpoints, terminal equality, and rollback remain. The final
+consumer advances to v14/generation 14 because the rejected sixteen-way live
+attempt durably occupied generation-13 identities; no retained fact, terminal
+event, or member decision is deleted or rewritten.
 
 CO-012 update (2026-08-10): contextual message reasoning is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing message facts and candidate decisions are never
@@ -448,7 +451,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
-| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v13 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, and reviewed schema-failure replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-013 VOCABULARY REPAIR IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, and outcome feedback; confidence never gates a review candidate and no model owns a decision. |
+| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v14 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, and reviewed schema-failure/idempotency-generation replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-013 FINAL REPLAY ACTIVATION IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, and outcome feedback; confidence never gates a review candidate and no model owns a decision. |
 | Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` 6.0.1 returns classification, bounded semantic features, and exact-quote typed candidates defensively while admitting every fixed-code context reason | HARDEN COMPLETE; CO-013 VOCABULARY REPAIR IN REVIEW | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
 | OpenClaw skill wrapper | `adminme/lib/skill_runner/` | exactly one pinned `llm-task` request uses a canonical member-isolated Gateway session, records actual returned provider/model provenance, and versions durable terminal identity by skill version | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |

@@ -6,8 +6,9 @@ only cursor would otherwise certify a false-complete source stream. C109 owns
 cursor-before-list ordering, member-private historical seeds, deterministic
 exact-participant/date expansion, seed-first global caps, content-free policy
 receipts, restart idempotency, explicit truncation, the reviewed eight-way
-context-safe replay width, a one-hour guarded settlement ceiling, immediate
-Doctor on newly degraded non-source capabilities, and the unchanged human/
+context-safe replay width, an explicit new generation after a rejected attempt
+retains conflicting idempotency state, a one-hour guarded settlement ceiling,
+immediate Doctor on newly degraded non-source capabilities, and the unchanged human/
 write gate. Liveness, terminal equality, final Doctor, synthetic proof, and
 rollback are not weakened; AC-38 is its release boundary.
 

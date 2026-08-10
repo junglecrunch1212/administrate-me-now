@@ -76,8 +76,13 @@ durable idempotency identity: the bus correctly poisoned the subscriber on
 conflict. The final repair restores the reviewed eight-way width, retains the
 still-bounded one-hour settlement window, and makes the lightweight settlement
 loop run full Doctor immediately when any non-source capability newly degrades.
-Final settlement, Doctor, and authenticated Triage proof are still required.
-No candidate has been confirmed and no provider effect has been authorized.
+That fail-fast path passed every local and hosted gate, merged as `a9a4045`,
+and correctly rejected the next live attempt at the first retained generation-13
+idempotency conflict. The final consumer is therefore v14/generation 14: it
+does not delete or overwrite the rejected attempt's durable evidence, and it
+retains width eight and the one-hour guard. Final settlement, Doctor, and
+authenticated Triage proof are still required. No candidate has been confirmed
+and no provider effect has been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
