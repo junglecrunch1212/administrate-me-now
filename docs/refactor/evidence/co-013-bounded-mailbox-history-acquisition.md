@@ -68,12 +68,18 @@ retained here.
   superseding the retained schema failures. Content-free live telemetry then
   proved that the roughly 1,500-message language-bound replay could exceed the
   controller's 30-minute settlement ceiling despite clean forward progress.
-- Operational convergence repair: keep the v13 semantic generation, use the
-  EventBus maximum sixteen-way bounded callback width, and extend only the
-  guarded settlement ceiling to one hour. Ordered-prefix durability,
-  liveness, terminal equality, full Doctor, synthetic proof, and rollback are
-  unchanged. Review, merge, activation, settlement, Doctor, and authenticated
-  proof remain pending.
+- A first operational convergence repair passed every local and hosted gate,
+  merged as `e8b10b876c299f94deecd05d8a52b39a80b5f287`, and activated. Sixteen-way
+  delivery exposed a context/idempotency race: linked sources reached the same
+  durable identity with different payloads, and the bus correctly poisoned the
+  subscriber after five conflicts without advancing past the failed source.
+- Final convergence repair: keep the v13 semantic generation, restore the
+  reviewed eight-way context-safe width, retain the one-hour guarded settlement
+  ceiling, and make the lightweight wait invoke full Doctor immediately on any
+  new non-source capability degradation. Ordered-prefix durability, liveness,
+  terminal equality, synthetic proof, and rollback are unchanged. Review,
+  merge, activation, settlement, Doctor, and authenticated proof remain
+  pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.

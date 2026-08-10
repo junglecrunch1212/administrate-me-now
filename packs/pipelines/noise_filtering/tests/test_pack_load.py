@@ -16,7 +16,7 @@ def test_pack_loads_cleanly() -> None:
     assert pack.pack_id == "pipeline:noise_filtering"
     assert pack.version == "13.0.0"
     assert pack.replay_on_version_change is True
-    assert pack.delivery_concurrency == 16
+    assert pack.delivery_concurrency == 8
     assert pack.triggers.get("events") == [
         "messaging.received",
         "messaging.sent",
