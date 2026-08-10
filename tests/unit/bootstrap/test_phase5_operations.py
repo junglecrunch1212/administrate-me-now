@@ -1883,6 +1883,51 @@ def test_upgrade_polls_lightweight_source_settlement_before_full_doctor(
     assert include_synthetic == [False, False, True]
 
 
+def test_upgrade_aborts_source_wait_on_new_pipeline_degradation(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "source_assurance_terminal_dispositions", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [
+            {"name": "source_assurance_terminal_dispositions", "ok": False},
+            {"name": "required_reactive_pipeline_delivery", "ok": False},
+        ],
+    }
+    reports = iter((transient, structural))
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["capabilities"]["pipeline:pipeline:noise_filtering"] = {
+        "name": "pipeline:noise_filtering",
+        "kind": "reactive_pipeline",
+        "state": "degraded",
+        "reason": "subscriber delivery is degraded",
+        "details": {"consecutive_failures": 5, "poison_event_id": "ev_fixture"},
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+    assert include_synthetic == [False, False]
+
+
 def test_upgrade_replay_settlement_window_covers_household_language_backlog() -> None:
     assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 60 * 60
 

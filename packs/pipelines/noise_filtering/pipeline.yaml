@@ -17,10 +17,10 @@ replay:
   on_version_change: full
 delivery:
   # The handler is idempotent; EventBus checkpoints only the ordered success
-  # prefix if one of these bounded language calls fails. The maximum bounded
-  # bus width keeps a reviewed full replay inside the guarded deployment
-  # settlement window without changing semantic output.
-  concurrency: 16
+  # prefix if one of these bounded language calls fails. Eight-way delivery is
+  # the reviewed maximum for context-linked messages that can share durable
+  # idempotency identities.
+  concurrency: 8
 depends_on:
   skills:
     - classify_message_nature@^6.0.1

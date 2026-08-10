@@ -42,6 +42,13 @@ _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
         "source_assurance_terminal_dispositions",
     }
 )
+_SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS = frozenset(
+    {
+        "policy:source-assurance",
+        "product:member",
+        "surface:triage-processing",
+    }
+)
 # A full reviewed language-bound replay can traverse more than one thousand
 # immutable message facts on a household instance.  Keep this bounded, but do
 # not make a healthy, advancing replay race an unrealistically short rollback
@@ -195,6 +202,20 @@ class UpgradeManager:
             if isinstance(check, dict) and not check.get("ok")
         }
 
+    @staticmethod
+    def _has_new_structural_degradation(diagnostics: dict[str, Any]) -> bool:
+        """Reject a runtime capability failure that emerges during replay."""
+
+        capabilities = diagnostics.get("capabilities")
+        if not isinstance(capabilities, dict):
+            return True
+        for capability_id, capability in capabilities.items():
+            if capability_id in _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS:
+                continue
+            if isinstance(capability, dict) and capability.get("state") == "degraded":
+                return True
+        return False
+
     def _post_switch_doctor(self, release: Path) -> dict[str, Any]:
         """Wait for only known launch transients, then run the full proof once."""
 
@@ -230,6 +251,10 @@ class UpgradeManager:
                         time.sleep(POST_SWITCH_POLL_SECONDS)
                         continue
                     return last
+                if self._has_new_structural_degradation(diagnostics):
+                    return self._run_release_doctor(
+                        release, include_synthetic_proof=False
+                    )
                 settled, _evidence = source_assurance_terminal_evidence(diagnostics)
                 if not settled and time.monotonic() < deadline:
                     time.sleep(POST_SWITCH_POLL_SECONDS)

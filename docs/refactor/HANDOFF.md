@@ -70,12 +70,14 @@ idempotency generation. PR #316 passed both hosted gates and merged as
 `6cc627ffca4ef11bf9670e440d5eee82bfbdff11`. Guarded activation proved the
 schema repair: replay advanced without new failures and began superseding the
 retained failures, but the real 1,500-message language-bound backlog progressed
-too slowly for the 30-minute controller ceiling. The follow-up keeps v13
-semantics and ordered-prefix durability unchanged, uses the bus's supported
-maximum sixteen-way bounded delivery, and gives a still-bounded one-hour
-settlement window. Final settlement, Doctor, and authenticated Triage proof are
-still required. No candidate has been confirmed and no provider effect has
-been authorized.
+too slowly for the 30-minute controller ceiling. A first throughput follow-up
+proved that sixteen-way delivery is unsafe for context-linked sources sharing a
+durable idempotency identity: the bus correctly poisoned the subscriber on
+conflict. The final repair restores the reviewed eight-way width, retains the
+still-bounded one-hour settlement window, and makes the lightweight settlement
+loop run full Doctor immediately when any non-source capability newly degrades.
+Final settlement, Doctor, and authenticated Triage proof are still required.
+No candidate has been confirmed and no provider effect has been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
