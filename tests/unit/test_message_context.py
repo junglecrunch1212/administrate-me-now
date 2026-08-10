@@ -191,6 +191,59 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
 
 
 @pytest.mark.asyncio
+async def test_exact_authored_participant_reference_relates_service_message() -> None:
+    """A service notice in another provider thread can join a matter when it
+    shares the member mailbox and its newly authored body exactly references a
+    primary participant. Near-text and a reference in another scope stay out.
+    """
+    anchor = _message(
+        "source-anchor",
+        "Please send the authorization package when it is ready.",
+        sender="counsel@example.invalid",
+        recipient="member@example.invalid",
+    )
+    service_notice = _message(
+        "source-service",
+        "A secure request from counsel@example.invalid is ready for review.",
+        thread_id="thread-service",
+        sender="delivery@example.invalid",
+        recipient="member@example.invalid",
+        subject="Secure delivery notice",
+    )
+    near_text = _message(
+        "source-near-text",
+        "A secure request from counsel at example dot invalid is ready.",
+        thread_id="thread-near-text",
+        sender="delivery@example.invalid",
+        recipient="member@example.invalid",
+        subject="Secure delivery notice",
+    )
+    wrong_scope = _message(
+        "source-wrong-scope",
+        "A secure request from counsel@example.invalid is ready for review.",
+        thread_id="thread-wrong-scope",
+        sender="delivery@example.invalid",
+        recipient="member@example.invalid",
+        subject="Secure delivery notice",
+        workspace="work",
+    )
+
+    pack = await build_message_context_pack(
+        anchor,
+        _Log([anchor, service_notice, near_text, wrong_scope]),
+    )
+
+    assert [message.source_event_id for message in pack.messages] == [
+        "source-anchor",
+        "source-service",
+    ]
+    assert pack.messages[-1].relation_reason_codes == (
+        "participant_overlap",
+        "participant_reference_overlap",
+    )
+
+
+@pytest.mark.asyncio
 async def test_context_extraction_preserves_distinct_open_asks_and_provenance() -> None:
     messages = [
         _message(

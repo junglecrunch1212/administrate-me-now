@@ -212,6 +212,9 @@ def _build_gmail_adapter(
     poll_interval_s: float = 0.0,
     initial_backfill_days: int = 0,
     initial_backfill_max_messages: int = 0,
+    historical_seed_queries: list[str] | None = None,
+    historical_seed_max_messages_per_query: int = 100,
+    historical_related_max_participants: int = 20,
 ) -> Any:
     """Construct a real ``GmailAdapter`` with an injected fake service +
     deterministic credentials resolver. The adapter is otherwise the
@@ -236,6 +239,13 @@ def _build_gmail_adapter(
             "user_email": user_email,
             "initial_backfill_days": initial_backfill_days,
             "initial_backfill_max_messages": initial_backfill_max_messages,
+            "historical_seed_queries": historical_seed_queries or [],
+            "historical_seed_max_messages_per_query": (
+                historical_seed_max_messages_per_query
+            ),
+            "historical_related_max_participants": (
+                historical_related_max_participants
+            ),
         },
         credentials_resolver=_resolver,
         service_factory=_factory,
@@ -406,9 +416,10 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     """Production composition proof for the source-acquisition repair.
 
     The supervisor authenticates the real adapter, snapshots the incremental
-    cursor, acquires two pre-existing messages through ``messages.list``, and
-    records a durable policy marker. A replacement adapter using the same
-    cursor store does not list or emit that history again.
+    cursor, acquires two old pre-existing messages through a private reviewed
+    seed, and records a content-free durable policy marker. A replacement
+    adapter using the same cursor store does not list or emit that history
+    again.
     """
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
@@ -428,8 +439,11 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     )
     first_adapter = _build_gmail_adapter(
         service=first_service,
-        initial_backfill_days=180,
+        initial_backfill_days=0,
         initial_backfill_max_messages=2,
+        historical_seed_queries=["subject:fixture-matter"],
+        historical_seed_max_messages_per_query=2,
+        historical_related_max_participants=0,
     )
     first_log = _RecordingEventLog()
     first = _supervisor(
@@ -445,7 +459,7 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
         assert first_service.messages_list_calls == [
             {
                 "userId": "me",
-                "q": "newer_than:180d -label:drafts",
+                "q": "subject:fixture-matter -label:drafts",
                 "includeSpamTrash": False,
                 "maxResults": 2,
             }
@@ -459,8 +473,11 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     )
     second_adapter = _build_gmail_adapter(
         service=second_service,
-        initial_backfill_days=180,
+        initial_backfill_days=0,
         initial_backfill_max_messages=2,
+        historical_seed_queries=["subject:fixture-matter"],
+        historical_seed_max_messages_per_query=2,
+        historical_related_max_participants=0,
     )
     second_log = _RecordingEventLog()
     second = _supervisor(

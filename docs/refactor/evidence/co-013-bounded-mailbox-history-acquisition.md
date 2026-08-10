@@ -12,15 +12,19 @@ Status: candidate evidence; live fields intentionally pending
   returned `historyId`, returned zero, and never called `users.messages.list`.
 - Therefore, source assurance correctly accounted for the facts in the event
   log but could not certify provider messages that were never acquired.
+- Private provider inspection then confirmed the member-reviewed example is
+  older than the ordinary recent-history default. A recent-only repair would
+  therefore still miss the exact matter it was intended to recover.
 
 No household message text, identifier, address, token, or credential is
 retained here.
 
 ## Candidate proof
 
-- Focused Gmail adapter, send, retrofit, and production-supervisor suite: 50
-  passed.
-- Full root/pack/bridge/acceptance release matrix: 1,753 root/pack, 60 isolated
+- Focused Gmail adapter, contextual reasoning, and production-supervisor suite:
+  47 passed after adding historical-seed, exact-participant/date expansion,
+  private-query non-disclosure, Python 3.14 parsing, and durable-restart proof.
+- Full root/pack/bridge/acceptance release matrix: 1,761 root/pack, 60 isolated
   bridge, and 47 strict acceptance tests passed; Ruff/format/mypy/Pyright,
   dependency/security/architecture/invariant checks, performance budgets,
   builds/packages, clean install, tenant isolation, encrypted backup/restore,
@@ -35,6 +39,9 @@ retained here.
 
 - The current incremental cursor is snapshotted before acquisition.
 - Bounds are validated and capped; drafts and spam/trash are excluded.
+- Private reviewed seeds win the global cap; fixed code derives exact non-
+  member participants and a bounded date window before recent-history fill.
+- Seed query text is absent from events, status, and durable cursor IDs.
 - Per-message event identity, scope, direction, dedupe, and quarantine are
   unchanged.
 - Completion state is metadata-only and policy-digest scoped.

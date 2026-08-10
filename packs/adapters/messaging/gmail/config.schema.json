@@ -51,14 +51,55 @@
       "minimum": 0,
       "maximum": 3650,
       "default": 730,
-      "description": "Bounded initial mailbox acquisition window. Zero disables history acquisition; incremental history remains enabled."
+      "description": "Bounded recent-history fill window after private seeds and related expansion. Zero disables only the recent fill; incremental history remains enabled."
     },
     "initial_backfill_max_messages": {
       "type": "integer",
       "minimum": 0,
       "maximum": 5000,
       "default": 1000,
-      "description": "Hard cap for the durable initial mailbox acquisition. Zero disables history acquisition."
+      "description": "Global hard cap across historical seeds, related expansion, and recent fill. Zero disables initial history acquisition."
+    },
+    "historical_seed_queries": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\r\\n\\u0000]+$"
+      },
+      "default": [],
+      "description": "Private member-reviewed Gmail searches that acquire older named matters before generic recency. Query text is never emitted in events or status."
+    },
+    "historical_seed_max_messages_per_query": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 500,
+      "default": 100,
+      "description": "Per-seed hard cap inside the global initial_backfill_max_messages ceiling."
+    },
+    "historical_related_max_participants": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50,
+      "default": 20,
+      "description": "Maximum distinct non-member seed participants used for deterministic historical context acquisition."
+    },
+    "historical_related_messages_per_participant": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 25,
+      "description": "Per-participant context cap inside the global acquisition ceiling."
+    },
+    "historical_related_context_days": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3650,
+      "default": 730,
+      "description": "Days before and after the seed matter searched for exact participant references. Zero removes the date window while retaining the other caps."
     },
     "sensitivity_floor": {
       "type": "string",

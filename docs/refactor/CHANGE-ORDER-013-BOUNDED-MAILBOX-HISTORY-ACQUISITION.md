@@ -24,20 +24,27 @@ model as household truth:
 1. On first use of each acquisition policy, snapshot the current Gmail history
    cursor before listing prior messages. This cursor is the floor for the next
    incremental poll, so messages arriving during acquisition remain observable.
-2. List a bounded recent window with `users.messages.list`, excluding drafts
-   and spam/trash. Defaults are 730 days and 1,000 messages; explicit integers
-   may narrow, disable, or increase the bounds only within 0–3,650 days and
-   0–5,000 messages.
-3. Fetch and append each listed message through the existing account-bound,
+2. Acquire optional member-reviewed historical seed queries first. Query text
+   remains private instance configuration: fixed code exposes only its count
+   and incorporates only irreversible query digests in the durable policy
+   receipt. Each seed is capped at 500 messages and the policy at 20 queries.
+3. From fetched seeds, derive at most 50 exact non-member header participants
+   and acquire up to 100 messages per participant in a bounded date window.
+   This deterministic expansion recovers separate provider threads and service
+   notices without a model selecting sources. Fill the remaining global cap
+   from a recent window. Drafts and spam/trash remain excluded everywhere.
+   Defaults are 730 recent days and 1,000 total messages; hard ceilings remain
+   3,650 days and 5,000 messages.
+4. Fetch and append each listed message through the existing account-bound,
    direction-preserving `messaging.received@v3` / `messaging.sent@v2` path.
    Existing content fingerprints and native message IDs provide per-message
    replay deduplication and quarantine semantics.
-4. Record a content-free durable completion cursor keyed by an irreversible
+5. Record a content-free durable completion cursor keyed by an irreversible
    digest of the adapter ID and acquisition policy. A restart with the same
    policy does not relist or re-emit history. A reviewed policy change creates
    a distinct bounded acquisition obligation rather than silently mutating the
    old receipt.
-5. Expose only counts, bounds, completion state, and truncation in adapter
+6. Expose only counts, bounds, completion state, and truncation in adapter
    status. No subject, sender, body, query result, credential, or household
    identifier enters operational evidence.
 
@@ -51,7 +58,7 @@ the human gate remain downstream under CO-012.
 | Concern | Fixed code | Pinned language seam | Member/operator |
 |---|---|---|---|
 | Provider cursor snapshot | Owns ordering and durable watermark | No role | May inspect content-free health |
-| History query and cap | Owns validated bounds, exclusions, paging, and truncation | No role | May choose a narrower reviewed policy |
+| History query and cap | Owns seed-first priority, validated bounds, exact-participant/date expansion, exclusions, paging, and truncation | No role | May provide or remove a private reviewed seed policy |
 | Message identity/direction | Existing native ID, label, account, workspace, owner, scope, and fingerprint rules | No role | Can inspect the exact authorized source in Comms |
 | Candidate meaning | Admits only grounded typed output under existing rules | Interprets only appended authorized facts | Reviews each proposal in Triage |
 | Canonical/provider effect | Existing confirmation, allowlist, governance, approval, privacy, and observation controls | No authority | Explicit later authorization remains required |
@@ -76,11 +83,12 @@ substitute.
 
 AC-38 requires:
 
-1. adapter-level proof of cursor-before-list ordering, paging, exact query,
-   hard caps, validation, normal typed emission, and content-free status;
-2. production-supervisor proof that two pre-existing messages are emitted on
-   first composition and never relisted after a fresh adapter instance reuses
-   the durable cursor store;
+1. adapter-level proof of cursor-before-list ordering, historical-seed priority,
+   exact-participant/date expansion, recent-cap fill, paging, hard caps,
+   validation, normal typed emission, and content-free status;
+2. production-supervisor proof that two old pre-existing messages are emitted
+   from a reviewed seed on first composition and never relisted after a fresh
+   adapter instance reuses the durable cursor store;
 3. preservation of existing Gmail direction, scope, quarantine, incremental
    cursor, and message-level dedupe tests;
 4. full release gates, reviewed merge, guarded observation deployment, source

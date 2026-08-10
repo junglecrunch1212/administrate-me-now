@@ -26,17 +26,20 @@ for a pre-launch multi-message obligation. CO-013 makes first-use acquisition
 finite, durable, and explicit while retaining the provider as source and
 Triage as a human gate.
 
-Gmail adapter v1.1 snapshots the incremental cursor first, lists up to 1,000
-non-draft messages from the prior 730 days by default, and feeds each through
-the existing account-bound direction/dedupe/quarantine path. Validated hard
-ceilings are 3,650 days and 5,000 messages; zero disables acquisition. A
-content-free policy-digest cursor makes restart idempotent and status reports
-the exact bounds, counts, completion, and truncation without source content.
+Gmail adapter v1.1 snapshots the incremental cursor first. Optional private
+historical seeds run before deterministic exact-participant/date expansion;
+any remaining capacity is filled by up to 1,000 non-draft messages from the
+prior 730 days by default. Global hard ceilings remain 3,650 days and 5,000
+messages. Query text never enters an event, status, or cursor ID. A content-
+free policy-digest cursor makes restart idempotent and status reports only
+bounds, counts, completion, and truncation.
 
-Focused adapter and production-supervisor tests pass, including paging, hard
-caps, invalid-value refusal, normal typed emission, durable replacement-
-instance idempotency, and preservation of incremental cursor ordering. The full
-candidate matrix passes: 1,753 root/pack tests, 60 isolated bridge tests, 47
+Focused adapter, contextual-reasoning, and production-supervisor tests pass,
+including seed-first priority, exact participant/date expansion, Python 3.14
+address parsing, paging, hard caps, private-query non-disclosure, normal typed
+emission, durable replacement-instance idempotency, and preservation of
+incremental cursor ordering. The full
+candidate matrix passes: 1,761 root/pack tests, 60 isolated bridge tests, 47
 strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
 architecture/invariant checks, performance budgets, builds/packages, clean
 install, tenant isolation, encrypted backup/restore, the exact pinned native
@@ -52,8 +55,9 @@ The observed legal-message failure is now represented by
 `CHANGE-ORDER-012-CONTEXTUAL-MESSAGE-REASONING.md` and AC-37. The candidate
 replaces isolated-body candidate interpretation with a bounded private context
 pack assembled only from immutable same-member/account/workspace facts. Exact
-provider-thread, participant, normalized-subject, and attachment-filename
-edges are code-owned and disclosed. Quoted history is removed before the
+provider-thread, header-participant, authored participant-reference,
+normalized-subject, and attachment-filename edges are code-owned and
+disclosed. Quoted history is removed before the
 pinned skill receives the pack. Content deduplication is bound to tenant,
 member owner, visibility, sensitivity, provider account, workspace, and thread
 identity so identical notices cannot collide across private member scopes.

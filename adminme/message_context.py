@@ -6,9 +6,10 @@ authorized source events from the append-only log, removes duplicated quoted
 history, and assigns stable aliases that the pinned language seam can cite.
 
 Relationship edges are deliberately code-owned: exact provider thread,
-participant overlap, normalized subject tokens, and attachment filename
-tokens.  A model may interpret the resulting language, but it cannot widen the
-member/account/workspace boundary or invent another source.
+participant overlap, exact participant references, normalized subject tokens,
+and attachment filename tokens.  A model may interpret the resulting language,
+but it cannot widen the member/account/workspace boundary or invent another
+source.
 """
 
 from __future__ import annotations
@@ -157,6 +158,20 @@ def _identifiers(payload: Mapping[str, Any]) -> frozenset[str]:
     )
 
 
+def _referenced_identifiers(payload: Mapping[str, Any]) -> frozenset[str]:
+    """Return exact email references from newly authored message content.
+
+    These values are discovery edges, never identity or authorization truth.
+    Quoted history is removed first so a forwarded chain does not multiply
+    relationships already represented by its own source messages.
+    """
+
+    authored = strip_quoted_history(
+        str(payload.get("body_text") or payload.get("body") or "")
+    )
+    return frozenset(match.group(0).casefold() for match in _EMAIL.finditer(authored))
+
+
 def _subject_tokens(payload: Mapping[str, Any]) -> frozenset[str]:
     subject = str(payload.get("subject") or "")
     subject = unicodedata.normalize("NFKC", _SUBJECT_PREFIX.sub("", subject)).casefold()
@@ -288,11 +303,15 @@ def _related_score(
     reasons: list[str] = []
     score = 0
     participant_overlap = len(_identifiers(payload) & primary_participants)
+    referenced_overlap = len(_referenced_identifiers(payload) & primary_participants)
     subject_overlap = len(_subject_tokens(payload) & primary_subject)
     attachment_overlap = len(_attachment_tokens(payload) & primary_attachments)
     if participant_overlap:
         score += min(participant_overlap, 3) * 3
         reasons.append("participant_overlap")
+    if referenced_overlap:
+        score += min(referenced_overlap, 3) * 3
+        reasons.append("participant_reference_overlap")
     if subject_overlap:
         score += min(subject_overlap, 4) * 2
         reasons.append("subject_token_overlap")
@@ -301,8 +320,13 @@ def _related_score(
         reasons.append("attachment_token_overlap")
     # A single shared mailbox address plus one generic subject word is not
     # enough to relate two threads. Require two shared subject tokens, a shared
-    # attachment token, or two shared parties (normally member + counterparty).
-    if participant_overlap < 2 and not (subject_overlap >= 2 or attachment_overlap):
+    # attachment token, two shared parties (normally member + counterparty), or
+    # one shared mailbox party plus an exact authored reference to a primary
+    # participant (the common third-party service-notification shape).
+    participant_reference_edge = participant_overlap >= 1 and referenced_overlap >= 1
+    if participant_overlap < 2 and not (
+        subject_overlap >= 2 or attachment_overlap or participant_reference_edge
+    ):
         return 0, ()
     return score, tuple(reasons)
 
