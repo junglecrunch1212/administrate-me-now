@@ -78,6 +78,15 @@ retained here.
   ceiling, and make the lightweight wait invoke full Doctor immediately on any
   new non-source capability degradation. Ordered-prefix durability, liveness,
   terminal equality, synthetic proof, and rollback are unchanged. Review,
+  and hosted gates passed; PR #318 merged as
+  `a9a404521385ae1c60e6183d4bf4443faa083ab0`.
+- Its guarded activation proved the fail-fast path: after replay encountered a
+  retained generation-13 idempotency conflict from the rejected sixteen-way
+  attempt, the controller immediately ran full Doctor, reported pipeline and
+  source-assurance failure together, and rolled back. No history was deleted.
+- Final replay candidate: `noise_filtering` v14/generation 14 preserves the
+  reviewed width, semantics, source facts, prior terminal evidence, member
+  decisions, and one-hour guard while using fresh durable identities. Review,
   merge, activation, settlement, Doctor, and authenticated proof remain
   pending.
 - Guarded observation deployment and encrypted backup receipt: pending.

@@ -65,7 +65,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 13
+_REPLAY_GENERATION = 14
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -162,7 +162,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "13.0.0"
+    version: str = "14.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
