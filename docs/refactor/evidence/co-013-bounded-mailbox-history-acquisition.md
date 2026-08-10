@@ -131,6 +131,19 @@ retained here.
   assessment/proposal pair; confidence neither ranks nor authorizes the choice.
   Persistent failure remains auditable and health-degrading. Review, merge,
   activation, settlement, Doctor, and authenticated proof remain pending.
+- The first generation-19 guarded activation was correctly rejected before
+  replay settlement because a Gmail message disappeared between provider
+  discovery and `messages.get`. The record already received an append-only
+  quarantine and the cursor advanced, but adapter v1.1.0 mislabeled that
+  successful record-level terminal disposition as whole-source backoff. The
+  v1.1.1 candidate keeps the quarantine evidence and zero provider mutation,
+  records no transport error, and leaves the advancing Gmail source running.
+- The v1.1.1 repair passed 55 focused Gmail pack/supervisor/retrofit tests, 47
+  strict acceptance tests, 1,772 root/pack tests, 60 isolated bridge tests,
+  Ruff/format/mypy/Pyright, audits and dependency locks, performance budgets,
+  architecture/invariant/clean-install/tenant-isolation/encrypted-backup gates,
+  17 OpenClaw plugin tests/build/package/audit, the 69-test Apple-silicon
+  bootstrap rehearsal, and the exact OpenClaw 2026.7.2 source build/attestation.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.

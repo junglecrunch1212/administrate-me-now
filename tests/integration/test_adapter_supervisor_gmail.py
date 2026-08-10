@@ -582,7 +582,7 @@ async def test_durable_cursor_and_dedupe_survive_supervisor_restart(
         cursor_store.close()
 
 
-async def test_malformed_message_is_quarantined_without_hiding_later_message(
+async def test_vanished_message_is_quarantined_without_degrading_gmail(
     tmp_path: Path,
 ) -> None:
     channels = tmp_path / "channels.yaml"
@@ -631,7 +631,9 @@ async def test_malformed_message_is_quarantined_without_hiding_later_message(
         [received] = event_log.by_type("messaging.received")
         assert received["payload"]["thread_id"] == "thr-bob"
         assert cursor_store.get(adapter._cursor_id).provider_watermark == "9002"
-        assert adapter.status().state == "backoff"
+        assert adapter.status().state == "running"
+        assert cursor_store.get(adapter._cursor_id).error_count == 0
+        assert event_log.by_type("adapter.error") == []
     finally:
         await supervisor.stop()
         cursor_store.close()

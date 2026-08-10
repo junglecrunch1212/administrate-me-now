@@ -151,7 +151,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.1.0"
+    version: ClassVar[str] = "1.1.1"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -396,7 +396,12 @@ class GmailAdapter(CommunicationAdapter):
                     "quarantined": backfill_quarantined,
                     "provider_watermark": self._cursor,
                 }
-                self._status.state = "backoff" if backfill_quarantined else "running"
+                # A record-level quarantine is a successful terminal disposition,
+                # not a provider transport failure. Gmail may return a message id
+                # from list/history and then 404 if that message is deleted before
+                # the bounded get. Keep the adapter available after accounting for
+                # that race instead of degrading the whole source.
+                self._status.state = "running"
                 await self._maybe_emit_cursor_advance(
                     ctx=ctx, cursor_value=str(self._cursor)
                 )
@@ -418,15 +423,13 @@ class GmailAdapter(CommunicationAdapter):
                 self._cursor = new_history_id
             if store is not None:
                 store.record_success(cursor_id, provider_watermark=self._cursor)
-                if quarantined:
-                    store.record_error(cursor_id)
                 self._status.extra["durable_cursor"] = store.get(cursor_id).public()
             self._status.extra["last_poll"] = {
                 "emitted": emitted,
                 "quarantined": quarantined,
                 "provider_watermark": self._cursor,
             }
-            self._status.state = "backoff" if quarantined else "running"
+            self._status.state = "running"
             await self._maybe_emit_cursor_advance(ctx=ctx, cursor_value=self._cursor)
             return emitted
         finally:
