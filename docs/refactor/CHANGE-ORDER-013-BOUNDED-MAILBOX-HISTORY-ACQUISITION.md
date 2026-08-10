@@ -90,9 +90,10 @@ AC-38 requires:
    exact-participant/date expansion, recent-cap fill, newest-first provider
    normalization into context-before-seed chronological emission, paging, hard
    caps, validation, normal typed emission, and content-free status;
-2. production-supervisor proof that two old pre-existing messages are emitted
-   from a reviewed seed on first composition and never relisted after a fresh
-   adapter instance reuses the durable cursor store;
+2. production-supervisor proof that an installation with an existing forward
+   cursor still emits two old pre-existing messages from a reviewed seed and
+   never relists them after a fresh adapter instance reuses the durable cursor
+   store;
 3. preservation of existing Gmail direction, scope, quarantine, incremental
    cursor, and message-level dedupe tests;
 4. full release gates, reviewed merge, guarded observation deployment, source

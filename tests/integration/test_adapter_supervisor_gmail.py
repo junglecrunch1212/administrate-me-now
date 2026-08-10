@@ -415,17 +415,18 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
 ) -> None:
     """Production composition proof for the source-acquisition repair.
 
-    The supervisor authenticates the real adapter, snapshots the incremental
-    cursor, acquires two old pre-existing messages through a private reviewed
-    seed, and records a content-free durable policy marker. A replacement
-    adapter using the same cursor store does not list or emit that history
-    again.
+    The supervisor authenticates the real adapter with an already durable
+    incremental cursor, still acquires two old pre-existing messages through a
+    private reviewed seed, and records a content-free durable policy marker.
+    A replacement adapter using the same cursor store does not list or emit
+    that history again.
     """
     channels = tmp_path / "channels.yaml"
     _write_channels_yaml(channels)
     cursor_store = AdapterCursorStore(tmp_path / "adapter-cursors.sqlite3")
+    cursor_id = "messaging-gmail-api:unbound:sandbox@example.test"
+    cursor_store.record_success(cursor_id, provider_watermark="9000")
     first_service = _FakeGmailService(
-        profile=_fixture("profile_response.json"),
         backfill_pages=[
             {
                 "messages": [{"id": "msg-alice"}, {"id": "msg-bob"}],
@@ -436,6 +437,7 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
             "msg-alice": _fixture("message_alice.json"),
             "msg-bob": _fixture("message_bob.json"),
         },
+        history_pages=[{"historyId": "9000", "history": []}],
     )
     first_adapter = _build_gmail_adapter(
         service=first_service,
@@ -455,7 +457,8 @@ async def test_supervisor_initial_backfill_is_bounded_and_restart_durable(
     await first.start()
     try:
         await _wait_for(lambda: len(first_log.by_type("messaging.received")) == 2)
-        assert first_service.get_profile_calls == [{"userId": "me"}]
+        await _wait_for(lambda: len(first_service.history_list_calls) == 1)
+        assert first_service.get_profile_calls == []
         assert first_service.messages_list_calls == [
             {
                 "userId": "me",
