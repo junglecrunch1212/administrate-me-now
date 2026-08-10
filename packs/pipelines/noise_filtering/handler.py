@@ -67,7 +67,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 15
+_REPLAY_GENERATION = 16
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -224,7 +224,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "15.0.0"
+    version: str = "16.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -232,6 +232,30 @@ class NoiseFilteringPipeline:
             "telephony.sms_received",
         ]
     }
+
+    def __init__(self) -> None:
+        # Ordinary deliveries retain the reviewed pack concurrency. Only
+        # recovery after a transport failure is serialized so a failed batch
+        # cannot stampede the pinned Gateway with synchronized retries.
+        self._transient_retry_lock = asyncio.Lock()
+
+    async def _run_skill_with_transient_recovery(
+        self,
+        ctx: PipelineContext,
+        inputs: dict[str, Any],
+        skill_ctx: SkillContext,
+    ) -> Any:
+        try:
+            return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+        except _TRANSIENT_SKILL_FAILURE_TYPES as exc:
+            _log.warning(
+                "noise_filtering transient skill failure (%s); "
+                "queueing one recovery attempt",
+                type(exc).__name__,
+            )
+            async with self._transient_retry_lock:
+                await asyncio.sleep(0.5)
+                return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
@@ -354,15 +378,9 @@ class NoiseFilteringPipeline:
         )
 
         try:
-            try:
-                result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
-            except _TRANSIENT_SKILL_FAILURE_TYPES as exc:
-                _log.warning(
-                    "noise_filtering transient skill failure (%s); retrying once",
-                    type(exc).__name__,
-                )
-                await asyncio.sleep(0.5)
-                result = await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+            result = await self._run_skill_with_transient_recovery(
+                ctx, inputs, skill_ctx
+            )
         except _SKILL_FAILURE_TYPES as exc:
             _log.warning(
                 "noise_filtering skill failure (%s); emitting defensive default",

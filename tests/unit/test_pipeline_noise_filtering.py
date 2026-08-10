@@ -119,7 +119,7 @@ class _RacingProposalEventLog(_FakeEventLog):
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
             existing is None
-            and idempotency_key.startswith("triage:message-candidate:v15:")
+            and idempotency_key.startswith("triage:message-candidate:v16:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -403,6 +403,51 @@ async def test_transient_language_failure_retries_once_before_terminal_failure()
     assert assessments[-1].payload["assessment_outcome"] == "no_candidate"
     assert assessments[-1].payload["reason_codes"][0] == (
         "language_assessment_completed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None:
+    log = _FakeEventLog()
+    attempts: dict[str, int] = {}
+    active_recoveries = 0
+    max_active_recoveries = 0
+
+    async def transient_then_recovered(
+        _skill_id: str, _inputs: dict[str, Any], skill_ctx: SkillContext
+    ) -> SkillResult:
+        nonlocal active_recoveries, max_active_recoveries
+        source_id = str(skill_ctx.triggering_event_id)
+        attempts[source_id] = attempts.get(source_id, 0) + 1
+        if attempts[source_id] == 1:
+            raise OpenClawTimeout("concurrent first-attempt timeout")
+        active_recoveries += 1
+        max_active_recoveries = max(max_active_recoveries, active_recoveries)
+        await asyncio.sleep(0.01)
+        active_recoveries -= 1
+        return _make_skill_result(classification="transactional", confidence=0.9)
+
+    first = _messaging_received_event(body_text="First message without a candidate.")
+    first["event_id"] = "transient-source-1"
+    second = _messaging_received_event(body_text="Second message without a candidate.")
+    second["event_id"] = "transient-source-2"
+    pipeline = NoiseFilteringPipeline()
+    await asyncio.gather(
+        pipeline.handle(first, _make_ctx(log, transient_then_recovered)),
+        pipeline.handle(second, _make_ctx(log, transient_then_recovered)),
+    )
+
+    assert attempts == {"transient-source-1": 2, "transient-source-2": 2}
+    assert max_active_recoveries == 1
+    assessments = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert len(assessments) == 2
+    assert all(
+        assessment.payload["assessment_outcome"] == "no_candidate"
+        for assessment in assessments
     )
 
 
@@ -728,7 +773,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v15:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v16:")
 
 
 @pytest.mark.asyncio
@@ -842,7 +887,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v15:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v16:")
         for proposal in proposals
     )
 
@@ -898,7 +943,7 @@ async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -
 @pytest.mark.asyncio
 async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
     log = _RacingProposalEventLog()
-    key = "triage:message-candidate:v15:collision:task-key:task"
+    key = "triage:message-candidate:v16:collision:task-key:task"
     base_payload = {
         "proposal_id": "proposal-first",
         "target_kind": "task",

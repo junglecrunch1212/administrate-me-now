@@ -90,15 +90,22 @@ retained here.
   that proposal-key read-before-append deduplication could race even at width
   eight. The fail-fast controller reported pipeline and source-assurance
   failure together and rolled back without deleting evidence.
-- Final replay candidate: `noise_filtering` v15/generation 15 preserves the
-  reviewed width, semantics, source facts, prior terminal evidence, member
-  decisions, and one-hour guard. Deliberately shared proposal and supersession
-  identities now accept the first equivalent event only after the atomic event
-  log arbitrates the race; non-equivalent reuse still raises. One transient
-  OpenClaw timeout/unreachable result is retried once under the same private
-  invocation fingerprint, while persistent failure remains auditable and
-  health-degrading. Review, merge, activation, settlement, Doctor, and
-  authenticated proof remain pending.
+- Generation-15 live evidence: replay crossed the exact generation-14 collision
+  with a healthy subscriber, zero consecutive failures, and no poison event,
+  proving the atomic first-equivalent-writer repair. A later retained-failure
+  batch exposed that several immediate transient retries could synchronize
+  against the pinned Gateway and leave failed terminal assessments even though
+  the subscriber remained healthy.
+- Final replay candidate: `noise_filtering` v16/generation 16 preserves the
+  reviewed ordinary width, semantics, source facts, prior terminal evidence,
+  member decisions, and one-hour guard. Deliberately shared proposal and
+  supersession identities accept the first equivalent event only after the
+  atomic event log arbitrates the race; non-equivalent reuse still raises. Only
+  transient OpenClaw timeout/unreachable recovery serializes behind one
+  runtime-local lock before one retry under the same private invocation
+  fingerprint. Persistent failure remains auditable and health-degrading.
+  Review, merge, activation, settlement, Doctor, and authenticated proof remain
+  pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.
