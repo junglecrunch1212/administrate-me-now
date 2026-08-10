@@ -323,7 +323,11 @@ async def test_noise_filtering_emits_classified_with_stubbed_skill(
 async def test_noise_filtering_skill_failure_lands_defensive_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    calls = 0
+
     async def stub_run_skill(skill_id: str, inputs: dict, ctx: Any) -> SkillResult:
+        nonlocal calls
+        calls += 1
         raise OpenClawTimeout("openclaw stub timeout")
 
     monkeypatch.setattr("adminme.pipelines.runner.run_skill", stub_run_skill)
@@ -354,10 +358,14 @@ async def test_noise_filtering_skill_failure_lands_defensive_default(
         )
         await bus.notify(triggering_eid)
         await _wait_for_checkpoint(
-            bus, "pipeline:pipeline:noise_filtering", triggering_eid
+            bus,
+            "pipeline:pipeline:noise_filtering",
+            triggering_eid,
+            timeout_iters=600,
         )
 
         all_events = await _read_all(log)
+        assert calls == 3
         classified = [e for e in all_events if e["type"] == "messaging.classified"]
         assert len(classified) == 1
         e = classified[0]

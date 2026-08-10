@@ -107,16 +107,25 @@ retained here.
   Code and append-only metadata proved the queued recovery reused the base
   durable invocation identity, so the skill wrapper correctly replayed that
   generation's failure instead of issuing an unbounded duplicate call.
-- Final replay candidate: `noise_filtering` v18/generation 18 preserves the
+- Generation-18 guarded live evidence: the distinct `:recovery-1` identity
+  performed a real pinned-seam call and changed the first retained source from
+  failed to no-candidate while replay continued. One later OpenClaw completion
+  reached its real 60-second terminal timeout, so one recovery attempt was not
+  sufficient for a bounded historical batch. The pass crossed both retained
+  idempotency-collision sources with zero subscriber failures and raised the
+  content-free eligible-candidate count to 166, live-proving generation 17's
+  atomic and same-interpretation identity repairs.
+- Final replay candidate: `noise_filtering` v19/generation 19 preserves the
   reviewed ordinary width, semantics, source facts, prior terminal evidence,
   member decisions, and one-hour guard. Deliberately shared proposal and
   supersession identities accept the first equivalent event only after the
   atomic event log arbitrates the race; non-equivalent reuse still raises. Only
   transient OpenClaw timeout/unreachable recovery serializes behind one
-  runtime-local lock before one retry under the same private invocation
-  fingerprint. The one recovery attempt uses a separate deterministic
-  `:recovery-1` invocation identity, so it is a real call after a base failure,
-  a success is reusable, and a second failure remains terminal. Fixed code
+  runtime-local lock before at most two retries derived from the same private
+  invocation fingerprint. The recovery attempts use separate deterministic
+  `:recovery-1` and `:recovery-2` invocation identities, so calls after a base
+  failure are real, prior success is reusable, and exhausting both remains
+  terminal. Fixed code
   collapses a repeated typed candidate identity within
   one recorded interpretation to its first occurrence before emitting the
   assessment/proposal pair; confidence neither ranks nor authorizes the choice.

@@ -25,14 +25,17 @@ pinned Gateway. Generation 15 later exposed a distinct same-assessment alias
 collision: two non-equivalent candidates declared the same typed candidate
 identity. Generation 17 fixed that collision but proved its serialized retry
 still reused the base durable invocation identity, so the wrapper correctly
-replayed the recorded failure without making a second call. The final
-v18/generation-18 consumer is **HARDENED** so
+replayed the recorded failure without making a second call. Generation 18
+proved the separate identity recovered one retained failure, then one later
+OpenClaw stream reached its real terminal timeout. The final
+v19/generation-19 consumer is **HARDENED** so
 deliberately shared proposal/supersession identities accept only the first
 equivalent event at the atomic event-log boundary; non-equivalent reuse still
 fails. Ordinary width-eight delivery remains parallel, while only transient
-pinned-seam recovery serializes locally and uses one separate deterministic
-`:recovery-1` invocation identity, which is durable and reusable but cannot
-repeat without another reviewed change. Fixed code also collapses repeated
+pinned-seam recovery serializes locally and uses at most two separate
+deterministic durable invocation identities. A success is reusable; exhausting
+`:recovery-1` and `:recovery-2` remains terminal and cannot repeat without
+another reviewed change. Fixed code also collapses repeated
 `(target_kind, candidate_key)` identities within one recorded interpretation to
 the first occurrence before the assessment/proposal boundary, without
 confidence ranking. Persistent failure remains terminal. No retained fact,
@@ -469,7 +472,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
-| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v18 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, one serialized transient seam recovery under a distinct durable invocation identity, and reviewed schema/idempotency replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-013 FINAL REPLAY ACTIVATION IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
+| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v19 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, at most two serialized transient seam recoveries under distinct durable invocation identities, and reviewed schema/idempotency replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-013 FINAL REPLAY ACTIVATION IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
 | Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` 6.0.1 returns classification, bounded semantic features, and exact-quote typed candidates defensively while admitting every fixed-code context reason | HARDEN COMPLETE; CO-013 VOCABULARY REPAIR IN REVIEW | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
 | OpenClaw skill wrapper | `adminme/lib/skill_runner/` | exactly one pinned `llm-task` request uses a canonical member-isolated Gateway session, records actual returned provider/model provenance, and versions durable terminal identity by skill version | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |
