@@ -9,6 +9,7 @@ events feed the body field rather than body_text.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 import pytest
 
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import IdempotencyConflict
 from adminme.lib.skill_runner import (
     OpenClawTimeout,
     SkillContext,
@@ -102,6 +104,51 @@ class _FakeEventLog:
             for call in self.calls
             if call.causation_id == causation_id
         ]
+
+
+@dataclass
+class _RacingProposalEventLog(_FakeEventLog):
+    """Force two proposal producers through the read-before-append window."""
+
+    proposal_reads: int = 0
+    proposal_gate: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def get_by_idempotency(
+        self, tenant_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        existing = await super().get_by_idempotency(tenant_id, idempotency_key)
+        if (
+            existing is None
+            and idempotency_key.startswith("triage:message-candidate:v15:")
+            and self.proposal_reads < 2
+        ):
+            self.proposal_reads += 1
+            if self.proposal_reads == 2:
+                self.proposal_gate.set()
+            await self.proposal_gate.wait()
+            return None
+        return existing
+
+    async def write(
+        self,
+        envelope: EventEnvelope,
+        *,
+        correlation_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> str:
+        if envelope.idempotency_key is not None:
+            existing = await _FakeEventLog.get_by_idempotency(
+                self, envelope.tenant_id, envelope.idempotency_key
+            )
+            if existing is not None:
+                raise IdempotencyConflict(
+                    "idempotency key already belongs to a different event identity"
+                )
+        return await super().write(
+            envelope,
+            correlation_id=correlation_id,
+            causation_id=causation_id,
+        )
 
 
 @dataclass
@@ -327,6 +374,36 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.payload["skill_version"] == "6.0.1"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_transient_language_failure_retries_once_before_terminal_failure() -> (
+    None
+):
+    log = _FakeEventLog()
+    calls = 0
+
+    async def transient_then_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OpenClawTimeout("one transient timeout")
+        return _make_skill_result(classification="transactional", confidence=0.9)
+
+    await NoiseFilteringPipeline().handle(
+        _messaging_received_event(), _make_ctx(log, transient_then_recovered)
+    )
+
+    assert calls == 2
+    assessments = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    ]
+    assert assessments[-1].payload["assessment_outcome"] == "no_candidate"
+    assert assessments[-1].payload["reason_codes"][0] == (
+        "language_assessment_completed"
+    )
 
 
 @pytest.mark.asyncio
@@ -651,7 +728,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v14:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v15:")
 
 
 @pytest.mark.asyncio
@@ -765,9 +842,114 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v14:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v15:")
         for proposal in proposals
     )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -> None:
+    log = _RacingProposalEventLog()
+    received_at = "2026-08-08T12:00:00Z"
+
+    async def recovered(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "evidence_quote": "Pay the electric bill by Friday.",
+                    "candidate": {},
+                    "confidence": 0.95,
+                }
+            ]
+        )
+
+    first = _messaging_received_event(body_text="Pay the electric bill by Friday.")
+    first.update(
+        {
+            "event_id": "concurrent-duplicate-source-1",
+            "owner_scope": "private:member-fixture",
+            "visibility_scope": "private:member-fixture",
+            "occurred_at": received_at,
+        }
+    )
+    first["payload"].update({"member_id": "member-fixture", "received_at": received_at})
+    second = {
+        **first,
+        "event_id": "concurrent-duplicate-source-2",
+        "payload": dict(first["payload"]),
+    }
+
+    pipeline = NoiseFilteringPipeline()
+    await asyncio.gather(
+        pipeline.handle(first, _make_ctx(log, recovered)),
+        pipeline.handle(second, _make_ctx(log, recovered)),
+    )
+
+    proposals = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+    ]
+    assert len(proposals) == 1
+    assert proposals[0].payload["target_kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
+    log = _RacingProposalEventLog()
+    key = "triage:message-candidate:v15:collision:task-key:task"
+    base_payload = {
+        "proposal_id": "proposal-first",
+        "target_kind": "task",
+        "owner_member_id": "member-fixture",
+        "title": "Pay the electric bill",
+        "candidate": {},
+        "route": {"member_id": "member-fixture"},
+        "source_event_id": "source-first",
+        "parent_intent_id": None,
+        "candidate_key": "task-key",
+        "extraction_event_id": "extraction-first",
+        "eligibility_rule_ids": ["exact_source_quote_grounded_v1"],
+        "confidence": 0.9,
+        "reasons": ["exact_source_quote_grounded_v1"],
+        "interpretation": None,
+    }
+
+    def proposal(payload: dict[str, Any]) -> EventEnvelope:
+        return EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2026-08-08T12:00:00Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key=key,
+            payload=payload,
+        )
+
+    await log.write(proposal(base_payload))
+    conflicting = {
+        **base_payload,
+        "proposal_id": "proposal-second",
+        "source_event_id": "source-second",
+        "extraction_event_id": "extraction-second",
+        "title": "Schedule an unrelated appointment",
+    }
+    with pytest.raises(IdempotencyConflict):
+        await _handler._write_first_equivalent_event(
+            ctx=_make_ctx(log, None),
+            envelope=proposal(conflicting),
+            correlation_id="corr-second",
+            causation_id="extraction-second",
+            ignored_payload_fields=frozenset(
+                {"proposal_id", "source_event_id", "extraction_event_id"}
+            ),
+        )
 
 
 @pytest.mark.asyncio

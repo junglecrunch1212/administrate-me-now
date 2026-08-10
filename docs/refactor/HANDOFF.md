@@ -78,11 +78,20 @@ still-bounded one-hour settlement window, and makes the lightweight settlement
 loop run full Doctor immediately when any non-source capability newly degrades.
 That fail-fast path passed every local and hosted gate, merged as `a9a4045`,
 and correctly rejected the next live attempt at the first retained generation-13
-idempotency conflict. The final consumer is therefore v14/generation 14: it
-does not delete or overwrite the rejected attempt's durable evidence, and it
-retains width eight and the one-hour guard. Final settlement, Doctor, and
-authenticated Triage proof are still required. No candidate has been confirmed
-and no provider effect has been authorized.
+idempotency conflict. The generation-14 activation then advanced cleanly past
+that retained identity and processed more than 1,080 message facts, raising
+eligible accounting to at least 133, before a later pair of context-equivalent
+sources exposed the underlying read-before-append race even at width eight.
+The fail-fast gate again rejected and rolled back the release without deleting
+evidence. The final consumer is therefore v15/generation 15: deliberately
+shared proposal and supersession identities now let the SQLCipher event log
+atomically select the first equivalent writer, while any non-equivalent key
+reuse remains a hard conflict. One transient OpenClaw timeout/unreachable result
+is retried once under the same private fingerprint; a persistent failure still
+emits an auditable failed disposition and fails Doctor. Width eight and the
+one-hour guard remain unchanged. Final settlement, Doctor, and authenticated
+Triage proof are still required. No candidate has been confirmed and no
+provider effect has been authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 
