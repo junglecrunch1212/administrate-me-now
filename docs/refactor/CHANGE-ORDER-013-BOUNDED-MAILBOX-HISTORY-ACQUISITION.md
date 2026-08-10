@@ -1,6 +1,6 @@
 # CO-013 — Bounded, durable mailbox history acquisition
 
-Status: **IMPLEMENTED IN REVIEWED CANDIDATE; LIVE EVIDENCE PENDING**
+Status: **MERGED; STARTUP-LIVENESS REPAIR CANDIDATE; LIVE EVIDENCE PENDING**
 
 Date: 2026-08-10
 
@@ -50,6 +50,10 @@ model as household truth:
 6. Expose only counts, bounds, completion state, and truncation in adapter
    status. No subject, sender, body, query result, credential, or household
    identifier enters operational evidence.
+7. Execute the finite synchronous Gmail list/fetch acquisition in a worker
+   thread. The one central asyncio runtime must continue serving health and
+   scheduling unrelated work while provider I/O is in flight; the worker has
+   no alternate event, projection, or authority path.
 
 The backfill emits source observations only. It does not invoke a provider
 write, confirm a candidate, or create a Task, Commitment, Calendar event,
@@ -96,9 +100,11 @@ AC-38 requires:
    store;
 3. preservation of existing Gmail direction, scope, quarantine, incremental
    cursor, and message-level dedupe tests;
-4. full release gates, reviewed merge, guarded observation deployment, source
+4. a held-open synchronous provider-call test proving acquisition cannot block
+   the central runtime event loop or health surface;
+5. full release gates, reviewed merge, guarded observation deployment, source
    settlement, Doctor, and authenticated Comms/Triage proof;
-5. live proof that a previously absent multi-message obligation is now present
+6. live proof that a previously absent multi-message obligation is now present
    as source context and produces separate human-gated candidates without a
    canonical or provider effect.
 

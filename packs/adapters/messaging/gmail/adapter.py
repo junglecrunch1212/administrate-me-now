@@ -547,7 +547,14 @@ class GmailAdapter(CommunicationAdapter):
             }
             return 0, 0
 
-        message_ids, prefetched, acquisition = self._fetch_initial_backfill_ids(policy)
+        # ``googleapiclient`` is synchronous.  Initial acquisition can span many
+        # bounded list/get calls, so running it on the central asyncio loop would
+        # stall the HTTP health surface and every other adapter during startup.
+        # Keep the deterministic acquisition algorithm intact, but execute its
+        # blocking provider I/O in a worker thread.
+        message_ids, prefetched, acquisition = await asyncio.to_thread(
+            self._fetch_initial_backfill_ids, policy
+        )
         emitted, quarantined = await self._ingest_message_ids(
             ctx=ctx,
             store=store,
