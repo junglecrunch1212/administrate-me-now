@@ -2,8 +2,8 @@
 
 Date: 2026-08-10
 
-Status: merged acquisition with reviewed startup-liveness repair pending; live
-fields intentionally pending
+Status: deployed acquisition and liveness repair; reviewed context-vocabulary
+repair and final live fields pending
 
 ## Failure evidence
 
@@ -29,7 +29,7 @@ retained here.
 - A held-open synchronous Gmail list regression proves initial acquisition runs
   outside the central asyncio loop and cannot starve HTTP health or unrelated
   runtime scheduling.
-- Full root/pack/bridge/acceptance release matrix: 1,762 root/pack, 60 isolated
+- Full root/pack/bridge/acceptance release matrix: 1,764 root/pack, 60 isolated
   bridge, and 47 strict acceptance tests passed; Ruff/format/mypy/Pyright,
   dependency/security/architecture/invariant checks, performance budgets,
   builds/packages, clean install, tenant isolation, encrypted backup/restore,
@@ -44,7 +44,25 @@ retained here.
   settings were removed before restarting the older schema, and the prior
   runtime, OpenClaw, and observation mode returned healthy. No source or
   provider mutation was discarded.
-- Startup-liveness repair review and merge: pending.
+- Startup-liveness repair: PR #315 passed the hosted constitutional cascade and
+  17m24s Apple-silicon rehearsal, then merged as
+  `7d750cd8811dbed1b84fc104d3a66f2fa791b91e`.
+- Guarded activation: the attested updater created an encrypted backup, retained
+  rollback, reported no runtime migration, and activated that exact commit.
+  Runtime liveness remained available while the bounded Gmail batch ran.
+- Acquisition result before final assessment settlement: source facts increased
+  from 61,398 to 62,526 and candidate-eligible facts from 13 to at least 18.
+- Live structural failure: 45 retained `classify_message_nature` input failures
+  share the content-free cause that `participant_reference_overlap` was emitted
+  by deterministic context assembly but absent from the pinned skill input and
+  typed Triage context schemas. The language model was not called for those
+  inputs.
+- Context-vocabulary repair: skill 6.0.1 and `noise_filtering` 13.0.0 add the
+  missing reason atomically and opt into full immutable-source replay under a
+  new idempotency generation. Its local matrix passed 1,764 root/pack, 60
+  isolated bridge, and 47 strict acceptance tests plus every static, security,
+  clean-install, backup, and pinned OpenClaw gate. Review, merge, deployment,
+  settlement, Doctor, and authenticated proof remain pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.

@@ -1,7 +1,7 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 6.0.0
+version: 6.0.1
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json

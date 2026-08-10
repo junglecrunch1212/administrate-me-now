@@ -112,3 +112,20 @@ def test_skill_call_suppressed_v1_rejects_unknown_reason() -> None:
         from adminme.events.schemas.system import SkillCallSuppressedV1
 
         SkillCallSuppressedV1.model_validate(payload)
+
+
+def test_triage_context_accepts_exact_participant_reference_reason() -> None:
+    from adminme.events.schemas.triage import TriageContextSourceV1
+
+    source = TriageContextSourceV1.model_validate(
+        {
+            "source_event_id": "fixture-source",
+            "relation": "related",
+            "reason_codes": [
+                "participant_overlap",
+                "participant_reference_overlap",
+            ],
+        }
+    )
+
+    assert source.reason_codes[-1] == "participant_reference_overlap"

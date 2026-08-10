@@ -77,7 +77,7 @@
             "properties": {
               "source_id": { "type": "string", "pattern": "^m[0-9]{2}$" },
               "relation": { "type": "string", "enum": ["thread", "related"] },
-              "relation_reason_codes": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "string", "enum": ["provider_thread_id", "participant_overlap", "subject_token_overlap", "attachment_token_overlap"] } },
+              "relation_reason_codes": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "string", "enum": ["provider_thread_id", "participant_overlap", "participant_reference_overlap", "subject_token_overlap", "attachment_token_overlap"] } },
               "direction": { "type": "string", "enum": ["inbound", "outbound"] },
               "occurred_at": { "type": "string", "maxLength": 100 },
               "source_channel": { "type": "string", "maxLength": 100 },

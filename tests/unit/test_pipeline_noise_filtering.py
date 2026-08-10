@@ -300,7 +300,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "6.0.0"
+    assert envelope.payload["skill_version"] == "6.0.1"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -324,7 +324,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "6.0.0"
+    assert envelope.payload["skill_version"] == "6.0.1"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -651,7 +651,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v12:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v13:")
 
 
 @pytest.mark.asyncio
@@ -765,7 +765,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v12:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v13:")
         for proposal in proposals
     )
 

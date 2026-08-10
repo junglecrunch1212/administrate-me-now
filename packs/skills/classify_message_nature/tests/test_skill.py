@@ -6,6 +6,8 @@ schema, and exercises the defensive-default coercion handler directly
 
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from adminme.lib.skill_runner.pack_loader import invalidate_cache, load_pack
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +30,7 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "6.0.0"
+    assert loaded.version == "6.0.1"
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
         "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]
@@ -45,6 +47,43 @@ def test_pack_loads_cleanly() -> None:
         "properties"
     ]["target_kind"]["enum"]
     assert set(candidate_enum) == ALL_TRIAGE_TARGETS
+
+
+def test_input_schema_accepts_exact_participant_reference_context_edge() -> None:
+    """The fixed-code context vocabulary and pinned skill schema stay atomic."""
+    invalidate_cache()
+    loaded = load_pack(PACK_ROOT)
+    inputs = {
+        "body_text": "Fixture source body.",
+        "source_channel": "gmail",
+        "from_identifier": "service@example.invalid",
+        "context_pack": {
+            "contract": "message-context-pack-v1",
+            "thread_key": "a" * 64,
+            "context_fingerprint": "b" * 64,
+            "current_source_id": "m01",
+            "messages": [
+                {
+                    "source_id": "m01",
+                    "relation": "related",
+                    "relation_reason_codes": [
+                        "participant_overlap",
+                        "participant_reference_overlap",
+                    ],
+                    "direction": "inbound",
+                    "occurred_at": "2026-08-10T12:00:00Z",
+                    "source_channel": "gmail",
+                    "sender": "service@example.invalid",
+                    "recipients": ["member@example.invalid"],
+                    "subject": "Fixture notice",
+                    "body_text": "Fixture source body.",
+                    "attachment_names": [],
+                }
+            ],
+        },
+    }
+
+    Draft202012Validator(loaded.input_schema).validate(inputs)
 
 
 def test_handler_passes_through_well_formed_output() -> None:
