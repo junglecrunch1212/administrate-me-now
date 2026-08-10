@@ -120,7 +120,7 @@ class _RacingProposalEventLog(_FakeEventLog):
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
             existing is None
-            and idempotency_key.startswith("triage:message-candidate:v17:")
+            and idempotency_key.startswith("triage:message-candidate:v18:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -383,10 +383,14 @@ async def test_transient_language_failure_retries_once_before_terminal_failure()
 ):
     log = _FakeEventLog()
     calls = 0
+    invocation_keys: list[str] = []
 
-    async def transient_then_recovered(*args: Any, **kwargs: Any) -> SkillResult:
+    async def transient_then_recovered(
+        _skill_id: str, _inputs: dict[str, Any], skill_ctx: SkillContext
+    ) -> SkillResult:
         nonlocal calls
         calls += 1
+        invocation_keys.append(str(skill_ctx.invocation_idempotency_key))
         if calls == 1:
             raise OpenClawTimeout("one transient timeout")
         return _make_skill_result(classification="transactional", confidence=0.9)
@@ -396,6 +400,7 @@ async def test_transient_language_failure_retries_once_before_terminal_failure()
     )
 
     assert calls == 2
+    assert invocation_keys[1] == f"{invocation_keys[0]}:recovery-1"
     assessments = [
         call.envelope
         for call in log.calls
@@ -411,6 +416,7 @@ async def test_transient_language_failure_retries_once_before_terminal_failure()
 async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None:
     log = _FakeEventLog()
     attempts: dict[str, int] = {}
+    invocation_keys: dict[str, list[str]] = {}
     active_recoveries = 0
     max_active_recoveries = 0
 
@@ -420,6 +426,9 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
         nonlocal active_recoveries, max_active_recoveries
         source_id = str(skill_ctx.triggering_event_id)
         attempts[source_id] = attempts.get(source_id, 0) + 1
+        invocation_keys.setdefault(source_id, []).append(
+            str(skill_ctx.invocation_idempotency_key)
+        )
         if attempts[source_id] == 1:
             raise OpenClawTimeout("concurrent first-attempt timeout")
         active_recoveries += 1
@@ -439,6 +448,7 @@ async def test_concurrent_transient_recoveries_do_not_stampede_gateway() -> None
     )
 
     assert attempts == {"transient-source-1": 2, "transient-source-2": 2}
+    assert all(keys[1] == f"{keys[0]}:recovery-1" for keys in invocation_keys.values())
     assert max_active_recoveries == 1
     assessments = [
         call.envelope
@@ -774,7 +784,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v17:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v18:")
 
 
 @pytest.mark.asyncio
@@ -888,7 +898,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v17:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v18:")
         for proposal in proposals
     )
 
@@ -982,7 +992,7 @@ def test_repeated_candidate_alias_keeps_first_recorded_identity() -> None:
 @pytest.mark.asyncio
 async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
     log = _RacingProposalEventLog()
-    key = "triage:message-candidate:v17:collision:task-key:task"
+    key = "triage:message-candidate:v18:collision:task-key:task"
     base_payload = {
         "proposal_id": "proposal-first",
         "target_kind": "task",

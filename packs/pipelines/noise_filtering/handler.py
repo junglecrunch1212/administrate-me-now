@@ -67,7 +67,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 17
+_REPLAY_GENERATION = 18
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -244,7 +244,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "17.0.0"
+    version: str = "18.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -273,9 +273,20 @@ class NoiseFilteringPipeline:
                 "queueing one recovery attempt",
                 type(exc).__name__,
             )
+            invocation_identity = skill_ctx.invocation_idempotency_key
+            if not invocation_identity:
+                # The production composition always supplies the private
+                # message fingerprint. Without it, a second provider attempt
+                # could not be durably bounded or replayed.
+                raise
+            recovery_ctx = replace(
+                skill_ctx,
+                invocation_idempotency_key=f"{invocation_identity}:recovery-1",
+                retry_prior_failure=True,
+            )
             async with self._transient_retry_lock:
                 await asyncio.sleep(0.5)
-                return await ctx.run_skill_fn(SKILL_ID, inputs, skill_ctx)
+                return await ctx.run_skill_fn(SKILL_ID, inputs, recovery_ctx)
 
     async def handle(self, event: dict[str, Any], ctx: PipelineContext) -> None:
         event_type = event.get("type", "")
