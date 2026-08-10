@@ -14,7 +14,7 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     pack = load_pipeline_pack(PACK_ROOT)
     assert pack.pack_id == "pipeline:noise_filtering"
-    assert pack.version == "17.0.0"
+    assert pack.version == "18.0.0"
     assert pack.replay_on_version_change is True
     assert pack.delivery_concurrency == 8
     assert pack.triggers.get("events") == [

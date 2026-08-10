@@ -102,14 +102,22 @@ retained here.
   `(target_kind, candidate_key)` with a different payload inside the same
   recorded interpretation. The event log correctly refused the ambiguous key
   reuse and the controller rolled back.
-- Final replay candidate: `noise_filtering` v17/generation 17 preserves the
+- Generation-17 guarded live evidence: same-interpretation identity collapse
+  activated, but the first retained transient language failure remained failed.
+  Code and append-only metadata proved the queued recovery reused the base
+  durable invocation identity, so the skill wrapper correctly replayed that
+  generation's failure instead of issuing an unbounded duplicate call.
+- Final replay candidate: `noise_filtering` v18/generation 18 preserves the
   reviewed ordinary width, semantics, source facts, prior terminal evidence,
   member decisions, and one-hour guard. Deliberately shared proposal and
   supersession identities accept the first equivalent event only after the
   atomic event log arbitrates the race; non-equivalent reuse still raises. Only
   transient OpenClaw timeout/unreachable recovery serializes behind one
   runtime-local lock before one retry under the same private invocation
-  fingerprint. Fixed code collapses a repeated typed candidate identity within
+  fingerprint. The one recovery attempt uses a separate deterministic
+  `:recovery-1` invocation identity, so it is a real call after a base failure,
+  a success is reusable, and a second failure remains terminal. Fixed code
+  collapses a repeated typed candidate identity within
   one recorded interpretation to its first occurrence before emitting the
   assessment/proposal pair; confidence neither ranks nor authorizes the choice.
   Persistent failure remains auditable and health-degrading. Review, merge,

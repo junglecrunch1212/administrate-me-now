@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 17.0.0
+  version: 18.0.0
   kind: pipeline
 runtime:
   language: python
@@ -20,7 +20,9 @@ delivery:
   # prefix if one of these bounded language calls fails. Eight-way delivery is
   # the reviewed maximum for context-linked messages. Deliberately shared
   # cross-source identities use atomic first-equivalent-writer handling, and
-  # only transport-failure recovery attempts serialize behind a local lock.
+  # only transport-failure recovery attempts serialize behind a local lock and
+  # use one separate durable invocation identity so the retry is real, bounded,
+  # and reusable on replay.
   # One recorded interpretation is collapsed to one typed candidate identity
   # before any terminal assessment or proposal append.
   concurrency: 8
