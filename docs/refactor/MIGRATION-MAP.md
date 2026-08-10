@@ -11,7 +11,10 @@ seed queries. Existing installations acquire once because they have no such
 marker; a reviewed policy change creates a new bounded obligation and restarts
 reuse its marker. Rollback may ignore the marker and new source observations,
 but must not delete either. No schema, credential, canonical object, provider
-object, or runtime version migrates.
+object, or runtime version migrates. The v13 operational replay remains
+semantically unchanged while moving from eight to the bus's maximum sixteen
+bounded callbacks and from a 30-minute to one-hour guarded settlement ceiling;
+ordered-prefix checkpoints, terminal equality, Doctor, and rollback remain.
 
 CO-012 update (2026-08-10): contextual message reasoning is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing message facts and candidate decisions are never

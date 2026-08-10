@@ -5,8 +5,10 @@ bounded durable acquisition of pre-existing provider history when a forward-
 only cursor would otherwise certify a false-complete source stream. C109 owns
 cursor-before-list ordering, member-private historical seeds, deterministic
 exact-participant/date expansion, seed-first global caps, content-free policy
-receipts, restart idempotency, explicit truncation, and the unchanged human/
-write gate; AC-38 is its release boundary.
+receipts, restart idempotency, explicit truncation, maximum bounded idempotent
+replay width, a one-hour guarded settlement ceiling, and the unchanged human/
+write gate. Liveness, terminal equality, final Doctor, synthetic proof, and
+rollback are not weakened; AC-38 is its release boundary.
 
 CO-012 amendment (2026-08-10): C002/C004/C007/C010/C025/C026/C031/C034/
 C044/C049/C051/C055-C059/C071/C076/C097/C098/C101/C106/C107 are

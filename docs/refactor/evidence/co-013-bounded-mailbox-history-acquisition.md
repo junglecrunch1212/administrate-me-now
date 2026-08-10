@@ -61,8 +61,19 @@ retained here.
   missing reason atomically and opt into full immutable-source replay under a
   new idempotency generation. Its local matrix passed 1,764 root/pack, 60
   isolated bridge, and 47 strict acceptance tests plus every static, security,
-  clean-install, backup, and pinned OpenClaw gate. Review, merge, deployment,
-  settlement, Doctor, and authenticated proof remain pending.
+  clean-install, backup, and pinned OpenClaw gate. PR #316 passed both hosted
+  gates and merged as `6cc627ffca4ef11bf9670e440d5eee82bfbdff11`.
+- Guarded activation kept runtime liveness and produced no new pipeline
+  failures. It raised candidate-eligible accounting into the dozens and began
+  superseding the retained schema failures. Content-free live telemetry then
+  proved that the roughly 1,500-message language-bound replay could exceed the
+  controller's 30-minute settlement ceiling despite clean forward progress.
+- Operational convergence repair: keep the v13 semantic generation, use the
+  EventBus maximum sixteen-way bounded callback width, and extend only the
+  guarded settlement ceiling to one hour. Ordered-prefix durability,
+  liveness, terminal equality, full Doctor, synthetic proof, and rollback are
+  unchanged. Review, merge, activation, settlement, Doctor, and authenticated
+  proof remain pending.
 - Guarded observation deployment and encrypted backup receipt: pending.
 - Settled source assurance and full Doctor: pending.
 - Authenticated Comms/Triage proof of recovered multi-message context: pending.
