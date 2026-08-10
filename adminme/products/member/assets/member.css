@@ -151,6 +151,13 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .triage-source-facts dd, .triage-extracted-fields dd { margin: 0; overflow-wrap: anywhere; }
 .triage-meaning-box { display: grid; gap: .3rem; padding: .7rem; border-left: 3px solid var(--teal); border-radius: var(--radius); background: #edf6f3; }
 .triage-meaning-box p { margin: 0; }
+.triage-context-guide { display: grid; gap: .65rem; padding: .8rem; border: 1px solid #c9c0e6; border-radius: var(--radius); background: #f2eefb; }
+.triage-context-guide-row { display: grid; grid-template-columns: minmax(8rem, .35fr) minmax(0, 1fr); gap: .7rem; align-items: start; }
+.triage-context-guide-row p { margin: 0; overflow-wrap: anywhere; }
+.triage-context-questions { margin: -.25rem 0 0; padding-left: 1.25rem; }
+.triage-source-chain { padding-top: .45rem; border-top: 1px solid rgb(93 75 140 / .25); }
+.triage-source-chain summary { cursor: pointer; font-weight: 750; }
+.triage-source-chain ol { display: grid; gap: .3rem; margin-bottom: 0; padding-left: 1.25rem; color: var(--muted); font-size: .78rem; }
 .triage-evidence-quote { margin: 0; padding: .65rem .75rem; border-left: 3px solid #c9942c; background: #fff8e6; overflow-wrap: anywhere; }
 .triage-methods, .candidate-policy-signals { display: flex; flex-wrap: wrap; gap: .35rem; }
 .triage-review-form { display: grid; gap: .75rem; }

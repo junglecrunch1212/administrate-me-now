@@ -394,6 +394,37 @@ function triageSourceContext(item) {
     meaningBox.append(values);
   }
   section.append(meaningBox);
+  const interpretation = context.interpretation;
+  if (interpretation) {
+    const guide = document.createElement("div"); guide.className = "triage-context-guide";
+    guide.append(text("p", "CONTEXT SUMMARY · REVIEW AID", "eyebrow"));
+    for (const [label, value] of [["What this is", interpretation.case_summary], ["Why it may need you", interpretation.why_member], ["Smallest next step", interpretation.next_step]]) {
+      if (!value) continue;
+      const row = document.createElement("div"); row.className = "triage-context-guide-row";
+      row.append(text("strong", label), text("p", value)); guide.append(row);
+    }
+    const status = [interpretation.thread_state && titleCase(interpretation.thread_state), interpretation.action_owner && `Owner: ${titleCase(interpretation.action_owner)}`, interpretation.lifecycle_state && `Status: ${titleCase(interpretation.lifecycle_state)}`].filter(Boolean).join(" · ");
+    if (status) guide.append(text("p", status, "meta"));
+    if (interpretation.unresolved_questions?.length) {
+      guide.append(text("strong", "Still unresolved"));
+      const questions = document.createElement("ul"); questions.className = "triage-context-questions";
+      for (const question of interpretation.unresolved_questions) questions.append(text("li", question));
+      guide.append(questions);
+    }
+    if (interpretation.source_chain?.length > 1) {
+      const chain = document.createElement("details"); chain.className = "triage-source-chain";
+      chain.append(text("summary", `${interpretation.source_chain.length} messages used for context`));
+      const list = document.createElement("ol");
+      for (const source of interpretation.source_chain) {
+        const relation = source.relation_reason_codes?.length ? `${titleCase(source.relation)}: ${source.relation_reason_codes.map(titleCase).join(", ")}` : titleCase(source.relation);
+        const label = [relation, source.subject || source.sender || titleCase(source.channel), source.occurred_at ? new Date(source.occurred_at).toLocaleString() : null].filter(Boolean).join(" · ");
+        list.append(text("li", label));
+      }
+      chain.append(list); guide.append(chain);
+    }
+    guide.append(text("small", "This explanation came from bounded language interpretation. Exact source words remain the evidence below; nothing is official until you confirm it.", "state-note"));
+    section.append(guide);
+  }
   const evidence = context.evidence || {};
   if (evidence.quote) {
     const quote = document.createElement("blockquote"); quote.className = "triage-evidence-quote"; quote.textContent = evidence.quote;
@@ -415,8 +446,9 @@ function triageDetail(item, data, readOnly = false) {
     section.append(text("h2", "Choose a proposal"), text("p", "Select one item to review its evidence, destination, and exact effect.", "empty"));
     return section;
   }
-  section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", item.title));
-  if (item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
+  const reviewHeading = item.interpretation?.compact_summary || item.title;
+  section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", reviewHeading));
+  if (!item.interpretation && item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
   section.append(triageSourceContext(item));
   if (readOnly) {
     const outcome = item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
@@ -582,7 +614,9 @@ function triageSurface(data) {
   for (const item of visible) {
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
     const source = item.source_context?.state === "available" ? [item.source_context.channel && titleCase(item.source_context.channel), item.source_context.sender].filter(Boolean).join(" · ") : null;
-    button.append(text("strong", item.title), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}${source ? ` · ${source}` : ""}`));
+    const compactSummary = item.interpretation?.compact_summary || item.title;
+    const contextState = item.interpretation?.thread_state ? ` · ${titleCase(item.interpretation.thread_state)}` : "";
+    button.append(text("strong", compactSummary), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}${contextState}${source ? ` · ${source}` : ""}`));
     button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;

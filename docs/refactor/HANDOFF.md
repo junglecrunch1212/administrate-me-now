@@ -17,6 +17,43 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-10 CO-012 contextual-message candidate
+
+The observed legal-message failure is now represented by
+`CHANGE-ORDER-012-CONTEXTUAL-MESSAGE-REASONING.md` and AC-37. The candidate
+replaces isolated-body candidate interpretation with a bounded private context
+pack assembled only from immutable same-member/account/workspace facts. Exact
+provider-thread, participant, normalized-subject, and attachment-filename
+edges are code-owned and disclosed. Quoted history is removed before the
+pinned skill receives the pack. Content deduplication is bound to tenant,
+member owner, visibility, sensitivity, provider account, workspace, and thread
+identity so identical notices cannot collide across private member scopes.
+
+The pinned `classify_message_nature` skill v6 may return several distinct
+schema-bound interpretations with stable aliases, exact quotes, apparent
+owner/status, compact and expanded review aids, next step, unresolved
+questions, and related aliases. Fixed code rejects ungrounded, closed,
+other-owned, related-only, out-of-scope, and disallowed output. Message
+pipeline v12 evaluates candidates at the latest retained thread source,
+prevents same-local-offset collapse, supersedes only untouched older
+interpretations, and never reopens a member decision. Triage proposal v3 and
+projection v6 retain the private review explanation separately from canonical
+truth.
+
+The complete local candidate matrix passes: 1,745 root/pack tests, 60 isolated
+bridge tests, 47 strict acceptance tests, Ruff, format, mypy, Pyright,
+dependency/invariant/architecture checks, performance budgets, builds,
+packages, clean install, tenant isolation, encrypted backup/restore, the exact
+pinned native OpenClaw contract, and all 17 plugin tests. That includes a
+fictional six-message legal-authorization matter and a related signing notice
+that yield four separate human-gated Task/Commitment decisions with exact
+multi-source provenance and zero provider effects. The rendered console passes
+223 desktop/narrow/accessibility checks with zero browser, page, or request
+errors. Reviewed merge, guarded
+observation deployment, replay settlement, Doctor, and authenticated live
+desktop/narrow Triage review remain required before this section may claim
+deployment.
+
 ## 2026-08-09 CO-011 deployed and live verified
 
 `CHANGE-ORDER-011-CANDIDATE-IDENTIFICATION-AND-TRIAGE-CONTEXT.md` now governs

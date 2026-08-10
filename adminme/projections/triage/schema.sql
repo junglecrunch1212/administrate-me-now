@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS triage_items (
     eligibility_rule_ids_json    TEXT NOT NULL DEFAULT '[]',
     confidence                   REAL,
     reasons_json                 TEXT NOT NULL DEFAULT '[]',
+    interpretation_json          TEXT,
     state                        TEXT NOT NULL
                                  CHECK (state IN (
                                    'pending_interpretation','pending_review','approved',

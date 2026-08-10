@@ -46,11 +46,14 @@ from adminme.lib.skill_runner import (
     SkillScopeInsufficient,
     SkillSensitivityRefused,
 )
+from adminme.message_context import MessageContextPack, build_message_context_pack
 from adminme.pipelines.base import PipelineContext, Triggers, skill_output
 from adminme.triage_intent import (
+    CONTEXTUAL_NLP_EXTRACTOR_ID,
     GROUNDED_NLP_EXTRACTOR_ID,
     MESSAGE_FALLBACK_EXTRACTOR_ID,
     extract_grounded_nlp_candidates,
+    extract_grounded_context_candidates,
     extract_message_fallback_candidates,
     is_inbound_reply_request,
     merge_intent_candidates,
@@ -60,9 +63,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "5.1.0"
+SKILL_VERSION = "6.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 11
+_REPLAY_GENERATION = 12
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -159,7 +162,7 @@ def _extract_text_and_inputs(
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "11.0.0"
+    version: str = "12.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -240,9 +243,16 @@ class NoiseFilteringPipeline:
             )
             return
         source_text, inputs = prepared
+        context_pack = await build_message_context_pack(event, ctx.event_log)
         inputs["candidate_mode"] = policy["mode"]
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
         inputs["candidate_language_enabled"] = bool(policy["language_enabled"])
+        inputs["context_pack"] = context_pack.skill_payload()
+        inputs["candidate_scope"] = (
+            "primary_thread"
+            if context_pack.current_is_thread_anchor
+            else "deferred_to_latest_thread_message"
+        )
 
         invocation_fingerprint = hashlib.sha256(
             json.dumps(
@@ -309,6 +319,7 @@ class NoiseFilteringPipeline:
                 assessment_failure_reason=f"language_seam_{type(exc).__name__}",
                 policy_source_id=policy_source_id,
                 policy=policy,
+                context_pack=context_pack,
             )
             return
 
@@ -323,6 +334,7 @@ class NoiseFilteringPipeline:
             assessment_failure_reason=None,
             policy_source_id=policy_source_id,
             policy=policy,
+            context_pack=context_pack,
         )
 
     async def _emit_results(
@@ -337,6 +349,7 @@ class NoiseFilteringPipeline:
         assessment_failure_reason: str | None,
         policy_source_id: str,
         policy: dict[str, Any],
+        context_pack: MessageContextPack,
     ) -> None:
         await self._emit_classified(
             event=event,
@@ -372,6 +385,7 @@ class NoiseFilteringPipeline:
             assessment_failure_reason=assessment_failure_reason,
             policy_source_id=policy_source_id,
             policy=policy,
+            context_pack=context_pack,
         )
 
     async def _emit_classified(
@@ -478,6 +492,7 @@ class NoiseFilteringPipeline:
         assessment_failure_reason: str | None,
         policy_source_id: str,
         policy: dict[str, Any],
+        context_pack: MessageContextPack,
     ) -> None:
         owner_scope = str(event.get("owner_scope") or "")
         member_id = owner_scope.removeprefix("private:")
@@ -489,19 +504,27 @@ class NoiseFilteringPipeline:
             submitted_at = datetime.fromtimestamp(
                 event["event_at_ms"] / 1000, timezone.utc
             )
-        language_candidates = (
-            extract_grounded_nlp_candidates(source_text, raw_candidates)
-            if policy.get("language_enabled")
-            else []
+        has_context_contract = isinstance(raw_candidates, list) and any(
+            isinstance(value, dict) and value.get("evidence_source_id")
+            for value in raw_candidates
         )
-        candidates = merge_intent_candidates(
-            extract_message_fallback_candidates(
-                source_text,
-                submitted_at=submitted_at,
-                direction=message_direction,
-            ),
-            language_candidates,
-        )
+        language_candidates = []
+        if policy.get("language_enabled") and context_pack.current_is_thread_anchor:
+            language_candidates = (
+                extract_grounded_context_candidates(context_pack, raw_candidates)
+                if has_context_contract
+                else extract_grounded_nlp_candidates(source_text, raw_candidates)
+            )
+        candidates = []
+        if context_pack.current_is_thread_anchor:
+            candidates = merge_intent_candidates(
+                extract_message_fallback_candidates(
+                    source_text,
+                    submitted_at=submitted_at,
+                    direction=message_direction,
+                ),
+                language_candidates,
+            )
         if message_direction == "inbound":
             candidates = [
                 candidate
@@ -525,6 +548,13 @@ class NoiseFilteringPipeline:
             )
             for candidate in candidates
         ]
+        candidates = await self._reconcile_thread_candidates(
+            event=event,
+            ctx=ctx,
+            source_event_id=source_event_id,
+            context_pack=context_pack,
+            candidates=candidates,
+        )
         intent_id = f"source:{source_event_id}"
         # Replay must produce byte-identical event identities.  Never place a
         # wall-clock retry time in an idempotent payload.
@@ -584,9 +614,10 @@ class NoiseFilteringPipeline:
         deduplicated_candidates = []
         proposal_keys: dict[tuple[str, str], str] = {}
         for candidate in new_candidates:
+            proposal_fingerprint = context_pack.fingerprint
             proposal_key = (
                 f"triage:message-candidate:v{_REPLAY_GENERATION}:"
-                f"{invocation_fingerprint}:{candidate.candidate_key}:"
+                f"{proposal_fingerprint}:{candidate.candidate_key}:"
                 f"{candidate.target_kind}"
             )
             if (
@@ -624,6 +655,11 @@ class NoiseFilteringPipeline:
                 else ["language_assessment_completed"]
             ),
             "eligible_candidate_found" if candidates else "no_eligible_candidate",
+            *(
+                ["conversation_context_assessed"]
+                if context_pack.current_is_thread_anchor
+                else ["deferred_to_latest_thread_message"]
+            ),
             *([policy_reason] if policy_reason else []),
             policy_rule,
         ]
@@ -650,7 +686,7 @@ class NoiseFilteringPipeline:
                 event_at_ms=event["event_at_ms"],
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
-                schema_version=2,
+                schema_version=3,
                 occurred_at=extracted_at,
                 source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
@@ -672,6 +708,7 @@ class NoiseFilteringPipeline:
                     "eligibility_rule_ids": candidate.eligibility_rule_ids,
                     "confidence": candidate.confidence,
                     "reasons": candidate.reasons,
+                    "interpretation": candidate.interpretation,
                 },
             )
             await ctx.event_sink.write(
@@ -679,6 +716,124 @@ class NoiseFilteringPipeline:
                 correlation_id=ctx.correlation_id,
                 causation_id=extraction_event_id,
             )
+
+    async def _reconcile_thread_candidates(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        source_event_id: str,
+        context_pack: MessageContextPack,
+        candidates: list[Any],
+    ) -> list[Any]:
+        """Replace untouched older thread interpretations; preserve decisions.
+
+        A new message can answer or supersede an earlier ask.  Conversation
+        candidates are therefore a versioned set rooted at the latest message.
+        Member enrichments and decisions are permanent; an exact candidate the
+        member already acted on is never silently re-opened.
+        """
+
+        if not context_pack.current_is_thread_anchor or not hasattr(
+            ctx.event_log, "read_since"
+        ):
+            return candidates
+        thread_source_ids = {
+            message.source_event_id
+            for message in context_pack.messages
+            if message.relation == "thread"
+        }
+        decided_keys: set[tuple[str, str]] = set()
+        decided_titles: set[tuple[str, str]] = set()
+        prior_proposals: list[dict[str, Any]] = []
+        async for prior in ctx.event_log.read_since(
+            owner_scope=str(event.get("owner_scope") or ""),
+            types=["triage.item.proposed"],
+        ):
+            payload = prior.get("payload") or {}
+            if prior.get("source_adapter") not in {
+                "deterministic_candidate_eligibility",
+                "noise_filtering",
+                "legacy-message-extractor",
+            }:
+                continue
+            if str(payload.get("source_event_id") or "") not in thread_source_ids:
+                continue
+            interpretation = payload.get("interpretation")
+            if (
+                str(payload.get("source_event_id") or "") == source_event_id
+                and isinstance(interpretation, dict)
+                and interpretation.get("context_fingerprint")
+                == context_pack.fingerprint
+            ):
+                continue
+            prior_proposals.append(prior)
+
+        for prior in prior_proposals:
+            payload = prior.get("payload") or {}
+            descendants = await ctx.event_log.get_by_causation(prior["event_id"])
+            member_decided = any(
+                child.get("type")
+                in {
+                    "triage.item.enriched",
+                    "triage.item.confirmed",
+                    "triage.item.materialized",
+                    "triage.item.dismissed",
+                }
+                for child in descendants
+            )
+            kind = str(payload.get("target_kind") or "")
+            key = str(payload.get("candidate_key") or "")
+            title = str(payload.get("title") or "")
+            if member_decided:
+                if key:
+                    decided_keys.add((kind, key))
+                if title:
+                    decided_titles.add((kind, title))
+                continue
+            proposal_id = str(payload.get("proposal_id") or "")
+            if not proposal_id:
+                continue
+            await ctx.event_sink.write(
+                EventEnvelope(
+                    event_at_ms=event["event_at_ms"],
+                    tenant_id=event["tenant_id"],
+                    type="triage.item.superseded",
+                    schema_version=2,
+                    occurred_at=str(
+                        event.get("recorded_at")
+                        or event.get("occurred_at")
+                        or EventEnvelope.now_utc_iso()
+                    ),
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=event["owner_scope"],
+                    visibility_scope=event["visibility_scope"],
+                    sensitivity=event.get("sensitivity", "normal"),
+                    idempotency_key=(
+                        "triage:message-thread-replaced:v12:"
+                        f"{proposal_id}:{source_event_id}"
+                    ),
+                    payload={
+                        "proposal_id": proposal_id,
+                        "superseded_at": str(
+                            event.get("recorded_at")
+                            or event.get("occurred_at")
+                            or EventEnvelope.now_utc_iso()
+                        ),
+                        "replacement_source_event_id": source_event_id,
+                        "reason": "eligibility_rule_replaced",
+                    },
+                ),
+                correlation_id=ctx.correlation_id,
+                causation_id=prior["event_id"],
+            )
+        return [
+            candidate
+            for candidate in candidates
+            if (candidate.target_kind, candidate.candidate_key) not in decided_keys
+            and (candidate.target_kind, candidate.title) not in decided_titles
+        ]
 
     async def _supersede_retired_fallbacks(
         self,
@@ -788,7 +943,10 @@ class NoiseFilteringPipeline:
                 "intent_id": intent_id or f"source:{source_event_id}",
                 "source_event_id": source_event_id,
                 "skill_call_event_id": None,
-                "extractor_id": f"{MESSAGE_FALLBACK_EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}",
+                "extractor_id": (
+                    f"{MESSAGE_FALLBACK_EXTRACTOR_ID}+{GROUNDED_NLP_EXTRACTOR_ID}"
+                    f"+{CONTEXTUAL_NLP_EXTRACTOR_ID}"
+                ),
                 "language": None,
                 "candidates": [candidate.feature_payload() for candidate in candidates],
                 "extraction_state": (

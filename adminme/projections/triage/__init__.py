@@ -11,7 +11,7 @@ from adminme.projections.triage import handlers
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 5
+    version = 6
     subscribes_to = [
         "triage.item.proposed",
         "triage.item.enriched",
@@ -39,6 +39,10 @@ class TriageProjection(Projection):
     def migrate_schema(self, conn: Any) -> None:
         info = list(conn.execute("PRAGMA table_info(triage_items)"))
         columns = {row[1]: row for row in info}
+        if "interpretation_json" not in columns:
+            conn.execute("ALTER TABLE triage_items ADD COLUMN interpretation_json TEXT")
+            info = list(conn.execute("PRAGMA table_info(triage_items)"))
+            columns = {row[1]: row for row in info}
         if "resolution_reason" not in columns:
             conn.execute("ALTER TABLE triage_items ADD COLUMN resolution_reason TEXT")
             info = list(conn.execute("PRAGMA table_info(triage_items)"))
@@ -73,6 +77,7 @@ class TriageProjection(Projection):
                 eligibility_rule_ids_json TEXT NOT NULL DEFAULT '[]',
                 confidence REAL,
                 reasons_json TEXT NOT NULL DEFAULT '[]',
+                interpretation_json TEXT,
                 state TEXT NOT NULL CHECK (state IN (
                     'pending_interpretation','pending_review','approved',
                     'confirmed','dismissed','failed'

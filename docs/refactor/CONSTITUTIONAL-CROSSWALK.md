@@ -1,5 +1,14 @@
 # Constitutional crosswalk
 
+CO-012 amendment (2026-08-10): C002/C004/C007/C010/C025/C026/C031/C034/
+C044/C049/C051/C055-C059/C071/C076/C097/C098/C101/C106/C107 are
+**PRESERVED/HARDENED** by privacy-scoped conversation context, distinct
+exact-evidence candidates, member-decision-preserving thread reconciliation,
+and explicitly non-authoritative compact/expanded explanations. Fixed code
+owns every source edge, scope, evidence check, owner/status admission,
+deduplication, supersession, route, truth, and effect. C108 records the
+invariant; AC-37 is its release boundary.
+
 CO-011 amendment (2026-08-09): C001/C002/C004/C007/C010/C035/C044-C046/
 C049-C051/C053/C055-C068/C071/C076/C097/C101/C102/C104/C106 are
 **PRESERVED/HARDENED** by an executable, member-scoped candidate source policy
@@ -433,6 +442,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C105 | Finance separates provider observations, reviewed planning intent, append-only history, and deterministic presentation; the workbook is the editable planning authority without overwriting Plaid facts or becoming a second event log | Household cash-flow/scenario objective; ADR-0007; CO-006; C019/C036/C049/C069–C071 | Money v2, detailed Plaid events/removals, durable cursor, validated twelve-sheet canonical workbook, deterministic Finance cockpit, private/shared isolation, replay, responsive portal, and no provider write seam | PRESERVE provider/event/privacy boundaries; MODERNIZE Finance; SUPERSEDE thin workbook, summary-only sync, and static projection | AC-07, AC-08, AC-10, AC-13, AC-18, AC-32 |
 | C106 | Every retained source fact receives an audited terminal assessment, every supported candidate remains human-gated, and every declared canonical/provider object has an explicit typed lifecycle with retained history | Whole platform loop; D18/D19/D26; CO-001/CO-007/CO-008/CO-010; C007/C010/C025/C026/C031/C097/C101 | Executable catalog and generated evidence; total 121-cell source matrix; all-eleven message/Note/member extraction; deterministic Finance/context assessment; typed Task/Commitment/Recurrence/Routine/Finance Goal/registry lifecycles; source-linked reassessment; Google Tasks restart dedupe; Scoreboard outcome/reward evidence | PRESERVE source/event/type boundaries; HARDEN completeness and human gating; SUPERSEDE prose-only or schema-only support claims | AC-07–AC-12, AC-14, AC-18, AC-21, AC-24–AC-35 |
 | C107 | Candidate identification is member-scoped, source-explicit, total over current/planned source families, terminally accounted, and decision-grade in Triage; grounded language may extract exact-evidence typed fields but cannot own admission, meaning authority, route, rank, truth, or effects | ADHD working-memory objective; D19/D26; CO-007/CO-008/CO-010/CO-011; C002/C035/C044-C056/C071/C097/C101/C104/C106 | `deterministic-candidate-policy-v1`, secret-free Settings journal v2, private typed receipt, effective pipeline policy, source-grounded Triage context v1, current/planned adapter matrix, provider capability research, process and browser proof | PRESERVE source/privacy/human/write boundaries; HARDEN member control and context; SUPERSEDE global extraction defaults and title-only Triage cues | AC-08–AC-12, AC-14, AC-18, AC-24, AC-28–AC-36 |
+| C108 | Communication extraction uses a bounded privacy-scoped conversation context, preserves each distinct ask and exact source, explains related-message edges, and reconciles later thread state without model-owned authority or reopening a member decision | ADHD working-memory/executive-function objective; D19/D26/D28; CO-001/CO-007/CO-010/CO-011/CO-012; C002/C004/C025/C034/C055-C059/C097/C098/C101/C106/C107 | `message-context-pack-v1`, `triage-context-interpretation-v1`, message pipeline v12, pinned skill v6, Triage projection v6, exact alias/quote validation, thread-set supersession, production legal-context fixture, compact/expanded portal context | PRESERVE source/event/privacy/human/write boundaries; HARDEN contextual meaning and provenance; SUPERSEDE isolated-body and offset-only candidate merging | AC-08–AC-12, AC-14, AC-18, AC-24, AC-25, AC-28, AC-33–AC-37 |
 
 ## Source coverage index
 

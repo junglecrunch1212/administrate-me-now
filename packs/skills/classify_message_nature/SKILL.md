@@ -1,18 +1,18 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 5.1.0
+version: 6.0.0
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
 provider_preferences:
   - anthropic/claude-haiku-4-5
   - anthropic/claude-opus-4-7
-max_tokens: 700
+max_tokens: 4000
 temperature: 0.1
 sensitivity_required: normal
 context_scopes_required: []
-timeout_seconds: 30
+timeout_seconds: 60
 outbound_affecting: false
 on_failure:
   classification: personal
@@ -74,7 +74,11 @@ something they needed to see."
 
 ## Typed features and candidates
 
-The skill extracts language features only. `reply_signal` describes whether
+The skill extracts language features only. It receives a bounded, private,
+same-account conversation context pack assembled by deterministic code. Exact
+thread IDs, participant overlap, normalized subject tokens, and attachment
+filename tokens are the only relationship edges; the model cannot add sources
+or widen member/workspace scope. `reply_signal` describes whether
 the text explicitly calls for a response; unread state never changes it.
 Automation, transactional-due, security-code, person-to-person, and deadline
 fields are typed evidence consumed by deterministic code. The model does not
@@ -87,7 +91,8 @@ People output remains unresolved evidence for human review; the model never
 selects an existing party or asserts identity. Direction is derived from the event type or immutable provider
 `SENT` label, so another person's inbound promise is never attributed to the
 member. Every admitted candidate
-must carry a verbatim source quote; deterministic code rejects ungrounded
+must carry a stable source alias and verbatim source quote; deterministic code
+rejects ungrounded, completed, other-owned, or related-only
 output, filters candidate fields, preserves privacy scope, and owns Triage
 eligibility. They remain derived proposals until the member reviews them in
 Triage. The dedicated commitment pipeline continues to own richer attributed

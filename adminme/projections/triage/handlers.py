@@ -31,6 +31,7 @@ def _insert(
     candidate_key: str | None = None,
     extraction_event_id: str | None = None,
     eligibility_rule_ids: list[str] | None = None,
+    interpretation: dict[str, Any] | None = None,
 ) -> None:
     if envelope["owner_scope"] != f"private:{owner_member_id}":
         return
@@ -42,8 +43,8 @@ def _insert(
             reasons_json, state, proposed_at, owner_scope, visibility_scope,
             parent_intent_id, candidate_key, extraction_event_id,
             eligibility_rule_ids_json,
-            sensitivity, last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            interpretation_json, sensitivity, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, proposal_id) DO NOTHING
         """,
         (
@@ -66,6 +67,7 @@ def _insert(
             candidate_key,
             extraction_event_id,
             _json(eligibility_rule_ids or []),
+            _json(interpretation) if interpretation is not None else None,
             envelope["sensitivity"],
             envelope["event_id"],
         ),
@@ -93,6 +95,7 @@ def _apply_triage_proposed(
         candidate_key=payload.get("candidate_key"),
         extraction_event_id=payload.get("extraction_event_id"),
         eligibility_rule_ids=list(payload.get("eligibility_rule_ids") or []),
+        interpretation=payload.get("interpretation"),
     )
     parent_intent_id = payload.get("parent_intent_id")
     if parent_intent_id:

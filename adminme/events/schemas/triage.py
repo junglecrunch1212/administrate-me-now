@@ -71,6 +71,62 @@ class TriageItemProposedV2(TriageItemProposedV1):
     eligibility_rule_ids: list[str] = Field(min_length=1, max_length=20)
 
 
+class TriageContextEvidenceV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1, max_length=240)
+    quote: str = Field(min_length=1, max_length=1000)
+
+
+class TriageContextSourceV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    source_event_id: str = Field(min_length=1, max_length=240)
+    relation: Literal["thread", "related"]
+    reason_codes: list[
+        Literal[
+            "provider_thread_id",
+            "participant_overlap",
+            "subject_token_overlap",
+            "attachment_token_overlap",
+        ]
+    ] = Field(min_length=1, max_length=4)
+
+
+class TriageContextInterpretationV1(BaseModel):
+    """Bounded language interpretation; never authority or source truth."""
+
+    model_config = {"extra": "forbid"}
+    contract: Literal["triage-context-interpretation-v1"]
+    context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    thread_key: str = Field(min_length=1, max_length=64)
+    anchor_event_id: str = Field(min_length=1, max_length=240)
+    compact_summary: str = Field(min_length=1, max_length=160)
+    case_summary: str | None = Field(default=None, min_length=1, max_length=600)
+    why_member: str | None = Field(default=None, min_length=1, max_length=240)
+    next_step: str | None = Field(default=None, min_length=1, max_length=240)
+    thread_state: Literal[
+        "new",
+        "in_progress",
+        "waiting_on_member",
+        "waiting_on_other",
+        "blocked",
+        "unclear",
+    ]
+    action_owner: Literal["member", "group_including_member", "unknown"]
+    lifecycle_state: Literal["open", "unknown"]
+    unresolved_questions: list[str] = Field(default_factory=list, max_length=8)
+    evidence_refs: list[TriageContextEvidenceV1] = Field(min_length=1, max_length=5)
+    context_source_event_ids: list[str] = Field(min_length=1, max_length=20)
+    context_sources: list[TriageContextSourceV1] = Field(min_length=1, max_length=20)
+    related_source_event_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class TriageItemProposedV3(TriageItemProposedV2):
+    """Conversation-aware proposal with bounded, review-only explanation."""
+
+    model_config = {"extra": "forbid"}
+    interpretation: TriageContextInterpretationV1 | None = None
+
+
 TriageSourceSurface = Literal[
     "today",
     "triage",
@@ -256,6 +312,7 @@ class TriageItemSupersededV2(BaseModel):
 
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
+registry.register("triage.item.proposed", 3, TriageItemProposedV3)
 registry.register("triage.intent.submitted", 1, TriageIntentSubmittedV1)
 registry.register(
     "triage.intent.features_extracted", 1, TriageIntentFeaturesExtractedV1
@@ -283,6 +340,7 @@ __all__ = [
     "TriageItemMaterializedV1",
     "TriageItemProposedV1",
     "TriageItemProposedV2",
+    "TriageItemProposedV3",
     "TriageItemSupersededV1",
     "TriageItemSupersededV2",
     "TriageRouteV1",

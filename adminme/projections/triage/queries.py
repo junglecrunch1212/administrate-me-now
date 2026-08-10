@@ -23,6 +23,8 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
     result["eligibility_rule_ids"] = json.loads(
         result.pop("eligibility_rule_ids_json") or "[]"
     )
+    interpretation = result.pop("interpretation_json", None)
+    result["interpretation"] = json.loads(interpretation) if interpretation else None
     result["id"] = result["proposal_id"]
     result["kind"] = result["target_kind"]
     result["actions"] = (
@@ -39,6 +41,7 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         "source_changed",
         "source_deleted",
         "source_privileged",
+        "eligibility_rule_replaced",
     }:
         result["state"] = "superseded"
     return result

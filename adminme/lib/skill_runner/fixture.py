@@ -56,6 +56,86 @@ def _response(request: httpx.Request) -> httpx.Response:
     elif title.startswith("classify_message_nature"):
         body_text = str(inputs.get("body_text", ""))
         candidates = []
+        context_pack = inputs.get("context_pack")
+        context_pack = context_pack if isinstance(context_pack, dict) else {}
+        context_messages = [
+            message
+            for message in context_pack.get("messages") or []
+            if isinstance(message, dict)
+        ]
+
+        def contextual_candidate(
+            quote: str,
+            *,
+            target_kind: str,
+            compact_summary: str,
+            action_owner: str = "member",
+        ) -> dict[str, Any]:
+            [source] = [
+                message
+                for message in context_messages
+                if quote in str(message.get("body_text") or "")
+            ]
+            return {
+                "target_kind": target_kind,
+                "title": compact_summary,
+                "evidence_source_id": source["source_id"],
+                "evidence_quote": quote,
+                "candidate": {},
+                "confidence": 0.98,
+                "reasons": ["fixture exact conversation evidence"],
+                "action_owner": action_owner,
+                "lifecycle_state": "open",
+                "compact_summary": compact_summary,
+                "case_summary": (
+                    "A legal authorization matter includes document preparation, "
+                    "compliance records, a fee transfer, and an execution decision."
+                ),
+                "why_member": (
+                    "The member is directly addressed or made the cited promise."
+                ),
+                "next_step": "Review this distinct ask and assign its final destination.",
+                "thread_state": "in_progress",
+                "unresolved_questions": [
+                    "Is a notarized original required?",
+                    "Who will collect the original?",
+                ],
+                "related_source_ids": [
+                    message["source_id"]
+                    for message in context_messages
+                    if message.get("relation") == "related"
+                ][:10],
+            }
+
+        if inputs.get("candidate_scope") == "primary_thread" and any(
+            "[fixture:contextual-legal]" in str(message.get("body_text") or "")
+            for message in context_messages
+            if message.get("relation") == "thread"
+        ):
+            candidates = [
+                contextual_candidate(
+                    "Please prepare two authorization forms for the two proceedings.",
+                    target_kind="task",
+                    compact_summary="Prepare two authorization forms",
+                    action_owner="group_including_member",
+                ),
+                contextual_candidate(
+                    "Please return the compliance form and identification copy.",
+                    target_kind="task",
+                    compact_summary="Return compliance form and ID copy",
+                ),
+                contextual_candidate(
+                    "I will arrange the legal-fee transfer this afternoon.",
+                    target_kind="commitment",
+                    compact_summary="Arrange the legal-fee transfer",
+                ),
+                contextual_candidate(
+                    "Can the signed PDF be used, or is the notarized original required?",
+                    target_kind="task",
+                    compact_summary="Resolve the notarization requirement",
+                    action_owner="unknown",
+                ),
+            ]
         fixture_kind = next(
             (
                 kind
@@ -64,7 +144,9 @@ def _response(request: httpx.Request) -> httpx.Response:
             ),
             None,
         )
-        if fixture_kind is not None:
+        if candidates:
+            pass
+        elif fixture_kind is not None:
             candidates = [
                 {
                     "target_kind": fixture_kind,

@@ -1,10 +1,12 @@
 """Read-time, source-grounded context for one Triage decision.
 
 The context is derived from the authorized immutable source event and the
-candidate's fixed eligibility evidence.  It is deliberately not stored as new
-truth and contains no generative summary.  The member sees provider/channel,
-counterparty, subject, exact evidence, extracted fields, and the extraction
-layers that produced the proposal.
+candidate's fixed eligibility evidence.  It is deliberately not stored as
+canonical truth. The member sees provider/channel, counterparty, subject,
+exact evidence, extracted fields, and the extraction layers that produced the
+proposal. Conversation-aware proposals may add a bounded language
+interpretation, always labelled separately from exact source evidence and
+re-authorized source-by-source at read time.
 """
 
 from __future__ import annotations
@@ -100,7 +102,9 @@ def _methods(item: Mapping[str, Any]) -> list[dict[str, str]]:
 
 
 def compose_triage_source_context(
-    item: Mapping[str, Any], source_event: Mapping[str, Any]
+    item: Mapping[str, Any],
+    source_event: Mapping[str, Any],
+    context_events: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = source_event.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
@@ -144,8 +148,71 @@ def compose_triage_source_context(
         ),
         None,
     )
+    interpretation = item.get("interpretation")
+    interpretation = interpretation if isinstance(interpretation, Mapping) else None
+    context_events = context_events or {}
+    evidence_refs: list[dict[str, Any]] = []
+    source_chain: list[dict[str, Any]] = []
+    if interpretation is not None:
+        for ref in interpretation.get("evidence_refs") or []:
+            if not isinstance(ref, Mapping):
+                continue
+            ref_event_id = str(ref.get("source_event_id") or "")
+            ref_event = context_events.get(ref_event_id)
+            if ref_event is None:
+                continue
+            ref_payload = ref_event.get("payload")
+            ref_payload = ref_payload if isinstance(ref_payload, Mapping) else {}
+            ref_quote = str(ref.get("quote") or "").strip()
+            if ref_quote and ref_quote in _source_text(ref_payload):
+                evidence_refs.append(
+                    {"source_event_id": ref_event_id, "quote": ref_quote[:1000]}
+                )
+        source_contracts = {
+            str(value.get("source_event_id") or ""): value
+            for value in interpretation.get("context_sources") or []
+            if isinstance(value, Mapping)
+        }
+        for event_id in interpretation.get("context_source_event_ids") or []:
+            event_id = str(event_id)
+            context_event = context_events.get(event_id)
+            if context_event is None:
+                continue
+            context_payload = context_event.get("payload")
+            context_payload = (
+                context_payload if isinstance(context_payload, Mapping) else {}
+            )
+            context_type = str(context_event.get("type") or "")
+            source_contract = source_contracts.get(event_id, {})
+            context_direction = (
+                "outbound" if context_type == "messaging.sent" else "inbound"
+            )
+            source_chain.append(
+                {
+                    "source_event_id": event_id,
+                    "relation": source_contract.get("relation") or "thread",
+                    "relation_reason_codes": source_contract.get("reason_codes") or [],
+                    "direction": context_direction,
+                    "channel": _first(context_payload, "source_channel") or "message",
+                    "sender": _first(
+                        context_payload,
+                        "to_identifier"
+                        if context_direction == "outbound"
+                        else "from_identifier",
+                        "from_number",
+                    ),
+                    "subject": _first(context_payload, "subject"),
+                    "occurred_at": context_event.get("occurred_at"),
+                }
+            )
+    evidence = {
+        "quote": evidence_refs[0]["quote"] if evidence_refs else quote,
+        "exactly_grounded": bool(evidence_refs) or quote is not None,
+    }
+    if interpretation is not None:
+        evidence["quotes"] = evidence_refs
     return {
-        "contract": "triage-source-context-v1",
+        "contract": "triage-source-context-v2",
         "source_event_id": source_event.get("event_id"),
         "source_event_type": event_type,
         "source_id": source_id_for_event(source_event),
@@ -160,13 +227,30 @@ def compose_triage_source_context(
         "occurred_at": source_event.get("occurred_at"),
         "meaning": {
             "target_kind": item.get("target_kind"),
-            "summary": item.get("title"),
+            "summary": (
+                interpretation.get("compact_summary")
+                if interpretation is not None
+                else item.get("title")
+            ),
             "extracted_fields": extracted_fields,
         },
-        "evidence": {
-            "quote": quote,
-            "exactly_grounded": quote is not None,
-        },
+        "evidence": evidence,
+        "interpretation": (
+            {
+                "label": "Context summary",
+                "case_summary": interpretation.get("case_summary"),
+                "why_member": interpretation.get("why_member"),
+                "next_step": interpretation.get("next_step"),
+                "thread_state": interpretation.get("thread_state"),
+                "action_owner": interpretation.get("action_owner"),
+                "lifecycle_state": interpretation.get("lifecycle_state"),
+                "unresolved_questions": interpretation.get("unresolved_questions")
+                or [],
+                "source_chain": source_chain,
+            }
+            if interpretation is not None
+            else None
+        ),
         "methods": _methods(item),
         "policy_rule": policy_rule,
     }
@@ -180,13 +264,24 @@ async def add_triage_source_context(
     if runtime.event_log is None:
         return
     cache: dict[str, dict[str, Any] | None] = {}
-    for item in [*(surface.get("items") or []), *(surface.get("recent_items") or [])]:
+    items = [*(surface.get("items") or []), *(surface.get("recent_items") or [])]
+    requested_ids: set[str] = set()
+    for item in items:
+        requested_ids.add(str(item.get("source_event_id") or ""))
+        interpretation = item.get("interpretation")
+        if isinstance(interpretation, Mapping):
+            requested_ids.update(
+                str(value)
+                for value in interpretation.get("context_source_event_ids") or []
+            )
+    for event_id in requested_ids:
+        if event_id:
+            cache[event_id] = await runtime.event_log.get(event_id)
+    for item in items:
         event_id = str(item.get("source_event_id") or "")
         if not event_id:
             item["source_context"] = {"state": "unavailable"}
             continue
-        if event_id not in cache:
-            cache[event_id] = await runtime.event_log.get(event_id)
         source = cache[event_id]
         if source is None:
             item["source_context"] = {"state": "unavailable"}
@@ -199,9 +294,28 @@ async def add_triage_source_context(
         ):
             item["source_context"] = {"state": "withheld"}
             continue
+        authorized_context: dict[str, Mapping[str, Any]] = {}
+        interpretation = item.get("interpretation")
+        if isinstance(interpretation, Mapping):
+            for context_id in interpretation.get("context_source_event_ids") or []:
+                context_id = str(context_id)
+                context_source = cache.get(context_id)
+                if context_source is None:
+                    continue
+                context_visibility = str(
+                    context_source.get("visibility_scope") or "shared:household"
+                )
+                context_owner = str(
+                    context_source.get("owner_scope") or "shared:household"
+                )
+                context_sensitivity = str(context_source.get("sensitivity") or "normal")
+                if context_visibility in session.allowed_scopes and allowed_read(
+                    session, context_sensitivity, context_owner
+                ):
+                    authorized_context[context_id] = context_source
         item["source_context"] = {
             "state": "available",
-            **compose_triage_source_context(item, source),
+            **compose_triage_source_context(item, source, authorized_context),
         }
 
 
