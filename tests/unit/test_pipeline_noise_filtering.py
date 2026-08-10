@@ -26,6 +26,7 @@ from adminme.lib.skill_runner import (
     SkillResult,
 )
 from adminme.pipelines.base import PipelineContext
+from adminme.triage_intent import IntentCandidate
 
 PACK_ROOT = (
     Path(__file__).resolve().parents[2] / "packs" / "pipelines" / "noise_filtering"
@@ -119,7 +120,7 @@ class _RacingProposalEventLog(_FakeEventLog):
         existing = await super().get_by_idempotency(tenant_id, idempotency_key)
         if (
             existing is None
-            and idempotency_key.startswith("triage:message-candidate:v16:")
+            and idempotency_key.startswith("triage:message-candidate:v17:")
             and self.proposal_reads < 2
         ):
             self.proposal_reads += 1
@@ -773,7 +774,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v16:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v17:")
 
 
 @pytest.mark.asyncio
@@ -887,7 +888,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v16:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v17:")
         for proposal in proposals
     )
 
@@ -940,10 +941,48 @@ async def test_concurrent_duplicate_sources_accept_first_equivalent_proposal() -
     assert proposals[0].payload["target_kind"] == "task"
 
 
+def test_repeated_candidate_alias_keeps_first_recorded_identity() -> None:
+    first = IntentCandidate(
+        candidate_key="context-stable-alias",
+        target_kind="reminder",
+        title="First grounded interpretation",
+        fields={"notes": "first"},
+        evidence_spans=[{"start": 0, "end": 5, "text": "first"}],
+        confidence=0.4,
+        reasons=["first_recorded"],
+        eligibility_rule_ids=["exact_source_quote_grounded_v1"],
+    )
+    repeated = IntentCandidate(
+        candidate_key="context-stable-alias",
+        target_kind="reminder",
+        title="Later conflicting interpretation",
+        fields={"notes": "later"},
+        evidence_spans=[{"start": 6, "end": 11, "text": "later"}],
+        confidence=0.99,
+        reasons=["later_recorded"],
+        eligibility_rule_ids=["exact_source_quote_grounded_v1"],
+    )
+    distinct_kind = IntentCandidate(
+        candidate_key="context-stable-alias",
+        target_kind="task",
+        title="Same alias in another typed namespace",
+        fields={},
+        evidence_spans=[{"start": 12, "end": 17, "text": "other"}],
+        confidence=0.9,
+        reasons=["distinct_kind"],
+        eligibility_rule_ids=["exact_source_quote_grounded_v1"],
+    )
+
+    result = _handler._deduplicate_candidate_keys([first, repeated, distinct_kind])
+
+    assert result == [first, distinct_kind]
+    assert result[0].confidence == 0.4  # confidence never ranks the review candidate
+
+
 @pytest.mark.asyncio
 async def test_first_equivalent_writer_does_not_mask_semantic_key_conflict() -> None:
     log = _RacingProposalEventLog()
-    key = "triage:message-candidate:v16:collision:task-key:task"
+    key = "triage:message-candidate:v17:collision:task-key:task"
     base_payload = {
         "proposal_id": "proposal-first",
         "target_kind": "task",

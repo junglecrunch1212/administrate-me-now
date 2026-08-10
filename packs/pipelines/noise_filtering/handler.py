@@ -67,7 +67,7 @@ SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "6.0.1"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 16
+_REPLAY_GENERATION = 17
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -222,9 +222,29 @@ def _extract_text_and_inputs(
     return grounded_source, inputs
 
 
+def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
+    """Collapse one recorded interpretation to one typed candidate identity.
+
+    Candidate keys are model-output aliases validated by fixed code. If one
+    recorded result repeats an alias for the same target kind, its first
+    occurrence is the canonical review candidate. Confidence never ranks or
+    authorizes the choice; recorded order is stable on replay.
+    """
+
+    deduplicated: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        identity = (str(candidate.target_kind), str(candidate.candidate_key))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(candidate)
+    return deduplicated
+
+
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "16.0.0"
+    version: str = "17.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -643,6 +663,7 @@ class NoiseFilteringPipeline:
             context_pack=context_pack,
             candidates=candidates,
         )
+        candidates = _deduplicate_candidate_keys(candidates)
         intent_id = f"source:{source_event_id}"
         # Replay must produce byte-identical event identities.  Never place a
         # wall-clock retry time in an idempotent payload.
