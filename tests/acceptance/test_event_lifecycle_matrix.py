@@ -62,7 +62,13 @@ def _private_envelope(
         event_at_ms=int(time.time() * 1000),
         tenant_id=runtime.settings.instance.tenant_id,
         type=event_type,
-        schema_version=3 if event_type == "messaging.received" else 1,
+        schema_version=(
+            3
+            if event_type == "messaging.received"
+            else 2
+            if event_type == "messaging.sent"
+            else 1
+        ),
         occurred_at="2026-08-09T12:00:00Z",
         source_adapter="lifecycle-matrix-fixture",
         source_account_id="matrix-account",
@@ -94,28 +100,48 @@ def test_message_and_note_sources_reach_every_triage_target(tmp_path: Path) -> N
         runtime = app.state.runtime
         for index, kind in enumerate(TRIAGE_KINDS):
             message_body = f"[fixture:triage-kind={kind}] Exact {kind} message fact"
+            message_event_type = (
+                "messaging.sent" if kind == "commitment" else "messaging.received"
+            )
+            message_payload = {
+                "provider": "gmail",
+                "provider_account_id": "matrix-account",
+                "member_id": MEMBER,
+                "source_channel": "gmail",
+                "native_message_id": f"message-{index}",
+                "thread_id": f"thread-{index}",
+                "to_identifier": (
+                    "source@example.invalid"
+                    if message_event_type == "messaging.sent"
+                    else "member@example.invalid"
+                ),
+                "workspace": "personal",
+                "subject": "Lifecycle matrix",
+                "body_text": message_body,
+            }
+            if message_event_type == "messaging.sent":
+                message_payload.update(
+                    {
+                        "sent_at": "2026-08-09T12:00:00Z",
+                        "delivery_status": "sent",
+                    }
+                )
+            else:
+                message_payload.update(
+                    {
+                        "from_identifier": "source@example.invalid",
+                        "received_at": "2026-08-09T12:00:00Z",
+                        "provider_labels": ["INBOX"],
+                        "attachments": [],
+                    }
+                )
             message_id = client.portal.call(
                 runtime.events.write,
                 _private_envelope(
                     runtime,
-                    event_type="messaging.received",
+                    event_type=message_event_type,
                     key=f"message-{kind}",
-                    payload={
-                        "provider": "gmail",
-                        "provider_account_id": "matrix-account",
-                        "member_id": MEMBER,
-                        "source_channel": "gmail",
-                        "native_message_id": f"message-{index}",
-                        "thread_id": f"thread-{index}",
-                        "from_identifier": "source@example.invalid",
-                        "to_identifier": "member@example.invalid",
-                        "workspace": "personal",
-                        "subject": "Lifecycle matrix",
-                        "body_text": message_body,
-                        "received_at": "2026-08-09T12:00:00Z",
-                        "provider_labels": ["INBOX"],
-                        "attachments": [],
-                    },
+                    payload=message_payload,
                 ),
             )
             client.portal.call(

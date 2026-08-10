@@ -1,5 +1,16 @@
 # UX behavior contract
 
+CO-012 amendment (2026-08-10): Triage treats a privacy-scoped provider thread,
+not one isolated body, as the bounded interpretation context while preserving
+one independently reviewable typed candidate per distinct ask. Compact cards
+state the possible decision; expanded cards separately label context summary,
+why it may concern the member, smallest next step, thread state, unresolved
+questions, deterministic source-edge reasons, and exact evidence. Generated
+explanation is a review aid and never evidence or authority. Cross-member,
+account, workspace, visibility, sensitivity, and privileged content fails
+closed. A later message may retire only untouched prior interpretations;
+member decisions remain permanent.
+
 CO-011 amendment (2026-08-09): Settings publishes one member-scoped candidate
 identification matrix across every member entry point and current/planned
 source family. Adults may select automatic review, explicit-request only, or
@@ -176,6 +187,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-45 | Reminders presents canonical Recurrences and ordered Routines as separate structures with add/edit/pause/resume/end controls, optimistic concurrency, member/household scope disclosure, accessible repeat/window/step inputs, and retained occurrence history. Ending is not deletion and Routine steps never imply Task completion. |
 | UX-46 | Scoreboard presents typed completed, abandoned, cancelled, delegated, expired, recurrence, and Routine outcomes. Immediate completion feedback and asynchronous reward delivery link to the same immutable completion evidence and render once. |
 | UX-47 | Finance Goal definition and lifecycle remain separate. Pause, complete, and reopen controls disclose that they change planning state only, use optimistic concurrency, retain history, and never transfer money; reviewed workbook status edits emit the same typed lifecycle. |
+| UX-48 | Triage message candidates use one bounded, private conversation context with code-owned thread/participant/subject/attachment edges. Each compact card identifies one distinct possible decision; expanded review separates bounded context explanation from exact source quotes, shows apparent owner/lifecycle uncertainty and edge reason codes, and preserves per-candidate correction/confirmation. Related-only, closed, other-owned, cross-scope, or ungrounded content cannot enter the member queue. |
 
 ## State model
 

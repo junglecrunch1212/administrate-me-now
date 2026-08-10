@@ -183,6 +183,188 @@ def test_inbound_recurring_bill_reaches_human_gated_triage_without_env_lookup(
         assert runtime.fixture_adapter.delivered == []
 
 
+def test_multi_message_legal_context_yields_distinct_explainable_candidates(
+    tmp_path: Path,
+) -> None:
+    """Production composition proves conversation context -> four human gates."""
+
+    instance = tmp_path / "instance-contextual-message"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        common = {
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "member_id": MEMBER,
+            "source_channel": "gmail",
+            "thread_id": "fixture-legal-thread",
+            "workspace": "personal",
+            "subject": "Legal authorization package",
+        }
+
+        def source(
+            index: int,
+            body: str,
+            *,
+            event_type: str = "messaging.received",
+        ) -> EventEnvelope:
+            occurred_at = f"2034-02-01T{9 + index:02d}:00:00Z"
+            payload = {
+                **common,
+                "native_message_id": f"fixture-legal-{index}",
+                "body_text": body,
+                "to_identifier": (
+                    "counsel@example.invalid"
+                    if event_type == "messaging.sent"
+                    else "member@example.invalid"
+                ),
+            }
+            if event_type == "messaging.sent":
+                payload.update(
+                    {
+                        "sent_at": occurred_at,
+                        "delivery_status": "sent",
+                    }
+                )
+            else:
+                payload.update(
+                    {
+                        "from_identifier": "counsel@example.invalid",
+                        "attachments": [],
+                        "received_at": occurred_at,
+                        "provider_labels": ["INBOX"],
+                        "unread": True,
+                        "archived": False,
+                        "starred": False,
+                        "important": False,
+                    }
+                )
+            return EventEnvelope(
+                event_at_ms=2_022_568_400_000 + index,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type=event_type,
+                schema_version=2 if event_type == "messaging.sent" else 3,
+                occurred_at=occurred_at,
+                source_adapter="fixture-message-adapter",
+                source_account_id="fixture-account",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key=f"fixture:contextual-legal:{index}",
+                payload=payload,
+            )
+
+        prior_sources = [
+            source(
+                1,
+                "Please prepare two authorization forms for the two proceedings.",
+            ),
+            source(
+                2,
+                "Please return the compliance form and identification copy.",
+            ),
+            source(
+                3,
+                "I will arrange the legal-fee transfer this afternoon.",
+                event_type="messaging.sent",
+            ),
+            source(
+                4,
+                "Can the signed PDF be used, or is the notarized original required?",
+            ),
+            source(
+                5,
+                "The first form is signed; the second form is still outstanding.",
+            ),
+        ]
+        for envelope in prior_sources:
+            client.portal.call(runtime.event_log.append, envelope)
+        client.portal.call(
+            runtime.event_log.append,
+            EventEnvelope(
+                event_at_ms=2_022_568_400_005,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="messaging.received",
+                schema_version=3,
+                occurred_at="2034-02-01T14:30:00Z",
+                source_adapter="fixture-signing-adapter",
+                source_account_id="fixture-account",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture:contextual-legal:related",
+                payload={
+                    **common,
+                    "thread_id": "fixture-signing-thread",
+                    "native_message_id": "fixture-signing-notice",
+                    "from_identifier": "signing-service@example.invalid",
+                    "to_identifier": "member@example.invalid",
+                    "subject": "Sign legal authorization package",
+                    "body_text": "Your authorization package is waiting for signature.",
+                    "received_at": "2034-02-01T14:30:00Z",
+                    "provider_labels": ["INBOX"],
+                    "attachments": [],
+                    "unread": True,
+                    "archived": False,
+                    "starred": False,
+                    "important": False,
+                },
+            ),
+        )
+        current = source(
+            6,
+            "[fixture:contextual-legal] Please confirm who will collect the original document.",
+        )
+        current_source_id = client.portal.call(runtime.events.write, current)
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            current_source_id,
+        )
+        proposals = client.portal.call(
+            _message_proposals_for_source,
+            runtime.event_log,
+            current_source_id,
+        )
+        assert len(proposals) == 4, [value["payload"] for value in proposals]
+        assert [value["payload"]["target_kind"] for value in proposals] == [
+            "task",
+            "task",
+            "commitment",
+            "task",
+        ]
+        assert all(value["schema_version"] == 3 for value in proposals)
+        assert all(value["payload"]["interpretation"] for value in proposals)
+        client.portal.call(
+            runtime.wait_for_projection,
+            "triage",
+            proposals[-1]["event_id"],
+        )
+
+        surface = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()
+        items = [
+            item
+            for item in surface["items"]
+            if item["source_event_id"] == current_source_id
+        ]
+        assert len(items) == 4
+        assert {item["interpretation"]["compact_summary"] for item in items} == {
+            "Prepare two authorization forms",
+            "Return compliance form and ID copy",
+            "Arrange the legal-fee transfer",
+            "Resolve the notarization requirement",
+        }
+        assert all(
+            item["source_context"]["interpretation"]["source_chain"] for item in items
+        )
+        assert all(
+            item["source_context"]["evidence"]["exactly_grounded"] for item in items
+        )
+        assert all(item["review_state"]["human_gate_required"] for item in items)
+        assert runtime.fixture_adapter.delivered == []
+
+
 def test_note_recurrence_candidate_remains_human_gated_and_type_distinct(
     tmp_path: Path,
 ) -> None:

@@ -44,7 +44,7 @@
       "maxItems": 20,
       "items": {
         "type": "object",
-        "required": ["target_kind", "title", "evidence_quote", "candidate", "confidence", "reasons"],
+        "required": ["target_kind", "title", "evidence_source_id", "evidence_quote", "candidate", "confidence", "reasons", "action_owner", "lifecycle_state", "compact_summary", "case_summary", "why_member", "next_step", "thread_state", "unresolved_questions", "related_source_ids"],
         "additionalProperties": false,
         "properties": {
           "target_kind": {
@@ -52,6 +52,7 @@
             "enum": ["task", "commitment", "calendar_event", "reminder", "recurrence", "list", "list_item", "party_identifier", "party_candidate", "party_relationship", "relationship_fact"]
           },
           "title": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "evidence_source_id": { "type": "string", "pattern": "^m[0-9]{2}$" },
           "evidence_quote": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "candidate": { "type": "object" },
           "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
@@ -59,7 +60,16 @@
             "type": "array",
             "maxItems": 20,
             "items": { "type": "string" }
-          }
+          },
+          "action_owner": { "type": "string", "enum": ["member", "group_including_member", "other_party", "unknown"] },
+          "lifecycle_state": { "type": "string", "enum": ["open", "answered", "completed", "superseded", "unknown"] },
+          "compact_summary": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "case_summary": { "type": ["string", "null"], "maxLength": 600 },
+          "why_member": { "type": ["string", "null"], "maxLength": 240 },
+          "next_step": { "type": ["string", "null"], "maxLength": 240 },
+          "thread_state": { "type": "string", "enum": ["new", "in_progress", "waiting_on_member", "waiting_on_other", "blocked", "unclear"] },
+          "unresolved_questions": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 240 } },
+          "related_source_ids": { "type": "array", "maxItems": 10, "items": { "type": "string", "pattern": "^m[0-9]{2}$" } }
         }
       }
     }

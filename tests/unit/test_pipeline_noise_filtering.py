@@ -104,6 +104,36 @@ class _FakeEventLog:
         ]
 
 
+@dataclass
+class _ContextEventLog(_FakeEventLog):
+    source_events: list[dict[str, Any]] = field(default_factory=list)
+
+    async def read_since(
+        self,
+        *,
+        owner_scope: str | None = None,
+        types: list[str] | None = None,
+        **_kwargs: Any,
+    ):  # type: ignore[no-untyped-def]
+        values = [
+            *self.source_events,
+            *[
+                {
+                    **call.envelope.model_dump(mode="json"),
+                    "event_id": call.event_id,
+                    "causation_id": call.causation_id,
+                }
+                for call in self.calls
+            ],
+        ]
+        for value in values:
+            if owner_scope is not None and value.get("owner_scope") != owner_scope:
+                continue
+            if types is not None and value.get("type") not in types:
+                continue
+            yield value
+
+
 def _make_ctx(
     event_log: Any,
     run_skill_fn: Any,
@@ -270,7 +300,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "5.1.0"
+    assert envelope.payload["skill_version"] == "6.0.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -294,7 +324,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "5.1.0"
+    assert envelope.payload["skill_version"] == "6.0.0"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -515,7 +545,7 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
     }
     assert proposal["confidence"] == 0.91
     assert log.calls[2].envelope.schema_version == 3
-    assert log.calls[3].envelope.schema_version == 2
+    assert log.calls[3].envelope.schema_version == 3
     assert log.calls[3].causation_id == "fake-event-id-3"
 
 
@@ -621,7 +651,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v11:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v12:")
 
 
 @pytest.mark.asyncio
@@ -735,7 +765,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v11:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v12:")
         for proposal in proposals
     )
 
@@ -833,3 +863,123 @@ async def test_v9_retires_only_untouched_generic_action_verb_proposals(
             "replacement_source_event_id": source_event_id,
             "reason": "eligibility_rule_replaced",
         }
+
+
+@pytest.mark.asyncio
+async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> None:
+    prior = _messaging_received_event(body_text="Please return the signed form.")
+    prior.update(
+        {
+            "event_id": "thread-source-prior",
+            "occurred_at": "2034-02-01T10:00:00Z",
+            "recorded_at": "2034-02-01T10:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    prior["payload"].update(
+        {
+            "thread_id": "thread-context-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T10:00:00Z",
+        }
+    )
+    current = _messaging_received_event(
+        body_text="Please choose delivery option A or B."
+    )
+    current.update(
+        {
+            "event_id": "thread-source-current",
+            "occurred_at": "2034-02-01T11:00:00Z",
+            "recorded_at": "2034-02-01T11:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    current["payload"].update(
+        {
+            "thread_id": "thread-context-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T11:00:00Z",
+        }
+    )
+    log = _ContextEventLog(source_events=[prior, current])
+    await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=2,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="legacy-message-extractor",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="prior-thread-proposal",
+            payload={
+                "proposal_id": "prior-thread-proposal",
+                "target_kind": "task",
+                "owner_member_id": "member-fixture",
+                "title": "Please return the signed form.",
+                "candidate": {"description": "Please return the signed form."},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": "thread-source-prior",
+                "candidate_key": "legacy-candidate",
+                "eligibility_rule_ids": ["exact_source_quote_grounded_v1"],
+                "confidence": 0.8,
+                "reasons": ["legacy"],
+            },
+        )
+    )
+
+    async def contextual(
+        _skill_id: str, inputs: dict[str, Any], _skill_ctx: SkillContext
+    ) -> SkillResult:
+        current_alias = next(
+            value["source_id"]
+            for value in inputs["context_pack"]["messages"]
+            if "choose delivery option" in value["body_text"]
+        )
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "title": "Choose the delivery plan",
+                    "evidence_source_id": current_alias,
+                    "evidence_quote": "Please choose delivery option A or B.",
+                    "candidate": {},
+                    "confidence": 0.9,
+                    "reasons": ["new ask"],
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "compact_summary": "Choose the delivery plan",
+                    "case_summary": "A document delivery plan needs confirmation.",
+                    "why_member": "The member is directly asked to confirm.",
+                    "next_step": "Review the proposed delivery plan.",
+                    "thread_state": "waiting_on_member",
+                    "unresolved_questions": [],
+                    "related_source_ids": [],
+                }
+            ]
+        )
+
+    await NoiseFilteringPipeline().handle(current, _make_ctx(log, contextual))
+
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert len(superseded) == 1
+    assert superseded[0].payload["proposal_id"] == "prior-thread-proposal"
+    new_proposals = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+        and call.envelope.payload.get("interpretation")
+    ]
+    assert len(new_proposals) == 1
+    assert new_proposals[0].payload["source_event_id"] == "thread-source-current"

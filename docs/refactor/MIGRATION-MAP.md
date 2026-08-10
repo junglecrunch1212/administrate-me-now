@@ -1,5 +1,17 @@
 # Migration map
 
+CO-012 update (2026-08-10): contextual message reasoning is **HARDENED IN THE
+REVIEWED CANDIDATE**. Existing message facts and candidate decisions are never
+rewritten. `triage.item.proposed@v3` adds a private bounded interpretation;
+Triage projection v6 adds nullable `interpretation_json` and replays old
+events as `NULL`. Message pipeline v12 and pinned skill v6 request reviewed
+replay: older thread sources receive terminal deferred assessments, the latest
+source emits the conversation candidate set, and only untouched older
+proposals may receive additive `eligibility_rule_replaced` supersession.
+Enriched/confirmed/materialized/dismissed decisions win permanently. Rollback
+may ignore v3 and the nullable column; reactivation replays immutable facts.
+No credential, provider fact, canonical object, or provider object migrates.
+
 CO-011 update (2026-08-09): candidate identification is **HARDENED IN THE
 REVIEWED CANDIDATE** with an additive `candidate_policies` map in the
 secret-free Settings journal. Schema v1 is accepted and migrates in memory;

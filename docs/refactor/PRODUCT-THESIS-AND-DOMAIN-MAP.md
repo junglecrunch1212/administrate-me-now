@@ -1,5 +1,14 @@
 # Product thesis and domain map
 
+CO-012 clarification: “Understand” may use a bounded, privacy-scoped
+conversation context rather than one isolated message body. Deterministic code
+alone selects same-member/account/workspace sources and explains thread,
+participant, subject, or attachment edges. The language seam may describe
+asks, apparent owners, linguistic state, and review aids, but exact-alias/quote
+validation and fixed eligibility reject closed, other-owned, related-only, or
+ungrounded output. Each surviving ask remains a separate Triage decision; a
+conversation never becomes a universal work object.
+
 Gate 3 evidence: the first full household signal-to-outcome loop is executable without credentials. A synthetic inbound communication becomes a scoped Interaction with a resolved Party, an LLM-derived proposal with recorded provenance, a principal-reviewed commitment, an observation-safe delivery intent, API/xlsx read models, lifecycle outcomes, and a changed six-horizon what-now recommendation. This proves one representative slice; it does not claim the still-deferred member-private knowledge slice or optional providers.
 
 ## Product promise

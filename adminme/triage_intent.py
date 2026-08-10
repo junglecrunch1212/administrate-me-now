@@ -8,17 +8,20 @@ Triage for a person to interpret.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from adminme.events.schemas.triage import TriageTargetKind
+from adminme.message_context import MessageContextPack
 
 
 EXTRACTOR_ID = "deterministic-intent-features-v1"
 GROUNDED_NLP_EXTRACTOR_ID = "grounded-nlp-intent-features-v1"
 MESSAGE_FALLBACK_EXTRACTOR_ID = "message-high-signal-intent-features-v1"
+CONTEXTUAL_NLP_EXTRACTOR_ID = "privacy-scoped-message-context-v1"
 
 CANDIDATE_FIELD_ALLOWLISTS: dict[str, frozenset[str]] = {
     "task": frozenset({"description", "due", "energy", "effort_min"}),
@@ -89,6 +92,7 @@ class IntentCandidate:
     confidence: float | None
     reasons: list[str]
     eligibility_rule_ids: list[str]
+    interpretation: dict[str, Any] | None = None
 
     def feature_payload(self) -> dict[str, Any]:
         return {
@@ -304,6 +308,152 @@ def extract_intent_candidates(
             )
         )
     return candidates
+
+
+def _bounded_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    compact = " ".join(value.split())
+    return compact[:limit] or None
+
+
+def extract_grounded_context_candidates(
+    context_pack: MessageContextPack,
+    raw_candidates: Any,
+    *,
+    source_rule_id: str = "private_member_message_context_v1",
+) -> list[IntentCandidate]:
+    """Admit conversation-aware model interpretations under fixed controls.
+
+    The language seam may identify who an ask appears to concern and whether
+    the words say it is still open.  Code retains only open/unknown asks that
+    concern the member, the member's group, or require human ownership review.
+    Every primary quote must occur verbatim in a same-thread message.  Related
+    messages may explain status, but cannot create a candidate for this anchor.
+    """
+
+    if not isinstance(raw_candidates, list):
+        return []
+    aliases = context_pack.alias_map()
+    admitted: list[IntentCandidate] = []
+    for raw in raw_candidates[:20]:
+        if not isinstance(raw, dict):
+            continue
+        alias = str(raw.get("evidence_source_id") or "")
+        source = aliases.get(alias)
+        if source is None or source.relation != "thread":
+            continue
+        if raw.get("target_kind") == "commitment" and source.direction != "outbound":
+            continue
+        owner = str(raw.get("action_owner") or "unknown")
+        lifecycle = str(raw.get("lifecycle_state") or "unknown")
+        if owner not in {"member", "group_including_member", "unknown"}:
+            continue
+        if lifecycle not in {"open", "unknown"}:
+            continue
+        bases = extract_grounded_nlp_candidates(
+            source.source_text(),
+            [raw],
+            source_rule_id=source_rule_id,
+        )
+        if not bases:
+            continue
+        base = bases[0]
+        quote = base.title
+        identity = hashlib.sha256(
+            f"{context_pack.thread_key}|{base.target_kind}|{quote}".encode("utf-8")
+        ).hexdigest()[:16]
+        requested_related = raw.get("related_source_ids") or []
+        related_source_event_ids = [
+            aliases[value].source_event_id
+            for value in requested_related[:10]
+            if isinstance(value, str)
+            and value in aliases
+            and aliases[value].relation == "related"
+        ]
+        unresolved = [
+            value
+            for raw_value in (raw.get("unresolved_questions") or [])[:8]
+            if (value := _bounded_text(raw_value, 240)) is not None
+        ]
+        interpretation = {
+            "contract": "triage-context-interpretation-v1",
+            "context_fingerprint": context_pack.fingerprint,
+            "thread_key": context_pack.thread_key,
+            "anchor_event_id": context_pack.anchor_event_id,
+            "compact_summary": _bounded_text(raw.get("compact_summary"), 160)
+            or quote[:160],
+            "case_summary": _bounded_text(raw.get("case_summary"), 600),
+            "why_member": _bounded_text(raw.get("why_member"), 240),
+            "next_step": _bounded_text(raw.get("next_step"), 240),
+            "thread_state": (
+                str(raw.get("thread_state"))
+                if raw.get("thread_state")
+                in {
+                    "new",
+                    "in_progress",
+                    "waiting_on_member",
+                    "waiting_on_other",
+                    "blocked",
+                    "unclear",
+                }
+                else "unclear"
+            ),
+            "action_owner": owner,
+            "lifecycle_state": lifecycle,
+            "unresolved_questions": unresolved,
+            "evidence_refs": [
+                {
+                    "source_event_id": source.source_event_id,
+                    "quote": quote,
+                }
+            ],
+            "context_source_event_ids": [
+                message.source_event_id for message in context_pack.messages
+            ],
+            "context_sources": [
+                {
+                    "source_event_id": message.source_event_id,
+                    "relation": message.relation,
+                    "reason_codes": list(message.relation_reason_codes),
+                }
+                for message in context_pack.messages
+            ],
+            "related_source_event_ids": list(dict.fromkeys(related_source_event_ids)),
+        }
+        rules = [
+            *base.eligibility_rule_ids,
+            "conversation_context_pack_v1",
+            f"context_owner_{owner}_v1",
+            f"context_lifecycle_{lifecycle}_v1",
+        ]
+        admitted.append(
+            replace(
+                base,
+                candidate_key=f"context-{identity}",
+                reasons=list(
+                    dict.fromkeys(
+                        [
+                            *base.reasons,
+                            "conversation_context_interpreted_v1",
+                            *(
+                                ["ownership_requires_member_review_v1"]
+                                if owner == "unknown"
+                                else []
+                            ),
+                            *(
+                                ["lifecycle_requires_member_review_v1"]
+                                if lifecycle == "unknown"
+                                else []
+                            ),
+                        ]
+                    )
+                )[:20],
+                eligibility_rule_ids=list(dict.fromkeys(rules))[:20],
+                interpretation=interpretation,
+            )
+        )
+    return admitted
 
 
 _MESSAGE_BOILERPLATE = re.compile(
@@ -551,6 +701,22 @@ def merge_intent_candidates(
         for index, existing in enumerate(merged):
             if existing.target_kind != candidate.target_kind:
                 continue
+            candidate_ref = (
+                (candidate.interpretation or {}).get("evidence_refs") or [{}]
+            )[0].get("source_event_id")
+            existing_ref = (
+                (existing.interpretation or {}).get("evidence_refs") or [{}]
+            )[0].get("source_event_id")
+            if candidate_ref and existing_ref and candidate_ref != existing_ref:
+                continue
+            if candidate_ref and not existing_ref:
+                anchor = (candidate.interpretation or {}).get("anchor_event_id")
+                if candidate_ref != anchor:
+                    continue
+            if existing_ref and not candidate_ref:
+                anchor = (existing.interpretation or {}).get("anchor_event_id")
+                if existing_ref != anchor:
+                    continue
             existing_span = existing.evidence_spans[0]
             if (
                 candidate_span["start"] < existing_span["end"]
@@ -578,12 +744,14 @@ def merge_intent_candidates(
                     ]
                 )
             )[:20],
+            interpretation=candidate.interpretation or existing.interpretation,
         )
     return merged[:20]
 
 
 __all__ = [
     "CANDIDATE_FIELD_ALLOWLISTS",
+    "CONTEXTUAL_NLP_EXTRACTOR_ID",
     "EXTRACTOR_ID",
     "GROUNDED_NLP_EXTRACTOR_ID",
     "MESSAGE_FALLBACK_EXTRACTOR_ID",
@@ -591,6 +759,7 @@ __all__ = [
     "extract_intent_candidates",
     "extract_message_fallback_candidates",
     "extract_grounded_nlp_candidates",
+    "extract_grounded_context_candidates",
     "is_inbound_reply_request",
     "merge_intent_candidates",
 ]
