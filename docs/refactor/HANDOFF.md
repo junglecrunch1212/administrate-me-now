@@ -17,7 +17,7 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
-## 2026-08-10 CO-013 bounded Gmail history candidate
+## 2026-08-10 CO-013 bounded Gmail history activation
 
 Live investigation after CO-012 found the missing-source cause: Gmail's first
 poll intentionally snapshotted the current history cursor and imported zero
@@ -39,16 +39,22 @@ including seed-first priority, exact participant/date expansion, Python 3.14
 address parsing, context-before-seed chronological emission from newest-first
 results, paging, hard caps, private-query non-disclosure, normal typed emission,
 durable replacement-instance idempotency, and preservation of incremental
-cursor ordering. The full
-candidate matrix passes: 1,761 root/pack tests, 60 isolated bridge tests, 47
+cursor ordering. The synchronous Gmail acquisition batch now executes outside
+the central asyncio loop; a held-open provider call proves runtime health and
+unrelated scheduling remain responsive. The full
+candidate matrix passes: 1,762 root/pack tests, 60 isolated bridge tests, 47
 strict acceptance tests, Ruff/format/mypy/Pyright, dependency/security/
 architecture/invariant checks, performance budgets, builds/packages, clean
 install, tenant isolation, encrypted backup/restore, the exact pinned native
-OpenClaw contract, and all 17 plugin tests. Reviewed merge, guarded deployment,
-settled source assurance, Doctor, and authenticated proof that the previously
-absent obligation produces distinct private Triage candidates remain required
-before this section may claim deployment. No candidate was confirmed and no
-provider effect was authorized.
+OpenClaw contract, and all 17 plugin tests. PR #314 merged after its hosted
+constitutional cascade and Apple-silicon rehearsal passed. Its first guarded
+activation correctly rolled back when the synchronous history batch starved
+the health surface; the older release is healthy and its incompatible private
+settings were removed. Review and merge of the narrow liveness repair, guarded
+redeployment, settled source assurance, Doctor, and authenticated proof that
+the previously absent obligation produces distinct private Triage candidates
+remain required before this section may claim deployment. No candidate was
+confirmed and no provider effect was authorized.
 
 ## 2026-08-10 CO-012 contextual-message candidate
 

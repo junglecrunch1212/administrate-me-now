@@ -19,8 +19,10 @@ root does not collide with sibling packs.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -169,6 +171,7 @@ class _FakeGmailService:
         messages: dict[str, dict[str, Any]] | None = None,
         history_raises: Exception | None = None,
         get_profile_raises: Exception | None = None,
+        messages_list_gate: threading.Event | None = None,
     ) -> None:
         self._profile = profile
         # Use a queue of responses so paging is testable.
@@ -177,6 +180,8 @@ class _FakeGmailService:
         self._messages = dict(messages or {})
         self._history_raises = history_raises
         self._get_profile_raises = get_profile_raises
+        self._messages_list_gate = messages_list_gate
+        self.messages_list_started = threading.Event()
         self.history_list_calls: list[dict[str, Any]] = []
         self.messages_list_calls: list[dict[str, Any]] = []
         self.messages_get_calls: list[dict[str, Any]] = []
@@ -247,6 +252,9 @@ class _FakeExecute:
                 return {"historyId": "0"}
             return self._service._history_pages.pop(0)
         if self._kind == "messages.list":
+            self._service.messages_list_started.set()
+            if self._service._messages_list_gate is not None:
+                assert self._service._messages_list_gate.wait(timeout=2.0)
             if not self._service._backfill_pages:
                 return {"messages": []}
             return self._service._backfill_pages.pop(0)
@@ -524,6 +532,39 @@ async def test_initial_backfill_pages_emits_and_is_durable(tmp_path: Path) -> No
     assert len(service.messages_get_calls) == 2
     assert len(service.history_list_calls) == 1
     store.close()
+
+
+async def test_initial_backfill_provider_io_does_not_block_runtime_loop() -> None:
+    """A slow synchronous Gmail list call cannot starve central runtime health."""
+    gate = threading.Event()
+    service = _FakeGmailService(
+        profile=_fixture("profile_response.json"),
+        backfill_pages=[{"messages": []}],
+        messages_list_gate=gate,
+    )
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+            "initial_backfill_days": 30,
+            "initial_backfill_max_messages": 1,
+        },
+    )
+    adapter._service = service
+    adapter._last_advance_at = _FROZEN_NOW
+
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    cycle = asyncio.create_task(adapter._run_poll_cycle(ctx=_ctx(_FakeEventLog())))
+    try:
+        await asyncio.sleep(0.02)
+        assert loop.time() - started_at < 0.5
+        assert service.messages_list_started.is_set()
+        assert not cycle.done()
+    finally:
+        gate.set()
+
+    assert await asyncio.wait_for(cycle, timeout=1.0) == 0
 
 
 async def test_initial_backfill_hard_cap_reports_truncation() -> None:
