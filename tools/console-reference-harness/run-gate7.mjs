@@ -489,6 +489,8 @@ async function run() {
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       await visit(principalPhone.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "triage") {
+        const triagePhoneMetrics = await principalPhone.page.evaluate(() => ({ viewport: window.innerWidth, document: document.documentElement.scrollWidth }));
+        record("Triage phone has no horizontal document overflow", triagePhoneMetrics.document <= triagePhoneMetrics.viewport, JSON.stringify(triagePhoneMetrics));
         await principalPhone.page.getByRole("button", { name: /^Needs details/ }).click();
         await principalPhone.page.locator(".triage-master-button").filter({ hasText: "Renew the annual registration" }).click();
         record("Triage phone retains the provider capability ceiling", await principalPhone.page.getByLabel("Scheduled date date").count() === 1 && await principalPhone.page.getByLabel("Scheduled date time (optional)").count() === 0 && (await principalPhone.page.locator(".triage-detail").textContent()).includes("discards due time"), await principalPhone.page.locator(".triage-detail").textContent());
