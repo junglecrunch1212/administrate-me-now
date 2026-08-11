@@ -872,6 +872,24 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolution_reason=payload.get("reason"),
             allow_pending_interpretation=True,
         )
+        request_prefix = (
+            f"triage:triage.item.dismissed:{payload['dismissed_by_member_id']}:"
+        )
+        idempotency_key = str(envelope.get("idempotency_key") or "")
+        if idempotency_key.startswith(request_prefix):
+            conn.execute(
+                """UPDATE triage_items
+                      SET dismissal_event_id=?, dismissal_request_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='dismissed'
+                      AND last_event_id=?""",
+                (
+                    envelope["event_id"],
+                    idempotency_key.removeprefix(request_prefix),
+                    envelope["tenant_id"],
+                    payload["proposal_id"],
+                    envelope["event_id"],
+                ),
+            )
     elif event_type == "triage.item.superseded":
         _resolve(
             envelope,

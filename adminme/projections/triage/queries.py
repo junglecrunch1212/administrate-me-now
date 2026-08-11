@@ -32,6 +32,10 @@ def _public(row: dict[str, Any]) -> dict[str, Any]:
         ["edit", "approve", "dismiss"]
         if result["source_kind"] == "commitment_proposal"
         and result["state"] == "pending_review"
+        and result["decision_disposition"] == "decision"
+        else ["enrich", "dismiss"]
+        if result["state"] in {"pending_interpretation", "pending_review"}
+        and result["decision_disposition"] != "decision"
         else ["enrich", "approve", "dismiss"]
         if result["state"] in {"pending_interpretation", "pending_review"}
         else ["await_openclaw_approval"]

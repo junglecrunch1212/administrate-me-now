@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
+from adminme.lib.governance import GuardedWriteResult
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
 
@@ -572,6 +574,63 @@ def test_add_for_review_holds_exact_text_and_splits_typed_candidates(
         assert app.state.runtime.triage_intent_command_locks == {}
         assert app.state.runtime.triage_intent_command_lock_users == {}
 
+        calls = 0
+
+        async def alternating_language_result(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            target_kind = "task" if calls == 1 else "reminder"
+            return SimpleNamespace(
+                output={
+                    "candidates": [
+                        {
+                            "target_kind": target_kind,
+                            "evidence_quote": "The folder answer is expected Friday",
+                            "candidate": {},
+                            "confidence": 0.9,
+                            "reasons": ["bounded fixture"],
+                        }
+                    ]
+                }
+            )
+
+        app.state.runtime.run_skill_fn = alternating_language_result
+        recorded_once = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": "The folder answer is expected Friday",
+                "source_surface": "today",
+                "client_request_id": "intent-recorded-feature-0001",
+            },
+        )
+        replayed = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": "The folder answer is expected Friday",
+                "source_surface": "today",
+                "client_request_id": "intent-recorded-feature-0001",
+            },
+        )
+        assert recorded_once.status_code == replayed.status_code == 202
+        assert calls == 1
+        assert replayed.json()["duplicate"] is True
+        assert (
+            replayed.json()["feature_event_id"]
+            == recorded_once.json()["feature_event_id"]
+        )
+        assert replayed.json()["proposal_ids"] == recorded_once.json()["proposal_ids"]
+        rows = [
+            item
+            for item in client.get(
+                "/api/member/v1/surfaces/triage", headers=AUTH
+            ).json()["items"]
+            if item.get("parent_intent_id") == recorded_once.json()["intent_id"]
+        ]
+        assert len(rows) == 1
+        assert rows[0]["target_kind"] == "task"
+
         canonical = client.portal.call(
             _events,
             app.state.runtime,
@@ -645,6 +704,152 @@ def test_member_can_create_canonical_task_directly_in_reminders(tmp_path: Path) 
             },
         )
         assert blank_denied.status_code == 422
+
+
+def test_existing_object_evidence_cannot_create_duplicate_truth(tmp_path: Path) -> None:
+    instance = tmp_path / "existing-object-evidence"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        direct = client.post(
+            "/api/member/v1/tasks",
+            headers=AUTH,
+            json={
+                "request_id": "existing-task-create-0001",
+                "title": "Call the dentist",
+                "domain": "health",
+                "item_type": "task",
+            },
+        )
+        assert direct.status_code == 201, direct.text
+        intent = client.post(
+            "/api/member/v1/triage/intents",
+            headers=AUTH,
+            json={
+                "text": "Call the dentist",
+                "source_surface": "today",
+                "kind_hint": "task",
+                "client_request_id": "existing-task-intent-0001",
+            },
+        )
+        assert intent.status_code == 202, intent.text
+        [proposal_id] = intent.json()["proposal_ids"]
+        surface = client.get(
+            f"/api/member/v1/surfaces/triage?item={proposal_id}", headers=AUTH
+        ).json()
+        candidate = next(
+            item
+            for item in [*(surface["items"]), *(surface["recent_items"])]
+            if item["proposal_id"] == proposal_id
+        )
+        assert candidate["decision_disposition"] == "attach_existing"
+        assert candidate["existing_object_id"] == direct.json()["task"]["task_id"]
+        assert "approve" not in candidate["actions"]
+        rejected = client.post(
+            f"/api/member/v1/triage/{proposal_id}/approve",
+            headers=AUTH,
+            json={
+                "request_id": "existing-task-approve-0001",
+                "expected_last_event_id": candidate["last_event_id"],
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        tasks = client.get("/api/member/v1/surfaces/reminders", headers=AUTH).json()[
+            "cockpit"
+        ]["tasks"]
+        assert sum(task["title"] == "Call the dentist" for task in tasks) == 1
+
+
+def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "post-capture-conflict"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        calls = 0
+
+        async def alternating_language_result(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            target_kind = "task" if calls == 1 else "reminder"
+            return SimpleNamespace(
+                output={
+                    "candidates": [
+                        {
+                            "target_kind": target_kind,
+                            "evidence_quote": "The folder answer is expected Friday",
+                            "candidate": {},
+                            "confidence": 0.9,
+                            "reasons": ["bounded fixture"],
+                        }
+                    ]
+                }
+            )
+
+        runtime.run_skill_fn = alternating_language_result
+        original_check = runtime.guarded_write.check
+        denials_remaining = 2
+
+        async def deny_proposal(session, action, payload):
+            nonlocal denials_remaining
+            if action == "triage.item.proposed" and denials_remaining:
+                denials_remaining -= 1
+                return GuardedWriteResult(
+                    pass_=False,
+                    layer_failed="governance",
+                    reason="fixture_post_capture_denial",
+                    correlation_id=session.correlation_id,
+                )
+            return await original_check(session, action, payload)
+
+        runtime.guarded_write.check = deny_proposal
+        body = {
+            "text": "The folder answer is expected Friday",
+            "source_surface": "today",
+            "client_request_id": "post-capture-conflict-0001",
+        }
+        first = client.post("/api/member/v1/triage/intents", headers=AUTH, json=body)
+        second = client.post("/api/member/v1/triage/intents", headers=AUTH, json=body)
+        assert first.status_code == second.status_code == 409
+        assert calls == 1
+        events = client.portal.call(
+            _events,
+            runtime,
+            "triage.intent.submitted",
+            "triage.intent.features_extracted",
+            "triage.item.proposed",
+        )
+        assert [event["type"] for event in events] == [
+            "triage.intent.submitted",
+            "triage.intent.features_extracted",
+        ]
+        pending = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()[
+            "items"
+        ]
+        assert any(
+            item["source_kind"] == "member_intent"
+            and item["state"] == "pending_interpretation"
+            and item["candidate"]["exact_text"] == body["text"]
+            for item in pending
+        )
+
+        runtime.guarded_write.check = original_check
+        recovered = client.post(
+            "/api/member/v1/triage/intents", headers=AUTH, json=body
+        )
+        assert recovered.status_code == 202, recovered.text
+        assert recovered.json()["duplicate"] is True
+        assert calls == 1
+        [proposal_id] = recovered.json()["proposal_ids"]
+        surface = client.get(
+            f"/api/member/v1/surfaces/triage?item={proposal_id}", headers=AUTH
+        ).json()
+        recovered_item = next(
+            item for item in surface["items"] if item["proposal_id"] == proposal_id
+        )
+        assert recovered_item["target_kind"] == "task"
 
 
 def test_proposal_requires_member_triage_before_official_task(
@@ -1054,6 +1259,15 @@ def test_proposal_requires_member_triage_before_official_task(
             json=dismissal_body,
         )
         assert dismissed.status_code == 200, dismissed.text
+        dismissed_receipt = next(
+            item
+            for item in client.get(
+                "/api/member/v1/surfaces/triage", headers=AUTH
+            ).json()["recent_items"]
+            if item["proposal_id"] == generic_item["proposal_id"]
+        )
+        assert dismissed_receipt["dismissal_event_id"] == dismissed.json()["event_id"]
+        assert dismissed_receipt["dismissal_request_id"] == dismissal_body["request_id"]
         retried_dismissal = client.post(
             f"/api/member/v1/triage/{generic_item['proposal_id']}/dismiss",
             headers=AUTH,

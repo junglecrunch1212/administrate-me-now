@@ -136,7 +136,15 @@ class ProjectionRunner:
         if self._started:
             return
         self._started = True
+        replay_required: list[str] = []
         for name, projection in self._projections.items():
+            db_path = self._config.projection_db_path(name)
+            db_existed = db_path.exists()
+            stored_version = (
+                await asyncio.to_thread(self._stored_projection_version, name)
+                if db_existed
+                else None
+            )
             conn = await asyncio.to_thread(self._open_projection_db, name, projection)
             self._conns[name] = conn
             self._write_locks[name] = asyncio.Lock()
@@ -151,6 +159,19 @@ class ProjectionRunner:
                 types,
                 self._make_callback(name, projection),
             )
+            if db_existed and stored_version != str(projection.version):
+                replay_required.append(name)
+        for name in replay_required:
+            _log.info(
+                "replaying projection %s after reviewed version change",
+                name,
+            )
+            projection = self._projections[name]
+            async with self._write_locks[name]:
+                await self._replay_through(projection, self._conns[name])
+                latest = await self._log.latest_event_id()
+                if latest is not None:
+                    await self._bus.set_checkpoint(f"projection:{name}", latest)
         if start_bus:
             await self._bus.start()
 
@@ -350,6 +371,30 @@ class ProjectionRunner:
             ("name", projection.name),
         )
         return conn
+
+    def _stored_projection_version(self, name: str) -> str | None:
+        """Read metadata before opening code can stamp the candidate version."""
+
+        db_path = self._config.projection_db_path(name)
+        conn = sqlcipher3.connect(
+            str(db_path),
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        try:
+            conn.execute(f'PRAGMA key = "{self._key_pragma}"')
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_projection_meta'"
+            ).fetchone()
+            if table is None:
+                return None
+            row = conn.execute(
+                "SELECT value FROM _projection_meta WHERE key='version'"
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+        finally:
+            conn.close()
 
     @staticmethod
     def _read_schema(projection: Projection) -> str:

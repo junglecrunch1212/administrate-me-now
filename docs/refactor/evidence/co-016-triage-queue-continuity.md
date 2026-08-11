@@ -53,10 +53,18 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
   confirmation, followed by one continuation with the identical request ID and
   a proven local materialization receipt;
 - an exact pending candidate changing to evidence-only during reconciliation,
-  remaining visible in All candidates without an unrelated matter replacing it;
+  remaining visible in All candidates without an unrelated matter replacing it
+  and without a confirm capability in either browser or API;
+- an ambiguous dismissal response settling only from the exact member-authored
+  dismissal event and request receipt, never a system supersession;
 - Add for review from Today held through native Escape, failed inside the
   handler after exact intent capture, and completed on one retry with the same
-  client request ID; and
+  client request ID and the one recorded feature interpretation;
+- a second ambiguous Add-for-review response retaining the exact dialog and an
+  enabled, focused reload/reconcile action; and
+- a v7 Triage read model restarted under v8, migrated in place, and replayed
+  from retained event zero so an existing pending provider-action receipt
+  becomes visible without deleting legacy rows;
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -68,14 +76,14 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 
 ```text
 Focused Triage/projection/pipeline/production-composition tests
-32 passed
+23 passed
 
 Gate 7 rendered production composition
 253 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite
-49 strict acceptance gates; 1,793 root/code/pack tests; 60 bridge tests;
+51 strict acceptance gates; 1,796 root/code/pack tests; 60 bridge tests;
 Ruff/format/mypy/Pyright; dependency audits; performance budgets;
 architecture checks; clean install; tenant isolation; backup/restore;
 pinned OpenClaw contract, 17 plugin tests, build, package, and audit

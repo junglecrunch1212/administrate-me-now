@@ -436,6 +436,10 @@ def build_app():
             ("gate7-visual-dismiss-task", "Ignore the promotional digest"),
             ("gate7-visual-next-task", "Review the household insurance quote"),
             ("gate7-visual-ambiguous-task", "Verify the summer camp packing list"),
+            (
+                "gate7-visual-system-dismiss-task",
+                "Review the system-transition dismissal",
+            ),
             ("gate7-visual-guarded-task", "Reconcile the guarded camp form"),
             (
                 "gate7-visual-disposition-task",
@@ -479,7 +483,7 @@ def build_app():
             )
         )
         await runtime.wait_for_projection("triage", superseded_id)
-        return {"seeded": 7, "last_event_id": superseded_id}
+        return {"seeded": 8, "last_event_id": superseded_id}
 
     @app.post("/__gate7/fail-next-triage-materialization")
     async def fail_next_triage_materialization():

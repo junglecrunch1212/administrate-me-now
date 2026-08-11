@@ -190,7 +190,7 @@ async function seed(baseUrl) {
     identities.principal,
     "POST",
   );
-  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 7, triageContinuity.value);
+  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 8, triageContinuity.value);
   const triageFinalReady = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-final-ready",
@@ -833,7 +833,7 @@ async function run() {
     await principal.page.route("**/api/member/v1/surfaces/triage?*", dispositionSurfaceRoute);
     await principal.page.getByRole("button", { name: "Confirm and route" }).click();
     await principal.page.getByText("Nothing was confirmed or dismissed.", { exact: false }).waitFor();
-    record("Exact reconciliation keeps a non-decision candidate visible without substituting another matter", await principal.page.getByRole("button", { name: /^All candidates/ }).getAttribute("aria-pressed") === "true" && principal.page.url().includes("item=gate7-visual-disposition-task") && await principal.page.locator('[data-triage-item="gate7-visual-disposition-task"]').filter({ hasText: "Attach the insurance note to its existing task" }).count() === 1, JSON.stringify({ url: principal.page.url(), surface: await principal.page.locator("#surface").textContent() }));
+    record("Exact reconciliation keeps a non-decision candidate visible without substituting or permitting duplicate truth", await principal.page.getByRole("button", { name: /^All candidates/ }).getAttribute("aria-pressed") === "true" && principal.page.url().includes("item=gate7-visual-disposition-task") && await principal.page.locator('[data-triage-item="gate7-visual-disposition-task"]').filter({ hasText: "Attach the insurance note to its existing task" }).count() === 1 && await principal.page.getByRole("button", { name: "Confirm and route" }).isDisabled() && (await principal.page.locator(".triage-detail").textContent()).includes("supporting evidence"), JSON.stringify({ url: principal.page.url(), surface: await principal.page.locator("#surface").textContent() }));
     await principal.page.unroute("**/api/member/v1/triage/gate7-visual-disposition-task/approve", dispositionDecisionRoute);
     await principal.page.unroute("**/api/member/v1/surfaces/triage?*", dispositionSurfaceRoute);
     await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
@@ -866,6 +866,34 @@ async function run() {
     await principal.page.getByText("response was interrupted, but Triage reconciled this exact candidate as confirmed", { exact: false }).waitFor();
     record("A lost confirmation response reconciles the exact terminal receipt without claiming rejection", ambiguousCommitStatus === 200 && await principal.page.getByRole("button", { name: /^Recent/ }).getAttribute("aria-pressed") === "true" && principal.page.url().includes("item=gate7-visual-ambiguous-task") && await principal.page.locator('[data-triage-item="gate7-visual-ambiguous-task"]').filter({ hasText: "Verify the summer camp packing list" }).count() === 1 && !(await principal.page.locator("#state-banner").textContent()).includes("Nothing was confirmed"), JSON.stringify({ ambiguousCommitStatus, url: principal.page.url(), banner: await principal.page.locator("#state-banner").textContent() }));
     await principal.page.unroute("**/api/member/v1/triage/gate7-visual-ambiguous-task/approve", ambiguousDecisionRoute);
+    await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
+    await principal.page.locator(".triage-master-button").filter({ hasText: "Review the system-transition dismissal" }).click();
+    await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
+    const systemDismissDecisionRoute = async (route) => {
+      expected503Console += 1;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted dismissal while extraction changed state." }) });
+    };
+    const systemDismissSurfaceRoute = async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const updateCandidate = (candidate) => candidate.proposal_id === "gate7-visual-system-dismiss-task"
+        ? { ...candidate, state: "dismissed", resolution_reason: "candidates_extracted", dismissal_event_id: null, dismissal_request_id: null }
+        : candidate;
+      payload.items = (payload.items || []).map(updateCandidate);
+      payload.recent_items = (payload.recent_items || []).map(updateCandidate);
+      payload.triage.matters = (payload.triage.matters || []).map((matter) => ({
+        ...matter,
+        candidates: (matter.candidates || []).map(updateCandidate),
+      }));
+      await route.fulfill({ response, json: payload });
+    };
+    await principal.page.route("**/api/member/v1/triage/gate7-visual-system-dismiss-task/dismiss", systemDismissDecisionRoute);
+    await principal.page.route("**/api/member/v1/surfaces/triage?*", systemDismissSurfaceRoute);
+    await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
+    await principal.page.getByText("could not prove an action-specific receipt", { exact: false }).waitFor();
+    record("A system dismissal cannot impersonate the member's interrupted dismissal receipt", (await principal.page.locator("#state-banner").textContent()).includes("Reload this page before continuing") && !(await principal.page.locator("#state-banner").textContent()).includes("reconciled this exact candidate as dismissed") && await principal.page.getByRole("button", { name: /^Ready/ }).isDisabled(), await principal.page.locator("#state-banner").textContent());
+    await principal.page.unroute("**/api/member/v1/triage/gate7-visual-system-dismiss-task/dismiss", systemDismissDecisionRoute);
+    await principal.page.unroute("**/api/member/v1/surfaces/triage?*", systemDismissSurfaceRoute);
     await principal.context.close();
 
     const principalPhone = await newContext(browser, identities.principal, { width: 390, height: 844 }, "reduce");
@@ -937,7 +965,7 @@ async function run() {
       resolveFailedIntentStarted();
       await failedIntentRelease;
       expected409Console += 1;
-      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this intent before recording it." }) });
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted the Add-for-review request." }) });
     };
     await adult.page.route("**/api/member/v1/triage/intents", failedIntentRoute);
     await adult.page.locator("#add-for-review").click();
@@ -948,10 +976,22 @@ async function run() {
     await adult.page.keyboard.press("Escape");
     const dialogStayedOpenDuringIntent = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
     releaseFailedIntent();
-    await adult.page.getByText("Your thought was not saved; the text is still here.", { exact: false }).waitFor();
-    record("Native Escape cannot bypass a pending Add-for-review lock or discard failed input", dialogStayedOpenDuringIntent && await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open) && await adult.page.getByLabel("Thought to hold").inputValue() === retainedIntentText, JSON.stringify({ dialogStayedOpenDuringIntent, retainedText: await adult.page.getByLabel("Thought to hold").inputValue(), banner: await adult.page.locator("#state-banner").textContent() }));
+    const recoveryButton = adult.page.getByRole("button", { name: "Reload and reconcile" });
+    await recoveryButton.waitFor();
+    const recoveryState = {
+      dialogStayedOpenDuringIntent,
+      dialogOpen: await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open),
+      retainedText: await adult.page.getByLabel("Thought to hold").inputValue(),
+      enabled: await recoveryButton.isEnabled(),
+      focused: await recoveryButton.evaluate((button) => button === document.activeElement),
+      status: await adult.page.locator("[data-add-recovery-status]").textContent(),
+      dialog: await adult.page.locator("#action-dialog").textContent(),
+      banner: await adult.page.locator("#state-banner").textContent(),
+    };
+    record("Ambiguous Add failure retains exact text with an accessible in-dialog recovery action", recoveryState.dialogStayedOpenDuringIntent && recoveryState.dialogOpen && recoveryState.retainedText === retainedIntentText && recoveryState.enabled && recoveryState.focused && recoveryState.status.includes("Reload this page"), JSON.stringify(recoveryState));
     await adult.page.unroute("**/api/member/v1/triage/intents", failedIntentRoute);
-    await adult.page.getByRole("button", { name: "Cancel" }).click();
+    await recoveryButton.click();
+    await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
     let blockedRefreshFailureIntentRequests = 0;
     const blockedRefreshFailureIntentRoute = async (route) => {
       blockedRefreshFailureIntentRequests += 1;
@@ -976,7 +1016,6 @@ async function run() {
     await adult.page.getByRole("button", { name: /^Ready/ }).dispatchEvent("click");
     await adult.page.getByRole("button", { name: /^Recent/ }).dispatchEvent("click");
     await adult.page.locator("#add-for-review").dispatchEvent("click");
-    await adult.page.locator(".add-for-review-form").dispatchEvent("submit");
     record("Post-write refresh failure latches Triage until a successful reload", await adult.page.locator("#state-banner").textContent() === refreshFailureText && await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() && await adult.page.locator(".triage-review-form button:not([disabled])").count() === 0 && await adult.page.locator("#add-for-review").isDisabled() && !await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open) && blockedRefreshFailureIntentRequests === 0, JSON.stringify({ banner: await adult.page.locator("#state-banner").textContent(), readyDisabled: await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled(), blockedRefreshFailureIntentRequests }));
     await adult.page.unroute("**/api/member/v1/triage/intents", blockedRefreshFailureIntentRoute);
     await adult.page.unroute("**/api/member/v1/surfaces/triage?*", failTriageRefresh);
@@ -1090,7 +1129,7 @@ async function run() {
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 5 && observedExpected503Console === 2, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
+    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 6 && observedExpected503Console === 4, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {

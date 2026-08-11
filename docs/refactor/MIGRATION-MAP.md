@@ -28,9 +28,17 @@ ordinary cursor. Ambiguous decision responses reconcile immutable exact-candidat
 state and fail closed if terminal truth cannot be proven. Native dialog cancel
 cannot discard an in-flight Add-for-review form on any surface; one stable
 client request ID and a server-side per-intent lock make an ambiguous retry
-idempotent. Triage projection v8 replays immutable
+idempotent. Every response class may follow durable capture; existing feature
+events are rehydrated without a second language interpretation, and unresolved
+ambiguity retains an in-dialog reload/reconcile path. Evidence-only and
+attach-existing candidates cannot be approved, while exact member-dismissal
+event/request receipts distinguish voluntary dismissal from system
+supersession. Triage projection v8 replays immutable
 `member.provider_action.confirmed` facts and additively links the pending-action
-receipt to the originating approved candidate. This is a rebuildable read-model
+receipt to the originating approved candidate. The projection runner reads the
+stored version before stamping candidate metadata, migrates in place, and
+automatically replays retained events from immutable event zero before live
+delivery. Legacy rows that predate retained events remain intact. This is a rebuildable read-model
 upgrade only: no durable event, domain approval, provider command, outcome, or
 provider state is migrated or rewritten. Non-continuation banners carry their
 own presentation kind.

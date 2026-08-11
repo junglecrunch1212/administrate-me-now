@@ -207,7 +207,11 @@ def test_extracted_candidate_never_deduplicates_against_its_parent_intent() -> N
                  FROM triage_items"""
         )
     }
-    assert rows["member-intent-1"]["state"] == "dismissed"
+    parent_receipt = conn.execute(
+        "SELECT state, dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='member-intent-1'"
+    ).fetchone()
+    assert tuple(parent_receipt) == ("dismissed", None, None)
     assert rows["proposal-0002"]["state"] == "pending_review"
     assert rows["proposal-0002"]["decision_disposition"] == "decision"
     assert rows["proposal-0002"]["duplicate_of_proposal_id"] is None
@@ -251,6 +255,9 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
     projection.apply(intent, conn)
     dismissed = _event(5)
     dismissed.update(event_id="event-9002", type="triage.item.dismissed")
+    dismissed["idempotency_key"] = (
+        f"triage:triage.item.dismissed:{MEMBER}:dismiss-request-0001"
+    )
     dismissed["payload"] = {
         "proposal_id": "pending-intent",
         "dismissed_at": "2030-01-03T00:00:00Z",
@@ -258,10 +265,15 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
         "reason": "not_actionable",
     }
     projection.apply(dismissed, conn)
-    state = conn.execute(
-        "SELECT state FROM triage_items WHERE proposal_id='pending-intent'"
-    ).fetchone()[0]
-    assert state == "dismissed"
+    receipt = conn.execute(
+        "SELECT state, dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='pending-intent'"
+    ).fetchone()
+    assert tuple(receipt) == (
+        "dismissed",
+        "event-9002",
+        "dismiss-request-0001",
+    )
 
 
 def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:

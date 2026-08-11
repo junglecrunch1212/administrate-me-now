@@ -106,6 +106,8 @@ class TriageProjection(Projection):
                 domain_approval_event_id TEXT,
                 materialization_event_id TEXT,
                 outcome_event_id TEXT,
+                dismissal_event_id TEXT,
+                dismissal_request_id TEXT,
                 owner_scope TEXT NOT NULL,
                 visibility_scope TEXT NOT NULL,
                 sensitivity TEXT NOT NULL DEFAULT 'normal'
@@ -153,6 +155,8 @@ class TriageProjection(Projection):
             "existing_object_kind": "TEXT",
             "existing_object_id": "TEXT",
             "policy_disposition": "TEXT NOT NULL DEFAULT 'none'",
+            "dismissal_event_id": "TEXT",
+            "dismissal_request_id": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:

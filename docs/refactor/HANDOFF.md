@@ -2158,9 +2158,17 @@ settlement proof. A non-decision disposition change keeps exact focus in All
 candidates. Shared Add for review now owns an independent operation token on
 every member surface, preserves one client request ID across one ambiguous retry
 under a per-intent server lock, and blocks Escape/Close/Cancel/repeat submit and
-stale callbacks. Triage projection v8 additively links the immutable pending
-OpenClaw/provider-action receipt without changing external-write authority. The
-generations rotate before interaction reopens.
+stale callbacks. Any response class may follow durable capture; a retry uses
+the existing feature event instead of invoking the language seam again, and a
+still-ambiguous dialog keeps an enabled reload/reconcile action beside the
+exact member text. Evidence-only and attach-existing candidates are
+non-approvable in both browser and API. Dismissal reconciliation requires the
+exact member-dismissal event/request receipt rather than generic resolved
+state. Triage projection v8 additively links the immutable pending
+OpenClaw/provider-action receipt without changing external-write authority;
+the runner detects v7 metadata, migrates in place, and replays retained events
+from immutable event zero before live delivery without discarding legacy rows.
+The generations rotate before interaction reopens.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
@@ -2177,10 +2185,13 @@ decision followed by a lost-response exact-receipt reconciliation, a real
 post-confirmation guard refusal resumed with one request identity, an exact
 evidence-only transition with no substituted matter, an all-surface
 Escape-resistant post-capture Add-for-review retry with one intent identity,
+one recorded interpretation, and operable ambiguous recovery; evidence-only
+confirmation denial; exact member-dismissal receipt proof; automatic v7-to-v8
+historical pending-action replay with legacy-row preservation,
 and provenance-bounded lifecycle-receipt copy assertion in production
 composition. The repaired candidate passes 253 assertions and 39 screenshots
-with zero console/page/request failures. It also passes 49 strict acceptance
-gates, 1,793 root/code/pack tests, 60 bridge tests, all
+with zero console/page/request failures. It also passes 51 strict acceptance
+gates, 1,796 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,
 tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
 tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.
