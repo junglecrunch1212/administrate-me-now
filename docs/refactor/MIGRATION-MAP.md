@@ -561,7 +561,7 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 
 ## CO-015 decision comprehension and link migration delta
 
-| Subsystem | Before | Candidate result | Classification |
+| Subsystem | Before | Deployed result | Classification |
 |---|---|---|---|
 | Today decisions | Candidate title, target-kind label, generic micro-step, and generic Review action required the member to reconstruct context. | `member-decision-context-v1` names the direct question, situation, reason, source, uncertainty, fixed consequences, next step, and member authority with progressive disclosure. | MODERNIZE |
 | Today → Triage | Candidate id appeared in the URL, but the server loaded only its ordinary cursor and the browser could silently show another matter. | Candidate plus matter URL state drives an independently authorized focus lookup with pending/resolved/not-found state and exact DOM focus. | SUPERSEDE generic/fallback navigation |
@@ -570,3 +570,4 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Scoreboard next steps | Canonical Tasks appeared without a path back to the managing surface. | Active Tasks carry an exact Reminders item link; terminal evidence remains distinct. | MODERNIZE |
 | Surface contract | Typed paths covered only six stable routes. | `surface-link-v1` covers all ten adult routes and remains non-authorizing. | HARDEN |
 | Runtime/domain topology | Fifteen projections and existing sources, models, write gates. | Unchanged: no projection, source store, graph, provider SDK, model router, write path, or external effect added. | PRESERVE |
+| Release activation | CO-015 behavior existed only in isolated candidate evidence. | PR #331 merge `2fede3f` is active after encrypted backup and guarded same-runtime upgrade; Doctor is healthy, authenticated exact-focus and phone review pass, observation remains active, and the provider-called count remains zero. | PRESERVE guarded G-001 release and observation boundaries |

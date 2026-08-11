@@ -1,5 +1,17 @@
 # Release acceptance contract
 
+CO-015 live evidence (2026-08-11): PR #331 exact head
+`ca1a29033e48d5d6d32a0cd77de3fc0c1266778f` passed independent full-diff
+review, both hosted checks, the complete release suite, and 229 rendered Gate 7
+assertions. Merge commit `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`
+was activated through the attested updater after encrypted backup
+`administrateme-20260811T102316Z.ambackup`. Full Doctor settled healthy at
+15/15 projections, 8/8 pipelines, and 62,580/62,580 source obligations with
+zero pending/missing/failed. Authenticated read-only Today/Carousel/Triage and
+390 px acceptance passed with exact focus, explicit not-found behavior, and no
+browser warnings or errors. Observation remained active and the provider-
+called terminal count stayed zero.
+
 CO-015 amendment (2026-08-10): AC-40 proves that a member-facing decision is
 comprehensible before source reconstruction and that every candidate/object
 link resolves exact typed identity. Today publishes the direct question,

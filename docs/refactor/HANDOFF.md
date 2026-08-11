@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_011_DEPLOYED_LIVE_VERIFIED
-verified_local_date: 2026-08-09
-verified_github_date: 2026-08-09
+gate_result: CO_015_DEPLOYED_LIVE_VERIFIED
+verified_local_date: 2026-08-11
+verified_github_date: 2026-08-11
 branch: main
-candidate_commit_resolution: cd49c60d608c1acf3e0baf9aa5f000c982382a66
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/311
+candidate_commit_resolution: 2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/331
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -2051,10 +2051,14 @@ gates pass.
   preserves independently reviewable nested children, and has no horizontal
   overflow: the live document is 375 px inside a 390 px phone viewport.
 
-## CO-015 candidate handoff — decision comprehension and surface integrity
+## CO-015 release handoff — decision comprehension and surface integrity
 
-CO-015 is implemented and release-gated in an isolated Python 3.14/Node 24
-worktree. It is not yet a merged, deployed, or live-verified claim.
+CO-015 is reviewed, merged, deployed, and authenticated-live-verified under
+G-001. PR #331 head `ca1a29033e48d5d6d32a0cd77de3fc0c1266778f`
+received a separate exact-head review receipt after the earlier blocked head
+was repaired. Both hosted checks were green, the PR was clean and mergeable,
+and zero review threads remained. The guarded merge produced immutable
+`main` release `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`.
 
 - Today publishes `member-decision-context-v1`: direct question, what happened,
   why present, authorized source label, uncertainty, fixed
@@ -2078,12 +2082,24 @@ worktree. It is not yet a merged, deployed, or live-verified claim.
   audits, performance budgets, package builds, architecture checks, clean
   install, tenant isolation, backup/restore, and the pinned OpenClaw contract,
   17 plugin tests, build, package, and audit.
-- Isolated Gate 7 passes 228 assertions and 36 screenshots across five viewport
-  families with zero console, page, or request failures. The production
+- Final exact-head Gate 7 passes 229 assertions and 36 screenshots across five
+  viewport families with zero console, page, or request failures. The production
   composition proves off-page pending focus, immutable resolved focus, and
   cross-member `not_found`.
-
-Release completion still requires reviewed-head publication, hosted checks,
-an encrypted live backup, guarded deployment, full Doctor/settlement, and
-authenticated live Today → Triage/Comms/Notes/Scoreboard observation under
-observation mode with zero unintended provider effects.
+- The attested same-runtime updater created encrypted rollback backup
+  `administrateme-20260811T102316Z.ambackup`, required no runtime or OpenClaw
+  migration, retained predecessor `0e0f13e`, and activated the merge SHA with
+  rollback available.
+- Independent post-switch status and full Doctor are healthy in observation
+  mode: 15/15 projection stores/checkpoints, 8/8 required pipelines,
+  62,580/62,580 source obligations accounted for, zero pending/missing/failed,
+  exact OpenClaw plus authenticated `llm-task`, and zero synthetic external
+  side effects.
+- Authenticated read-only live review proves decision context in both Day Brief
+  and Carousel, candidate + matter + `all_candidates` routing, exact rendered
+  and focused Triage identity, explicit no-substitution not-found behavior,
+  and 375 px document width inside a 390 px phone viewport. The browser
+  recorded no warnings or errors.
+- Observation remained active throughout. The provider-called terminal count
+  was zero before activation and remained zero after deployment, Doctor, and
+  browser acceptance; no decision or provider action was performed.

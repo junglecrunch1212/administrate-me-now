@@ -1,7 +1,6 @@
 # CO-015 decision comprehension evidence
 
-Status: isolated candidate PASS; reviewed release and authenticated live proof
-pending.
+Status: released and authenticated-live-verified in observation mode.
 
 ## Requirement matrix
 
@@ -18,7 +17,7 @@ pending.
 | Scoreboard canonical return | Gate 7 verifies an active canonical Task returns to its exact Reminders item. |
 | Ten-route contract | Unit proof constructs `surface-link-v1` for every stable adult route. |
 | Responsive/accessibility/degraded behavior | Gate 7 exercises five viewport families, phone width, reduced motion, named controls, focus, landmarks, contrast, role boundaries, observation, chat degradation, and every adult tab. |
-| No unintended provider effects | Credential-free runtime plus observation contracts; no new write path exists. Live observation proof remains required before release completion. |
+| No unintended provider effects | Observation stayed active; the provider-called terminal count was zero before activation and remained zero after deployment, Doctor, and authenticated browser acceptance. |
 
 ## Candidate commands and results
 
@@ -35,8 +34,8 @@ PYTHONPATH=bridge poetry run pytest -q \
   tests/acceptance/test_gate7_household_experience.py::test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated
 28 passed
 
-Node 24.14.0 tools/console-reference-harness/run-gate7.mjs
-PASS: 228 assertions, 36 screenshots, 0 console errors, 0 page errors,
+Node 24.19.0 tools/console-reference-harness/run-gate7.mjs
+PASS: 229 assertions, 36 screenshots, 0 console errors, 0 page errors,
 0 request failures
 
 PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh
@@ -53,11 +52,36 @@ the member's new choice. The complete Gate 7 rerun passes. This is evidence
 that the exact-link repair includes an escape path rather than trapping the
 member in a stale selection.
 
+## Reviewed release and live activation
+
+- G-001 authorization bound PR #331 to exact head
+  `ca1a29033e48d5d6d32a0cd77de3fc0c1266778f`. The independent review
+  receipt covered the full diff and repair delta, complete local gates, hosted
+  state, and zero review threads. Both hosted checks passed. Receipt:
+  `https://github.com/junglecrunch1212/administrate-me-now/pull/331#issuecomment-5251891510`.
+- GitHub created merge commit
+  `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`; it was verified on
+  `origin/main` before Phase B.
+- The attested same-runtime updater created encrypted backup
+  `administrateme-20260811T102316Z.ambackup`, required no runtime or OpenClaw
+  migration, retained predecessor `0e0f13e`, and reported rollback available.
+- Independent post-switch status and full Doctor passed in observation mode:
+  15/15 projections, 8/8 required pipelines, 62,580/62,580 source obligations
+  accounted for, zero pending/missing/failed, exact OpenClaw and authenticated
+  `llm-task`, and zero synthetic external side effects.
+- Authenticated read-only live browser acceptance verified Day Brief and
+  Carousel decision context, candidate + matter + view routing, exact Triage
+  render/focus, explicit missing-candidate no-substitution behavior, and a
+  375 px document inside a 390 px phone viewport, with no browser warnings or
+  errors.
+- Observation remained active. The provider-called terminal count was zero at
+  the pre-switch watermark and remained zero at the final watermark. No member
+  decision or provider action was performed.
+
 ## Evidence boundary
 
-The run used generated tenant-neutral fixtures in an encrypted temporary
+Candidate runs used generated tenant-neutral fixtures in an encrypted temporary
 instance and generated artifacts outside the repository worktree. No household
-content, credential, token, provider mutation, or live runtime state is
-included. Final release evidence must add reviewed-head checks, backup,
-deployment, Doctor, authenticated live Today/Triage review, and observation-
-mode side-effect proof without copying private source contents into Git.
+content, credential, token, provider mutation, private event payload, or live
+runtime path is included. Live evidence above records only content-free counts,
+states, immutable commits, and the encrypted backup receipt.
