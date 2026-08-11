@@ -1,5 +1,54 @@
 # UX behavior contract
 
+CO-016 amendment (2026-08-11): a successful Triage confirmation or typed
+dismissal clears exact-link focus, stays in the member's active working lens,
+and advances to the next independently manageable candidate when one remains.
+If the refreshed lens is empty, feedback says that the member is caught up
+instead of promising another decision. It never changes the lens to Recent
+merely because the prior candidate is now resolved. Recent remains read-only
+audit history and distinguishes historical context-or-eligibility replacement
+receipts from member-authored feedback and learned-rule state without claiming
+unproven migration provenance. Direct exact links to resolved candidates
+continue to open their immutable receipt. Deliberately changing Triage lenses
+clears prior lens-relative continuation feedback before rendering the new lens;
+reselecting the active lens does not, and typed progress/success/failure
+feedback is never cleared under the continuation rule. If a decision or
+Add-for-review intent is recorded but the post-write refresh fails, its reload
+warning and disabled stale surface/shared-intent controls remain latched until
+a successful reload. Beginning a decision or deliberately
+changing lenses invalidates any older in-flight pagination request; neither a
+late success nor a late failure may replace the newer authoritative surface,
+restore a resolved candidate, clear decision feedback, or re-enable stale
+controls. Invalidating a pending page restores its transient Loading state
+before semantic disabled-state capture. A dirty Save & confirm acquires one
+serialized Triage operation before enrichment and retains it through decision
+and authoritative refresh. Every surface and shared Add-for-review control is
+disabled; any operation-time render inherits that lock; and lens, matter, form,
+intent, learning-policy, decision, and pagination handlers reject programmatic
+work. Earlier callbacks cannot clear feedback or refresh-failure safety. The
+generations rotate again before interaction reopens. Enrichment returns the
+current computed review state; a transition away from Ready cannot advance to
+confirmation. If enrichment succeeds but the following decision fails, an
+authoritative refresh retains the saved values/current revision for immediate
+retry, or latches a reload warning if that refresh fails.
+Decision settlement requires the exact member-action event/request receipt
+rather than HTTP class or generic resolved state. Projection acceptance of an
+exact confirmation precedes materialization. One bounded continuation reuses the
+original request ID; an incomplete confirmation remains locked. Non-decision
+disposition changes move exact focus to All candidates without substitution.
+Shared Add for review has a separate operation token on every member surface,
+retains one client request ID through one explicitly proven post-capture retry, and blocks
+Cancel/Close/Escape/repeat submit/stale callbacks until success, definite
+pre-write rejection, or reload-required failure.
+A generic definite 4xx is not retried. When the server proves intent and
+features already exist, the same-ID retry replays that recorded interpretation
+without another language call and atomically appends the governance-preflighted
+proposal family. If settlement remains ambiguous, the dialog retains the exact
+text and exposes an enabled focused action that opens the exact saved Needs
+interpretation item when known, or All candidates for inspection before
+resubmission when transport provides no coordinates. Evidence-only and attach-existing
+rows explain their authority and never enable confirmation in either API.
+
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,
 what happened, why it is present, authorized source identity, unresolved
@@ -210,6 +259,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-56 | Today, Comms, Notes, and any other candidate-bearing surface link the exact Triage candidate and matter. Triage resolves a scoped `triage_item` independently of its ordinary cursor and returns explicit pending, resolved, or unavailable focus state. Reload/history/filter state cannot substitute another candidate, reopen a decision, or change queue truth. |
 | UX-57 | A deliberate Triage lens change clears exact-link focus. An asynchronous or stale focus response cannot force the member back to the linked lens after that choice. The selected candidate receives keyboard focus without creating a decision or provider effect. |
 | UX-58 | Every stable adult surface participates in `surface-link-v1`. Where a surface shows a canonical item owned by another surface, it exposes an exact return path or explicitly states that no destination surface exists; generic top-of-page navigation is not an object link. |
+| UX-59 | After confirm or Dismiss & teach, Triage clears the resolved candidate and matter from URL and client focus, preserves Ready/Needs details/Needs interpretation/Low signal/Recurring exceptions/Learned rules/All candidates, and derives its continuation message from the refreshed visible lens: select the next matter when one remains, say the member is caught up when none remains, or disclose that more matters must be loaded. Deliberately changing lenses clears only that lens-relative success message before the new lens renders; reselecting the active lens preserves it, and typed non-continuation feedback survives. If a decision or Add-for-review intent was recorded but refresh failed, its warning and disabled stale surface/shared-intent controls remain latched through lens clicks and programmatic submission until a successful reload. A Triage token serializes enrichment, learning-policy, decision, pagination invalidation, and authoritative refresh; an independent all-surface Add-for-review token preserves one form and one client request ID while blocking Escape/Close/Cancel/repeat submit and stale callbacks. Transient loading state is normalized before semantic lock capture. Enrichment publishes computed readiness, which must remain Ready before decision transport. A rejected post-enrichment decision refreshes the exact saved current revision independently of ordinary pagination before controls reopen. HTTP class and generic resolved state are never settlement proof: the exact confirmation/dismissal event and request ID must match the requested action, and local materialization, durable pending OpenClaw/provider action, or terminal provider outcome must also exist where applicable. One bounded continuation reuses the original request ID; otherwise actions remain locked until reload. Evidence-only/attach-existing transitions retain the exact candidate in All candidates and cannot be confirmed in browser, Triage API, or the underlying commitment API; a concurrent canonical transition must win before materialization. A definite generic Add-for-review 4xx is not retried. Explicit server provenance that intent and features were recorded permits one same-ID retry, which reuses the recorded interpretation, governance-preflights every missing child, and atomically appends the complete proposal family without invoking language again; unresolved ambiguity retains an operable exact-saved-item action inside the locked dialog. Response loss never proves rejection, and no reconciliation may substitute another candidate or another request's receipt. Recent is entered only by explicit member choice or an exact resolved deep link. Historical `eligibility_rule_replaced` receipts say only that source context or eligibility changed; they do not claim a system migration or a sender-wide rule created by the current dismissal. |
 
 ## State model
 

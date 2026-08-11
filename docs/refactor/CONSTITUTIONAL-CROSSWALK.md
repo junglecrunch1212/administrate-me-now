@@ -1,5 +1,59 @@
 # Constitutional crosswalk
 
+CO-016 amendment (2026-08-11): C097/C101/C107/C110/C111 are
+**PRESERVED/HARDENED** by deterministic post-decision queue continuation.
+Resolving one candidate consumes its exact focus and leaves the member in the
+chosen work lens; immutable Recent history remains separately inspectable and
+labels context-or-eligibility replacement distinctly from reversible feedback
+without inventing migration provenance. Continuation feedback is derived from
+the refreshed visible lens, says the member is caught up when it is empty, and
+is cleared only before a deliberately selected different lens renders; typed
+progress, success, and failure feedback is retained across that change. A
+recorded-decision refresh failure remains visibly and interactively latched
+until successful reload, so stale data and the shared Add-for-review path
+cannot regain decision authority.
+Pre-decision pagination is invalidated before a decision or deliberate lens
+change, so a late transport result cannot supersede the later authoritative
+projection read, resurrect resolved work, or alter its feedback; invalidation
+first removes transient loading state so a no-render failure cannot strand the
+control. Pagination is also part of one serialized Triage operation acquired
+before enrichment: replacement renders and shared-shell intent controls remain
+disabled, and lens, matter, form, intent, learning-policy, decision, and
+pagination handlers reject programmatic work. The operation and pagination
+generations rotate before interaction reopens; independently tested requests
+from before and after operation start cannot supersede the settled refresh or
+clear its failure latch, and native dialog cancellation cannot discard a
+pending intent. The enrichment response publishes deterministic
+computed readiness: changed readiness prevents confirmation, while a following
+decision rejection authoritatively refreshes and retains the exact saved
+current revision outside ordinary pagination. Ambiguous decision responses
+likewise reconcile only that exact candidate's exact event/request-specific
+immutable receipt, reuse the original request ID for one bounded continuation, and never
+substitute another matter after a non-decision disposition change. Triage v8
+links the immutable pending provider-action receipt into the candidate read
+model without merging domain, OpenClaw, command, or provider authority. Shared
+Add for review has its own all-surface operation token and stable client request
+ID, so post-capture ambiguity, native cancellation, duplicate submission, and
+stale dialog callbacks fail closed. A generic definite capture 4xx is not
+retried; explicit server capture-state provenance permits one same-ID retry.
+Recorded features fix retry interpretation without another language call, and
+the complete proposal family is governance-preflighted before one atomic
+append; an unresolved response retains an operable in-dialog action to the
+exact saved Needs interpretation item when known, or All candidates before
+resubmission when transport provides no coordinates.
+Evidence-only/attach-existing candidates cannot create duplicate truth through
+either approval route, and confirmation/dismissal settlement requires the
+exact member-authored event/request receipt. Projected acceptance of that
+confirmation is required before materialization, so concurrent canonical truth
+wins. Triage v8 alone opts into reviewed version-change replay from event zero
+before live delivery. Candidate metadata is stamped only after success, so an
+interrupted replay retains v7 and retries at next start; exact confirmation
+receipts backfill even when later outcomes advanced historical rows, and
+pending-action evidence appears under v8 rather than merely restamping
+metadata. Terminal truth is reported when proven;
+otherwise the surface remains locked until reload. Response loss can never be
+presented as proof that no decision was recorded.
+
 CO-013 amendment (2026-08-10): C002/C004/C007/C025/C034/C106-C108 now require
 bounded durable acquisition of pre-existing provider history when a forward-
 only cursor would otherwise certify a false-complete source stream. C109 owns
@@ -458,6 +512,7 @@ Source abbreviations: **VISION** = WHAT-IS; **BUILD** = ADMINISTRATEME_BUILD; **
 | C109 | A source cannot be called complete merely because incremental observation began successfully; adapters that would omit actionable pre-install history must perform a bounded, durable, truthfully reported acquisition before relying on the forward cursor, without blocking central runtime liveness while synchronous provider I/O is in flight; deterministic context vocabulary must remain atomic across producer, pinned language input, and typed projection schemas; a record that disappears after provider discovery must receive an audited quarantine without falsely degrading the otherwise advancing adapter | ADHD prospective-memory objective; eight-stage Observe loop; D19; central-runtime topology; CO-007/CO-008/CO-010/CO-013; C002/C004/C007/C025/C034/C106-C108 | Gmail adapter v1.1.1, cursor-before-list ordering, private historical seed priority, deterministic exact-participant/date expansion, validated recent/global hard ceilings, draft/spam/trash exclusion, worker-thread provider acquisition, cross-schema context-vocabulary tests, reviewed failed-fact replay, typed direction/dedupe/quarantine path with healthy cursor advance after a list/get deletion race, content-free policy-digest completion cursor, event-loop liveness and supervisor restart proof | PRESERVE provider/event/privacy/human/write authority and one central runtime; HARDEN source completeness, liveness, schema compatibility, truthful health, and record-race accounting; SUPERSEDE forward-only first-run snapshot and quarantine-as-transport-backoff | AC-07–AC-12, AC-14, AC-21, AC-25, AC-33–AC-38 |
 | C110 | Context is a typed, temporal, scoped, rebuildable relationship index—not truth, model memory, or a universal Project—and complete candidate inventory is distinct from the bounded member decision queue | ADR-0008; CO-014; ADHD working-memory/noise-filtering objective; C001-C109 | Fifteenth `context_fabric` projection; authority-coded edges; private bounded traversal; 30-day/100-source matter episodes; exact duplicate/existing-object/recurrence evidence reconciliation; full cursor inventory; matter-first Triage; typed feedback and reversible shadow rules; fixed-seed two-year and production pagination/replay proofs | PRESERVE all prior authority/privacy/domain boundaries; MODERNIZE context and Triage; SUPERSEDE exact-fourteen count, hidden truncation, provider-thread-as-matter, scalar-confidence UI, and generic non-learning dismissal | AC-02, AC-07–AC-09, AC-14, AC-18, AC-20–AC-24, AC-39 |
 | C111 | Every projected member decision is comprehensible at the point of attention and every cross-surface object route preserves exact typed identity without granting authority | ADHD working-memory/task-initiation objective; CO-015; UX-03/05/10/24/46/48/55–58; C097/C101/C107/C108/C110 | `member-decision-context-v1`; candidate-and-matter surface links; cursor-independent scoped Triage focus with pending/resolved/not-found state; exact Comms/Notes candidates; Scoreboard Task return links; all-ten-route `surface-link-v1`; production composition; 229-check browser proof; reviewed merge, guarded activation, healthy Doctor, authenticated exact-focus/phone proof, and zero provider-called effects | PRESERVE source/event/privacy/member-decision/write boundaries; MODERNIZE comprehension and navigation; SUPERSEDE headline-only decisions, top-of-surface links, silent fallback, and stale focus snapback | AC-08, AC-11, AC-12, AC-14, AC-18, AC-24, AC-28, AC-39, CO-015 release evidence |
+| C112 | Resolving one Triage candidate preserves the member's chosen decision-work context and cannot visually recast unrelated immutable audit receipts as consequences of that action | ADHD working-memory/task-initiation/noise-filtering objective; CO-014/CO-015/CO-016; UX-49–59; C097/C101/C107/C110/C111 | Client focus consumption before reload; refreshed-lens continuation or truthful caught-up state; typed banner cleanup; recorded-write refresh-failure latch across surface and shared Add-for-review controls; serialized enrichment/intent/learning/decision operation token; all-surface Escape-safe capture with stable idempotency identity, explicit post-capture provenance, recorded-feature replay, and atomic proposal-family append; full-interval interaction exclusion plus generation-invalidated and transient-state-normalized pagination; computed post-enrichment readiness; exact off-page saved-revision, non-decision, and event/request-specific settlement reconciliation; exact confirmation/dismissal receipts; both-route evidence-only approval denial; projection-accepted confirmation before materialization; explicit Triage-v8-only replay opt-in with post-success version stamping and pending-action linkage; exact resolved deep-link preservation; explicit Recent audit-history framing; provenance-bounded eligibility-replacement language; confirm/dismiss/browser/concurrency regression proof | PRESERVE immutable events, reversible feedback, exact links, human gating, privacy, and provider-write boundaries; HARDEN queue continuity, stale-state safety, and authority legibility; SUPERSEDE automatic post-decision Recent jump and ambiguous raw reason labels | AC-18, AC-24, AC-39–AC-41 |
 
 ## Source coverage index
 

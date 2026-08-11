@@ -22,7 +22,8 @@ from adminme.projections.triage import handlers
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 7
+    version = 8
+    replay_retained_events_on_version_change = True
     subscribes_to = [
         "triage.item.proposed",
         "triage.item.enriched",
@@ -38,6 +39,7 @@ class TriageProjection(Projection):
         "commitment.edited",
         "commitment.confirmed",
         "commitment.dismissed",
+        "member.provider_action.confirmed",
         "external_sync.write_requested",
         "external_sync.write_completed",
         "external_sync.write_failed",
@@ -103,8 +105,12 @@ class TriageProjection(Projection):
                 resolution_reason TEXT,
                 materialized_event_ids_json TEXT NOT NULL DEFAULT '[]',
                 domain_approval_event_id TEXT,
+                confirmation_event_id TEXT,
+                confirmation_request_id TEXT,
                 materialization_event_id TEXT,
                 outcome_event_id TEXT,
+                dismissal_event_id TEXT,
+                dismissal_request_id TEXT,
                 owner_scope TEXT NOT NULL,
                 visibility_scope TEXT NOT NULL,
                 sensitivity TEXT NOT NULL DEFAULT 'normal'
@@ -152,6 +158,10 @@ class TriageProjection(Projection):
             "existing_object_kind": "TEXT",
             "existing_object_id": "TEXT",
             "policy_disposition": "TEXT NOT NULL DEFAULT 'none'",
+            "confirmation_event_id": "TEXT",
+            "confirmation_request_id": "TEXT",
+            "dismissal_event_id": "TEXT",
+            "dismissal_request_id": "TEXT",
         }
         for name, sql_type in additions.items():
             if name not in columns:

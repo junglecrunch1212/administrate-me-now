@@ -230,6 +230,20 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
             == (approved["delivery"]["domain_approval_event_id"])
         )
         assert runtime.fixture_adapter.delivered == []
+        client.portal.call(runtime.wait_for_projection, "triage", approved["event_id"])
+        approved_triage = client.get(
+            f"/api/member/v1/surfaces/triage?item={commitment_id}", headers=AUTH
+        ).json()
+        approved_receipt = next(
+            item
+            for item in [
+                *approved_triage["items"],
+                *approved_triage["recent_items"],
+            ]
+            if item["proposal_id"] == commitment_id
+        )
+        assert approved_receipt["confirmation_event_id"] == approved["event_id"]
+        assert approved_receipt["confirmation_request_id"] == "approve-1"
         approved_again = _post(
             client,
             f"/api/comms/v1/commitments/{commitment_id}/approve",
@@ -421,6 +435,20 @@ def test_communication_to_completed_commitment_is_durable_scoped_and_replay_safe
             },
         )
         assert dismissed["commitment"]["status"] == "cancelled"
+        client.portal.call(runtime.wait_for_projection, "triage", dismissed["event_id"])
+        dismissed_triage = client.get(
+            f"/api/member/v1/surfaces/triage?item={dismiss_id}", headers=AUTH
+        ).json()
+        dismissed_receipt = next(
+            item
+            for item in [
+                *dismissed_triage["items"],
+                *dismissed_triage["recent_items"],
+            ]
+            if item["proposal_id"] == dismiss_id
+        )
+        assert dismissed_receipt["dismissal_event_id"] == dismissed["event_id"]
+        assert dismissed_receipt["dismissal_request_id"] == "dismiss-1"
         dismissed_again = _post(
             client,
             f"/api/comms/v1/commitments/{dismiss_id}/dismiss",

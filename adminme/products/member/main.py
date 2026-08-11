@@ -28,6 +28,7 @@ from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
 from adminme.events.schemas.triage import (
+    TriageFeatureCandidateV1,
     TriageRouteV1,
     TriageSourceSurface,
     TriageTargetKind,
@@ -62,6 +63,7 @@ from adminme.products.auth import require_principal, session_from_request
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
+    _triage_review_state,
     authorize_surface,
     build_surface,
     communication_accounts,
@@ -125,6 +127,7 @@ from adminme.temporary_surfaces import (
     TemporarySurfaceSpec,
 )
 from adminme.triage_intent import (
+    IntentCandidate,
     extract_grounded_nlp_candidates,
     extract_intent_candidates,
     merge_intent_candidates,
@@ -894,6 +897,18 @@ def _owned_triage_item(
     )
     if item is None or item["owner_member_id"] != session.auth_member_id:
         raise HTTPException(404, "triage item not found")
+    return item
+
+
+def _owned_reviewable_triage_item(
+    runtime: Any,
+    session: Session,
+    proposal_id: str,
+) -> dict[str, Any]:
+    """Return current owned proposal truth plus the member review contract."""
+
+    item = _owned_triage_item(runtime, session, proposal_id)
+    item["review_state"] = _triage_review_state(item)
     return item
 
 
@@ -2268,16 +2283,91 @@ async def configure_reminder_cue(
     return {"accepted": True, "event_id": event_id, "cue_id": body.cue_id}
 
 
+def _recorded_intent_candidates(
+    feature_payload: dict[str, Any],
+    *,
+    deterministic_candidates: list[IntentCandidate],
+) -> list[IntentCandidate]:
+    """Rehydrate the one durable interpretation without invoking NLP again."""
+
+    deterministic_by_key = {
+        candidate.candidate_key: candidate for candidate in deterministic_candidates
+    }
+    recorded: list[IntentCandidate] = []
+    for raw_candidate in feature_payload.get("candidates") or []:
+        candidate = TriageFeatureCandidateV1.model_validate(raw_candidate)
+        reasons = list(candidate.reasons)
+        eligibility_rule_ids: list[str] = []
+        deterministic = deterministic_by_key.get(candidate.candidate_key)
+        if (
+            deterministic is not None
+            and deterministic.target_kind == candidate.target_kind
+        ):
+            eligibility_rule_ids.extend(deterministic.eligibility_rule_ids)
+        if "exact_source_quote_grounded_v1" in reasons:
+            eligibility_rule_ids.extend(
+                [
+                    "explicit_member_intent_v2",
+                    "exact_source_quote_grounded_v1",
+                    f"candidate_fields_{candidate.target_kind}_v1",
+                ]
+            )
+        if not eligibility_rule_ids:
+            eligibility_rule_ids.extend(
+                [
+                    "recorded_member_intent_feature_v1",
+                    f"candidate_fields_{candidate.target_kind}_v1",
+                ]
+            )
+        recorded.append(
+            IntentCandidate(
+                candidate_key=candidate.candidate_key,
+                target_kind=candidate.target_kind,
+                title=candidate.title,
+                fields=dict(candidate.fields),
+                evidence_spans=[
+                    span.model_dump(mode="json") for span in candidate.evidence_spans
+                ],
+                confidence=candidate.confidence,
+                reasons=reasons,
+                eligibility_rule_ids=list(dict.fromkeys(eligibility_rule_ids))[:20],
+            )
+        )
+    return recorded
+
+
 @router.post("/api/member/v1/triage/intents", status_code=202)
 async def submit_triage_intent(
     body: TriageIntentRequest, request: Request, session: SessionDep
 ) -> dict[str, Any]:
     """Durably hold exact member text before deterministic interpretation."""
 
+    runtime = _runtime(request)
+    lock_key = f"{session.tenant_id}:{session.auth_member_id}:{body.client_request_id}"
+    lock = runtime.triage_intent_command_locks.setdefault(lock_key, asyncio.Lock())
+    runtime.triage_intent_command_lock_users[lock_key] = (
+        runtime.triage_intent_command_lock_users.get(lock_key, 0) + 1
+    )
+    try:
+        async with lock:
+            return await _submit_triage_intent_locked(body, session, runtime)
+    finally:
+        remaining = runtime.triage_intent_command_lock_users[lock_key] - 1
+        if remaining:
+            runtime.triage_intent_command_lock_users[lock_key] = remaining
+        else:
+            runtime.triage_intent_command_lock_users.pop(lock_key, None)
+            runtime.triage_intent_command_locks.pop(lock_key, None)
+
+
+async def _submit_triage_intent_locked(
+    body: TriageIntentRequest,
+    session: Session,
+    runtime: Any,
+) -> dict[str, Any]:
     require_principal(session)
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(403, "Add for review is unavailable in view-as mode")
-    runtime = _runtime(request)
     if runtime.events is None or runtime.event_log is None:
         raise HTTPException(503, "Triage capture is unavailable")
 
@@ -2354,113 +2444,116 @@ async def submit_triage_intent(
         submitted_at=submitted_at,
         kind_hint=body.kind_hint,
     )
-    language_state = "complete"
-    language_reason = "bounded_language_assessment_completed"
-    skill_call_event_id: str | None = None
-    grounded_candidates = []
-    try:
-        skill_result = await runtime.run_skill_fn(
-            "skill:extract_note_semantics",
-            {
-                "title": None,
-                "body_text": body.text,
-                "body_format": "plain",
-                "source_kind": "member_intent",
-                "content_sha256": hashlib.sha256(body.text.encode()).hexdigest(),
-            },
-            SkillContext(
-                session=session,
-                correlation_id=session.correlation_id,
-                triggering_event_id=intent_event_id,
-                invocation_idempotency_key=f"triage-intent:v2:{intent_event_id}",
-                owner_scope=f"private:{session.auth_member_id}",
-                visibility_scope=f"private:{session.auth_member_id}",
-                sensitivity=sensitivity,
-            ),
-            input_sensitivities={"body_text": sensitivity},
-        )
-        raw_output = getattr(skill_result, "output", skill_result)
-        if isinstance(raw_output, dict):
-            grounded_candidates = extract_grounded_nlp_candidates(
-                body.text,
-                raw_output.get("candidates"),
-                source_rule_id="explicit_member_intent_v2",
-            )
-    except (
-        RuntimeError,
-        SkillInputInvalid,
-        SkillOutputInvalid,
-        SkillSensitivityRefused,
-        SkillScopeInsufficient,
-        SkillHandlerError,
-        OpenClawTimeout,
-        OpenClawUnreachable,
-        OpenClawResponseMalformed,
-    ) as exc:
-        language_state = "defensive_default"
-        language_reason = f"language_seam_{type(exc).__name__}"
-    if body.kind_hint is not None:
-        grounded_candidates = [
-            candidate
-            for candidate in grounded_candidates
-            if candidate.target_kind == body.kind_hint
-        ]
-    candidates = merge_intent_candidates(
-        deterministic_candidates,
-        grounded_candidates,
-    )
-    related_skill_events = await runtime.event_log.get_by_causation(intent_event_id)
-    skill_call = next(
-        (
-            event
-            for event in reversed(related_skill_events)
-            if event.get("type") == "skill.call.recorded"
-            and (event.get("payload") or {}).get("skill_name")
-            == "skill:extract_note_semantics"
-        ),
-        None,
-    )
-    if skill_call is not None:
-        skill_call_event_id = str(skill_call["event_id"])
-    extracted_at = EventEnvelope.now_utc_iso()
-    feature_payload = {
-        "intent_id": intent_id,
-        "source_event_id": intent_event_id,
-        "skill_call_event_id": skill_call_event_id,
-        "extractor_id": "member-intent-hybrid-v2",
-        "language": "en",
-        "candidates": [candidate.feature_payload() for candidate in candidates],
-        # The deterministic assessor completed even when it could not derive
-        # a typed candidate. The exact text remains in the Triage holding
-        # state for human interpretation; this is not a model failure.
-        "extraction_state": language_state,
-        "extracted_at": extracted_at,
-        "assessment_outcome": (
-            "eligible_candidates"
-            if candidates
-            else "failed"
-            if language_state != "complete"
-            else "no_candidate"
-        ),
-        "reason_codes": [
-            "member_kind_or_text_rule_matched"
-            if deterministic_candidates
-            else "bounded_language_candidate_found"
-            if grounded_candidates
-            else "member_text_requires_human_interpretation",
-            language_reason,
-        ],
-    }
-    feature_fingerprint = hashlib.sha256(
-        json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
     feature_key = f"triage-intent-features:{intent_event_id}:member-intent-hybrid-v2"
     prior_feature = await runtime.event_log.get_by_idempotency(
         session.tenant_id, feature_key
     )
     if prior_feature is not None:
         feature_event_id = str(prior_feature["event_id"])
+        feature_payload = dict(prior_feature["payload"])
     else:
+        language_state = "complete"
+        language_reason = "bounded_language_assessment_completed"
+        skill_call_event_id: str | None = None
+        grounded_candidates = []
+        try:
+            skill_result = await runtime.run_skill_fn(
+                "skill:extract_note_semantics",
+                {
+                    "title": None,
+                    "body_text": body.text,
+                    "body_format": "plain",
+                    "source_kind": "member_intent",
+                    "content_sha256": hashlib.sha256(body.text.encode()).hexdigest(),
+                },
+                SkillContext(
+                    session=session,
+                    correlation_id=session.correlation_id,
+                    triggering_event_id=intent_event_id,
+                    invocation_idempotency_key=f"triage-intent:v2:{intent_event_id}",
+                    owner_scope=f"private:{session.auth_member_id}",
+                    visibility_scope=f"private:{session.auth_member_id}",
+                    sensitivity=sensitivity,
+                ),
+                input_sensitivities={"body_text": sensitivity},
+            )
+            raw_output = getattr(skill_result, "output", skill_result)
+            if isinstance(raw_output, dict):
+                grounded_candidates = extract_grounded_nlp_candidates(
+                    body.text,
+                    raw_output.get("candidates"),
+                    source_rule_id="explicit_member_intent_v2",
+                )
+        except (
+            RuntimeError,
+            SkillInputInvalid,
+            SkillOutputInvalid,
+            SkillSensitivityRefused,
+            SkillScopeInsufficient,
+            SkillHandlerError,
+            OpenClawTimeout,
+            OpenClawUnreachable,
+            OpenClawResponseMalformed,
+        ) as exc:
+            language_state = "defensive_default"
+            language_reason = f"language_seam_{type(exc).__name__}"
+        if body.kind_hint is not None:
+            grounded_candidates = [
+                candidate
+                for candidate in grounded_candidates
+                if candidate.target_kind == body.kind_hint
+            ]
+        extracted_candidates = merge_intent_candidates(
+            deterministic_candidates,
+            grounded_candidates,
+        )
+        related_skill_events = await runtime.event_log.get_by_causation(intent_event_id)
+        skill_call = next(
+            (
+                event
+                for event in reversed(related_skill_events)
+                if event.get("type") == "skill.call.recorded"
+                and (event.get("payload") or {}).get("skill_name")
+                == "skill:extract_note_semantics"
+            ),
+            None,
+        )
+        if skill_call is not None:
+            skill_call_event_id = str(skill_call["event_id"])
+        extracted_at = EventEnvelope.now_utc_iso()
+        feature_payload = {
+            "intent_id": intent_id,
+            "source_event_id": intent_event_id,
+            "skill_call_event_id": skill_call_event_id,
+            "extractor_id": "member-intent-hybrid-v2",
+            "language": "en",
+            "candidates": [
+                candidate.feature_payload() for candidate in extracted_candidates
+            ],
+            # The deterministic assessor completed even when it could not derive
+            # a typed candidate. The exact text remains in the Triage holding
+            # state for human interpretation; this is not a model failure.
+            "extraction_state": language_state,
+            "extracted_at": extracted_at,
+            "assessment_outcome": (
+                "eligible_candidates"
+                if extracted_candidates
+                else "failed"
+                if language_state != "complete"
+                else "no_candidate"
+            ),
+            "reason_codes": [
+                "member_kind_or_text_rule_matched"
+                if deterministic_candidates
+                else "bounded_language_candidate_found"
+                if grounded_candidates
+                else "member_text_requires_human_interpretation",
+                language_reason,
+            ],
+        }
+        feature_fingerprint = hashlib.sha256(
+            json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         feature_event_id = await runtime.events.write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
@@ -2482,8 +2575,15 @@ async def submit_triage_intent(
             )
         )
 
-    proposal_event_ids: list[str] = []
+    extracted_at = str(feature_payload.get("extracted_at") or submitted_at.isoformat())
+    candidates = _recorded_intent_candidates(
+        feature_payload,
+        deterministic_candidates=deterministic_candidates,
+    )
+
     proposal_ids: list[str] = []
+    proposal_event_by_id: dict[str, str] = {}
+    missing_proposals: list[tuple[str, dict[str, Any], EventEnvelope]] = []
     for candidate in candidates:
         candidate_values = candidate.feature_payload()
         candidate_fingerprint = hashlib.sha256(
@@ -2517,13 +2617,12 @@ async def submit_triage_intent(
             session.tenant_id, proposal_key
         )
         if prior_proposal is not None:
-            proposal_event_ids.append(str(prior_proposal["event_id"]))
+            proposal_event_by_id[proposal_id] = str(prior_proposal["event_id"])
             continue
-        await _guard_triage_write(
-            runtime, session, "triage.item.proposed", proposal_payload
-        )
-        proposal_event_ids.append(
-            await runtime.events.write(
+        missing_proposals.append(
+            (
+                proposal_id,
+                proposal_payload,
                 EventEnvelope(
                     event_at_ms=int(time.time() * 1000),
                     tenant_id=session.tenant_id,
@@ -2541,13 +2640,60 @@ async def submit_triage_intent(
                     idempotency_key=proposal_key,
                     raw_ref=f"candidate-sha256:{candidate_fingerprint}",
                     payload=proposal_payload,
-                )
+                ),
             )
         )
+
+    # Preflight the complete recorded family before appending any child. A
+    # denial must not leave a partial family after the first projected child
+    # has dismissed the durable member-intent holding row.
+    try:
+        for _proposal_id, proposal_payload, _envelope in missing_proposals:
+            await _guard_triage_write(
+                runtime, session, "triage.item.proposed", proposal_payload
+            )
+    except HTTPException as exc:
+        detail = exc.detail
+        reason = (
+            detail
+            if isinstance(detail, str)
+            else str(detail.get("reason") or detail.get("code") or "write denied")
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": "triage_intent_post_capture",
+                "capture_state": "intent_and_features_recorded",
+                "reason": reason,
+                "recovery": {
+                    "intent_id": intent_id,
+                    "href": (
+                        f"/member/triage?view=needs_interpretation&item={intent_id}"
+                    ),
+                },
+            },
+            headers=exc.headers,
+        ) from exc
+
+    if missing_proposals:
+        appended_ids = await runtime.events.write_batch(
+            [envelope for _proposal_id, _payload, envelope in missing_proposals]
+        )
+        proposal_event_by_id.update(
+            {
+                proposal_id: event_id
+                for (proposal_id, _payload, _envelope), event_id in zip(
+                    missing_proposals, appended_ids, strict=True
+                )
+            }
+        )
+    proposal_event_ids = [
+        proposal_event_by_id[proposal_id] for proposal_id in proposal_ids
+    ]
     if proposal_event_ids:
         await runtime.wait_for_projection("triage", proposal_event_ids[-1])
     else:
-        await runtime.wait_for_projection("triage", intent_event_id)
+        await runtime.wait_for_projection("triage", feature_event_id)
     return {
         "accepted": True,
         "duplicate": duplicate,
@@ -2775,7 +2921,10 @@ async def _enrich_triage_item_locked(
             session,
         )
         await runtime.wait_for_projection("triage", result["event_id"])
-        return {**result, "triage": _owned_triage_item(runtime, session, proposal_id)}
+        return {
+            **result,
+            "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
+        }
     selected_target = str(body.target_kind or item.get("target_kind") or "")
     selected_route = (
         body.route.model_dump(mode="json")
@@ -2800,7 +2949,7 @@ async def _enrich_triage_item_locked(
         await runtime.wait_for_projection("triage", prior["event_id"])
         return {
             "event_id": prior["event_id"],
-            "triage": _owned_triage_item(runtime, session, proposal_id),
+            "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
             "duplicate": True,
         }
     _require_current_triage(
@@ -2835,7 +2984,7 @@ async def _enrich_triage_item_locked(
     await runtime.wait_for_projection("triage", event_id)
     return {
         "event_id": event_id,
-        "triage": _owned_triage_item(runtime, session, proposal_id),
+        "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
     }
 
 
@@ -2864,6 +3013,11 @@ async def _approve_triage_item_locked(
     session: Session,
 ) -> dict[str, Any]:
     item = _owned_triage_item(runtime, session, proposal_id)
+    if item.get("decision_disposition") != "decision":
+        raise HTTPException(
+            409,
+            "supporting or existing-object evidence cannot create duplicate household truth",
+        )
     if item["source_kind"] == "commitment_proposal":
         result = await comms.approve_commitment(
             proposal_id,
@@ -2963,6 +3117,23 @@ async def _approve_triage_item_locked(
         confirmation_event_id = await runtime.events.write(confirmation)
         await runtime.wait_for_projection("triage", confirmation_event_id)
 
+    # Projection acceptance, not append success, authorizes materialization.
+    # Canonical truth can arrive after the API read but before this decision is
+    # projected; in that race the handler deliberately rejects the transition.
+    confirmed_item = _owned_triage_item(runtime, session, proposal_id)
+    if not (
+        confirmed_item.get("decision_disposition") == "decision"
+        and confirmed_item.get("state") == "approved"
+        and confirmed_item.get("domain_approval_event_id") == confirmation_event_id
+        and confirmed_item.get("confirmation_event_id") == confirmation_event_id
+        and confirmed_item.get("confirmation_request_id") == body.request_id
+    ):
+        raise HTTPException(
+            409,
+            "triage confirmation was superseded before materialization; refresh",
+        )
+    item = confirmed_item
+
     if item["target_kind"] in {"calendar_event", "reminder", "list", "list_item"}:
         [external_candidate] = _materialization_envelopes(
             runtime,
@@ -2985,6 +3156,7 @@ async def _approve_triage_item_locked(
             causation_id=confirmation_event_id,
             origin_proposal_id=proposal_id,
         )
+        await runtime.wait_for_projection("triage", pending_event_id)
         return {
             "event_id": confirmation_event_id,
             "confirmation_event_id": confirmation_event_id,

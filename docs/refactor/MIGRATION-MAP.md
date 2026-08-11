@@ -1,5 +1,56 @@
 # Migration map
 
+CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
+REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
+cleanup, a post-write refresh-failure safety latch, generation-invalidated
+pagination with full decision-interval exclusion, action-specific settlement,
+all-surface capture serialization, and presentation copy. No source event,
+event schema, adapter, pipeline, provider object,
+credential, runtime, or dependency migrates. Existing
+`eligibility_rule_replaced` supersession events and feedback receipts remain
+immutable; the member surface now labels their different authority correctly
+without treating a shared reason code as proof of a migration.
+Rollback restores the prior navigation/copy only and cannot remove decisions
+or feedback. The latch is ephemeral browser state and does not migrate or
+rewrite any durable record. The pagination generation is likewise ephemeral;
+it discards only transport results made obsolete by a later member action.
+The Triage-operation latch and causality token are ephemeral. Dirty confirmation
+acquires them before FormData enrichment and retains them through decision and
+authoritative refresh; save, Add-for-review intent, learning-policy, and
+decision work is serialized, replacement renders and retained shared-shell
+intent controls inherit the disabled state, and older callbacks cannot clear
+feedback or a recorded-write refresh-failure latch. Invalidated pagination is
+normalized before its transient state can be mistaken for semantic disabled
+state. The additive enrichment response now returns deterministic computed
+review state; changed readiness blocks confirmation, and a following decision
+rejection refreshes the exact saved current revision independently of the
+ordinary cursor. Ambiguous decision responses reconcile immutable exact-candidate
+state and fail closed if terminal truth cannot be proven. Native dialog cancel
+cannot discard an in-flight Add-for-review form on any surface; one stable
+client request ID and a server-side per-intent lock make an ambiguous retry
+idempotent. A generic definite 4xx is not retried; explicit server provenance
+that intent and features are already recorded permits the one same-ID retry.
+Existing feature events are rehydrated without a second language
+interpretation, and every missing child is governance-preflighted before one
+atomic proposal-family append. Unresolved ambiguity retains an in-dialog action
+to the exact saved Needs interpretation item when known, or All candidates for
+inspection before resubmission. Evidence-only and attach-existing candidates cannot be
+approved through either API route, while exact member confirmation/dismissal
+event/request receipts distinguish the requested action from other immutable
+transitions. Projected acceptance of the exact confirmation is required before
+materialization, so concurrent canonical truth wins. Triage projection v8 replays immutable
+`member.provider_action.confirmed` facts and additively links the pending-action
+receipt to the originating approved candidate. The projection runner reads the
+stored version before stamping candidate metadata. Triage explicitly opts into
+retained event-zero replay before live delivery, and v8 is stamped only after
+that replay succeeds. Exact confirmation receipts are backfilled even when a
+later historical outcome already advanced the row. An interruption therefore
+retains v7 and retries on the next start; no other projection receives implicit replay behavior. Legacy rows
+that predate retained events remain intact. This is a rebuildable read-model
+upgrade only: no durable event, domain approval, provider command, outcome, or
+provider state is migrated or rewritten. Non-continuation banners carry their
+own presentation kind.
+
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable
 message facts, and member decisions are preserved. Adapter v1.1.1 snapshots the

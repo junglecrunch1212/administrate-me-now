@@ -749,7 +749,9 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
                           resolution_reason='approved_awaiting_openclaw',
                           last_event_id=?
                     WHERE tenant_id=? AND proposal_id=?
-                      AND state='pending_review' AND last_event_id < ?""",
+                      AND state='pending_review'
+                      AND decision_disposition='decision'
+                      AND last_event_id < ?""",
                 (
                     payload["confirmed_at"],
                     payload["confirmed_by_member_id"],
@@ -757,6 +759,42 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
                     envelope["event_id"],
                     envelope["tenant_id"],
                     payload["proposal_id"],
+                    envelope["event_id"],
+                ),
+            )
+        confirmation_prefix = (
+            f"triage:triage.item.confirmed:{payload['confirmed_by_member_id']}:"
+        )
+        idempotency_key = str(envelope.get("idempotency_key") or "")
+        if idempotency_key.startswith(confirmation_prefix):
+            conn.execute(
+                """UPDATE triage_items
+                      SET confirmation_event_id=?, confirmation_request_id=?
+                    WHERE tenant_id=? AND proposal_id=?
+                      AND domain_approval_event_id=?""",
+                (
+                    envelope["event_id"],
+                    idempotency_key.removeprefix(confirmation_prefix),
+                    envelope["tenant_id"],
+                    payload["proposal_id"],
+                    envelope["event_id"],
+                ),
+            )
+    elif event_type == "member.provider_action.confirmed":
+        proposal_id = payload.get("origin_proposal_id")
+        if proposal_id:
+            conn.execute(
+                """UPDATE triage_items
+                      SET resolution_reason='approved_awaiting_openclaw',
+                          materialization_event_id=?, last_event_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='approved'
+                      AND domain_approval_event_id=? AND last_event_id < ?""",
+                (
+                    envelope["event_id"],
+                    envelope["event_id"],
+                    envelope["tenant_id"],
+                    proposal_id,
+                    envelope.get("causation_id"),
                     envelope["event_id"],
                 ),
             )
@@ -843,6 +881,24 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolved_by=payload["confirmed_by_member_id"],
             materialized_event_ids=[envelope["event_id"]],
         )
+        confirmation_prefix = (
+            f"command:commitment.confirmed:{payload['commitment_id']}:"
+        )
+        idempotency_key = str(envelope.get("idempotency_key") or "")
+        if idempotency_key.startswith(confirmation_prefix):
+            conn.execute(
+                """UPDATE triage_items
+                      SET confirmation_event_id=?, confirmation_request_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='confirmed'
+                      AND last_event_id=?""",
+                (
+                    envelope["event_id"],
+                    idempotency_key.removeprefix(confirmation_prefix),
+                    envelope["tenant_id"],
+                    payload["commitment_id"],
+                    envelope["event_id"],
+                ),
+            )
     elif event_type == "triage.item.dismissed":
         _resolve(
             envelope,
@@ -854,6 +910,24 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolution_reason=payload.get("reason"),
             allow_pending_interpretation=True,
         )
+        request_prefix = (
+            f"triage:triage.item.dismissed:{payload['dismissed_by_member_id']}:"
+        )
+        idempotency_key = str(envelope.get("idempotency_key") or "")
+        if idempotency_key.startswith(request_prefix):
+            conn.execute(
+                """UPDATE triage_items
+                      SET dismissal_event_id=?, dismissal_request_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='dismissed'
+                      AND last_event_id=?""",
+                (
+                    envelope["event_id"],
+                    idempotency_key.removeprefix(request_prefix),
+                    envelope["tenant_id"],
+                    payload["proposal_id"],
+                    envelope["event_id"],
+                ),
+            )
     elif event_type == "triage.item.superseded":
         _resolve(
             envelope,
@@ -874,3 +948,19 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolved_at=payload["dismissed_at"],
             resolved_by=payload["dismissed_by_party_id"],
         )
+        dismissal_prefix = f"command:commitment.dismissed:{payload['commitment_id']}:"
+        idempotency_key = str(envelope.get("idempotency_key") or "")
+        if idempotency_key.startswith(dismissal_prefix):
+            conn.execute(
+                """UPDATE triage_items
+                      SET dismissal_event_id=?, dismissal_request_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='dismissed'
+                      AND last_event_id=?""",
+                (
+                    envelope["event_id"],
+                    idempotency_key.removeprefix(dismissal_prefix),
+                    envelope["tenant_id"],
+                    payload["commitment_id"],
+                    envelope["event_id"],
+                ),
+            )

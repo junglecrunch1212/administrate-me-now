@@ -8,9 +8,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import uvicorn
+from fastapi import HTTPException
 
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.events.envelope import EventEnvelope
+from adminme.lib.governance import GuardedWriteResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +74,54 @@ def build_app():
         deterministic_member_chat_fixture=True,
     )
     app = create_application(settings)
+
+    def install_triage_failure_hooks() -> None:
+        """Install opt-in, one-shot failures inside the production handlers."""
+
+        runtime = app.state.runtime
+        if getattr(app.state, "triage_failure_hooks_installed", False):
+            return
+        original_check = runtime.guarded_write.check
+        original_write = runtime.events.write
+
+        async def checked_write(session, action, payload):
+            proposal_denials = getattr(app.state, "fail_next_intent_proposal_guards", 0)
+            if proposal_denials and action == "triage.item.proposed":
+                app.state.fail_next_intent_proposal_guards = proposal_denials - 1
+                return GuardedWriteResult(
+                    pass_=False,
+                    layer_failed="governance",
+                    reason="gate7_post_capture_proposal_fixture",
+                    correlation_id=session.correlation_id,
+                )
+            if (
+                getattr(app.state, "fail_next_task_materialization", False)
+                and action == "task.created"
+            ):
+                app.state.fail_next_task_materialization = False
+                return GuardedWriteResult(
+                    pass_=False,
+                    layer_failed="governance",
+                    reason="gate7_post_confirmation_fixture",
+                    correlation_id=session.correlation_id,
+                )
+            return await original_check(session, action, payload)
+
+        async def event_write(envelope, **kwargs):
+            if (
+                getattr(app.state, "fail_next_intent_feature_append", False)
+                and envelope.type == "triage.intent.features_extracted"
+            ):
+                app.state.fail_next_intent_feature_append = False
+                raise HTTPException(
+                    503,
+                    "gate7 fixture interrupted intent processing after durable capture",
+                )
+            return await original_write(envelope, **kwargs)
+
+        runtime.guarded_write.check = checked_write
+        runtime.events.write = event_write
+        app.state.triage_failure_hooks_installed = True
 
     @app.middleware("http")
     async def local_fixture_identity(request, call_next):
@@ -373,6 +423,137 @@ def build_app():
         )
         await runtime.wait_for_projection("triage", proposal_event)
         return {"seeded": 2, "last_event_id": proposal_event}
+
+    @app.post("/__gate7/seed-triage-continuity")
+    async def seed_triage_continuity():
+        """Seed queue-continuity and historical-receipt browser evidence."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-triage-fixture",
+            "source_account_id": PRINCIPAL,
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        proposals = [
+            ("gate7-visual-dismiss-task", "Ignore the promotional digest"),
+            ("gate7-visual-next-task", "Review the household insurance quote"),
+            ("gate7-visual-ambiguous-task", "Verify the summer camp packing list"),
+            (
+                "gate7-visual-mismatched-receipt-task",
+                "Review the caregiver authorization receipt",
+            ),
+            (
+                "gate7-visual-system-dismiss-task",
+                "Review the system-transition dismissal",
+            ),
+            ("gate7-visual-guarded-task", "Reconcile the guarded camp form"),
+            (
+                "gate7-visual-disposition-task",
+                "Attach the insurance note to its existing task",
+            ),
+            ("gate7-visual-retired-task", "Archive the outdated enrollment reminder"),
+        ]
+        event_ids: list[str] = []
+        for proposal_id, title in proposals:
+            event_ids.append(
+                await runtime.events.write(
+                    EventEnvelope(
+                        **common,
+                        type="household.action.proposed",
+                        schema_version=1,
+                        idempotency_key=f"gate7:visual:{proposal_id}",
+                        payload={
+                            "proposal_id": proposal_id,
+                            "kind": "task",
+                            "title": title,
+                            "owner_member_id": PRINCIPAL,
+                            "reason": "explicit_proposal",
+                            "provenance": {"fixture": "gate7-visual"},
+                        },
+                    )
+                )
+            )
+        superseded_id = await runtime.events.write(
+            EventEnvelope(
+                **common,
+                type="triage.item.superseded",
+                schema_version=2,
+                idempotency_key="gate7:visual:retired-eligibility",
+                causation_id=event_ids[-1],
+                payload={
+                    "proposal_id": "gate7-visual-retired-task",
+                    "superseded_at": now.isoformat(),
+                    "replacement_source_event_id": event_ids[-1],
+                    "reason": "eligibility_rule_replaced",
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", superseded_id)
+        return {"seeded": 9, "last_event_id": superseded_id}
+
+    @app.post("/__gate7/fail-next-triage-materialization")
+    async def fail_next_triage_materialization():
+        """Force one local guard refusal after its domain confirmation append."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_task_materialization = True
+        return {"armed": True}
+
+    @app.post("/__gate7/fail-next-intent-after-capture")
+    async def fail_next_intent_after_capture():
+        """Force one handler failure after exact intent text is durable."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_intent_feature_append = True
+        return {"armed": True}
+
+    @app.post("/__gate7/fail-next-intent-proposals")
+    async def fail_next_intent_proposals():
+        """Deny both same-ID proposal attempts after intent/features exist."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_intent_proposal_guards = 2
+        return {"armed": True}
+
+    @app.post("/__gate7/seed-triage-final-ready")
+    async def seed_triage_final_ready():
+        """Seed one isolated adult Ready item for empty-queue browser proof."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="household.action.proposed",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-triage-fixture",
+                source_account_id=ADULT,
+                owner_scope=f"private:{ADULT}",
+                visibility_scope=f"private:{ADULT}",
+                sensitivity="normal",
+                actor_identity=ADULT,
+                idempotency_key="gate7:visual:final-ready",
+                payload={
+                    "proposal_id": "gate7-visual-final-ready",
+                    "kind": "task",
+                    "title": "Review the only ready household item",
+                    "owner_member_id": ADULT,
+                    "reason": "explicit_proposal",
+                    "provenance": {"fixture": "gate7-visual-final-ready"},
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", event_id)
+        return {"seeded": 1, "event_id": event_id}
 
     @app.post("/__gate7/seed-notes")
     async def seed_notes():

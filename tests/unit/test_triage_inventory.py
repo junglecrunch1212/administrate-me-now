@@ -207,7 +207,11 @@ def test_extracted_candidate_never_deduplicates_against_its_parent_intent() -> N
                  FROM triage_items"""
         )
     }
-    assert rows["member-intent-1"]["state"] == "dismissed"
+    parent_receipt = conn.execute(
+        "SELECT state, dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='member-intent-1'"
+    ).fetchone()
+    assert tuple(parent_receipt) == ("dismissed", None, None)
     assert rows["proposal-0002"]["state"] == "pending_review"
     assert rows["proposal-0002"]["decision_disposition"] == "decision"
     assert rows["proposal-0002"]["duplicate_of_proposal_id"] is None
@@ -251,6 +255,9 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
     projection.apply(intent, conn)
     dismissed = _event(5)
     dismissed.update(event_id="event-9002", type="triage.item.dismissed")
+    dismissed["idempotency_key"] = (
+        f"triage:triage.item.dismissed:{MEMBER}:dismiss-request-0001"
+    )
     dismissed["payload"] = {
         "proposal_id": "pending-intent",
         "dismissed_at": "2030-01-03T00:00:00Z",
@@ -258,10 +265,123 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
         "reason": "not_actionable",
     }
     projection.apply(dismissed, conn)
-    state = conn.execute(
-        "SELECT state FROM triage_items WHERE proposal_id='pending-intent'"
-    ).fetchone()[0]
-    assert state == "dismissed"
+    receipt = conn.execute(
+        "SELECT state, dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='pending-intent'"
+    ).fetchone()
+    assert tuple(receipt) == (
+        "dismissed",
+        "event-9002",
+        "dismiss-request-0001",
+    )
+
+
+def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
+    projection, conn = _projection()
+    projection.apply(_event(1), conn)
+    confirmation = {
+        **_event(2),
+        "event_id": "event-9998",
+        "type": "triage.item.confirmed",
+        "schema_version": 2,
+        "idempotency_key": (
+            f"triage:triage.item.confirmed:{MEMBER}:confirm-request-0001"
+        ),
+        "payload": {
+            "proposal_id": "proposal-0001",
+            "confirmed_at": "2030-01-02T00:00:00Z",
+            "confirmed_by_member_id": MEMBER,
+            "expected_last_event_id": "event-0001",
+            "candidate_fingerprint": "fixture-fingerprint",
+        },
+    }
+    projection.apply(confirmation, conn)
+    pending = {
+        **_event(3),
+        "event_id": "event-9999",
+        "type": "member.provider_action.confirmed",
+        "causation_id": "event-9998",
+        "payload": {
+            "action_id": "fixture-action",
+            "member_id": MEMBER,
+            "provider": "apple_calendar",
+            "provider_account_id": MEMBER,
+            "operation": "create_event",
+            "command_payload": {},
+            "request_fingerprint": "fixture-fingerprint",
+            "confirmed_at": "2030-01-02T00:01:00Z",
+            "origin_proposal_id": "proposal-0001",
+        },
+    }
+    projection.apply(pending, conn)
+    receipt = conn.execute(
+        """SELECT state, resolution_reason, domain_approval_event_id,
+                  confirmation_event_id, confirmation_request_id,
+                  materialization_event_id, last_event_id
+             FROM triage_items WHERE proposal_id='proposal-0001'"""
+    ).fetchone()
+    assert tuple(receipt) == (
+        "approved",
+        "approved_awaiting_openclaw",
+        "event-9998",
+        "event-9998",
+        "confirm-request-0001",
+        "event-9999",
+        "event-9999",
+    )
+
+
+def test_commitment_decisions_project_exact_member_request_receipts() -> None:
+    projection, conn = _projection()
+
+    for index, action in enumerate(("confirmed", "dismissed"), start=1):
+        commitment_id = f"commitment-{action}"
+        proposed = {
+            **_event(index),
+            "type": "commitment.proposed",
+            "payload": {
+                "commitment_id": commitment_id,
+                "owed_by_member_id": MEMBER,
+                "text_summary": f"Fixture commitment {action}",
+                "confidence": 0.9,
+                "classify_reasons": ["fixture"],
+            },
+        }
+        projection.apply(proposed, conn)
+        decision = {
+            **_event(index + 10),
+            "type": f"commitment.{action}",
+            "idempotency_key": (
+                f"command:commitment.{action}:{commitment_id}:{action}-request"
+            ),
+            "payload": {
+                "commitment_id": commitment_id,
+                f"{action}_at": "2030-01-03T00:00:00Z",
+                (
+                    "confirmed_by_member_id"
+                    if action == "confirmed"
+                    else "dismissed_by_party_id"
+                ): MEMBER,
+            },
+        }
+        projection.apply(decision, conn)
+
+    confirmed = conn.execute(
+        "SELECT confirmation_event_id, confirmation_request_id "
+        "FROM triage_items WHERE proposal_id='commitment-confirmed'"
+    ).fetchone()
+    dismissed = conn.execute(
+        "SELECT dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='commitment-dismissed'"
+    ).fetchone()
+    assert tuple(confirmed) == (
+        "event-0011",
+        "confirmed-request",
+    )
+    assert tuple(dismissed) == (
+        "event-0012",
+        "dismissed-request",
+    )
 
 
 def test_continuous_long_chat_is_bounded_into_temporal_matters() -> None:

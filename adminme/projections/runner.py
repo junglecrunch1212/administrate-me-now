@@ -136,8 +136,25 @@ class ProjectionRunner:
         if self._started:
             return
         self._started = True
+        replay_required: list[str] = []
         for name, projection in self._projections.items():
-            conn = await asyncio.to_thread(self._open_projection_db, name, projection)
+            db_path = self._config.projection_db_path(name)
+            db_existed = db_path.exists()
+            stored_version = (
+                await asyncio.to_thread(self._stored_projection_version, name)
+                if db_existed
+                else None
+            )
+            version_changed = db_existed and stored_version != str(projection.version)
+            replay_version_change = version_changed and bool(
+                projection.replay_retained_events_on_version_change
+            )
+            conn = await asyncio.to_thread(
+                self._open_projection_db,
+                name,
+                projection,
+                not replay_version_change,
+            )
             self._conns[name] = conn
             self._write_locks[name] = asyncio.Lock()
             subscriber_id = f"projection:{name}"
@@ -151,6 +168,24 @@ class ProjectionRunner:
                 types,
                 self._make_callback(name, projection),
             )
+            if replay_version_change:
+                replay_required.append(name)
+        for name in replay_required:
+            _log.info(
+                "replaying projection %s after reviewed version change",
+                name,
+            )
+            projection = self._projections[name]
+            async with self._write_locks[name]:
+                await self._replay_through(projection, self._conns[name])
+                latest = await self._log.latest_event_id()
+                if latest is not None:
+                    await self._bus.set_checkpoint(f"projection:{name}", latest)
+                await asyncio.to_thread(
+                    self._stamp_projection_metadata,
+                    self._conns[name],
+                    projection,
+                )
         if start_bus:
             await self._bus.start()
 
@@ -312,6 +347,7 @@ class ProjectionRunner:
         self,
         name: str,
         projection: Projection,
+        stamp_version: bool = True,
     ) -> sqlcipher3.Connection:
         db_path = self._config.projection_db_path(name)
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -336,20 +372,53 @@ class ProjectionRunner:
         cur = conn.cursor()
         cur.executescript(schema_sql)
         projection.migrate_schema(conn)
-        # Stamp projection version in a tiny metadata table for debugging.
+        # A version-changing startup stamps only after retained-event replay
+        # succeeds, so a crash cannot make the next restart skip recovery.
         cur.executescript(
             "CREATE TABLE IF NOT EXISTS _projection_meta ("
             "  key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         )
         cur.execute(
             "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
-            ("version", str(projection.version)),
-        )
-        cur.execute(
-            "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
             ("name", projection.name),
         )
+        if stamp_version:
+            self._stamp_projection_metadata(conn, projection)
         return conn
+
+    @staticmethod
+    def _stamp_projection_metadata(
+        conn: sqlcipher3.Connection,
+        projection: Projection,
+    ) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
+            ("version", str(projection.version)),
+        )
+
+    def _stored_projection_version(self, name: str) -> str | None:
+        """Read metadata before opening code can stamp the candidate version."""
+
+        db_path = self._config.projection_db_path(name)
+        conn = sqlcipher3.connect(
+            str(db_path),
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        try:
+            conn.execute(f'PRAGMA key = "{self._key_pragma}"')
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_projection_meta'"
+            ).fetchone()
+            if table is None:
+                return None
+            row = conn.execute(
+                "SELECT value FROM _projection_meta WHERE key='version'"
+            ).fetchone()
+            return str(row[0]) if row is not None else None
+        finally:
+            conn.close()
 
     @staticmethod
     def _read_schema(projection: Projection) -> str:

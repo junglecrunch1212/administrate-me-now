@@ -40,6 +40,7 @@ from adminme.projections.places_assets_accounts import PlacesAssetsAccountsProje
 from adminme.projections.recurrences import RecurrencesProjection
 from adminme.projections.runner import ProjectionRunner
 from adminme.projections.tasks import TasksProjection
+from adminme.projections.triage import TriageProjection
 from adminme.projections.vector_search import VectorSearchProjection
 
 _log = logging.getLogger(__name__)
@@ -121,6 +122,303 @@ def _fake_embedding(text: str, dim: int = 1536) -> list[float]:
     floats = [(h[i % 32] - 127.5) / 127.5 for i in range(dim)]
     mag = sum(f * f for f in floats) ** 0.5
     return [f / mag for f in floats]
+
+
+@pytest.mark.asyncio
+async def test_version_change_replays_triage_before_live_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A populated v7 cursor cannot skip the v8 pending-action receipt."""
+
+    class TriageProjectionV7(TriageProjection):
+        version = 7
+        subscribes_to = [
+            event_type
+            for event_type in TriageProjection.subscribes_to
+            if event_type != "member.provider_action.confirmed"
+        ]
+
+    instance_dir = tmp_path / "triage-upgrade"
+    instance_dir.mkdir()
+    config = load_instance_config(instance_dir)
+    log_v7 = EventLog(config, TEST_KEY)
+    bus_v7 = EventBus(log_v7, config.bus_checkpoint_path)
+    runner_v7 = ProjectionRunner(bus_v7, log_v7, config, encryption_key=TEST_KEY)
+    runner_v7.register(TriageProjectionV7())
+    await runner_v7.start()
+    now = EventEnvelope.now_utc_iso()
+    proposed_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.proposed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="test",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id="source-event",
+            payload={
+                "proposal_id": "proposal-upgrade",
+                "target_kind": "calendar_event",
+                "owner_member_id": "member-a",
+                "title": "Reviewed appointment",
+                "candidate": {"start_at": "2030-01-02T14:00:00Z"},
+                "route": {
+                    "member_id": "member-a",
+                    "provider": "apple_calendar",
+                    "provider_account_id": "member-a",
+                    "container_external_id": "calendar-a",
+                },
+                "source_event_id": "source-event",
+                "confidence": None,
+                "reasons": ["fixture"],
+                "parent_intent_id": None,
+                "candidate_key": "candidate-upgrade",
+                "extraction_event_id": "feature-event",
+                "eligibility_rule_ids": ["fixture_v1"],
+            },
+        )
+    )
+    confirmation_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.confirmed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=proposed_id,
+            idempotency_key=("triage:triage.item.confirmed:member-a:upgrade-request"),
+            payload={
+                "proposal_id": "proposal-upgrade",
+                "confirmed_at": now,
+                "confirmed_by_member_id": "member-a",
+                "expected_last_event_id": proposed_id,
+                "candidate_fingerprint": "a" * 64,
+            },
+        )
+    )
+    pending_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="member.provider_action.confirmed",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=confirmation_id,
+            payload={
+                "action_id": "provider-action-upgrade",
+                "member_id": "member-a",
+                "provider": "apple_calendar",
+                "provider_account_id": "member-a",
+                "operation": "create_event",
+                "command_payload": {},
+                "request_fingerprint": "b" * 64,
+                "confirmed_at": now,
+                "origin_proposal_id": "proposal-upgrade",
+            },
+        )
+    )
+    local_proposal_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.proposed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="test",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id="local-source-event",
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "target_kind": "task",
+                "owner_member_id": "member-a",
+                "title": "Historical local task",
+                "candidate": {"description": "Historical local task"},
+                "route": {"member_id": "member-a"},
+                "source_event_id": "local-source-event",
+                "confidence": None,
+                "reasons": ["fixture"],
+                "parent_intent_id": None,
+                "candidate_key": "candidate-local-upgrade",
+                "extraction_event_id": "feature-local-event",
+                "eligibility_rule_ids": ["fixture_v1"],
+            },
+        )
+    )
+    local_confirmation_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.confirmed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_proposal_id,
+            idempotency_key=(
+                "triage:triage.item.confirmed:member-a:local-upgrade-request"
+            ),
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "confirmed_at": now,
+                "confirmed_by_member_id": "member-a",
+                "expected_last_event_id": local_proposal_id,
+                "candidate_fingerprint": "c" * 64,
+            },
+        )
+    )
+    local_task_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="task.created",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_confirmation_id,
+            payload={
+                "task_id": "task-local-upgrade",
+                "title": "Historical local task",
+                "owner_member_id": "member-a",
+            },
+        )
+    )
+    local_receipt_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.materialized",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_task_id,
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "confirmation_event_id": local_confirmation_id,
+                "materialized_event_ids": [local_task_id],
+                "materialized_at": now,
+            },
+        )
+    )
+    await bus_v7.notify(local_receipt_id)
+    await _wait_idle(bus_v7, "projection:triage")
+    before = (
+        runner_v7.connection("triage")
+        .execute(
+            "SELECT state, materialization_event_id FROM triage_items "
+            "WHERE proposal_id='proposal-upgrade'"
+        )
+        .fetchone()
+    )
+    assert tuple(before) == ("approved", None)
+    local_before = (
+        runner_v7.connection("triage")
+        .execute(
+            "SELECT state, domain_approval_event_id, last_event_id "
+            "FROM triage_items WHERE proposal_id='proposal-local-upgrade'"
+        )
+        .fetchone()
+    )
+    assert tuple(local_before) == (
+        "confirmed",
+        local_confirmation_id,
+        local_receipt_id,
+    )
+    runner_v7.connection("triage").execute(
+        "UPDATE triage_items SET confirmation_event_id=NULL, "
+        "confirmation_request_id=NULL"
+    )
+    await runner_v7.stop()
+    await log_v7.close()
+
+    failed_log = EventLog(config, TEST_KEY)
+    failed_bus = EventBus(failed_log, config.bus_checkpoint_path)
+    failed_runner = ProjectionRunner(
+        failed_bus, failed_log, config, encryption_key=TEST_KEY
+    )
+    failed_runner.register(TriageProjection())
+
+    async def interrupted_replay(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("fixture interrupted version replay")
+
+    monkeypatch.setattr(failed_runner, "_replay_through", interrupted_replay)
+    with pytest.raises(RuntimeError, match="interrupted version replay"):
+        await failed_runner.start()
+    interrupted_version = (
+        failed_runner.connection("triage")
+        .execute("SELECT value FROM _projection_meta WHERE key='version'")
+        .fetchone()[0]
+    )
+    assert interrupted_version == "7"
+    await failed_runner.stop()
+    await failed_log.close()
+
+    log_v8 = EventLog(config, TEST_KEY)
+    bus_v8 = EventBus(log_v8, config.bus_checkpoint_path)
+    runner_v8 = ProjectionRunner(bus_v8, log_v8, config, encryption_key=TEST_KEY)
+    runner_v8.register(TriageProjection())
+    await runner_v8.start()
+    try:
+        after = (
+            runner_v8.connection("triage")
+            .execute(
+                "SELECT state, resolution_reason, domain_approval_event_id, "
+                "materialization_event_id FROM triage_items "
+                "WHERE proposal_id='proposal-upgrade'"
+            )
+            .fetchone()
+        )
+        assert tuple(after) == (
+            "approved",
+            "approved_awaiting_openclaw",
+            confirmation_id,
+            pending_id,
+        )
+        local_after = (
+            runner_v8.connection("triage")
+            .execute(
+                "SELECT state, confirmation_event_id, confirmation_request_id, "
+                "last_event_id FROM triage_items "
+                "WHERE proposal_id='proposal-local-upgrade'"
+            )
+            .fetchone()
+        )
+        assert tuple(local_after) == (
+            "confirmed",
+            local_confirmation_id,
+            "local-upgrade-request",
+            local_receipt_id,
+        )
+        version = (
+            runner_v8.connection("triage")
+            .execute("SELECT value FROM _projection_meta WHERE key='version'")
+            .fetchone()[0]
+        )
+        assert version == "8"
+    finally:
+        await runner_v8.stop()
+        await log_v8.close()
 
 
 async def test_rebuild_preserves_all_ten_projections(rig: dict[str, Any]) -> None:

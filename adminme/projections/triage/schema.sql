@@ -43,8 +43,12 @@ CREATE TABLE IF NOT EXISTS triage_items (
     resolution_reason            TEXT,
     materialized_event_ids_json  TEXT NOT NULL DEFAULT '[]',
     domain_approval_event_id     TEXT,
+    confirmation_event_id        TEXT,
+    confirmation_request_id      TEXT,
     materialization_event_id     TEXT,
     outcome_event_id             TEXT,
+    dismissal_event_id           TEXT,
+    dismissal_request_id         TEXT,
     owner_scope                  TEXT NOT NULL,
     visibility_scope             TEXT NOT NULL,
     sensitivity                  TEXT NOT NULL DEFAULT 'normal'
