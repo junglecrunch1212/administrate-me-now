@@ -25,9 +25,11 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 - reselecting the active lens preserving its continuation message;
 - a forced post-write refresh failure preserving its warning and locking stale
   controls through active- and different-lens clicks until successful reload;
-- a held confirmation followed by a load-more attempt, proving the control is
-  disabled, its handler admits no transport, and the settled refresh cannot be
-  overwritten by pagination started during the decision interval;
+- a load-more request begun and held before confirmation, then released only
+  after the authoritative refresh, proving its stale result cannot overwrite
+  the settled queue;
+- a held confirmation with every Triage control disabled and programmatic lens,
+  enrichment-form, and pagination attempts rejected without new transport;
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -42,7 +44,7 @@ Focused Triage/projection/pipeline/production-composition tests
 48 passed
 
 Gate 7 rendered production composition
-239 assertions; 39 screenshots; 0 console errors; 0 page errors;
+240 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite

@@ -177,7 +177,12 @@ async function reloadActiveSurface() {
   return data;
 }
 
-function lockTriageUntilReload() {
+function triageInteractionLocked() {
+  return state.triageDecisionPending || state.triageRefreshRequired;
+}
+
+function applyTriageInteractionLock() {
+  if (!triageInteractionLocked()) return;
   for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) control.disabled = true;
 }
 
@@ -185,9 +190,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
   if (state.triageDecisionPending) return;
   state.triageDecisionPending = true;
   state.triageLoadGeneration += 1;
-  buttons.forEach((button) => { button.disabled = true; });
-  const pendingLoadMore = document.querySelector("[data-triage-more]");
-  if (pendingLoadMore) pendingLoadMore.disabled = true;
+  applyTriageInteractionLock();
   const banner = $("#state-banner"); banner.hidden = false;
   state.triageBannerKind = "progress";
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
@@ -227,7 +230,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
       state.triageBannerKind = "refresh_failure";
       state.triageRefreshRequired = true;
       banner.textContent = `The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`;
-      lockTriageUntilReload();
+      applyTriageInteractionLock();
     }
     else {
       state.triageBannerKind = "error";
@@ -239,6 +242,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
   } finally {
     state.triageLoadGeneration += 1;
     state.triageDecisionPending = false;
+    if (!state.triageRefreshRequired && currentSurface() === "triage" && state.surface?.surface === "triage") renderSurface(state.surface);
   }
 }
 
@@ -390,6 +394,7 @@ function triageCandidateUpdates(form, targetKind, schema) {
 }
 
 async function saveTriageForm(item, form, { reload = true } = {}) {
+  if (triageInteractionLocked()) return null;
   const values = new FormData(form);
   const targetKind = String(values.get("target_kind") || item.target_kind);
   const candidateUpdates = triageCandidateUpdates(form, targetKind, state.surface?.enrichment_schema);
@@ -685,7 +690,7 @@ function triageVisibleMatters(data, view) {
 }
 
 async function loadMoreTriage(data) {
-  if (state.triageDecisionPending || state.triageRefreshRequired) return;
+  if (triageInteractionLocked()) return;
   const cursor = data.triage?.next_cursor;
   if (!cursor) return;
   const generation = state.triageLoadGeneration;
@@ -704,6 +709,7 @@ async function loadMoreTriage(data) {
 }
 
 async function approveTriageSuggestion(suggestion, button) {
+  if (triageInteractionLocked()) return;
   button.disabled = true;
   const values = { scope_kind: suggestion.scope_kind, scope_value: suggestion.scope_value, disposition: suggestion.suggested_disposition };
   const banner = $("#state-banner"); banner.hidden = false;
@@ -724,6 +730,7 @@ async function approveTriageSuggestion(suggestion, button) {
 }
 
 async function revokeTriageRule(rule, button) {
+  if (triageInteractionLocked()) return;
   button.disabled = true; const banner = $("#state-banner"); banner.hidden = false;
   try { await api(`/api/member/v1/triage-policy/${encodeURIComponent(rule.rule_id)}/revoke`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), reason: "Revoked from Triage learning controls" }) }); banner.textContent = "Shadow rule revoked."; await reloadActiveSurface(); }
   catch (error) { banner.textContent = `${error.message} The rule remains unchanged.`; button.disabled = false; }
@@ -768,7 +775,7 @@ function triageSurface(data) {
     const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
     const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
     button.addEventListener("click", () => {
-      if (state.triageView === key || state.triageRefreshRequired) return;
+      if (state.triageView === key || triageInteractionLocked()) return;
       if (state.triageBannerKind === "continuation") clearBanner();
       state.triageLoadGeneration += 1;
       state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false;
@@ -795,7 +802,7 @@ function triageSurface(data) {
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(matter.context_id === state.triageMatter));
     const first = matter.candidates[0]; const source = first?.source_context?.state === "available" ? [first.source_context.channel && titleCase(first.source_context.channel), first.source_context.sender].filter(Boolean).join(" · ") : null;
     button.append(text("strong", matter.label || first?.title || "Review matter"), text("small", `${matter.candidates.length} candidate${matter.candidates.length === 1 ? "" : "s"} · ${matter.source_count || 1} source${matter.source_count === 1 ? "" : "s"} · ${titleCase(matter.queue_lane)}${source ? ` · ${source}` : ""}`));
-    button.addEventListener("click", () => { state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; state.triageFocusPending = true; replaceQuery({ view: state.triageView, item: state.triageSelected, matter: matter.context_id }); renderSurface(data); }); li.append(button); list.append(li);
+    button.addEventListener("click", () => { if (triageInteractionLocked()) return; state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; state.triageFocusPending = true; replaceQuery({ view: state.triageView, item: state.triageSelected, matter: matter.context_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list);
   if (data.triage?.has_more && state.triageView !== "recent") { const more = text("button", "Load next matters", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
@@ -3332,6 +3339,7 @@ function renderSurface(data) {
     renderToday(data);
   } else if (data.surface === "triage") {
     root.append(freshnessStrip(data), triageSurface(data));
+    applyTriageInteractionLock();
   } else if (data.surface === "comms") {
     renderComms(data);
   } else if (data.surface === "reminders") {

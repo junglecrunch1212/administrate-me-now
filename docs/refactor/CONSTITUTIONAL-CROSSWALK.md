@@ -13,9 +13,11 @@ until successful reload, so stale data cannot regain decision authority.
 Pre-decision pagination is invalidated before a decision or deliberate lens
 change, so a late transport result cannot supersede the later authoritative
 projection read, resurrect resolved work, or alter its feedback. Pagination is
-also disabled and transport-rejected for the full decision interval, and its
-generation rotates again before interaction reopens; a request cannot enter
-after decision start under the same generation as the settled refresh.
+is also part of a full Triage interaction lock: replacement renders remain
+disabled, and lens, matter, form, and pagination handlers reject programmatic
+work. Its generation rotates again before interaction reopens; independently
+tested requests from before and after decision start cannot supersede the
+settled refresh.
 
 CO-013 amendment (2026-08-10): C002/C004/C007/C025/C034/C106-C108 now require
 bounded durable acquisition of pre-existing provider history when a forward-

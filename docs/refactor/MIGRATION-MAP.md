@@ -14,8 +14,9 @@ Rollback restores the prior navigation/copy only and cannot remove decisions
 or feedback. The latch is ephemeral browser state and does not migrate or
 rewrite any durable record. The pagination generation is likewise ephemeral;
 it discards only transport results made obsolete by a later member action.
-The decision-pending latch is ephemeral and admits no pagination request until
-the decision attempt settles; a successful decision requires the authoritative
+The decision-pending latch is ephemeral and admits no lens, matter, enrichment,
+or pagination work until the decision attempt settles. Replacement renders
+inherit the disabled state; a successful decision requires the authoritative
 refresh and a second generation rotation before interaction reopens.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE

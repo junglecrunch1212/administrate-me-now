@@ -17,9 +17,11 @@ latched until a successful reload. Beginning a decision or deliberately
 changing lenses invalidates any older in-flight pagination request; neither a
 late success nor a late failure may replace the newer authoritative surface,
 restore a resolved candidate, clear decision feedback, or re-enable stale
-controls. Load-more is disabled and its handler rejects new work for the full
-decision interval. The request generation rotates again before interaction
-reopens, closing the window for pagination attempted after the decision began.
+controls. Every Triage control is disabled for the full decision interval; any
+decision-time render inherits that lock, and lens, matter, form, and pagination
+handlers reject programmatic work. The request generation rotates again before
+interaction reopens, closing the window for pagination attempted after the
+decision began.
 
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,

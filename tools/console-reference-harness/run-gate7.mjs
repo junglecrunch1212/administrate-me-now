@@ -349,7 +349,7 @@ async function run() {
     let staleTriageLoadRoute;
     let releaseTriageDecision;
     let triageDecisionRoute;
-    let triageLoadStartedDuringDecision = false;
+    let triageCursorRequestCount = 0;
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       if (surface === "triage") {
         let initialPayload;
@@ -361,7 +361,7 @@ async function run() {
           staleTriageLoadRoute = async (route) => {
             const url = new URL(route.request().url());
             if (url.searchParams.has("triage_cursor")) {
-              triageLoadStartedDuringDecision = true;
+              triageCursorRequestCount += 1;
               resolveStaleTriageLoadStarted();
               await staleLoadRelease;
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialPayload) });
@@ -390,6 +390,19 @@ async function run() {
         await principal.page.route("**/api/member/v1/triage/*/approve", triageDecisionRoute);
       }
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
+      if (surface === "triage") {
+        await principal.page.evaluate(() => {
+          window.__gate7OriginalFetch = window.fetch;
+          window.__gate7FetchCounts = { enrich: 0, triageCursor: 0 };
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = (input, options) => {
+            const url = typeof input === "string" ? input : input?.url || String(input);
+            if (url.includes("/enrich")) window.__gate7FetchCounts.enrich += 1;
+            if (url.includes("triage_cursor=")) window.__gate7FetchCounts.triageCursor += 1;
+            return originalFetch(input, options);
+          };
+        });
+      }
       if (surface === "today") {
         record("Today defaults to Day Brief", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await principal.page.locator("#surface").textContent());
         record("Today offers Carousel and What Now", await principal.page.getByRole("button", { name: "Carousel" }).count() === 1 && await principal.page.getByRole("button", { name: "What Now?" }).count() === 1, await principal.page.locator(".today-controls").textContent());
@@ -426,22 +439,39 @@ async function run() {
         record("Triage renders typed task properties", await principal.page.getByLabel("Due date").count() === 1 && await principal.page.getByText("Available from", { exact: true }).count() === 1 && await principal.page.getByText("Energy needed", { exact: true }).count() === 1 && await principal.page.getByText("First tiny step", { exact: true }).count() === 1, await principal.page.locator(".triage-detail").textContent());
         record("Triage removed machine-format date entry", !(await principal.page.locator(".triage-detail").textContent()).includes("ISO 8601"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-task-desktop.png");
+        await principal.page.getByRole("button", { name: "Load next matters" }).click();
+        await staleTriageLoadStarted;
+        const preDecisionFetchCounts = await principal.page.evaluate(() => ({ ...window.__gate7FetchCounts }));
         await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
         await principal.page.getByText("Confirming this candidate through the household gate…").waitFor();
-        const loadMoreDuringDecision = principal.page.getByRole("button", { name: "Load next matters" });
-        const loadMoreDisabledDuringDecision = await loadMoreDuringDecision.isDisabled();
-        await loadMoreDuringDecision.dispatchEvent("click");
-        await Promise.race([staleTriageLoadStarted, new Promise((resolveProbe) => setTimeout(resolveProbe, 100))]);
-        const paginationStartedDuringDecision = triageLoadStartedDuringDecision;
+        const enabledTriageControls = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length);
+        const readyLens = principal.page.getByRole("button", { name: /^Ready/ });
+        const recentLens = principal.page.getByRole("button", { name: /^Recent/ });
+        await recentLens.dispatchEvent("click");
+        const heldForm = principal.page.locator('[data-triage-item="gate7-visual-triage-task"] form');
+        await heldForm.dispatchEvent("submit");
+        await principal.page.locator("[data-triage-more]").dispatchEvent("click");
+        const duringDecisionFetchCounts = await principal.page.evaluate(() => ({ ...window.__gate7FetchCounts }));
+        const decisionIntervalStayedLocked = enabledTriageControls === 0
+          && await readyLens.getAttribute("aria-pressed") === "true"
+          && await recentLens.getAttribute("aria-pressed") === "false"
+          && duringDecisionFetchCounts.enrich === preDecisionFetchCounts.enrich + 1
+          && duringDecisionFetchCounts.triageCursor === preDecisionFetchCounts.triageCursor;
+        record("A pending decision locks every Triage control and rejects new lens, form, and pagination work", decisionIntervalStayedLocked && triageCursorRequestCount === 1, JSON.stringify({ enabledTriageControls, preDecisionFetchCounts, duringDecisionFetchCounts, triageCursorRequestCount, url: principal.page.url() }));
         releaseTriageDecision();
         await principal.page.locator("#state-banner").getByRole("link", { name: "Open Reminders" }).waitFor();
         record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
         record("Triage confirmation continues the active work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.getByRole("heading", { name: "Matters awaiting review" }).count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
         releaseStaleTriageLoad();
-        if (paginationStartedDuringDecision) await staleTriageLoadSettled;
+        await staleTriageLoadSettled;
         await principal.page.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
-        record("Pagination cannot start after a decision begins or resurrect its candidate", loadMoreDisabledDuringDecision && !paginationStartedDuringDecision && await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), JSON.stringify({ loadMoreDisabledDuringDecision, paginationStartedDuringDecision, surface: await principal.page.locator("#surface").textContent() }));
+        record("Pagination begun before a decision cannot resurrect its resolved candidate", triageCursorRequestCount === 1 && await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), JSON.stringify({ triageCursorRequestCount, surface: await principal.page.locator("#surface").textContent() }));
+        await principal.page.evaluate(() => {
+          window.fetch = window.__gate7OriginalFetch;
+          delete window.__gate7OriginalFetch;
+          delete window.__gate7FetchCounts;
+        });
         await principal.page.unroute("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
         await principal.page.unroute("**/api/member/v1/triage/*/approve", triageDecisionRoute);
         await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();

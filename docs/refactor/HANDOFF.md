@@ -2137,17 +2137,21 @@ changes. A request generation also invalidates any pre-decision load-more
 request before the decision begins (and before a deliberate lens change), so
 its eventual success or failure cannot replace the newer authoritative queue,
 restore a resolved candidate, alter decision feedback, or re-enable stale
-controls. A decision-pending latch then disables and transport-rejects
-load-more through the complete decision interval; the generation rotates again
-before interaction reopens, closing the post-start request window.
+controls. A decision-pending latch disables every Triage control through the
+complete decision interval, survives replacement renders, and makes lens,
+matter, enrichment, and pagination handlers reject programmatic work; the
+generation rotates again before interaction reopens, closing the post-start
+request window.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
 lens-change banner cleanup, active-lens preservation, a forced post-write
 refresh failure with stale-control lock and reload recovery, direct Recent
-selection, a held confirmation with a post-start pagination attempt rejected
-before transport, and provenance-bounded lifecycle-receipt copy
-assertion in production composition. The repaired candidate passes 239 assertions and 39
+selection, a pagination request held from before confirmation and released only
+after authoritative refresh, a held confirmation with lens, form, and
+pagination attempts rejected before transport, and provenance-bounded
+lifecycle-receipt copy assertion in production composition. The repaired
+candidate passes 240 assertions and 39
 screenshots with zero console/page/request failures. It also passes 49 strict
 acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,
