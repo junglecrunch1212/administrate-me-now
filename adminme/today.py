@@ -10,6 +10,7 @@ counts here are pure functions of typed state plus an explicit clock.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -183,27 +184,197 @@ def _message_item(
     }
 
 
+_TRIAGE_LANE_EXPLANATIONS = {
+    "security": "A security signal is waiting for an explicit member decision.",
+    "time_bound": "The source includes a time boundary that may make delay costly.",
+    "financial": "The source may affect household cash flow, a bill, or an account.",
+    "member_promise": "The source may contain something the member agreed to do.",
+    "member_priority": "A member-confirmed context rule placed this matter here.",
+    "recurring_exception": "A recurring pattern changed or needs an exception decision.",
+    "standard": "The candidate is still unconfirmed and cannot enter household truth on its own.",
+}
+
+
 def _question_item(row: dict[str, Any]) -> dict[str, Any]:
     proposal_id = str(row["proposal_id"])
+    matter_id = str(row.get("context_id") or proposal_id)
+    proposed_title = row.get("title") or "A household detail needs your decision"
     return {
         "id": proposal_id,
+        "candidate_id": proposal_id,
+        "matter_id": matter_id,
         "kind": "clarifying_question",
-        "title": row.get("title") or "A household detail needs your decision",
+        "title": proposed_title,
+        "candidate_title": proposed_title,
+        "target_kind": row.get("target_kind"),
+        "queue_lane": row.get("queue_lane") or "standard",
         "status": "waiting_for_you",
         "context": str(row.get("target_kind") or "household").replace("_", " "),
         "micro_step": "Check the proposed fact, correct it if needed, then confirm or dismiss.",
         "actions": ["open_triage", "evidence"],
+        "source_event_id": row.get("source_event_id"),
+        "candidate": row.get("candidate") or {},
+        "interpretation": row.get("interpretation"),
+        "eligibility_rule_ids": row.get("eligibility_rule_ids") or [],
+        "proposed_at": row.get("proposed_at"),
         "last_event_id": row.get("last_event_id"),
         "evidence_event_id": row.get("source_event_id") or row.get("last_event_id"),
         "surface_link": surface_link(
             "triage",
             object_kind="item",
             object_id=proposal_id,
+            params={"matter": matter_id, "view": "all_candidates"},
             evidence_event_ids=[
                 str(row.get("source_event_id") or row.get("last_event_id") or "")
             ],
         ),
     }
+
+
+def _decision_prompt(item: dict[str, Any], unresolved: list[str]) -> str:
+    if unresolved:
+        prompt = unresolved[0].strip()
+        if prompt:
+            return prompt if prompt.endswith("?") else f"{prompt}?"
+    target = str(item.get("target_kind") or "household item").replace("_", " ")
+    title = str(item.get("candidate_title") or item.get("title") or "this proposal")
+    return f"Should AdministrateMe add this {target}: {title.rstrip('.?')}?"
+
+
+def add_today_decision_context(surface: dict[str, Any]) -> None:
+    """Publish decision-grade cards after source context has been authorized.
+
+    This is a read-only presentation contract. Fixed code chooses every field,
+    option, consequence, and route; any bounded language interpretation stays
+    labelled review aid and never becomes household truth or authority.
+    """
+
+    brief = surface.get("brief")
+    if not isinstance(brief, dict):
+        return
+    questions = brief.get("questions")
+    if not isinstance(questions, list):
+        return
+    for item in questions:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source_context")
+        source = source if isinstance(source, dict) else {}
+        interpretation = source.get("interpretation")
+        interpretation = interpretation if isinstance(interpretation, dict) else {}
+        unresolved = [
+            str(value).strip()
+            for value in interpretation.get("unresolved_questions") or []
+            if str(value).strip()
+        ]
+        sender = str(source.get("sender") or "").strip()
+        subject = str(source.get("subject") or "").strip()
+        channel = str(source.get("channel") or "").strip()
+        occurred_at = source.get("occurred_at")
+        source_parts = [value for value in (channel, sender, subject) if value]
+        source_label = " · ".join(source_parts) or (
+            "Source details withheld"
+            if source.get("state") == "withheld"
+            else "Source details unavailable"
+        )
+        what_happened = str(
+            interpretation.get("case_summary")
+            or (source.get("meaning") or {}).get("summary")
+            or item.get("candidate_title")
+            or "A source produced a candidate for review."
+        )
+        why_now = str(
+            interpretation.get("why_member")
+            or _TRIAGE_LANE_EXPLANATIONS.get(
+                str(item.get("queue_lane") or "standard"),
+                _TRIAGE_LANE_EXPLANATIONS["standard"],
+            )
+        )
+        next_step = str(
+            interpretation.get("next_step")
+            or "Review the source-grounded proposal, correct it if needed, then confirm or dismiss it."
+        )
+        prompt = _decision_prompt(item, unresolved)
+        target_label = str(item.get("target_kind") or "household item").replace(
+            "_", " "
+        )
+        item["decision_context"] = {
+            "contract": "member-decision-context-v1",
+            "decision_maker": "member",
+            "candidate_id": item.get("candidate_id") or item.get("id"),
+            "matter_id": item.get("matter_id"),
+            "decision_prompt": prompt,
+            "what_happened": what_happened,
+            "why_now": why_now,
+            "source": {
+                "state": source.get("state") or "unavailable",
+                "label": source_label,
+                "channel": channel or None,
+                "sender": sender or None,
+                "subject": subject or None,
+                "occurred_at": occurred_at,
+            },
+            "uncertainties": unresolved,
+            "choices": [
+                {
+                    "id": "confirm",
+                    "label": "Confirm",
+                    "consequence": f"Create or route the reviewed {target_label} only after every governance gate passes.",
+                },
+                {
+                    "id": "correct",
+                    "label": "Correct",
+                    "consequence": "Change the proposed meaning or destination before making it official.",
+                },
+                {
+                    "id": "dismiss",
+                    "label": "Dismiss",
+                    "consequence": "Keep the source as evidence, create no household object, and record why it was rejected.",
+                },
+            ],
+            "smallest_next_step": next_step,
+            "evidence_available": bool((source.get("evidence") or {}).get("quote")),
+            "interpretation_disclosure": (
+                "bounded_language_review_aid"
+                if interpretation
+                else "deterministic_source_facts"
+            ),
+        }
+        item["title"] = prompt
+        item["context"] = source_label
+        item["micro_step"] = next_step
+
+    # ``compose_daily_brief`` serializes the same logical question separately
+    # into Day Brief and Carousel. Source authorization and decision enrichment
+    # intentionally happen afterward, so publish the already-authorized
+    # presentation fields to the matching Carousel copy. The question remains
+    # the single read-time authority; Carousel never reinterprets source data.
+    carousel = brief.get("carousel")
+    carousel_items = carousel.get("items") if isinstance(carousel, dict) else None
+    if not isinstance(carousel_items, list):
+        return
+    questions_by_candidate = {
+        str(item.get("candidate_id") or item.get("id")): item
+        for item in questions
+        if isinstance(item, dict) and (item.get("candidate_id") or item.get("id"))
+    }
+    for item in carousel_items:
+        if not isinstance(item, dict) or item.get("kind") != "clarifying_question":
+            continue
+        question = questions_by_candidate.get(
+            str(item.get("candidate_id") or item.get("id") or "")
+        )
+        if question is None:
+            continue
+        for key in (
+            "source_context",
+            "decision_context",
+            "title",
+            "context",
+            "micro_step",
+        ):
+            if key in question:
+                item[key] = deepcopy(question[key])
 
 
 def _is_for_local_day(value: Any, *, end_utc: datetime) -> bool:
@@ -393,4 +564,4 @@ def compose_daily_brief(
     }
 
 
-__all__ = ["compose_daily_brief"]
+__all__ = ["add_today_decision_context", "compose_daily_brief"]

@@ -2050,3 +2050,40 @@ gates pass.
   advances from 65/474 to 124/474 through two stable pages and 60 matter rows,
   preserves independently reviewable nested children, and has no horizontal
   overflow: the live document is 375 px inside a 390 px phone viewport.
+
+## CO-015 candidate handoff — decision comprehension and surface integrity
+
+CO-015 is implemented and release-gated in an isolated Python 3.14/Node 24
+worktree. It is not yet a merged, deployed, or live-verified claim.
+
+- Today publishes `member-decision-context-v1`: direct question, what happened,
+  why present, authorized source label, uncertainty, fixed
+  Confirm/Correct/Dismiss consequences, smallest next step, candidate/matter
+  identity, and explicit member decision authority.
+- Bounded OpenClaw language remains a labelled review aid only. Fixed code owns
+  fallback wording, choice set, consequences, routes, lookup, and every write
+  boundary; no projection or model router was added.
+- Triage accepts `triage_item`, resolves the complete scoped matter outside the
+  ordinary cursor, retains an exact resolved row outside the Recent limit, and
+  returns pending/resolved/not-found state without cross-member leakage or
+  silent substitution.
+- Browser focus uses exact candidate identity. A deliberate lens change clears
+  stale focus; Gate 7 caught and verified this escape after confirmation.
+- Comms now reports actual candidates and matters with individual exact links,
+  Notes links candidate + matter + view + evidence, Scoreboard active Tasks
+  return to exact Reminders items, and `surface-link-v1` covers all ten adult
+  routes.
+- The full release candidate suite passes: 49 strict acceptance gates, 1,792
+  root/code/pack tests, 60 bridge tests, Ruff/format/mypy/Pyright, dependency
+  audits, performance budgets, package builds, architecture checks, clean
+  install, tenant isolation, backup/restore, and the pinned OpenClaw contract,
+  17 plugin tests, build, package, and audit.
+- Isolated Gate 7 passes 228 assertions and 36 screenshots across five viewport
+  families with zero console, page, or request failures. The production
+  composition proves off-page pending focus, immutable resolved focus, and
+  cross-member `not_found`.
+
+Release completion still requires reviewed-head publication, hosted checks,
+an encrypted live backup, guarded deployment, full Doctor/settlement, and
+authenticated live Today → Triage/Comms/Notes/Scoreboard observation under
+observation mode with zero unintended provider effects.

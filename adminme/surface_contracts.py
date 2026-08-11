@@ -18,6 +18,10 @@ _SURFACE_PATHS = {
     "reminders": "/member/reminders",
     "calendar": "/member/calendar",
     "people": "/member/people",
+    "notes": "/member/notes",
+    "finance": "/member/finance",
+    "scoreboard": "/member/scoreboard",
+    "settings": "/member/settings",
 }
 
 

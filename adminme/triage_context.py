@@ -264,7 +264,13 @@ async def add_triage_source_context(
     if runtime.event_log is None:
         return
     cache: dict[str, dict[str, Any] | None] = {}
-    items = [*(surface.get("items") or []), *(surface.get("recent_items") or [])]
+    brief = surface.get("brief")
+    today_questions = brief.get("questions") or [] if isinstance(brief, Mapping) else []
+    items = [
+        *(surface.get("items") or []),
+        *(surface.get("recent_items") or []),
+        *today_questions,
+    ]
     requested_ids: set[str] = set()
     for item in items:
         requested_ids.add(str(item.get("source_event_id") or ""))

@@ -116,6 +116,62 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         )
         assert other.status_code == 200
         assert other.json()["triage"]["inventory"]["total_candidates"] == 0
+        today = client.get("/api/member/v1/surfaces/today", headers=AUTH_A).json()
+        exact_question = next(
+            item
+            for item in today["brief"]["questions"]
+            if item["candidate_id"] == "co014-proposal-0124"
+        )
+        assert exact_question["decision_context"]["contract"] == (
+            "member-decision-context-v1"
+        )
+        assert exact_question["decision_context"]["decision_maker"] == "member"
+        assert exact_question["decision_context"]["what_happened"] == (
+            "Tenant-neutral candidate 0124"
+        )
+        assert exact_question["surface_link"]["href"].startswith(
+            "/member/triage?item=co014-proposal-0124&matter="
+        )
+        carousel_questions = [
+            item
+            for item in today["brief"]["carousel"]["items"]
+            if item["kind"] == "clarifying_question"
+        ]
+        assert carousel_questions
+        questions_by_id = {
+            item["candidate_id"]: item for item in today["brief"]["questions"]
+        }
+        for carousel_question in carousel_questions:
+            day_brief_question = questions_by_id[carousel_question["candidate_id"]]
+            assert (
+                carousel_question["decision_context"]
+                == day_brief_question["decision_context"]
+            )
+            assert carousel_question["title"] == day_brief_question["title"]
+            assert carousel_question["context"] == day_brief_question["context"]
+            assert carousel_question["micro_step"] == day_brief_question["micro_step"]
+        focused_pending = client.get(
+            "/api/member/v1/surfaces/triage"
+            "?triage_lens=all_candidates&triage_limit=10"
+            "&triage_item=co014-proposal-0124",
+            headers=AUTH_A,
+        ).json()
+        assert focused_pending["focus"] == {
+            "requested_candidate_id": "co014-proposal-0124",
+            "state": "pending",
+            "candidate_state": "pending_review",
+            "matter_id": exact_question["matter_id"],
+        }
+        assert any(
+            item["proposal_id"] == "co014-proposal-0124"
+            for matter in focused_pending["triage"]["matters"]
+            for item in matter["candidates"]
+        )
+        cross_scope_focus = client.get(
+            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0124",
+            headers=AUTH_B,
+        ).json()
+        assert cross_scope_focus["focus"]["state"] == "not_found"
         learning_page = client.get(
             "/api/member/v1/surfaces/triage?triage_lens=all_candidates",
             headers=AUTH_A,
@@ -205,6 +261,32 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
             headers=AUTH_A,
         ).json()
         assert after_revoke_matches["items"] == []
+        focused_item = next(
+            item
+            for item in focused_pending["items"]
+            if item["proposal_id"] == "co014-proposal-0124"
+        )
+        resolved = client.post(
+            "/api/member/v1/triage/co014-proposal-0124/dismiss",
+            headers=AUTH_A,
+            json={
+                "request_id": "co015-resolved-deep-link",
+                "expected_last_event_id": focused_item["last_event_id"],
+                "reason": "Tenant-neutral resolved-link proof",
+                "feedback_reason": "wrong_context",
+            },
+        )
+        assert resolved.status_code == 200, resolved.text
+        focused_resolved = client.get(
+            "/api/member/v1/surfaces/triage?triage_item=co014-proposal-0124",
+            headers=AUTH_A,
+        ).json()
+        assert focused_resolved["focus"]["state"] == "resolved"
+        assert focused_resolved["focus"]["candidate_state"] == "dismissed"
+        assert any(
+            item["proposal_id"] == "co014-proposal-0124"
+            for item in focused_resolved["recent_items"]
+        )
         pending_intent_id = "co014-pending-interpretation"
         pending_event_id = client.portal.call(
             runtime.events.write,

@@ -558,3 +558,15 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Member workload | One source with many instructions occupied many peer rows in a flat master list. | One matter card nests independent child candidates; exact duplicates/existing-object matches remain visible evidence without becoming extra decisions. | MODERNIZE |
 | Dismissal memory | Free-text dismissal ended the proposal but could not improve future review. | Typed feedback is immutable; repeated scoped outcomes create a member-visible rule suggestion; previewed approval is reversible and shadow-only. | MODERNIZE |
 | Runtime registry | Thirteen domain projections plus Triage. | Thirteen domain projections plus Triage and Context Fabric: exact count fifteen in runner, Doctor, backup/restore, Settings, invariants, and release gates. | SUPERSEDE exact-fourteen count; PRESERVE topology |
+
+## CO-015 decision comprehension and link migration delta
+
+| Subsystem | Before | Candidate result | Classification |
+|---|---|---|---|
+| Today decisions | Candidate title, target-kind label, generic micro-step, and generic Review action required the member to reconstruct context. | `member-decision-context-v1` names the direct question, situation, reason, source, uncertainty, fixed consequences, next step, and member authority with progressive disclosure. | MODERNIZE |
+| Today → Triage | Candidate id appeared in the URL, but the server loaded only its ordinary cursor and the browser could silently show another matter. | Candidate plus matter URL state drives an independently authorized focus lookup with pending/resolved/not-found state and exact DOM focus. | SUPERSEDE generic/fallback navigation |
+| Resolved and stale links | Ordinary Recent limit and stale client focus could hide a decision or force a member back to Recent. | Requested resolved rows remain reachable outside the ordinary limit; deliberate lens changes consume stale focus and never reopen a decision. | HARDEN |
+| Comms/Notes candidates | Comms linked a candidate count to Triage top; Notes carried only a candidate id. | Scoped candidate inventory publishes individual candidate/matter links; Notes carries candidate, matter, view, and evidence identity. | MODERNIZE |
+| Scoreboard next steps | Canonical Tasks appeared without a path back to the managing surface. | Active Tasks carry an exact Reminders item link; terminal evidence remains distinct. | MODERNIZE |
+| Surface contract | Typed paths covered only six stable routes. | `surface-link-v1` covers all ten adult routes and remains non-authorizing. | HARDEN |
+| Runtime/domain topology | Fifteen projections and existing sources, models, write gates. | Unchanged: no projection, source store, graph, provider SDK, model router, write path, or external effect added. | PRESERVE |

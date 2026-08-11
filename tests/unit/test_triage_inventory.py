@@ -10,6 +10,7 @@ import sqlcipher3
 from adminme.lib.session import build_internal_session
 from adminme.projections.triage import TriageProjection
 from adminme.projections.triage.queries import (
+    matter_for_proposal,
     pending_for_sources,
     triage_page_for_member,
 )
@@ -111,6 +112,41 @@ def test_cross_surface_candidate_lookup_reads_only_visible_source_rows() -> None
         "proposal-0124",
         "proposal-0001",
     ]
+
+
+def test_exact_matter_lookup_ignores_cursor_position_without_crossing_scope() -> None:
+    projection, conn = _projection()
+    for index in range(125):
+        projection.apply(_event(index), conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+
+    first_page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates", limit=10
+    )
+    assert "proposal-0124" not in {
+        item["proposal_id"]
+        for matter in first_page["matters"]
+        for item in matter["candidates"]
+    }
+    focused = matter_for_proposal(
+        conn,
+        session,
+        member_id=MEMBER,
+        proposal_id="proposal-0124",
+    )
+    assert focused is not None
+    assert focused["context_id"].startswith("ctx_source_")
+    assert [item["proposal_id"] for item in focused["candidates"]] == ["proposal-0124"]
+
+    assert (
+        matter_for_proposal(
+            conn,
+            build_internal_session("other-member", "principal", TENANT),
+            member_id="other-member",
+            proposal_id="proposal-0124",
+        )
+        is None
+    )
 
 
 def test_one_provider_conversation_is_one_matter_with_independent_candidates() -> None:

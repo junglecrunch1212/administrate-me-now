@@ -259,11 +259,11 @@ def compose_comms_cockpit(
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         groups.setdefault(_thread_key(row), []).append(row)
-    triage_sources = {
-        str(item.get("source_event_id"))
-        for item in triage_items
-        if item.get("source_event_id")
-    }
+    triage_by_source: dict[str, list[dict[str, Any]]] = {}
+    for item in triage_items:
+        source_event_id = str(item.get("source_event_id") or "")
+        if source_event_id:
+            triage_by_source.setdefault(source_event_id, []).append(item)
     account_by_key = {
         (str(item["provider"]), str(item["provider_account_id"])): item
         for item in accounts
@@ -289,7 +289,37 @@ def compose_comms_cockpit(
             for row in ordered
             for event_id in _json_list(row.get("raw_event_ids"))
         }
-        triage_count = len(raw_ids & triage_sources)
+        triage_candidates = sorted(
+            {
+                str(item["proposal_id"]): item
+                for source_event_id in raw_ids
+                for item in triage_by_source.get(source_event_id, [])
+            }.values(),
+            key=lambda item: (
+                str(item.get("proposed_at") or ""),
+                str(item.get("proposal_id") or ""),
+            ),
+        )
+        triage_links = [
+            {
+                "candidate_id": str(item["proposal_id"]),
+                "matter_id": str(item.get("context_id") or item["proposal_id"]),
+                "title": item.get("title") or "Review extracted candidate",
+                "queue_lane": item.get("queue_lane") or "standard",
+                "surface_link": surface_link(
+                    "triage",
+                    object_kind="item",
+                    object_id=str(item["proposal_id"]),
+                    params={
+                        "matter": str(item.get("context_id") or item["proposal_id"]),
+                        "view": "all_candidates",
+                    },
+                    evidence_event_ids=[str(item.get("source_event_id") or "")],
+                ),
+            }
+            for item in triage_candidates
+        ]
+        triage_count = len(triage_links)
         bucket, attention = message_attention_decision(
             latest, as_of, triage_count=triage_count
         )
@@ -325,6 +355,10 @@ def compose_comms_cockpit(
                 "unread_count": sum(1 for row in ordered if bool(row.get("unread"))),
                 "message_count": len(messages),
                 "triage_count": triage_count,
+                "triage_matter_count": len(
+                    {item["matter_id"] for item in triage_links}
+                ),
+                "triage_candidates": triage_links,
                 "snoozed_until": latest.get("snoozed_until"),
                 "quieted": bool(latest.get("quieted")),
                 "archived": bool(latest.get("archived")),

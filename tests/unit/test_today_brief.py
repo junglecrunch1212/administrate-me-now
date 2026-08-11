@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from adminme.today import compose_daily_brief
+from adminme.today import add_today_decision_context, compose_daily_brief
 
 
 AS_OF = datetime(2034, 3, 2, 15, 30, 45, tzinfo=timezone.utc)
@@ -154,6 +154,9 @@ def test_daily_brief_is_repeatable_local_and_semantically_distinct() -> None:
     assert by_kind["routine"]["actions"][:2] == ["complete_step", "skip_step"]
     assert by_kind["calendar_event"]["actions"] == ["evidence"]
     assert by_kind["clarifying_question"]["actions"][0] == "open_triage"
+    assert by_kind["clarifying_question"]["surface_link"]["href"] == (
+        "/member/triage?item=proposal-1&matter=proposal-1&view=all_candidates"
+    )
     assert by_kind["message"]["actions"][0] == "open_comms"
     assert by_kind["message"]["surface_link"]["surface"] == "comms"
     assert first["carousel"]["later_is_view_only"] is True
@@ -257,3 +260,75 @@ def test_today_and_comms_share_triage_link_as_an_attention_signal() -> None:
     assert message["triage_count"] == 1
     assert message["attention"]["rule_id"] == "comms.focus-v2"
     assert message["attention"]["signals"]["triage_count"] == 1
+
+
+def test_today_decision_context_names_question_source_choices_and_authority() -> None:
+    brief = compose_daily_brief(
+        member_id="member-a",
+        timezone_name="Etc/UTC",
+        as_of=AS_OF,
+        what_now={"ranked": [], "horizons": {}},
+        calendar_events=[],
+        interactions=[],
+        triage_items=[
+            {
+                "proposal_id": "proposal-exact",
+                "context_id": "matter-exact",
+                "title": "Send the enrollment form",
+                "target_kind": "task",
+                "queue_lane": "time_bound",
+                "source_event_id": "source-exact",
+                "last_event_id": "proposal-event",
+                "candidate": {"due": "2034-03-03"},
+                "interpretation": {
+                    "context_source_event_ids": ["source-exact"],
+                },
+                "eligibility_rule_ids": ["candidate_policy_v1:explicit_action"],
+            }
+        ],
+    )
+    question = brief["questions"][0]
+    question["source_context"] = {
+        "state": "available",
+        "channel": "gmail",
+        "sender": "School office",
+        "subject": "Enrollment form",
+        "occurred_at": "2034-03-02T14:00:00Z",
+        "meaning": {"summary": "The school asked for the signed form."},
+        "evidence": {"quote": "Please send the signed enrollment form."},
+        "interpretation": {
+            "case_summary": "The school requested the signed enrollment form.",
+            "why_member": "The request is addressed to the member and due tomorrow.",
+            "next_step": "Check whether the form is already signed.",
+            "unresolved_questions": ["Has the form already been signed?"],
+        },
+    }
+    add_today_decision_context({"brief": brief})
+
+    value = question["decision_context"]
+    assert value["contract"] == "member-decision-context-v1"
+    assert value["decision_maker"] == "member"
+    assert value["candidate_id"] == "proposal-exact"
+    assert value["matter_id"] == "matter-exact"
+    assert value["decision_prompt"] == "Has the form already been signed?"
+    assert value["what_happened"] == (
+        "The school requested the signed enrollment form."
+    )
+    assert value["source"]["label"] == "gmail · School office · Enrollment form"
+    assert [choice["id"] for choice in value["choices"]] == [
+        "confirm",
+        "correct",
+        "dismiss",
+    ]
+    assert value["interpretation_disclosure"] == "bounded_language_review_aid"
+    assert question["title"] == "Has the form already been signed?"
+    carousel_question = next(
+        item
+        for item in brief["carousel"]["items"]
+        if item["candidate_id"] == "proposal-exact"
+    )
+    assert carousel_question["decision_context"] == value
+    assert carousel_question["source_context"] == question["source_context"]
+    assert carousel_question["title"] == question["title"]
+    assert carousel_question["context"] == question["context"]
+    assert carousel_question["micro_step"] == question["micro_step"]

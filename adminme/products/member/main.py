@@ -131,6 +131,7 @@ from adminme.triage_intent import (
 )
 from adminme.triage_contract import candidate_update_fields, triage_destination
 from adminme.triage_context import add_triage_source_context
+from adminme.today import add_today_decision_context
 
 
 router = APIRouter(tags=["member-portal"])
@@ -3992,6 +3993,7 @@ async def surface(
     ] = "all_candidates",
     triage_cursor: str | None = Query(default=None, max_length=500),
     triage_limit: int = Query(default=30, ge=1, le=100),
+    triage_item: str | None = Query(default=None, max_length=240),
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     await runtime._refresh_capability_registry()
@@ -4018,9 +4020,12 @@ async def surface(
         triage_lens=triage_lens,
         triage_cursor=triage_cursor,
         triage_limit=triage_limit,
+        triage_item=triage_item,
     )
-    if surface == "triage":
+    if surface in {"today", "triage"}:
         await add_triage_source_context(runtime, session, result)
+    if surface == "today":
+        add_today_decision_context(result)
     if surface == "scoreboard" and runtime.event_log is not None:
         rewards: list[dict[str, Any]] = []
         async for event in runtime.event_log.read_since(types=["reward.ready"]):

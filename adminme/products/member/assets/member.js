@@ -11,6 +11,7 @@ const state = {
   triageView: "ready",
   triageSelected: null,
   triageMatter: null,
+  triageFocusPending: false,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -117,6 +118,9 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
     if (status) meta.classList.add("state-label", `state-${String(status).replaceAll("_", "-")}`);
     li.append(meta);
     if (item.reason) li.append(text("small", item.reason));
+    if (item.surface_link?.href) {
+      const open = text("a", "Open item", "link-button"); open.href = item.surface_link.href; li.append(open);
+    }
     if (item.last_event_id) {
       const button = text("button", "View evidence", "link-button");
       button.type = "button";
@@ -148,7 +152,11 @@ async function reloadActiveSurface() {
     if (state.calendarAnchor) params.set("date", state.calendarAnchor);
     path += `?${params}`;
   }
-  if (active === "triage") path += "?triage_lens=all_candidates";
+  if (active === "triage") {
+    const params = new URLSearchParams({ triage_lens: "all_candidates" });
+    if (state.triageSelected) params.set("triage_item", state.triageSelected);
+    path += `?${params}`;
+  }
   if (active === "notes") {
     state.notesResults = null; state.notesQuery = ""; replaceQuery({ q: null });
   }
@@ -448,6 +456,8 @@ function triageDetail(item, data, readOnly = false) {
     section.append(text("h2", "Choose a proposal"), text("p", "Select one item to review its evidence, destination, and exact effect.", "empty"));
     return section;
   }
+  section.dataset.triageItem = item.proposal_id;
+  section.tabIndex = -1;
   const reviewHeading = item.interpretation?.compact_summary || item.title;
   section.append(text("p", readOnly ? "RECENT DECISION" : "REVIEW ONE ITEM", "eyebrow"), text("h2", reviewHeading));
   if (!item.interpretation && item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
@@ -666,13 +676,15 @@ function triageSurface(data) {
   const matterRows = data.triage?.matters || pending.map((item) => ({ context_id: item.context_id || item.proposal_id, label: item.group_label || item.title, queue_lane: item.queue_lane || "standard", candidate_count: 1, source_count: 1, candidates: [item] }));
   const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
   if (!views.has(state.triageView)) state.triageView = "ready";
+  if (state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
+  if (state.triageSelected && data.focus?.state === "resolved") state.triageView = "recent";
   const controls = document.createElement("section"); controls.className = "card comms-controls";
   const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
   for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring exceptions"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
     const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
     const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
     const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
-    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; state.triageMatter = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
+    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false; data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null }; replaceQuery({ view: key, item: null, matter: null }); renderSurface(data); }); tabs.append(button);
   }
   controls.append(tabs);
   if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));
@@ -681,8 +693,10 @@ function triageSurface(data) {
   const visibleMatters = state.triageView === "recent"
     ? recent.map((item) => ({ context_id: `recent:${item.proposal_id}`, label: item.title, queue_lane: item.state, candidate_count: 1, source_count: 1, candidates: [item] }))
     : matterRows.map((matter) => ({ ...matter, candidates: (matter.candidates || []).filter((item) => triageCandidateMatches(item, state.triageView)) })).filter((matter) => matter.candidates.length);
+  const missingRequestedCandidate = Boolean(state.triageSelected && data.focus?.state === "not_found");
   if (state.triageSelected) state.triageMatter = visibleMatters.find((matter) => matter.candidates.some((item) => item.proposal_id === state.triageSelected))?.context_id || state.triageMatter;
-  if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
+  if (missingRequestedCandidate) state.triageMatter = null;
+  else if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Matters awaiting review"));
@@ -692,14 +706,28 @@ function triageSurface(data) {
     const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(matter.context_id === state.triageMatter));
     const first = matter.candidates[0]; const source = first?.source_context?.state === "available" ? [first.source_context.channel && titleCase(first.source_context.channel), first.source_context.sender].filter(Boolean).join(" · ") : null;
     button.append(text("strong", matter.label || first?.title || "Review matter"), text("small", `${matter.candidates.length} candidate${matter.candidates.length === 1 ? "" : "s"} · ${matter.source_count || 1} source${matter.source_count === 1 ? "" : "s"} · ${titleCase(matter.queue_lane)}${source ? ` · ${source}` : ""}`));
-    button.addEventListener("click", () => { state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; replaceQuery({ view: state.triageView, item: state.triageSelected }); renderSurface(data); }); li.append(button); list.append(li);
+    button.addEventListener("click", () => { state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; state.triageFocusPending = true; replaceQuery({ view: state.triageView, item: state.triageSelected, matter: matter.context_id }); renderSurface(data); }); li.append(button); list.append(li);
   }
   master.append(list);
   if (data.triage?.has_more && state.triageView !== "recent") { const more = text("button", "Load next matters", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
   const detail = document.createElement("div"); detail.className = "triage-matter-detail";
-  if (!selectedMatter) detail.append(triageDetail(null, data, state.triageView === "recent"));
+  if (missingRequestedCandidate) {
+    const unavailable = document.createElement("section"); unavailable.className = "card triage-detail"; unavailable.setAttribute("role", "status");
+    unavailable.append(text("p", "EXACT REVIEW LINK", "eyebrow"), text("h2", "This candidate is not available in your member scope."), text("p", "It may have been removed by source correction, or the link may belong to a different private member. AdministrateMe did not substitute another decision.", "state-note"));
+    detail.append(unavailable);
+  } else if (!selectedMatter) detail.append(triageDetail(null, data, state.triageView === "recent"));
   else { detail.append(text("p", `${selectedMatter.candidates.length} independently reviewable candidate${selectedMatter.candidates.length === 1 ? "" : "s"}; confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
-  workspace.append(master, detail); fragment.append(workspace); return fragment;
+  workspace.append(master, detail); fragment.append(workspace);
+  if (state.triageSelected && state.triageFocusPending && !missingRequestedCandidate) {
+    queueMicrotask(() => {
+      const target = [...document.querySelectorAll("[data-triage-item]")].find((node) => node.dataset.triageItem === state.triageSelected);
+      if (!target) return;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "start", behavior: "smooth" });
+      state.triageFocusPending = false;
+    });
+  }
+  return fragment;
 }
 
 function rankedItems(value) {
@@ -789,6 +817,36 @@ function todayItemMeta(item) {
   return [item.time_label, item.context, item.status ? memberStatusLabel(item.status) : null]
     .filter(Boolean)
     .join(" · ");
+}
+
+function todayDecisionExplanation(item) {
+  const value = item.decision_context;
+  if (!value) return null;
+  const section = document.createElement("div"); section.className = "today-decision-context";
+  const happened = document.createElement("p"); happened.append(text("strong", "What happened: "), document.createTextNode(value.what_happened || "A source produced a candidate for review."));
+  const why = document.createElement("p"); why.append(text("strong", "Why it is here: "), document.createTextNode(value.why_now || "It still needs your confirmation."));
+  section.append(happened, why);
+  if (value.source?.label) {
+    const source = text("p", value.source.label, "today-decision-source");
+    if (value.source.occurred_at) source.append(document.createTextNode(` · ${new Date(value.source.occurred_at).toLocaleString()}`));
+    section.append(source);
+  }
+  const details = document.createElement("details"); details.className = "today-decision-details";
+  details.append(text("summary", "Context, uncertainties, and consequences"));
+  details.append(text("p", value.smallest_next_step || item.micro_step, "state-note"));
+  if (value.uncertainties?.length) {
+    details.append(text("strong", "Still unknown"));
+    const list = document.createElement("ul"); for (const uncertainty of value.uncertainties) list.append(text("li", uncertainty)); details.append(list);
+  }
+  if (value.choices?.length) {
+    details.append(text("strong", "Your choices"));
+    const choices = document.createElement("dl"); choices.className = "today-decision-choices";
+    for (const choice of value.choices) choices.append(text("dt", choice.label), text("dd", choice.consequence));
+    details.append(choices);
+  }
+  details.append(text("p", value.interpretation_disclosure === "bounded_language_review_aid" ? "The explanation is a bounded language review aid. Exact source words remain evidence; only your decision can make anything official." : "This explanation uses typed source facts and fixed rules. Only your decision can make anything official.", "state-note"));
+  section.append(details);
+  return section;
 }
 
 function setBanner(message) {
@@ -944,7 +1002,9 @@ function todayItem(item, { interactive = true } = {}) {
   body.append(text("strong", item.title || "Household item"));
   const meta = todayItemMeta(item);
   if (meta) body.append(text("span", meta, "meta"));
-  if (item.micro_step) body.append(text("small", item.micro_step));
+  const decisionExplanation = todayDecisionExplanation(item);
+  if (decisionExplanation) body.append(decisionExplanation);
+  else if (item.micro_step) body.append(text("small", item.micro_step));
   const copies = possibleCopySources(item, true); if (copies) body.append(copies);
   li.append(body);
   if (interactive) {
@@ -1098,8 +1158,10 @@ function renderCarousel(brief) {
   section.append(
     text("p", `${titleCase(item.kind)} · ${state.carouselIndex + 1} of ${items.length}`, "eyebrow"),
     text("h2", item.title || "Take the next small step", "action-title"),
-    text("p", item.micro_step || "Open it and decide only the first move.", "microstep"),
   );
+  const decisionExplanation = todayDecisionExplanation(item);
+  if (decisionExplanation) section.append(decisionExplanation);
+  else section.append(text("p", item.micro_step || "Open it and decide only the first move.", "microstep"));
   const meta = todayItemMeta(item);
   if (meta) section.append(text("p", meta, "meta carousel-meta"));
   const copies = possibleCopySources(item); if (copies) section.append(copies);
@@ -1294,7 +1356,14 @@ function commsReadingPane(thread) {
     pane.append(text("p", labels[thread.command_state] || `Command state: ${titleCase(thread.command_state)}.`, `state-label state-${String(thread.command_state).replaceAll("_", "-")}`));
   }
   if (thread.triage_count) {
-    const triage = text("a", `${thread.triage_count} extracted candidate${thread.triage_count === 1 ? "" : "s"} awaiting Triage`, "triage-link"); triage.href = "/member/triage"; pane.append(triage);
+    const triage = document.createElement("section"); triage.className = "comms-triage-links";
+    triage.append(text("strong", `${thread.triage_count} extracted candidate${thread.triage_count === 1 ? "" : "s"} across ${thread.triage_matter_count || thread.triage_count} matter${(thread.triage_matter_count || thread.triage_count) === 1 ? "" : "s"}`));
+    const links = document.createElement("ul");
+    for (const candidate of thread.triage_candidates || []) {
+      const item = document.createElement("li"); const link = text("a", candidate.title || "Review extracted candidate", "triage-link");
+      link.href = candidate.surface_link?.href || "/member/triage"; item.append(link); links.append(item);
+    }
+    triage.append(links); pane.append(triage);
   }
   const messages = document.createElement("ol"); messages.className = "comms-transcript";
   for (const message of thread.messages) messages.append(messageBubble(message)); pane.append(messages);
@@ -3339,6 +3408,8 @@ async function initialize() {
     if (active === "triage") {
       if (["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"].includes(requestedView)) state.triageView = requestedView;
       state.triageSelected = params.get("item");
+      state.triageMatter = params.get("matter");
+      state.triageFocusPending = Boolean(state.triageSelected);
     }
     if (active === "comms") {
       if (["focus", "waiting", "snoozed", "quieted", "all"].includes(requestedView)) state.commsView = requestedView;
@@ -3378,7 +3449,11 @@ async function initialize() {
       if (state.calendarAnchor) query.set("date", state.calendarAnchor);
       path += `?${query}`;
     }
-    if (active === "triage") path += "?triage_lens=all_candidates";
+    if (active === "triage") {
+      const triageParams = new URLSearchParams({ triage_lens: "all_candidates" });
+      if (state.triageSelected) triageParams.set("triage_item", state.triageSelected);
+      path += `?${triageParams}`;
+    }
     let surfaceRequest;
     if (active.startsWith("quest:")) {
       surfaceRequest = api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest);

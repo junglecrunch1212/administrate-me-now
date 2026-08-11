@@ -183,6 +183,30 @@ status column above remains baseline provenance; current registration truth is
 owned by `bootstrap.contracts.PROJECTION_NAMES`, the runner, AC-02/07/39, and
 Doctor.
 
+## CO-015 decision comprehension amendment
+
+The executive loop is incomplete when a projection knows why an item exists
+but the member surface reduces it to a headline and a generic route. A
+decision is not comprehensible unless the member can see the direct question,
+what happened, why it is present, authorized source identity, uncertainty,
+choice consequences, and smallest next step without reconstructing the source
+conversation from memory.
+
+`member-decision-context-v1` is a read-time projection contract, not a new
+domain or stored summary authority. Fixed code owns its vocabulary, fallback,
+choice set, consequences, exact identities, and route. Bounded language may
+populate labelled case/owner/next-step review aids only from authorized source
+evidence. The member remains the sole decision maker; Triage and governance
+remain the only path to canonical materialization or provider intent.
+
+Object identity must also survive the entire executive loop. A candidate link
+names both candidate and deterministic matter; the target surface resolves
+that identity independently of paging and makes pending, resolved, or
+unavailable state explicit. Generic navigation to the top of a surface is not
+an object link. This rule applies across Today, Triage, Comms, Reminders,
+Calendar, People, Notes, Finance, Scoreboard, and Settings without collapsing
+their domain models or sources of truth.
+
 ## Lifecycle vocabulary
 
 Required typed outcomes include: proposed, approved, rejected, held-for-review, completed, deferred, snoozed, blocked/unblocked, corrected/superseded, suppressed, dispatched, delivered, failed, reconciled, and verified. Each carries actor, timestamp, scope/sensitivity, correlation, causation, provenance, and idempotency identity as applicable. Completion or failure is feedback: it must update the relevant projections/workbook and alter what-now when relevant.
