@@ -12,9 +12,11 @@ Triage retained the resolved candidate as exact focus. The subsequent API read
 correctly reported that one item as resolved, but browser code interpreted the
 response as an instruction to change the entire work surface to **Recent**.
 That lane contained many legitimate historical `eligibility_rule_replaced`
-supersession receipts from a reviewed extraction-policy migration. The member
-therefore saw unrelated read-only receipts instead of the next manageable
-candidate and reasonably understood them as an effect of the dismissal.
+supersession receipts. The same reason code covers both reviewed eligibility
+evolution and ordinary replacement by newer conversation context; it does not
+prove migration provenance. The member therefore saw unrelated read-only
+receipts instead of the next manageable candidate and reasonably understood
+them as an effect of the dismissal.
 
 The feedback system itself remained bounded: no shadow rule was created, no
 other candidate was dismissed, and the unresolved inventory remained intact.
@@ -25,12 +27,14 @@ The defect was presentation state and authority legibility.
 - A successful confirm or dismiss consumes the resolved item as browser focus.
 - Candidate and matter query parameters are cleared before reload.
 - The active working lens remains selected and the next visible matter becomes
-  manageable; a decision never implicitly opens Recent.
+  manageable when one remains. If none remains, feedback truthfully says that
+  the refreshed lens is caught up; a decision never implicitly opens Recent.
 - An exact external link to a resolved candidate still opens its immutable
   Recent receipt.
 - Recent is plainly read-only audit history.
-- `eligibility_rule_replaced` is rendered as a reviewed system eligibility
-  migration, not as a rule created by the current dismissal.
+- `eligibility_rule_replaced` is rendered as context-or-eligibility
+  replacement, not as a proven migration or rule created by the current
+  dismissal.
 - Reversible feedback, rule suggestions, shadow-rule approval/revocation,
   events, projections, member isolation, and provider governance are unchanged.
 
@@ -40,7 +44,7 @@ The defect was presentation state and authority legibility.
 |---|---|---|
 | Consume exact focus after successful decision | HARDEN | Client presentation only; the audited result remains immutable and exactly linkable. |
 | Preserve the active working lens and choose the next visible matter | MODERNIZE | Deterministic existing ordering; no model rank, hidden suppression, or new queue store. |
-| Relabel eligibility supersession receipts | HARDEN | Copy changes; event reason and projection state are not rewritten. |
+| Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
 No schema, migration, dependency, runtime, adapter, pipeline, model, canonical
@@ -50,7 +54,7 @@ object, provider object, projection count, or external-write path changes.
 
 AC-41 requires production-composition browser proof for confirm continuity,
 typed spam-dismiss continuity, next-matter selection, candidate/matter URL
-cleanup, explicit member navigation to Recent, historical system-receipt copy,
-and preserved destination receipts. Existing Triage projection/API, feedback,
-learning-policy, replay, privacy/isolation, release, and observation gates must
-remain green.
+cleanup, a final-Ready-item caught-up state, explicit member navigation to Recent,
+provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
+Existing Triage projection/API, feedback, learning-policy, replay,
+privacy/isolation, release, and observation gates must remain green.

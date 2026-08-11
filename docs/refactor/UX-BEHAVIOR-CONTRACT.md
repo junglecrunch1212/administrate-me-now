@@ -2,11 +2,14 @@
 
 CO-016 amendment (2026-08-11): a successful Triage confirmation or typed
 dismissal clears exact-link focus, stays in the member's active working lens,
-and advances to the next independently manageable candidate. It never changes
-the lens to Recent merely because the prior candidate is now resolved. Recent
-remains read-only audit history and distinguishes historical system migration
-receipts from member-authored feedback and learned-rule state. Direct exact
-links to resolved candidates continue to open their immutable receipt.
+and advances to the next independently manageable candidate when one remains.
+If the refreshed lens is empty, feedback says that the member is caught up
+instead of promising another decision. It never changes the lens to Recent
+merely because the prior candidate is now resolved. Recent remains read-only
+audit history and distinguishes historical context-or-eligibility replacement
+receipts from member-authored feedback and learned-rule state without claiming
+unproven migration provenance. Direct exact links to resolved candidates
+continue to open their immutable receipt.
 
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,
@@ -218,7 +221,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-56 | Today, Comms, Notes, and any other candidate-bearing surface link the exact Triage candidate and matter. Triage resolves a scoped `triage_item` independently of its ordinary cursor and returns explicit pending, resolved, or unavailable focus state. Reload/history/filter state cannot substitute another candidate, reopen a decision, or change queue truth. |
 | UX-57 | A deliberate Triage lens change clears exact-link focus. An asynchronous or stale focus response cannot force the member back to the linked lens after that choice. The selected candidate receives keyboard focus without creating a decision or provider effect. |
 | UX-58 | Every stable adult surface participates in `surface-link-v1`. Where a surface shows a canonical item owned by another surface, it exposes an exact return path or explicitly states that no destination surface exists; generic top-of-page navigation is not an object link. |
-| UX-59 | After confirm or Dismiss & teach, Triage clears the resolved candidate and matter from URL and client focus, preserves Ready/Needs details/Needs interpretation/Low signal/Recurring exceptions/Learned rules/All candidates, and deterministically selects the next visible matter. Recent is entered only by explicit member choice or an exact resolved deep link. Historical `eligibility_rule_replaced` receipts state that they are system migrations, not sender rules created by the current dismissal. |
+| UX-59 | After confirm or Dismiss & teach, Triage clears the resolved candidate and matter from URL and client focus, preserves Ready/Needs details/Needs interpretation/Low signal/Recurring exceptions/Learned rules/All candidates, and derives its continuation message from the refreshed visible lens: select the next matter when one remains, say the member is caught up when none remains, or disclose that more matters must be loaded. Recent is entered only by explicit member choice or an exact resolved deep link. Historical `eligibility_rule_replaced` receipts say only that source context or eligibility changed; they do not claim a system migration or a sender-wide rule created by the current dismissal. |
 
 ## State model
 

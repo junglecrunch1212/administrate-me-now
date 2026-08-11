@@ -434,6 +434,39 @@ def build_app():
         await runtime.wait_for_projection("triage", superseded_id)
         return {"seeded": 4, "last_event_id": superseded_id}
 
+    @app.post("/__gate7/seed-triage-final-ready")
+    async def seed_triage_final_ready():
+        """Seed one isolated adult Ready item for empty-queue browser proof."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        event_id = await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="household.action.proposed",
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="gate7-triage-fixture",
+                source_account_id=ADULT,
+                owner_scope=f"private:{ADULT}",
+                visibility_scope=f"private:{ADULT}",
+                sensitivity="normal",
+                actor_identity=ADULT,
+                idempotency_key="gate7:visual:final-ready",
+                payload={
+                    "proposal_id": "gate7-visual-final-ready",
+                    "kind": "task",
+                    "title": "Review the only ready household item",
+                    "owner_member_id": ADULT,
+                    "reason": "explicit_proposal",
+                    "provenance": {"fixture": "gate7-visual-final-ready"},
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", event_id)
+        return {"seeded": 1, "event_id": event_id}
+
     @app.post("/__gate7/seed-notes")
     async def seed_notes():
         """Seed synthetic owner-private Notes and one Triage link."""

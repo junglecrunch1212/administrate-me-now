@@ -2115,21 +2115,29 @@ and automatically switched the surface to Recent. Historical
 `eligibility_rule_replaced` receipts then dominated the visible read-only lane,
 making one dismissal appear to have replaced every candidate.
 
+That reason code is not exclusive to migrations: it also records ordinary
+replacement when a newer conversation anchor supersedes an untouched
+proposal. The presentation therefore must not infer migration provenance from
+the reason alone.
+
 The candidate consumes the resolved selection before reload, clears candidate
 and matter URL state, preserves the active working lens, and selects the next
 visible matter after both confirm and Dismiss & teach. Exact external links to
-resolved candidates still open their immutable Recent receipt. Recent now
-identifies itself as read-only audit history, and eligibility-rule supersession
-copy explicitly identifies a system migration rather than a learned sender
-rule. No event/projection/schema/runtime/provider behavior changes.
+resolved candidates still open their immutable Recent receipt. When no matter
+remains in the refreshed lens, feedback says the member is caught up rather
+than promising another decision. Recent identifies itself as read-only audit
+history, and eligibility-rule supersession copy states only that context or
+eligibility changed rather than claiming a migration or learned sender rule.
+No event/projection/schema/runtime/provider behavior changes.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
-matter continuation, URL cleanup, direct Recent selection, and migration-
-receipt copy assertion in production composition. It passes 233 assertions
-and 38 screenshots with zero console/page/request failures. The complete local
-release suite passes 49 strict acceptance gates, 1,792 root/code/pack tests,
-60 bridge tests, all static/dependency/performance/architecture/package gates,
-clean install, tenant isolation, backup/restore, the pinned OpenClaw contract,
-and its 17 plugin tests. Exact OpenClaw source install and the 69-test arm64
-macOS rehearsal also pass. Final candidate head, hosted checks, independent
-review, and any authorized release evidence remain pending.
+matter continuation, final-Ready-item caught-up feedback, URL cleanup, direct Recent
+selection, and provenance-bounded lifecycle-receipt copy assertion in
+production composition. The repaired candidate passes 235 assertions and 39
+screenshots with zero console/page/request failures. It also passes 49 strict
+acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
+static/dependency/performance/architecture/package gates, clean install,
+tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
+tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.
+Final candidate head, hosted checks, independent review, and any authorized
+release evidence remain pending.

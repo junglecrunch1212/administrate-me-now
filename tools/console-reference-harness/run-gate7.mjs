@@ -187,6 +187,13 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 4, triageContinuity.value);
+  const triageFinalReady = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-triage-final-ready",
+    identities.adult,
+    "POST",
+  );
+  record("isolated final Ready fixture seeded", triageFinalReady.response.ok && triageFinalReady.value.seeded === 1, triageFinalReady.value);
   const calendar = await jsonRequest(
     baseUrl,
     "/__gate7/seed-calendar",
@@ -381,7 +388,7 @@ async function run() {
         await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();
         await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("spam");
         await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
-        await principal.page.getByText("Your reversible feedback was recorded, and the next decision is ready.").waitFor();
+        await principal.page.getByText("Your reversible feedback was recorded. The next decision in this view is ready.").waitFor();
         record("Triage dismissal records feedback without leaving the work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).count() === 0 && await principal.page.locator(".triage-master-button[aria-current=true]").count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
         await screenshot(principal.page, "surface-triage-queue-continuity-desktop.png");
         const bootstrap = await jsonRequest(server.baseUrl, "/api/member/v1/bootstrap", identities.principal);
@@ -398,8 +405,8 @@ async function run() {
         await principal.page.getByRole("button", { name: /^Recent/ }).click();
         await principal.page.locator(".triage-master-button").filter({ hasText: "Archive the outdated enrollment reminder" }).click();
         const eligibilityReceipt = await principal.page.locator(".triage-detail").filter({ hasText: "Archive the outdated enrollment reminder" }).textContent();
-        record("Recent distinguishes migration receipts from learned sender rules", eligibilityReceipt.includes("Retired by a reviewed eligibility upgrade") && eligibilityReceipt.includes("not a sender rule created by a dismissal") && (await principal.page.locator(".triage-master").textContent()).includes("Read-only audit history"), eligibilityReceipt);
-        await screenshot(principal.page, "surface-triage-migration-receipt-desktop.png");
+        record("Recent distinguishes eligibility replacement from learned sender rules without inventing provenance", eligibilityReceipt.includes("Retired after context or eligibility changed") && eligibilityReceipt.includes("historical lifecycle evidence") && eligibilityReceipt.includes("not a sender-wide rule created by this dismissal") && (await principal.page.locator(".triage-master").textContent()).includes("Read-only audit history"), eligibilityReceipt);
+        await screenshot(principal.page, "surface-triage-eligibility-replacement-desktop.png");
         await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).click();
         const destinationLink = principal.page.locator(".triage-detail").getByRole("link", { name: "Open Reminders" });
         routedTaskHref = await destinationLink.getAttribute("href") || "";
@@ -553,6 +560,14 @@ async function run() {
     await principalPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
+    await adult.page.goto(`${server.baseUrl}/member/triage`);
+    await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
+    await adult.page.locator(".triage-master-button").filter({ hasText: "Review the only ready household item" }).click();
+    await adult.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
+    await adult.page.getByRole("button", { name: "Dismiss & teach" }).click();
+    await adult.page.getByText("Your reversible feedback was recorded. You're caught up in this view.").waitFor();
+    record("Triage final Ready dismissal reports the empty refreshed queue truthfully", await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.locator(".triage-master-button").count() === 0 && (await adult.page.locator(".triage-master").textContent()).includes("Nothing is ready to confirm"), await adult.page.locator("#state-banner").textContent());
+    await screenshot(adult.page, "surface-triage-final-ready-caught-up-tablet.png");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");
     record("tablet Day Brief default", await adult.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await adult.page.locator("#surface").textContent());
     record("observation mode visible", await adult.page.locator("#observation-pill").textContent() === "Observation mode", await adult.page.locator("#observation-pill").textContent());

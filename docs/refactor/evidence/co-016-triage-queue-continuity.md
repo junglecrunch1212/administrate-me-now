@@ -18,10 +18,12 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 
 - confirmation staying in Ready with candidate/matter URL state cleared;
 - typed Spam dismissal staying in Ready and selecting a remaining matter;
+- dismissal of an isolated member's only Ready candidate reporting the empty
+  refreshed Ready queue as caught up;
 - explicit navigation to Recent;
-- exact selection of a system-retired historical candidate;
-- migration-receipt language that cannot be mistaken for a learned sender
-  rule; and
+- exact selection of an eligibility-retired historical candidate;
+- provenance-bounded lifecycle-receipt language that cannot be mistaken for a
+  proven migration or learned sender rule; and
 - the previously proven exact destination receipt and resolved deep-link
   behavior.
 
@@ -32,7 +34,7 @@ Focused Triage/projection/pipeline/production-composition tests
 48 passed
 
 Gate 7 rendered production composition
-233 assertions; 38 screenshots; 0 console errors; 0 page errors;
+235 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite

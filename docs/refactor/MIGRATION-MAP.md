@@ -5,7 +5,8 @@ REVIEWED CANDIDATE** with browser-only focus consumption and presentation
 copy. No event, projection row, schema, adapter, pipeline, provider object,
 credential, runtime, or dependency migrates. Existing
 `eligibility_rule_replaced` supersession events and feedback receipts remain
-immutable; the member surface now labels their different authority correctly.
+immutable; the member surface now labels their different authority correctly
+without treating a shared reason code as proof of a migration.
 Rollback restores the prior navigation/copy only and cannot remove decisions
 or feedback.
 

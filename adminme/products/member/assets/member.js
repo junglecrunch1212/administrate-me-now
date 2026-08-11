@@ -164,7 +164,9 @@ async function reloadActiveSurface() {
     state.peopleResults = null; state.peopleQuery = ""; state.peopleDetail = null;
     replaceQuery({ q: null });
   }
-  renderSurface(await api(path));
+  const data = await api(path);
+  renderSurface(data);
+  return data;
 }
 
 async function decideTriage(item, action, buttons, feedbackReason = null) {
@@ -172,28 +174,41 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
   const banner = $("#state-banner"); banner.hidden = false;
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
   const workingView = state.triageView === "recent" ? "all_candidates" : state.triageView;
+  let decisionRecorded = false;
   try {
     const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
       body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
     });
+    decisionRecorded = true;
     state.triageView = workingView;
     state.triageSelected = null;
     state.triageMatter = null;
     state.triageFocusPending = false;
     replaceQuery({ view: workingView, item: null, matter: null });
-    await reloadActiveSurface();
+    const refreshed = await reloadActiveSurface();
+    const hasNextDecision = triageVisibleMatters(refreshed, workingView).length > 0;
+    const continuation = hasNextDecision
+      ? "The next decision in this view is ready."
+      : refreshed.triage?.has_more
+        ? "No other decision is loaded in this view. Load more matters or choose another view."
+        : "You're caught up in this view.";
     banner.replaceChildren();
-    if (action === "approve" && result.destination) {
-      const pending = result.destination.state === "awaiting_openclaw_approval";
-      banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. `));
-      const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
+    if (action === "approve") {
+      if (result.destination) {
+        const pending = result.destination.state === "awaiting_openclaw_approval";
+        banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ${continuation} ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. ${continuation} `));
+        const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
+      } else banner.textContent = `Confirmed through the household gate. ${continuation}`;
     } else {
-      banner.textContent = feedbackReason ? "Dismissed. No household record was created. Your reversible feedback was recorded, and the next decision is ready." : "Dismissed. No household record or provider write was created. The next decision is ready.";
+      banner.textContent = feedbackReason ? `Dismissed. No household record was created. Your reversible feedback was recorded. ${continuation}` : `Dismissed. No household record or provider write was created. ${continuation}`;
     }
   } catch (error) {
-    banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
-    buttons.forEach((button) => { button.disabled = false; });
+    if (decisionRecorded) banner.textContent = `The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`;
+    else {
+      banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
+      buttons.forEach((button) => { button.disabled = false; });
+    }
   }
 }
 
@@ -469,10 +484,10 @@ function triageDetail(item, data, readOnly = false) {
   if (!item.interpretation && item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
   section.append(triageSourceContext(item));
   if (readOnly) {
-    const eligibilityUpgrade = item.resolution_reason === "eligibility_rule_replaced";
-    const outcome = eligibilityUpgrade ? "Retired by a reviewed eligibility upgrade" : item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
+    const eligibilityChanged = item.resolution_reason === "eligibility_rule_replaced";
+    const outcome = eligibilityChanged ? "Retired after context or eligibility changed" : item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
     section.append(text("p", `${outcome}${item.resolved_at ? ` on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
-    if (eligibilityUpgrade) section.append(text("p", "This historical receipt records a system eligibility migration, not a sender rule created by a dismissal.", "state-note"));
+    if (eligibilityChanged) section.append(text("p", "This untouched candidate was replaced after its source context or eligibility changed. It is historical lifecycle evidence, not a sender-wide rule created by this dismissal.", "state-note"));
     if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
     if (item.domain_approval_event_id) section.append(text("p", item.materialized_event_ids?.length ? "Your confirmation was recorded before canonical materialization." : "Your domain confirmation is recorded before any provider action.", "meta"));
     if (item.outcome_event_id) section.append(text("p", "A terminal provider-path outcome is linked to this decision.", "meta"));
@@ -611,6 +626,34 @@ function triageCandidateMatches(item, view) {
   return true;
 }
 
+function triageVisibleMatters(data, view) {
+  const pending = data.items || [];
+  if (view === "recent") {
+    return (data.recent_items || []).map((item) => ({
+      context_id: `recent:${item.proposal_id}`,
+      label: item.title,
+      queue_lane: item.state,
+      candidate_count: 1,
+      source_count: 1,
+      candidates: [item],
+    }));
+  }
+  const matters = data.triage?.matters || pending.map((item) => ({
+    context_id: item.context_id || item.proposal_id,
+    label: item.group_label || item.title,
+    queue_lane: item.queue_lane || "standard",
+    candidate_count: 1,
+    source_count: 1,
+    candidates: [item],
+  }));
+  return matters
+    .map((matter) => ({
+      ...matter,
+      candidates: (matter.candidates || []).filter((item) => triageCandidateMatches(item, view)),
+    }))
+    .filter((matter) => matter.candidates.length);
+}
+
 async function loadMoreTriage(data) {
   const cursor = data.triage?.next_cursor;
   if (!cursor) return;
@@ -681,7 +724,6 @@ function triageSurface(data) {
     for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
     fragment.append(learning);
   }
-  const matterRows = data.triage?.matters || pending.map((item) => ({ context_id: item.context_id || item.proposal_id, label: item.group_label || item.title, queue_lane: item.queue_lane || "standard", candidate_count: 1, source_count: 1, candidates: [item] }));
   const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
   if (!views.has(state.triageView)) state.triageView = "ready";
   if (state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
@@ -698,9 +740,7 @@ function triageSurface(data) {
   if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));
   else controls.append(text("p", `All ${candidateCount} unresolved candidates are loaded; filter counts are complete.`, "state-note"));
   fragment.append(controls);
-  const visibleMatters = state.triageView === "recent"
-    ? recent.map((item) => ({ context_id: `recent:${item.proposal_id}`, label: item.title, queue_lane: item.state, candidate_count: 1, source_count: 1, candidates: [item] }))
-    : matterRows.map((matter) => ({ ...matter, candidates: (matter.candidates || []).filter((item) => triageCandidateMatches(item, state.triageView)) })).filter((matter) => matter.candidates.length);
+  const visibleMatters = triageVisibleMatters(data, state.triageView);
   const missingRequestedCandidate = Boolean(state.triageSelected && data.focus?.state === "not_found");
   if (state.triageSelected) state.triageMatter = visibleMatters.find((matter) => matter.candidates.some((item) => item.proposal_id === state.triageSelected))?.context_id || state.triageMatter;
   if (missingRequestedCandidate) state.triageMatter = null;
@@ -708,7 +748,7 @@ function triageSurface(data) {
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Matters awaiting review"));
-  if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical migration receipts, not new sender rules.", "state-note"));
+  if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical lifecycle receipts, not new sender rules.", "state-note"));
   if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing is in this lens on the loaded pages.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
   for (const matter of visibleMatters) {
