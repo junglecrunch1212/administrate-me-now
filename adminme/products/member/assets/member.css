@@ -139,8 +139,10 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 
 .triage-workspace { display: grid; grid-template-columns: minmax(15rem, .82fr) minmax(20rem, 1.45fr); gap: 1rem; align-items: start; }
 .triage-master, .triage-detail { min-width: 0; }
-.triage-master-list { list-style: none; display: grid; gap: .35rem; margin: .8rem 0 0; padding: 0; }
-.triage-master-button { width: 100%; display: grid; gap: .22rem; border: 1px solid var(--line); border-radius: var(--radius); padding: .72rem; background: #fbf8f2; color: var(--ink); text-align: left; }
+.triage-master-list { min-width: 0; list-style: none; display: grid; gap: .35rem; margin: .8rem 0 0; padding: 0; }
+.triage-master-list li { min-width: 0; }
+.triage-master-button { width: 100%; min-width: 0; max-width: 100%; display: grid; gap: .22rem; border: 1px solid var(--line); border-radius: var(--radius); padding: .72rem; background: #fbf8f2; color: var(--ink); text-align: left; }
+.triage-master-button > * { min-width: 0; overflow-wrap: anywhere; }
 .triage-master-button[aria-current="true"] { border-color: var(--teal); box-shadow: inset 3px 0 0 var(--teal); background: #edf6f3; }
 .triage-master-button small { color: var(--muted); }
 .triage-inventory { border-left: 4px solid var(--teal); }
