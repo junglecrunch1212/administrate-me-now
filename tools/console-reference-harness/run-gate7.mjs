@@ -344,17 +344,25 @@ async function run() {
     let routedTaskBucket = "scheduled";
     let routedTaskHref = "";
     let releaseStaleTriageLoad;
+    let staleTriageLoadStarted;
     let staleTriageLoadSettled;
     let staleTriageLoadRoute;
+    let releaseTriageDecision;
+    let triageDecisionRoute;
+    let triageLoadStartedDuringDecision = false;
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       if (surface === "triage") {
         let initialPayload;
         let initialResponseModified = false;
+        let resolveStaleTriageLoadStarted;
+        staleTriageLoadStarted = new Promise((resolveStarted) => { resolveStaleTriageLoadStarted = resolveStarted; });
         const staleLoadRelease = new Promise((resolveRelease) => { releaseStaleTriageLoad = resolveRelease; });
         staleTriageLoadSettled = new Promise((resolveSettled) => {
           staleTriageLoadRoute = async (route) => {
             const url = new URL(route.request().url());
             if (url.searchParams.has("triage_cursor")) {
+              triageLoadStartedDuringDecision = true;
+              resolveStaleTriageLoadStarted();
               await staleLoadRelease;
               await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialPayload) });
               resolveSettled();
@@ -374,6 +382,12 @@ async function run() {
           };
         });
         await principal.page.route("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
+        const triageDecisionRelease = new Promise((resolveRelease) => { releaseTriageDecision = resolveRelease; });
+        triageDecisionRoute = async (route) => {
+          await triageDecisionRelease;
+          await route.continue();
+        };
+        await principal.page.route("**/api/member/v1/triage/*/approve", triageDecisionRoute);
       }
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "today") {
@@ -413,17 +427,23 @@ async function run() {
         record("Triage removed machine-format date entry", !(await principal.page.locator(".triage-detail").textContent()).includes("ISO 8601"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-task-desktop.png");
         await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
-        await principal.page.getByRole("button", { name: "Load next matters" }).click();
-        await principal.page.getByRole("button", { name: "Loading…" }).waitFor();
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
+        await principal.page.getByText("Confirming this candidate through the household gate…").waitFor();
+        const loadMoreDuringDecision = principal.page.getByRole("button", { name: "Load next matters" });
+        const loadMoreDisabledDuringDecision = await loadMoreDuringDecision.isDisabled();
+        await loadMoreDuringDecision.dispatchEvent("click");
+        await Promise.race([staleTriageLoadStarted, new Promise((resolveProbe) => setTimeout(resolveProbe, 100))]);
+        const paginationStartedDuringDecision = triageLoadStartedDuringDecision;
+        releaseTriageDecision();
         await principal.page.locator("#state-banner").getByRole("link", { name: "Open Reminders" }).waitFor();
         record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
         record("Triage confirmation continues the active work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.getByRole("heading", { name: "Matters awaiting review" }).count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
         releaseStaleTriageLoad();
-        await staleTriageLoadSettled;
+        if (paginationStartedDuringDecision) await staleTriageLoadSettled;
         await principal.page.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
-        record("Late pre-decision load-more response cannot resurrect a resolved candidate", await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#surface").textContent());
+        record("Pagination cannot start after a decision begins or resurrect its candidate", loadMoreDisabledDuringDecision && !paginationStartedDuringDecision && await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), JSON.stringify({ loadMoreDisabledDuringDecision, paginationStartedDuringDecision, surface: await principal.page.locator("#surface").textContent() }));
         await principal.page.unroute("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
+        await principal.page.unroute("**/api/member/v1/triage/*/approve", triageDecisionRoute);
         await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();
         await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("spam");
         await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();

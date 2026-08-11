@@ -15,6 +15,7 @@ const state = {
   triageBannerKind: null,
   triageRefreshRequired: false,
   triageLoadGeneration: 0,
+  triageDecisionPending: false,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -181,8 +182,12 @@ function lockTriageUntilReload() {
 }
 
 async function decideTriage(item, action, buttons, feedbackReason = null) {
+  if (state.triageDecisionPending) return;
+  state.triageDecisionPending = true;
   state.triageLoadGeneration += 1;
   buttons.forEach((button) => { button.disabled = true; });
+  const pendingLoadMore = document.querySelector("[data-triage-more]");
+  if (pendingLoadMore) pendingLoadMore.disabled = true;
   const banner = $("#state-banner"); banner.hidden = false;
   state.triageBannerKind = "progress";
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
@@ -231,6 +236,9 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
       const loadMore = document.querySelector("[data-triage-more]");
       if (loadMore) { loadMore.disabled = false; loadMore.textContent = "Load next matters"; }
     }
+  } finally {
+    state.triageLoadGeneration += 1;
+    state.triageDecisionPending = false;
   }
 }
 
@@ -677,6 +685,7 @@ function triageVisibleMatters(data, view) {
 }
 
 async function loadMoreTriage(data) {
+  if (state.triageDecisionPending || state.triageRefreshRequired) return;
   const cursor = data.triage?.next_cursor;
   if (!cursor) return;
   const generation = state.triageLoadGeneration;
@@ -684,14 +693,14 @@ async function loadMoreTriage(data) {
   try {
     const params = new URLSearchParams({ triage_lens: "all_candidates", triage_cursor: cursor, triage_limit: "30" });
     const next = await api(`/api/member/v1/surfaces/triage?${params}`);
-    if (generation !== state.triageLoadGeneration) return;
+    if (state.triageDecisionPending || state.triageRefreshRequired || generation !== state.triageLoadGeneration) return;
     const known = new Set((data.triage.matters || []).map((matter) => matter.context_id));
     for (const matter of next.triage?.matters || []) if (!known.has(matter.context_id)) data.triage.matters.push(matter);
     const knownItems = new Set((data.items || []).map((item) => item.proposal_id));
     for (const item of next.items || []) if (!knownItems.has(item.proposal_id)) data.items.push(item);
     data.triage.next_cursor = next.triage?.next_cursor || null; data.triage.has_more = Boolean(next.triage?.has_more);
     renderSurface(data);
-  } catch (error) { if (generation !== state.triageLoadGeneration) return; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
+  } catch (error) { if (state.triageDecisionPending || state.triageRefreshRequired || generation !== state.triageLoadGeneration) return; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
 }
 
 async function approveTriageSuggestion(suggestion, button) {

@@ -41,6 +41,10 @@ The defect was presentation state and authority legibility.
   in-flight pagination. A late page response, successful or failed, cannot
   overwrite the authoritative post-decision surface, resurrect a resolved
   candidate, replace feedback, or restore stale action controls.
+- For the entire unresolved decision interval, load-more is visibly disabled
+  and its handler rejects even a programmatic request. The generation rotates
+  again before ordinary interaction reopens, so pagination attempted after the
+  decision began cannot share the generation of the authoritative refresh.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -56,6 +60,7 @@ The defect was presentation state and authority legibility.
 | Clear lens-relative feedback on deliberate lens change | HARDEN | Browser presentation only; the decision and feedback receipts remain immutable. |
 | Latch a recorded-decision refresh failure until successful reload | HARDEN | Stale browser data cannot regain decision controls; the already-recorded decision is not retried or rewritten. |
 | Invalidate pre-decision pagination before a decision or lens change | HARDEN | Browser request ordering only; late transport results cannot supersede a newer projection read or mutate durable truth. |
+| Close pagination for the full decision interval and rotate before reopening | HARDEN | Ephemeral browser concurrency only; no queue, event, projection, or provider authority changes. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
@@ -69,8 +74,8 @@ typed spam-dismiss continuity, next-matter selection, candidate/matter URL
 cleanup, a final-Ready-item caught-up state, explicit member navigation to Recent,
 actual-change-only continuation cleanup, a forced post-write refresh failure
 that keeps stale controls locked through lens clicks until reload,
-delayed pre-decision pagination released only after the authoritative refresh
-without resurrecting the resolved candidate or replacing its feedback,
+a held confirmation followed by an attempted load-more proving that pagination
+is disabled and transport-rejected until the authoritative refresh settles,
 provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

@@ -3,7 +3,7 @@
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
 cleanup, a post-write refresh-failure safety latch, generation-invalidated
-pagination, and presentation copy. No
+pagination with full decision-interval exclusion, and presentation copy. No
 event, projection row, schema, adapter,
 pipeline, provider object,
 credential, runtime, or dependency migrates. Existing
@@ -14,6 +14,9 @@ Rollback restores the prior navigation/copy only and cannot remove decisions
 or feedback. The latch is ephemeral browser state and does not migrate or
 rewrite any durable record. The pagination generation is likewise ephemeral;
 it discards only transport results made obsolete by a later member action.
+The decision-pending latch is ephemeral and admits no pagination request until
+the decision attempt settles; a successful decision requires the authoritative
+refresh and a second generation rotation before interaction reopens.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable
