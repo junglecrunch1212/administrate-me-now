@@ -1,7 +1,6 @@
 # Change Order 015 — Decision comprehension and surface integrity
 
-Status: approved; candidate implementation complete; reviewed release and live
-observation evidence pending.
+Status: deployed and authenticated-live-verified in observation mode.
 
 Governing sources: product thesis; ADR-0000, ADR-0001, ADR-0008; CO-001,
 CO-007, CO-009, CO-011, CO-012, and CO-014; UX-03, UX-05, UX-10, UX-24,
@@ -136,7 +135,31 @@ Required release evidence is:
 6. final release checks, reviewed commit, deployment, authenticated live
    browser observation, Doctor, backup, and zero unintended provider effects.
 
-The current isolated candidate run passes 228 Gate 7 assertions with 36
-screenshots and zero console/page/request failures. This is candidate evidence,
-not a live-release claim; the final handoff must record reviewed-head and live
-runtime evidence separately.
+The final exact-head candidate run passes 229 Gate 7 assertions with 36
+screenshots and zero console/page/request failures.
+
+## 8. Phase B activation evidence
+
+PR #331 head `ca1a29033e48d5d6d32a0cd77de3fc0c1266778f` received a
+content-free independent review receipt after complete exact-head release and
+browser gates, two green hosted checks, clean mergeability, and a thread-aware
+zero-review-thread check. Its merge commit
+`2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe` became `origin/main` before
+Phase B began.
+
+The attested same-runtime updater created encrypted backup
+`administrateme-20260811T102316Z.ambackup`, reported no runtime or OpenClaw
+migration, retained predecessor `0e0f13e`, and left rollback available.
+Independent final status and full Doctor are healthy in observation mode with
+15/15 projections, 8/8 required pipelines, 62,580/62,580 settled source
+obligations, zero pending/missing/failed, the exact OpenClaw/`llm-task` seam,
+and zero synthetic external side effects.
+
+Authenticated read-only live acceptance found decision-grade context in both
+Day Brief and Carousel; followed a candidate + matter + `all_candidates` link
+to the exact rendered and focused Triage item; confirmed a nonexistent id
+produces an explicit no-substitution state; and measured a 375 px document in
+a 390 px phone viewport. Observation remained visible and active, the browser
+recorded no warning or error, and the provider-called terminal count remained
+zero before and after activation. No member decision or provider action was
+performed.
