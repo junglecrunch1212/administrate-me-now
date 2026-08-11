@@ -348,6 +348,14 @@ async function run() {
         await principal.page.getByRole("button", { name: "Carousel" }).click();
         await principal.page.locator(".carousel-card").waitFor();
         record("Today Carousel is interactive", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "false", await principal.page.locator("#surface").textContent());
+        let carouselDecisionText = await principal.page.locator(".carousel-card").textContent();
+        for (let attempt = 0; attempt < 24 && !carouselDecisionText.includes("Should AdministrateMe add this task"); attempt += 1) {
+          const later = principal.page.getByRole("button", { name: "Later" });
+          if (await later.count() === 0) break;
+          await later.click();
+          carouselDecisionText = await principal.page.locator(".carousel-card").textContent();
+        }
+        record("Today Carousel carries the same decision-grade context", carouselDecisionText.includes("Should AdministrateMe add this task") && carouselDecisionText.includes("What happened:") && carouselDecisionText.includes("Why it is here:") && carouselDecisionText.includes("Your choices") && carouselDecisionText.includes("Correct"), carouselDecisionText);
         await screenshot(principal.page, "surface-today-carousel-desktop.png");
       } else if (surface === "triage") {
         const inventoryHeading = await principal.page.locator(".triage-inventory h2").textContent();

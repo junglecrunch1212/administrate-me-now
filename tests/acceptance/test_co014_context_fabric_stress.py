@@ -132,6 +132,24 @@ def test_co014_production_surface_pages_every_candidate_without_scope_leak(
         assert exact_question["surface_link"]["href"].startswith(
             "/member/triage?item=co014-proposal-0124&matter="
         )
+        carousel_questions = [
+            item
+            for item in today["brief"]["carousel"]["items"]
+            if item["kind"] == "clarifying_question"
+        ]
+        assert carousel_questions
+        questions_by_id = {
+            item["candidate_id"]: item for item in today["brief"]["questions"]
+        }
+        for carousel_question in carousel_questions:
+            day_brief_question = questions_by_id[carousel_question["candidate_id"]]
+            assert (
+                carousel_question["decision_context"]
+                == day_brief_question["decision_context"]
+            )
+            assert carousel_question["title"] == day_brief_question["title"]
+            assert carousel_question["context"] == day_brief_question["context"]
+            assert carousel_question["micro_step"] == day_brief_question["micro_step"]
         focused_pending = client.get(
             "/api/member/v1/surfaces/triage"
             "?triage_lens=all_candidates&triage_limit=10"

@@ -10,6 +10,7 @@ counts here are pure functions of typed state plus an explicit clock.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -342,6 +343,38 @@ def add_today_decision_context(surface: dict[str, Any]) -> None:
         item["title"] = prompt
         item["context"] = source_label
         item["micro_step"] = next_step
+
+    # ``compose_daily_brief`` serializes the same logical question separately
+    # into Day Brief and Carousel. Source authorization and decision enrichment
+    # intentionally happen afterward, so publish the already-authorized
+    # presentation fields to the matching Carousel copy. The question remains
+    # the single read-time authority; Carousel never reinterprets source data.
+    carousel = brief.get("carousel")
+    carousel_items = carousel.get("items") if isinstance(carousel, dict) else None
+    if not isinstance(carousel_items, list):
+        return
+    questions_by_candidate = {
+        str(item.get("candidate_id") or item.get("id")): item
+        for item in questions
+        if isinstance(item, dict) and (item.get("candidate_id") or item.get("id"))
+    }
+    for item in carousel_items:
+        if not isinstance(item, dict) or item.get("kind") != "clarifying_question":
+            continue
+        question = questions_by_candidate.get(
+            str(item.get("candidate_id") or item.get("id") or "")
+        )
+        if question is None:
+            continue
+        for key in (
+            "source_context",
+            "decision_context",
+            "title",
+            "context",
+            "micro_step",
+        ):
+            if key in question:
+                item[key] = deepcopy(question[key])
 
 
 def _is_for_local_day(value: Any, *, end_utc: datetime) -> bool:

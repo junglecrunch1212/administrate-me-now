@@ -322,3 +322,13 @@ def test_today_decision_context_names_question_source_choices_and_authority() ->
     ]
     assert value["interpretation_disclosure"] == "bounded_language_review_aid"
     assert question["title"] == "Has the form already been signed?"
+    carousel_question = next(
+        item
+        for item in brief["carousel"]["items"]
+        if item["candidate_id"] == "proposal-exact"
+    )
+    assert carousel_question["decision_context"] == value
+    assert carousel_question["source_context"] == question["source_context"]
+    assert carousel_question["title"] == question["title"]
+    assert carousel_question["context"] == question["context"]
+    assert carousel_question["micro_step"] == question["micro_step"]
