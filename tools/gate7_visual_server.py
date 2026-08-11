@@ -374,6 +374,66 @@ def build_app():
         await runtime.wait_for_projection("triage", proposal_event)
         return {"seeded": 2, "last_event_id": proposal_event}
 
+    @app.post("/__gate7/seed-triage-continuity")
+    async def seed_triage_continuity():
+        """Seed queue-continuity and historical-receipt browser evidence."""
+
+        runtime = app.state.runtime
+        now = datetime.now(timezone.utc)
+        common = {
+            "event_at_ms": int(now.timestamp() * 1000),
+            "tenant_id": runtime.settings.instance.tenant_id,
+            "occurred_at": now.isoformat(),
+            "source_adapter": "gate7-triage-fixture",
+            "source_account_id": PRINCIPAL,
+            "owner_scope": f"private:{PRINCIPAL}",
+            "visibility_scope": f"private:{PRINCIPAL}",
+            "sensitivity": "normal",
+            "actor_identity": PRINCIPAL,
+        }
+        proposals = [
+            ("gate7-visual-dismiss-task", "Ignore the promotional digest"),
+            ("gate7-visual-next-task", "Review the household insurance quote"),
+            ("gate7-visual-retired-task", "Archive the outdated enrollment reminder"),
+        ]
+        event_ids: list[str] = []
+        for proposal_id, title in proposals:
+            event_ids.append(
+                await runtime.events.write(
+                    EventEnvelope(
+                        **common,
+                        type="household.action.proposed",
+                        schema_version=1,
+                        idempotency_key=f"gate7:visual:{proposal_id}",
+                        payload={
+                            "proposal_id": proposal_id,
+                            "kind": "task",
+                            "title": title,
+                            "owner_member_id": PRINCIPAL,
+                            "reason": "explicit_proposal",
+                            "provenance": {"fixture": "gate7-visual"},
+                        },
+                    )
+                )
+            )
+        superseded_id = await runtime.events.write(
+            EventEnvelope(
+                **common,
+                type="triage.item.superseded",
+                schema_version=2,
+                idempotency_key="gate7:visual:retired-eligibility",
+                causation_id=event_ids[-1],
+                payload={
+                    "proposal_id": "gate7-visual-retired-task",
+                    "superseded_at": now.isoformat(),
+                    "replacement_source_event_id": event_ids[-1],
+                    "reason": "eligibility_rule_replaced",
+                },
+            )
+        )
+        await runtime.wait_for_projection("triage", superseded_id)
+        return {"seeded": 4, "last_event_id": superseded_id}
+
     @app.post("/__gate7/seed-notes")
     async def seed_notes():
         """Seed synthetic owner-private Notes and one Triage link."""

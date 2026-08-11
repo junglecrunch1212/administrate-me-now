@@ -180,6 +180,13 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Google Tasks Triage fixture seeded", triageGoogleTask.response.ok && triageGoogleTask.value.seeded === 2, triageGoogleTask.value);
+  const triageContinuity = await jsonRequest(
+    baseUrl,
+    "/__gate7/seed-triage-continuity",
+    identities.principal,
+    "POST",
+  );
+  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 4, triageContinuity.value);
   const calendar = await jsonRequest(
     baseUrl,
     "/__gate7/seed-calendar",
@@ -370,6 +377,13 @@ async function run() {
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
         await principal.page.locator("#state-banner").getByRole("link", { name: "Open Reminders" }).waitFor();
         record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
+        record("Triage confirmation continues the active work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.getByRole("heading", { name: "Matters awaiting review" }).count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();
+        await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("spam");
+        await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
+        await principal.page.getByText("Your reversible feedback was recorded, and the next decision is ready.").waitFor();
+        record("Triage dismissal records feedback without leaving the work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).count() === 0 && await principal.page.locator(".triage-master-button[aria-current=true]").count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
+        await screenshot(principal.page, "surface-triage-queue-continuity-desktop.png");
         const bootstrap = await jsonRequest(server.baseUrl, "/api/member/v1/bootstrap", identities.principal);
         const triageAfterConfirmation = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/triage", identities.principal);
         const recentTaskDecision = triageAfterConfirmation.value.recent_items?.find((value) => value.title === "Send the completed enrollment form");
@@ -382,6 +396,11 @@ async function run() {
         record("Triage receipt is destination-readable before return", routedReminders.response.ok && materializedEvidence.response.ok && Boolean(routedTaskRecord), JSON.stringify({ recent: recentTaskDecision, evidence: materializedEvidence.value, reminders: routedReminders.value }));
         routedTaskBucket = routedTaskRecord.bucket;
         await principal.page.getByRole("button", { name: /^Recent/ }).click();
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Archive the outdated enrollment reminder" }).click();
+        const eligibilityReceipt = await principal.page.locator(".triage-detail").filter({ hasText: "Archive the outdated enrollment reminder" }).textContent();
+        record("Recent distinguishes migration receipts from learned sender rules", eligibilityReceipt.includes("Retired by a reviewed eligibility upgrade") && eligibilityReceipt.includes("not a sender rule created by a dismissal") && (await principal.page.locator(".triage-master").textContent()).includes("Read-only audit history"), eligibilityReceipt);
+        await screenshot(principal.page, "surface-triage-migration-receipt-desktop.png");
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).click();
         const destinationLink = principal.page.locator(".triage-detail").getByRole("link", { name: "Open Reminders" });
         routedTaskHref = await destinationLink.getAttribute("href") || "";
         record("Recent decision retains destination receipt", await destinationLink.count() === 1 && routedTaskHref.includes("item=task%3A"), await principal.page.locator(".triage-detail").textContent());

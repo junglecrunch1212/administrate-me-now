@@ -1,5 +1,14 @@
 # Migration map
 
+CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
+REVIEWED CANDIDATE** with browser-only focus consumption and presentation
+copy. No event, projection row, schema, adapter, pipeline, provider object,
+credential, runtime, or dependency migrates. Existing
+`eligibility_rule_replaced` supersession events and feedback receipts remain
+immutable; the member surface now labels their different authority correctly.
+Rollback restores the prior navigation/copy only and cannot remove decisions
+or feedback.
+
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable
 message facts, and member decisions are preserved. Adapter v1.1.1 snapshots the

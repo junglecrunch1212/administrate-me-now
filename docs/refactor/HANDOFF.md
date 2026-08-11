@@ -2103,3 +2103,33 @@ and zero review threads remained. The guarded merge produced immutable
 - Observation remained active throughout. The provider-called terminal count
   was zero before activation and remained zero after deployment, Doctor, and
   browser acceptance; no decision or provider action was performed.
+
+## CO-016 candidate handoff — Triage queue continuity
+
+Status: implementation candidate; not merged or deployed.
+
+Authenticated live reproduction found that one Acorns spam dismissal did not
+create a global sender rule and did not remove the unresolved inventory. The
+browser retained the now-resolved exact candidate, reloaded it as `resolved`,
+and automatically switched the surface to Recent. Historical
+`eligibility_rule_replaced` receipts then dominated the visible read-only lane,
+making one dismissal appear to have replaced every candidate.
+
+The candidate consumes the resolved selection before reload, clears candidate
+and matter URL state, preserves the active working lens, and selects the next
+visible matter after both confirm and Dismiss & teach. Exact external links to
+resolved candidates still open their immutable Recent receipt. Recent now
+identifies itself as read-only audit history, and eligibility-rule supersession
+copy explicitly identifies a system migration rather than a learned sender
+rule. No event/projection/schema/runtime/provider behavior changes.
+
+Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
+matter continuation, URL cleanup, direct Recent selection, and migration-
+receipt copy assertion in production composition. It passes 233 assertions
+and 38 screenshots with zero console/page/request failures. The complete local
+release suite passes 49 strict acceptance gates, 1,792 root/code/pack tests,
+60 bridge tests, all static/dependency/performance/architecture/package gates,
+clean install, tenant isolation, backup/restore, the pinned OpenClaw contract,
+and its 17 plugin tests. Exact OpenClaw source install and the 69-test arm64
+macOS rehearsal also pass. Final candidate head, hosted checks, independent
+review, and any authorized release evidence remain pending.

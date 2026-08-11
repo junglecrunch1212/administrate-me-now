@@ -171,11 +171,17 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
   buttons.forEach((button) => { button.disabled = true; });
   const banner = $("#state-banner"); banner.hidden = false;
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
+  const workingView = state.triageView === "recent" ? "all_candidates" : state.triageView;
   try {
     const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
       body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
     });
+    state.triageView = workingView;
+    state.triageSelected = null;
+    state.triageMatter = null;
+    state.triageFocusPending = false;
+    replaceQuery({ view: workingView, item: null, matter: null });
     await reloadActiveSurface();
     banner.replaceChildren();
     if (action === "approve" && result.destination) {
@@ -183,7 +189,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
       banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. `));
       const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
     } else {
-      banner.textContent = feedbackReason ? "Dismissed. No household record was created, and this reason is now part of your reversible feedback history." : "Dismissed. No household record or provider write was created.";
+      banner.textContent = feedbackReason ? "Dismissed. No household record was created. Your reversible feedback was recorded, and the next decision is ready." : "Dismissed. No household record or provider write was created. The next decision is ready.";
     }
   } catch (error) {
     banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
@@ -463,8 +469,10 @@ function triageDetail(item, data, readOnly = false) {
   if (!item.interpretation && item.reasons?.length) section.append(text("p", item.reasons.join(" · "), "meta"));
   section.append(triageSourceContext(item));
   if (readOnly) {
-    const outcome = item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
-    section.append(text("p", `${outcome} ${item.resolved_at ? `on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
+    const eligibilityUpgrade = item.resolution_reason === "eligibility_rule_replaced";
+    const outcome = eligibilityUpgrade ? "Retired by a reviewed eligibility upgrade" : item.resolution_reason ? titleCase(item.resolution_reason) : titleCase(item.state);
+    section.append(text("p", `${outcome}${item.resolved_at ? ` on ${new Date(item.resolved_at).toLocaleString()}` : ""}.`, `review-state ${item.state === "failed" ? "" : "ready"}`.trim()));
+    if (eligibilityUpgrade) section.append(text("p", "This historical receipt records a system eligibility migration, not a sender rule created by a dismissal.", "state-note"));
     if (item.materialized_event_ids?.length) section.append(text("p", `${item.materialized_event_ids.length} audited materialization event${item.materialized_event_ids.length === 1 ? "" : "s"}.`, "meta"));
     if (item.domain_approval_event_id) section.append(text("p", item.materialized_event_ids?.length ? "Your confirmation was recorded before canonical materialization." : "Your domain confirmation is recorded before any provider action.", "meta"));
     if (item.outcome_event_id) section.append(text("p", "A terminal provider-path outcome is linked to this decision.", "meta"));
@@ -700,6 +708,7 @@ function triageSurface(data) {
   const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
   const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Matters awaiting review"));
+  if (state.triageView === "recent") master.append(text("p", "Read-only audit history. System-retired candidates are historical migration receipts, not new sender rules.", "state-note"));
   if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing is in this lens on the loaded pages.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
   for (const matter of visibleMatters) {
