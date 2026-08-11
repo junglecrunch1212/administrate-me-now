@@ -2125,15 +2125,18 @@ and matter URL state, preserves the active working lens, and selects the next
 visible matter after both confirm and Dismiss & teach. Exact external links to
 resolved candidates still open their immutable Recent receipt. When no matter
 remains in the refreshed lens, feedback says the member is caught up rather
-than promising another decision. Recent identifies itself as read-only audit
-history, and eligibility-rule supersession copy states only that context or
-eligibility changed rather than claiming a migration or learned sender rule.
-No event/projection/schema/runtime/provider behavior changes.
+than promising another decision. A deliberate lens change clears that
+lens-relative feedback before rendering its new context. Recent identifies
+itself as read-only audit history, and eligibility-rule supersession copy
+states only that context or eligibility changed rather than claiming a
+migration or learned sender rule. No event/projection/schema/runtime/provider
+behavior changes.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
-matter continuation, final-Ready-item caught-up feedback, URL cleanup, direct Recent
-selection, and provenance-bounded lifecycle-receipt copy assertion in
-production composition. The repaired candidate passes 235 assertions and 39
+matter continuation, final-Ready-item caught-up feedback, URL cleanup,
+lens-change banner cleanup, direct Recent selection, and provenance-bounded
+lifecycle-receipt copy assertion in production composition. The repaired
+candidate passes 236 assertions and 39
 screenshots with zero console/page/request failures. It also passes 49 strict
 acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,

@@ -1,8 +1,9 @@
 # Migration map
 
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
-REVIEWED CANDIDATE** with browser-only focus consumption and presentation
-copy. No event, projection row, schema, adapter, pipeline, provider object,
+REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
+cleanup, and presentation copy. No event, projection row, schema, adapter,
+pipeline, provider object,
 credential, runtime, or dependency migrates. Existing
 `eligibility_rule_replaced` supersession events and feedback receipts remain
 immutable; the member surface now labels their different authority correctly

@@ -20,6 +20,8 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 - typed Spam dismissal staying in Ready and selecting a remaining matter;
 - dismissal of an isolated member's only Ready candidate reporting the empty
   refreshed Ready queue as caught up;
+- explicit navigation to another lens clearing the prior lens-relative
+  continuation message;
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -34,7 +36,7 @@ Focused Triage/projection/pipeline/production-composition tests
 48 passed
 
 Gate 7 rendered production composition
-235 assertions; 39 screenshots; 0 console errors; 0 page errors;
+236 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite

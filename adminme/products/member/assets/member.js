@@ -734,7 +734,7 @@ function triageSurface(data) {
     const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
     const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
     const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
-    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false; data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null }; replaceQuery({ view: key, item: null, matter: null }); renderSurface(data); }); tabs.append(button);
+    button.addEventListener("click", () => { clearBanner(); state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false; data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null }; replaceQuery({ view: key, item: null, matter: null }); renderSurface(data); }); tabs.append(button);
   }
   controls.append(tabs);
   if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));

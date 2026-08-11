@@ -403,6 +403,8 @@ async function run() {
         record("Triage receipt is destination-readable before return", routedReminders.response.ok && materializedEvidence.response.ok && Boolean(routedTaskRecord), JSON.stringify({ recent: recentTaskDecision, evidence: materializedEvidence.value, reminders: routedReminders.value }));
         routedTaskBucket = routedTaskRecord.bucket;
         await principal.page.getByRole("button", { name: /^Recent/ }).click();
+        const recentBannerText = await principal.page.locator("#state-banner").textContent();
+        record("Changing Triage lenses clears view-relative continuation feedback", await principal.page.locator("#state-banner").isHidden() && !recentBannerText.includes("next decision in this view"), recentBannerText);
         await principal.page.locator(".triage-master-button").filter({ hasText: "Archive the outdated enrollment reminder" }).click();
         const eligibilityReceipt = await principal.page.locator(".triage-detail").filter({ hasText: "Archive the outdated enrollment reminder" }).textContent();
         record("Recent distinguishes eligibility replacement from learned sender rules without inventing provenance", eligibilityReceipt.includes("Retired after context or eligibility changed") && eligibilityReceipt.includes("historical lifecycle evidence") && eligibilityReceipt.includes("not a sender-wide rule created by this dismissal") && (await principal.page.locator(".triage-master").textContent()).includes("Read-only audit history"), eligibilityReceipt);
