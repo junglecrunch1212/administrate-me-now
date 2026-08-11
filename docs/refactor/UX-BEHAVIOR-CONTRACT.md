@@ -7,7 +7,10 @@ Settings source-assurance totals may report content-free requested, succeeded,
 failed, refused, and pending recovery counts, but never source text, subject,
 sender, account identity, or a cross-member identifier. Until the newer valid
 assessment is appended, the source remains explicitly failed rather than
-appearing empty or silently recovered.
+appearing empty or silently recovered. A delivery-time observation or identity
+mismatch records a terminal refusal for that exact command; it never renders a
+partial candidate or silently resumes if observation is later disabled and
+re-enabled.
 
 CO-016 amendment (2026-08-11): a successful Triage confirmation or typed
 dismissal clears exact-link focus, stays in the member's active working lens,

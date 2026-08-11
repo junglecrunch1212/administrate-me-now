@@ -8,8 +8,10 @@ identities and the pinned seam, while the exhausted failed event remains
 immutable. Source assurance follows the newest valid assessment, not an
 overwritten projection or reused idempotency key. Recovery is bounded,
 restart-idempotent, content-free at the control and diagnostic boundaries,
-observation-only, and unable to authorize canonical or provider truth. C113
-records the exact invariant.
+tenant-bound, observation-checked at both append and delivery, and unable to
+authorize canonical or provider truth. Per-source single-flight selection and
+cold-reopen append ordering prevent two commands or a restarted ID generator
+from displacing terminal history. C113 records the exact invariant.
 
 CO-016 amendment (2026-08-11): C097/C101/C107/C110/C111 are
 **PRESERVED/HARDENED** by deterministic post-decision queue continuation.

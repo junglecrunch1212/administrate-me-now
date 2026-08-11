@@ -103,6 +103,44 @@ def _noise_filtering_checkpoint_token(paths: DeploymentPaths) -> str:
     return hashlib.sha256(checkpoint.encode("utf-8")).hexdigest()[:12]
 
 
+async def _matching_recovery_refusal_token(
+    event_log: EventLog,
+    targets: list[SourceAssessmentRecoveryTarget],
+) -> str:
+    """Change identity only after a prior exact-target command was refused."""
+
+    target_pairs = {
+        (target.source_event_id, target.failed_assessment_event_id)
+        for target in targets
+    }
+    request_pairs: dict[str, tuple[str, str]] = {}
+    refusal_ids: list[str] = []
+    through = await event_log.latest_event_id()
+    if through is not None:
+        event_types = [
+            "source.assessment.recovery_requested",
+            "source.assessment.recovery_refused",
+        ]
+        async for event in event_log.read_metadata_since(
+            None,
+            through=through,
+            types=event_types,
+            include_payload_for=event_types,
+        ):
+            payload = event.get("payload") or {}
+            if event["type"] == "source.assessment.recovery_requested":
+                request_pairs[str(event["event_id"])] = (
+                    str(payload.get("source_event_id") or ""),
+                    str(payload.get("failed_assessment_event_id") or ""),
+                )
+                continue
+            request_pair = request_pairs.get(str(payload.get("request_event_id") or ""))
+            if request_pair in target_pairs:
+                refusal_ids.append(str(event["event_id"]))
+    identity = "\n".join(refusal_ids) if refusal_ids else "none"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+
+
 def load_repair_policy(candidate: Path) -> SourceAssessmentRepairPolicy:
     path = candidate / POLICY_RELATIVE_PATH
     if not path.is_file():
@@ -284,9 +322,11 @@ async def _offline_validate_and_append(
             ).encode("utf-8")
         ).hexdigest()[:16]
         checkpoint_token = _noise_filtering_checkpoint_token(paths)
+        refusal_token = await _matching_recovery_refusal_token(event_log, targets)
         batch = SourceAssessmentRecoveryBatch(
             request_id=(
-                f"guarded-release:{candidate_commit}:{target_digest}:{checkpoint_token}"
+                "guarded-release:"
+                f"{candidate_commit}:{target_digest}:{checkpoint_token}:{refusal_token}"
             ),
             targets=targets,
         )

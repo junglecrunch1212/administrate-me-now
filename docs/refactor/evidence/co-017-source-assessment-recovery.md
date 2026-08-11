@@ -27,6 +27,14 @@ recovery is claimed by this file.
   private same-member scope, non-privileged message source, observation mode,
   batch maximum eight, concurrency maximum two, and three total language
   attempts per request.
+- Execution control: request/source/assessment/runtime tenant identity must
+  match; observation is re-read at delivery; distinct commands for one failed
+  source are single-flight through terminal append; and cold-reopen derived
+  events sort after their request.
+- Durable retry control: the request-bound base call bypasses the selected old
+  causal failure once, while its own base/recovery-1/recovery-2 terminal
+  identities remain non-repeating. A refusal is terminal for its exact command,
+  and the guarded updater derives a new identity only after that refusal.
 - Release policy: the checked-in exception binds the prior live commit, exact
   four source IDs/reasons, and exact 62,623/62,623 settled-count baseline. Every
   changed or additional condition fails closed.
@@ -37,7 +45,7 @@ recovery is claimed by this file.
 
 | Command or slice | Result |
 |---|---|
-| `PYTHONPATH=bridge poetry run pytest -q tests/unit/test_source_assessment_recovery.py` | 4 passed |
+| `PYTHONPATH=bridge poetry run pytest -q tests/unit/test_source_assessment_recovery.py` | 7 passed |
 | Production-composition recovery endpoint integration slice | 1 passed |
 | `PYTHONPATH=bridge poetry run pytest -q tests/unit/bootstrap/test_source_assessment_repair.py` | 3 passed, including rollback-checkpoint advance |
 | Existing noise-filtering, source-assurance, and updater regression slices | 91 passed |
@@ -49,9 +57,9 @@ recovery is claimed by this file.
 | Gate | Result |
 |---|---|
 | `poetry sync --with dev` | Current project installed; no dependency change |
-| `PYTHONPATH=bridge poetry run pytest -q` | 1,642 passed; one upstream Starlette deprecation warning |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,645 passed; one upstream Starlette deprecation warning |
 | `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q` | 55 passed; one upstream Starlette deprecation warning |
-| `bash scripts/acceptance/release-candidate.sh` | PASS: 1,809 root/package tests, 60 bridge tests, Ruff format/lint, mypy, Pyright, both dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw contract/test/build/audit, shellcheck, syntax, and diff checks |
+| `bash scripts/acceptance/release-candidate.sh` | PASS: 1,812 root/package tests, 60 bridge tests, Ruff format/lint, mypy, Pyright, both dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw contract/test/build/audit, shellcheck, syntax, and diff checks |
 | `poetry run ruff check adminme bridge/adminme_bridge` | Passed |
 | `poetry run mypy adminme bridge/adminme_bridge` | 219 source files passed |
 | `bash scripts/verify_invariants.sh` | Passed |
@@ -63,6 +71,17 @@ The first aggregate run stopped at the format gate after its functional suites
 passed because Ruff reported eight changed files “would be reformatted.” The
 formatter was applied, its diff was checked, and the complete aggregate was
 rerun from the beginning to PASS.
+
+The first replacement-head aggregate run passed the 55-test acceptance slice,
+1,812 root/package tests, 60 bridge tests, Ruff, mypy, and dependency audits,
+then stopped at Pyright with
+`Argument of type "str" cannot be assigned to parameter "reason" of type "RecoveryRefusalReason"`.
+The refusal exception's public code attribute was annotated with the exact
+literal type. Independent preflight also reported
+`generated lifecycle catalog is stale` after the refusal vocabulary grew; the
+catalog was regenerated and its checked mode passed. Neither interrupted run
+is counted as the final aggregate result above; the complete suite was rerun
+from the beginning after both repairs.
 
 The first direct macOS rehearsal resolved its hard-coded `python3` to a host
 interpreter without the candidate environment and failed before lab mutation

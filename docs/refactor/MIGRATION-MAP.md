@@ -10,6 +10,11 @@ OpenClaw invocation identities. Source assurance deterministically chooses the
 newest valid assessment for the exact source while retaining all predecessors.
 Generation 20 consumes typed recovery requests directly; it does not use a
 whole-log replay to escape an occupied prior-generation idempotency key.
+Delivery rechecks observation and tenant identity, and distinct requests for
+one failed source are single-flight through the terminal append. Request-bound
+base execution may retry the predecessor's old causal failure once while its
+own durable result remains replay-safe. Fresh-process derived IDs are ordered
+after the command rather than copied from the retained source timestamp.
 
 The guarded updater contains one explicit, expiring baseline exception for the
 known production commit, exact four source IDs/reasons, and exact settled
@@ -20,6 +25,9 @@ identity binds both the exact failed-assessment set and the stopped consumer
 checkpoint, so restart reuses it while a v19 rollback that advances beyond it
 causes the next guarded audit to append safely after that new position. Rollback
 restores release/plugin/launch selection but retains those immutable events.
+An exact command refusal is terminal and contributes a separate content-free
+identity token, so a later guarded attempt appends a new request instead of
+silently reusing the refusal.
 Generation 19 ignores the new request type; a later reviewed generation-20
 start safely delivers or reuses it. No checkpoint edit, database rewrite, event deletion,
 credential migration, provider enrollment, permission change, external write,

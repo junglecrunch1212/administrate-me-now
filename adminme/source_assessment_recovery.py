@@ -34,10 +34,12 @@ RETRYABLE_FAILURE_REASONS = frozenset(
 )
 RecoveryAuthority = Literal["member_principal", "guarded_release_exception"]
 RecoveryRefusalReason = Literal[
+    "observation_inactive",
     "source_not_found",
     "unsupported_source_type",
     "source_not_private",
     "source_privileged",
+    "tenant_mismatch",
     "source_scope_mismatch",
     "request_scope_mismatch",
     "failed_assessment_not_current",
@@ -83,6 +85,8 @@ class ValidatedRecoveryTarget:
 
 class SourceAssessmentRecoveryRefused(RuntimeError):
     """A content-free, stable recovery selection refusal."""
+
+    code: RecoveryRefusalReason
 
     def __init__(self, code: RecoveryRefusalReason) -> None:
         self.code = code
@@ -131,12 +135,16 @@ async def validate_recovery_target(
     target: SourceAssessmentRecoveryTarget,
     *,
     required_owner_scope: str | None = None,
+    required_tenant_id: str | None = None,
 ) -> ValidatedRecoveryTarget:
     """Revalidate privacy, source identity, latest failure, and retryability."""
 
     source = await event_log.get(target.source_event_id)
     if source is None:
         raise SourceAssessmentRecoveryRefused("source_not_found")
+    source_tenant_id = str(source.get("tenant_id") or "")
+    if required_tenant_id is not None and source_tenant_id != required_tenant_id:
+        raise SourceAssessmentRecoveryRefused("tenant_mismatch")
     if source.get("type") not in SUPPORTED_SOURCE_EVENT_TYPES:
         raise SourceAssessmentRecoveryRefused("unsupported_source_type")
     owner_scope = str(source.get("owner_scope") or "")
@@ -156,6 +164,8 @@ async def validate_recovery_target(
     latest = await latest_source_assessment(event_log, target.source_event_id)
     if latest is None or latest.get("event_id") != target.failed_assessment_event_id:
         raise SourceAssessmentRecoveryRefused("failed_assessment_not_current")
+    if str(latest.get("tenant_id") or "") != source_tenant_id:
+        raise SourceAssessmentRecoveryRefused("tenant_mismatch")
     if assessment_outcome(latest) != "failed":
         raise SourceAssessmentRecoveryRefused("assessment_not_failed")
     reason = assessment_reason(latest)
@@ -202,6 +212,7 @@ async def build_recovery_request_envelopes(
             event_log,
             target,
             required_owner_scope=required_owner_scope,
+            required_tenant_id=tenant_id,
         )
         for target in batch.targets
     ]
@@ -261,6 +272,7 @@ __all__ = [
     "RECOVERY_POLICY",
     "RETRYABLE_FAILURE_REASONS",
     "SUPPORTED_SOURCE_EVENT_TYPES",
+    "RecoveryRefusalReason",
     "SourceAssessmentRecoveryBatch",
     "SourceAssessmentRecoveryRefused",
     "SourceAssessmentRecoveryTarget",

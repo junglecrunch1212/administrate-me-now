@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import weakref
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
@@ -54,6 +55,7 @@ from adminme.source_assessment_recovery import (
     RECOVERY_ATTEMPT_LIMIT,
     RECOVERY_MAX_CONCURRENCY,
     RECOVERY_POLICY,
+    RecoveryRefusalReason,
     SourceAssessmentRecoveryRefused,
     target_from_request_event,
     validate_recovery_target,
@@ -269,24 +271,43 @@ class NoiseFilteringPipeline:
         # cannot stampede the pinned Gateway with synchronized retries.
         self._transient_retry_lock = asyncio.Lock()
         self._recovery_request_semaphore = asyncio.Semaphore(RECOVERY_MAX_CONCURRENCY)
+        # One immutable source may be named by distinct command ids. Serialize
+        # selection through terminal append so only the first request can
+        # supersede the exact failed assessment selected by both commands.
+        self._recovery_source_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     @staticmethod
     def _recovery_assessment_key(request_event_id: str, source_event_id: str) -> str:
         return f"triage:message-features:recovery:{request_event_id}:{source_event_id}"
+
+    @staticmethod
+    def _recovery_refusal_key(request_event_id: str) -> str:
+        return f"source-assessment-recovery-refused:{request_event_id}"
+
+    @staticmethod
+    def _derived_event_at_ms(event: dict[str, Any]) -> int:
+        """Place a derived append after its command even after a cold reopen."""
+
+        return max(
+            int(datetime.now(timezone.utc).timestamp() * 1000),
+            int(event.get("event_at_ms") or 0) + 1,
+        )
 
     async def _emit_recovery_refusal(
         self,
         *,
         event: dict[str, Any],
         ctx: PipelineContext,
-        reason: str,
+        reason: RecoveryRefusalReason,
     ) -> None:
         payload = event.get("payload") or {}
         request_event_id = str(event.get("event_id") or "")
         source_event_id = str(payload.get("source_event_id") or "")
         await ctx.event_sink.write(
             EventEnvelope(
-                event_at_ms=event["event_at_ms"],
+                event_at_ms=self._derived_event_at_ms(event),
                 tenant_id=event["tenant_id"],
                 type="source.assessment.recovery_refused",
                 schema_version=1,
@@ -304,7 +325,7 @@ class NoiseFilteringPipeline:
                     or "system"
                 ),
                 sensitivity="normal",
-                idempotency_key=f"source-assessment-recovery-refused:{request_event_id}",
+                idempotency_key=self._recovery_refusal_key(request_event_id),
                 payload={
                     "request_event_id": request_event_id,
                     "source_event_id": source_event_id,
@@ -320,13 +341,28 @@ class NoiseFilteringPipeline:
         self, event: dict[str, Any], ctx: PipelineContext
     ) -> None:
         payload = event.get("payload") or {}
+        source_event_id = str(payload.get("source_event_id") or "")
+        lock_key = f"{event.get('tenant_id')}:{source_event_id}"
+        source_lock = self._recovery_source_locks.setdefault(lock_key, asyncio.Lock())
+        async with source_lock:
+            await self._handle_recovery_request_locked(event, ctx)
+
+    async def _handle_recovery_request_locked(
+        self, event: dict[str, Any], ctx: PipelineContext
+    ) -> None:
+        payload = event.get("payload") or {}
         request_event_id = str(event.get("event_id") or "")
         source_event_id = str(payload.get("source_event_id") or "")
-        existing = await ctx.event_log.get_by_idempotency(
-            event["tenant_id"],
+        tenant_id = str(event.get("tenant_id") or "")
+        assessment = await ctx.event_log.get_by_idempotency(
+            tenant_id,
             self._recovery_assessment_key(request_event_id, source_event_id),
         )
-        if existing is not None:
+        refusal = await ctx.event_log.get_by_idempotency(
+            tenant_id,
+            self._recovery_refusal_key(request_event_id),
+        )
+        if assessment is not None or refusal is not None:
             return
         try:
             if (
@@ -336,11 +372,19 @@ class NoiseFilteringPipeline:
                 or payload.get("max_concurrency") != RECOVERY_MAX_CONCURRENCY
             ):
                 raise SourceAssessmentRecoveryRefused("request_scope_mismatch")
+            if tenant_id != ctx.session.tenant_id:
+                raise SourceAssessmentRecoveryRefused("tenant_mismatch")
+            if (
+                ctx.observation_manager is None
+                or not await ctx.observation_manager.is_active()
+            ):
+                raise SourceAssessmentRecoveryRefused("observation_inactive")
             target = target_from_request_event(event)
             selected = await validate_recovery_target(
                 ctx.event_log,
                 target,
                 required_owner_scope=str(event.get("owner_scope") or ""),
+                required_tenant_id=tenant_id,
             )
             if payload.get("owner_member_id") != selected.owner_member_id:
                 raise SourceAssessmentRecoveryRefused("request_scope_mismatch")
@@ -353,6 +397,13 @@ class NoiseFilteringPipeline:
             return
 
         source = dict(selected.source)
+        # Recovery can be the first writer after EventLog reopens. Its ID
+        # generator is intentionally process-local, so reusing the retained
+        # source's old append timestamp could mint an event behind the durable
+        # request/checkpoint (or collide with an old ID). Recovery operates on
+        # a copy and gives every derived append a position strictly after the
+        # request while preserving the source's immutable occurred_at/payload.
+        source["event_at_ms"] = self._derived_event_at_ms(event)
         source["_assessment_recovery"] = {
             "request_event_id": request_event_id,
             "failed_assessment_event_id": selected.failed_assessment["event_id"],
@@ -523,7 +574,10 @@ class NoiseFilteringPipeline:
                 "message-nature:recovery:"
                 f"{recovery['request_event_id']}:{invocation_fingerprint}"
             )
-            retry_prior_failure = False
+            # The selected v3 failure shares the immutable source causation.
+            # The wrapper may reuse success, but must bypass that older
+            # terminal failure once for this request-bound invocation key.
+            retry_prior_failure = True
         skill_ctx = SkillContext(
             session=ctx.session,
             correlation_id=ctx.correlation_id,

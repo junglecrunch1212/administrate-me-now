@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,10 +75,23 @@ class _Sink:
         )
 
 
-def _source(*, member: str = MEMBER, sensitivity: str = "normal") -> EventEnvelope:
+@dataclass
+class _Observation:
+    active: bool = True
+
+    async def is_active(self) -> bool:
+        return self.active
+
+
+def _source(
+    *,
+    member: str = MEMBER,
+    sensitivity: str = "normal",
+    tenant_id: str = TENANT,
+) -> EventEnvelope:
     return EventEnvelope(
         event_at_ms=1_786_400_000_000,
-        tenant_id=TENANT,
+        tenant_id=tenant_id,
         type="messaging.received",
         schema_version=3,
         occurred_at="2026-08-11T12:00:00Z",
@@ -86,7 +100,7 @@ def _source(*, member: str = MEMBER, sensitivity: str = "normal") -> EventEnvelo
         owner_scope=f"private:{member}",
         visibility_scope=f"private:{member}",
         sensitivity=sensitivity,  # type: ignore[arg-type]
-        idempotency_key=f"recovery-source:{member}:{sensitivity}",
+        idempotency_key=f"recovery-source:{tenant_id}:{member}:{sensitivity}",
         payload={
             "provider": "gmail",
             "provider_account_id": "fixture-account",
@@ -111,18 +125,20 @@ async def _failed_assessment(
     source_event_id: str,
     *,
     reason: str = "language_seam_OpenClawUnreachable",
+    tenant_id: str = TENANT,
+    member: str = MEMBER,
 ) -> str:
     return await log.append(
         EventEnvelope(
             event_at_ms=1_786_400_000_001,
-            tenant_id=TENANT,
+            tenant_id=tenant_id,
             type="triage.intent.features_extracted",
             schema_version=3,
             occurred_at="2026-08-11T12:00:01Z",
             source_adapter="deterministic_candidate_eligibility",
             source_account_id="pipeline",
-            owner_scope=f"private:{MEMBER}",
-            visibility_scope=f"private:{MEMBER}",
+            owner_scope=f"private:{member}",
+            visibility_scope=f"private:{member}",
             sensitivity="normal",
             idempotency_key=f"triage:message-features:v19:{source_event_id}",
             payload={
@@ -158,7 +174,12 @@ def _batch(
 
 
 def _context(
-    log: EventLog, sink: _Sink, run_skill: Any, request_id: str
+    log: EventLog,
+    sink: _Sink,
+    run_skill: Any,
+    request_id: str,
+    *,
+    observation: _Observation | None = None,
 ) -> PipelineContext:
     return PipelineContext(
         session=build_internal_session("pipeline_runner", "device", TENANT),
@@ -167,7 +188,7 @@ def _context(
         run_skill_fn=run_skill,
         outbound_fn=lambda *args, **kwargs: None,  # type: ignore[arg-type, return-value]
         guarded_write=None,
-        observation_manager=None,
+        observation_manager=observation or _Observation(),  # type: ignore[arg-type]
         triggering_event_id=request_id,
         correlation_id="fixture-recovery",
     )
@@ -223,10 +244,14 @@ async def test_recovery_appends_newer_success_and_preserves_failed_history(
         failed_id = await _failed_assessment(log, source_id)
         request = await _append_request(log, source_id, failed_id, "request-success-1")
         calls = 0
+        retry_prior_failure: list[bool] = []
 
-        async def recovered(*_args: Any, **_kwargs: Any) -> SkillResult:
+        async def recovered(
+            _skill: str, _inputs: dict[str, Any], skill_ctx: Any
+        ) -> SkillResult:
             nonlocal calls
             calls += 1
+            retry_prior_failure.append(bool(skill_ctx.retry_prior_failure))
             return _successful_result()
 
         invalidate_cache()
@@ -244,6 +269,7 @@ async def test_recovery_appends_newer_success_and_preserves_failed_history(
         related = await log.get_by_causation(source_id)
         assert any(event["event_id"] == failed_id for event in related)
         assert calls == 1
+        assert retry_prior_failure == [True]
 
         audit = await audit_source_assurance(
             log,
@@ -319,6 +345,172 @@ async def test_duplicate_and_restart_during_recovery_reuse_one_invocation(
             and event["schema_version"] == 4
         ]
         assert len(replacements) == 1
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_reopened_log_appends_recovery_after_request_and_failed_history(
+    tmp_path: Path,
+) -> None:
+    """A fresh process generator cannot place recovery behind old history."""
+
+    database = tmp_path / "reopened.db"
+    key = b"w" * 32
+    seed_log = EventLog(database, key)
+    try:
+        source_id = await seed_log.append(_source())
+        failed_id = await _failed_assessment(seed_log, source_id)
+        request = await _append_request(
+            seed_log, source_id, failed_id, "request-reopened-1"
+        )
+    finally:
+        await seed_log.close()
+
+    reopened_log = EventLog(database, key)
+    try:
+
+        async def recovered(*_args: Any, **_kwargs: Any) -> SkillResult:
+            return _successful_result()
+
+        invalidate_cache()
+        pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+        await pipeline.handle(
+            request,
+            _context(
+                reopened_log,
+                _Sink(reopened_log),
+                recovered,
+                request["event_id"],
+            ),
+        )
+
+        latest = await latest_source_assessment(reopened_log, source_id)
+        assert latest is not None
+        assert latest["schema_version"] == 4
+        assert latest["event_id"] > request["event_id"] > failed_id
+        audit = await audit_source_assurance(
+            reopened_log,
+            repository_root=REPO_ROOT,
+            capabilities={
+                "pipeline:pipeline:noise_filtering": {
+                    "state": "healthy",
+                    "details": {"checkpoint_event_id": request["event_id"]},
+                }
+            },
+        )
+        assert audit["state"] == "healthy"
+        assert audit["counts"]["failed"] == 0
+    finally:
+        await reopened_log.close()
+
+
+@pytest.mark.asyncio
+async def test_delivery_requires_observation_and_refusal_is_terminal(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "observation.db", b"o" * 32)
+    try:
+        source_id = await log.append(_source())
+        failed_id = await _failed_assessment(log, source_id)
+        request = await _append_request(
+            log, source_id, failed_id, "request-observation-1"
+        )
+        calls = 0
+        observation = _Observation(active=False)
+
+        async def recovered(*_args: Any, **_kwargs: Any) -> SkillResult:
+            nonlocal calls
+            calls += 1
+            return _successful_result()
+
+        invalidate_cache()
+        pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+        ctx = _context(
+            log,
+            _Sink(log),
+            recovered,
+            request["event_id"],
+            observation=observation,
+        )
+        await pipeline.handle(request, ctx)
+        observation.active = True
+        await pipeline.handle(request, ctx)
+
+        refusals = [
+            event
+            async for event in log.read_since(
+                None, types=["source.assessment.recovery_refused"]
+            )
+        ]
+        assert calls == 0
+        assert len(refusals) == 1
+        assert refusals[0]["payload"]["reason"] == "observation_inactive"
+        assert refusals[0]["event_id"] > request["event_id"]
+        latest = await latest_source_assessment(log, source_id)
+        assert latest is not None
+        assert latest["event_id"] == failed_id
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_distinct_concurrent_requests_are_single_flight_per_source(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "single-flight.db", b"f" * 32)
+    try:
+        source_id = await log.append(_source())
+        failed_id = await _failed_assessment(log, source_id)
+        first = await _append_request(log, source_id, failed_id, "request-flight-1")
+        second = await _append_request(log, source_id, failed_id, "request-flight-2")
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = 0
+
+        async def recovered(*_args: Any, **_kwargs: Any) -> SkillResult:
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return _successful_result()
+
+        invalidate_cache()
+        pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+        first_task = asyncio.create_task(
+            pipeline.handle(
+                first,
+                _context(log, _Sink(log), recovered, first["event_id"]),
+            )
+        )
+        await entered.wait()
+        second_task = asyncio.create_task(
+            pipeline.handle(
+                second,
+                _context(log, _Sink(log), recovered, second["event_id"]),
+            )
+        )
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first_task, second_task)
+
+        related = await log.get_by_causation(source_id)
+        replacements = [
+            event
+            for event in related
+            if event["type"] == "triage.intent.features_extracted"
+            and event["schema_version"] == 4
+        ]
+        refusals = [
+            event
+            async for event in log.read_since(
+                None, types=["source.assessment.recovery_refused"]
+            )
+        ]
+        assert calls == 1
+        assert len(replacements) == 1
+        assert len(refusals) == 1
+        assert refusals[0]["payload"]["reason"] == "failed_assessment_not_current"
     finally:
         await log.close()
 
@@ -419,5 +611,40 @@ async def test_selection_rejects_nonretryable_privileged_and_cross_member_source
                 required_owner_scope="private:another-member",
             )
         assert cross_member.value.code == "request_scope_mismatch"
+
+        other_tenant_source = await log.append(
+            _source(member="member-other-tenant", tenant_id="tenant-other")
+        )
+        with pytest.raises(SourceAssessmentRecoveryRefused) as source_tenant:
+            await validate_recovery_target(
+                log,
+                SourceAssessmentRecoveryTarget(
+                    source_event_id=other_tenant_source,
+                    failed_assessment_event_id=failed_id,
+                    expected_failure_reason="language_seam_OpenClawUnreachable",
+                ),
+                required_tenant_id=TENANT,
+            )
+        assert source_tenant.value.code == "tenant_mismatch"
+
+        assessment_member = "member-assessment-tenant"
+        assessment_source = await log.append(_source(member=assessment_member))
+        cross_tenant_assessment = await _failed_assessment(
+            log,
+            assessment_source,
+            tenant_id="tenant-other",
+            member=assessment_member,
+        )
+        with pytest.raises(SourceAssessmentRecoveryRefused) as assessment_tenant:
+            await validate_recovery_target(
+                log,
+                SourceAssessmentRecoveryTarget(
+                    source_event_id=assessment_source,
+                    failed_assessment_event_id=cross_tenant_assessment,
+                    expected_failure_reason="language_seam_OpenClawUnreachable",
+                ),
+                required_tenant_id=TENANT,
+            )
+        assert assessment_tenant.value.code == "tenant_mismatch"
     finally:
         await log.close()

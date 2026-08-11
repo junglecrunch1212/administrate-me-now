@@ -38,7 +38,12 @@ active. Processing revalidates the request, uses a fresh request-bound
 assessment and pinned `llm-task` invocation namespace, caps execution at two
 concurrent requests and three total language attempts, and preserves the old
 failure. Source assurance treats the newest valid replacement as current.
-Duplicate delivery and restart reuse durable identities; a persistent failure
+Delivery rechecks observation, tenant, and current-predecessor truth. Distinct
+requests for one source are single-flight through terminal append; derived
+events are ordered after their command on cold reopen; and the request-bound
+base call may bypass the predecessor's old causal skill failure once without
+repeating its own result. Duplicate delivery and restart reuse durable
+identities, refusal is terminal for its exact command, and a persistent failure
 remains explicit.
 
 The updater's checked-in exception is restricted to the current production
@@ -48,7 +53,9 @@ flag, validates before and after encrypted backup, stops services, re-audits the
 encrypted log, and appends only the exact typed requests before selecting the
 candidate. Any mismatch uses ordinary fail-closed rollback. Successful switch
 still requires complete settlement and entirely healthy Doctor; the exception
-does not redefine health.
+does not redefine health. Its request identity changes after a matching
+content-free refusal, permitting a later guarded attempt without making an
+unchanged pending command non-idempotent.
 
 Focused recovery, production-composition endpoint, updater-policy, existing
 noise-filtering/source-assurance/updater, and rollback-checkpoint tests pass.

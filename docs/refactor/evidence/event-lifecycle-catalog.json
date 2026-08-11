@@ -19526,10 +19526,12 @@
         },
         "reason": {
           "enum": [
+            "observation_inactive",
             "source_not_found",
             "unsupported_source_type",
             "source_not_private",
             "source_privileged",
+            "tenant_mismatch",
             "source_scope_mismatch",
             "request_scope_mismatch",
             "failed_assessment_not_current",

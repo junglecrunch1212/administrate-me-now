@@ -29,27 +29,36 @@ events. The failed assessments remain valid historical evidence.
   authenticated member view, non-privileged, and currently governed by an exact
   terminal failure whose reason is either `language_seam_OpenClawTimeout` or
   `language_seam_OpenClawUnreachable`.
-- Validation is atomic for the batch. A stale, cross-member, privileged,
-  unsupported, or non-retryable target cannot enter the request.
+- Validation is atomic for the batch. Source, failed assessment, request, and
+  runtime session must retain one tenant identity. A stale, cross-tenant,
+  cross-member, privileged, unsupported, or non-retryable target cannot enter
+  the request.
 - The request and any refusal contain identifiers, scope, policy, reason, and
   bounded-attempt metadata only. Source bodies, subjects, senders, account
   identifiers, and extracted text are excluded.
-- Processing revalidates the immutable request against current event history.
-  An invalid or stale request produces a content-free refusal rather than a
-  candidate, canonical object, provider action, or poisoned subscription.
+- Processing revalidates the immutable request against current event history
+  and re-reads observation state at delivery time. An invalid, stale, or
+  no-longer-observation-only request produces one terminal content-free refusal
+  rather than a candidate, canonical object, provider action, or poisoned
+  subscription.
 - The request creates a request-specific assessment identity and invocation
   namespace. One base attempt and at most two transient retries run through the
   pinned OpenClaw `llm-task` seam, with no provider SDK or second model router.
-  At most two requests execute concurrently.
+  The request-bound base identity is explicitly allowed to bypass the selected
+  predecessor's old causal failure once; its own durable terminal result still
+  prevents repetition. At most two requests execute concurrently.
 - A successful or newly failed result is appended as
   `triage.intent.features_extracted@v4`, linked to the superseded failed
   assessment and recovery request. The old failure is never updated or deleted.
 - Source assurance selects the newest valid assessment for each exact source.
   A successful replacement clears that source's current failure; a persistent
   replacement failure remains explicit.
-- Reusing the same request is idempotent across retries and restarts. A later
-  distinct terminal failure may be addressed only by a new request tied to that
-  newer failed assessment.
+- Reusing the same request is idempotent across retries and restarts. Distinct
+  command IDs selecting the same failed source are single-flight through the
+  terminal append, so only one may supersede it. Recovery and refusal appends
+  are ordered after their durable request even when the event log has just
+  reopened. A later distinct terminal failure may be addressed only by a new
+  request tied to that newer failed assessment.
 - Observation mode is mandatory. Recovery may assess retained facts and create
   ordinary human-gated proposals, but it cannot authorize canonical truth or an
   external write. All terminal results remain audited.
@@ -97,7 +106,8 @@ acceptance still requires complete settlement and an entirely healthy Doctor.
 ## Security and privacy
 
 - Trusted-ingress authentication, principal identity, view scope, private
-  ownership, and observation state are checked before append.
+  ownership, tenant identity, and observation state are checked before append;
+  tenant and observation state are checked again at delivery.
 - Batch size is at most eight; processing concurrency is two; each request has
   three total language attempts at most.
 - Recovery control payloads and diagnostic totals are content-free.
@@ -119,7 +129,10 @@ also includes a digest of the stopped noise-filtering checkpoint. Re-advancing
 the reviewed candidate reuses an unprocessed request while it remains ahead of
 that checkpoint; if v19 later advances beyond it, the next exact guarded audit
 appends a new request beyond that position. An already processed request reuses
-its durable invocation and assessment identities, or a newer terminal failure
+its durable invocation and assessment identities. A terminal refusal is also
+part of the guarded request identity: an unchanged, unprocessed command remains
+idempotent, while a recorded refusal permits a later guarded attempt to append
+one new command instead of replaying the refused one. A newer terminal failure
 becomes the exact predecessor for a separately bounded request.
 
 ## Acceptance evidence

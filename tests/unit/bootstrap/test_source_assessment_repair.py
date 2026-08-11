@@ -333,6 +333,53 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
     )
     assert after_rollback_advance["request_event_ids"] != first["request_event_ids"]
 
+    async def refuse_request(request_event_id: str) -> None:
+        log = EventLog(events / "events.db", event_key)
+        try:
+            request = await log.get(request_event_id)
+            assert request is not None
+            await log.append(
+                EventEnvelope(
+                    event_at_ms=int(request["event_at_ms"]) + 1,
+                    tenant_id=TENANT,
+                    type="source.assessment.recovery_refused",
+                    schema_version=1,
+                    occurred_at="2026-08-11T16:00:02Z",
+                    source_adapter="noise_filtering",
+                    source_account_id="pipeline",
+                    owner_scope="private:member-release",
+                    visibility_scope="private:member-release",
+                    sensitivity="normal",
+                    idempotency_key=(
+                        "source-assessment-recovery-refused:" + request_event_id
+                    ),
+                    payload={
+                        "request_event_id": request_event_id,
+                        "source_event_id": source_id,
+                        "reason": "observation_inactive",
+                        "policy": "source-assessment-recovery-v1",
+                    },
+                ),
+                causation_id=request_event_id,
+            )
+        finally:
+            await log.close()
+
+    asyncio.run(refuse_request(after_rollback_advance["request_event_ids"][0]))
+    after_terminal_refusal = offline_validate_repair_baseline(
+        paths,
+        repository_root=REPO_ROOT,
+        candidate_commit=CANDIDATE_COMMIT,
+        policy=policy,
+        diagnostics=_diagnostics(source_id),
+        append_requests=True,
+        test_mode=True,
+    )
+    assert (
+        after_terminal_refusal["request_event_ids"]
+        != after_rollback_advance["request_event_ids"]
+    )
+
     async def count_requests() -> int:
         log = EventLog(events / "events.db", event_key)
         try:
@@ -347,4 +394,4 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
         finally:
             await log.close()
 
-    assert asyncio.run(count_requests()) == 2
+    assert asyncio.run(count_requests()) == 3

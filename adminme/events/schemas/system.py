@@ -130,10 +130,12 @@ class SourceAssessmentRecoveryRefusedV1(BaseModel):
     request_event_id: str = Field(min_length=1, max_length=240)
     source_event_id: str = Field(min_length=1, max_length=240)
     reason: Literal[
+        "observation_inactive",
         "source_not_found",
         "unsupported_source_type",
         "source_not_private",
         "source_privileged",
+        "tenant_mismatch",
         "source_scope_mismatch",
         "request_scope_mismatch",
         "failed_assessment_not_current",
