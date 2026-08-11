@@ -760,6 +760,176 @@ def test_existing_object_evidence_cannot_create_duplicate_truth(tmp_path: Path) 
         assert sum(task["title"] == "Call the dentist" for task in tasks) == 1
 
 
+def test_canonical_truth_wins_race_before_triage_confirmation(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    instance = tmp_path / "canonical-race"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        proposed = client.post(
+            "/api/openclaw/v1/tools/action",
+            headers=OPENCLAW_AUTH,
+            json={
+                "provenance": {
+                    **_provenance(),
+                    "correlation_id": "triage:canonical-race",
+                },
+                "request_id": "canonical-race-proposal-0001",
+                "mode": "propose",
+                "kind": "task",
+                "title": "Call the school registrar",
+            },
+        )
+        assert proposed.status_code == 200, proposed.text
+        client.portal.call(
+            runtime.wait_for_projection, "triage", proposed.json()["event_id"]
+        )
+        [item] = client.get("/api/core/v1/triage", headers=AUTH).json()["items"]
+
+        original_write = runtime.events.write
+        injected = False
+
+        async def inject_canonical_before_confirmation(envelope):
+            nonlocal injected
+            if envelope.type == "triage.item.confirmed" and not injected:
+                injected = True
+                canonical_id = await original_write(
+                    EventEnvelope(
+                        event_at_ms=1_786_400_100_000,
+                        tenant_id=runtime.settings.instance.tenant_id,
+                        type="task.created",
+                        schema_version=1,
+                        occurred_at="2026-08-11T12:01:00Z",
+                        source_adapter="fixture",
+                        source_account_id=MEMBER,
+                        owner_scope=f"private:{MEMBER}",
+                        visibility_scope=f"private:{MEMBER}",
+                        sensitivity="normal",
+                        idempotency_key="fixture:canonical-race:task",
+                        payload={
+                            "task_id": "task-canonical-race",
+                            "title": "Call the school registrar",
+                            "owner_member_id": MEMBER,
+                        },
+                    )
+                )
+                await runtime.wait_for_projection("tasks", canonical_id)
+                await runtime.wait_for_projection("triage", canonical_id)
+            return await original_write(envelope)
+
+        monkeypatch.setattr(
+            runtime.events, "write", inject_canonical_before_confirmation
+        )
+        rejected = client.post(
+            f"/api/member/v1/triage/{item['proposal_id']}/approve",
+            headers=AUTH,
+            json={
+                "request_id": "canonical-race-approve-0001",
+                "expected_last_event_id": item["last_event_id"],
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        tasks = client.get("/api/member/v1/surfaces/reminders", headers=AUTH).json()[
+            "cockpit"
+        ]["tasks"]
+        assert [task["task_id"] for task in tasks] == ["task-canonical-race"]
+        surface = client.get(
+            f"/api/member/v1/surfaces/triage?item={item['proposal_id']}",
+            headers=AUTH,
+        ).json()
+        raced = next(
+            candidate
+            for candidate in [*surface["items"], *surface["recent_items"]]
+            if candidate["proposal_id"] == item["proposal_id"]
+        )
+        assert raced["decision_disposition"] == "attach_existing"
+        assert raced["confirmation_event_id"] is None
+
+
+def test_commitment_evidence_cannot_bypass_triage_duplicate_guard(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "commitment-evidence"
+    instance.mkdir()
+    app = create_application(_settings(instance))
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        proposed_ids: list[str] = []
+        for index in (1, 2):
+            commitment_id = f"commitment-evidence-{index}"
+            proposed_id = client.portal.call(
+                runtime.events.write,
+                EventEnvelope(
+                    event_at_ms=1_786_400_000_000 + index,
+                    tenant_id=runtime.settings.instance.tenant_id,
+                    type="commitment.proposed",
+                    schema_version=1,
+                    occurred_at=f"2026-08-11T12:00:0{index}Z",
+                    source_adapter="fixture",
+                    source_account_id="fixture-account",
+                    owner_scope=f"private:{MEMBER}",
+                    visibility_scope=f"private:{MEMBER}",
+                    sensitivity="normal",
+                    causation_id="shared-commitment-source",
+                    idempotency_key=f"fixture:{commitment_id}:proposed",
+                    payload={
+                        "commitment_id": commitment_id,
+                        "kind": "reply",
+                        "owed_by_member_id": MEMBER,
+                        "owed_to_party_id": "party-recipient",
+                        "text_summary": "Reply with the signed school form",
+                        "urgency": "this_week",
+                        "confidence": 0.9,
+                        "strength": "confident",
+                        "source_interaction_id": "shared-commitment-source",
+                    },
+                ),
+            )
+            proposed_ids.append(proposed_id)
+            client.portal.call(runtime.wait_for_projection, "commitments", proposed_id)
+            client.portal.call(runtime.wait_for_projection, "triage", proposed_id)
+
+        surface = client.get(
+            "/api/member/v1/surfaces/triage?item=commitment-evidence-2",
+            headers=AUTH,
+        ).json()
+        evidence = next(
+            item
+            for item in [*surface["items"], *surface["recent_items"]]
+            if item["proposal_id"] == "commitment-evidence-2"
+        )
+        assert evidence["source_kind"] == "commitment_proposal"
+        assert evidence["decision_disposition"] == "evidence_only"
+        assert "approve" not in evidence["actions"]
+
+        rejected = client.post(
+            "/api/member/v1/triage/commitment-evidence-2/approve",
+            headers=AUTH,
+            json={
+                "request_id": "commitment-evidence-approve-0001",
+                "expected_last_event_id": evidence["last_event_id"],
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        direct_rejected = client.post(
+            "/api/comms/v1/commitments/commitment-evidence-2/approve",
+            headers=AUTH,
+            json={
+                "request_id": "commitment-evidence-direct-approve-0001",
+                "expected_last_event_id": evidence["last_event_id"],
+                "send_acknowledgement": False,
+            },
+        )
+        assert direct_rejected.status_code == 409, direct_rejected.text
+        confirmations = client.portal.call(_events, runtime, "commitment.confirmed")
+        assert all(
+            event["payload"]["commitment_id"] != "commitment-evidence-2"
+            for event in confirmations
+        )
+
+
 def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
     tmp_path: Path,
 ) -> None:
@@ -770,38 +940,45 @@ def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
         runtime = app.state.runtime
         calls = 0
 
-        async def alternating_language_result(*args, **kwargs):
+        async def recorded_language_result(*args, **kwargs):
             nonlocal calls
             calls += 1
-            target_kind = "task" if calls == 1 else "reminder"
             return SimpleNamespace(
                 output={
                     "candidates": [
                         {
-                            "target_kind": target_kind,
+                            "target_kind": "task",
                             "evidence_quote": "The folder answer is expected Friday",
                             "candidate": {},
                             "confidence": 0.9,
                             "reasons": ["bounded fixture"],
-                        }
+                        },
+                        {
+                            "target_kind": "reminder",
+                            "evidence_quote": "The folder answer is expected Friday",
+                            "candidate": {},
+                            "confidence": 0.9,
+                            "reasons": ["bounded fixture"],
+                        },
                     ]
                 }
             )
 
-        runtime.run_skill_fn = alternating_language_result
+        runtime.run_skill_fn = recorded_language_result
         original_check = runtime.guarded_write.check
-        denials_remaining = 2
+        proposal_checks = 0
 
         async def deny_proposal(session, action, payload):
-            nonlocal denials_remaining
-            if action == "triage.item.proposed" and denials_remaining:
-                denials_remaining -= 1
-                return GuardedWriteResult(
-                    pass_=False,
-                    layer_failed="governance",
-                    reason="fixture_post_capture_denial",
-                    correlation_id=session.correlation_id,
-                )
+            nonlocal proposal_checks
+            if action == "triage.item.proposed":
+                proposal_checks += 1
+                if proposal_checks in {2, 4}:
+                    return GuardedWriteResult(
+                        pass_=False,
+                        layer_failed="governance",
+                        reason="fixture_post_capture_denial",
+                        correlation_id=session.correlation_id,
+                    )
             return await original_check(session, action, payload)
 
         runtime.guarded_write.check = deny_proposal
@@ -813,6 +990,14 @@ def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
         first = client.post("/api/member/v1/triage/intents", headers=AUTH, json=body)
         second = client.post("/api/member/v1/triage/intents", headers=AUTH, json=body)
         assert first.status_code == second.status_code == 409
+        first_detail = first.json()["detail"]
+        second_detail = second.json()["detail"]
+        assert first_detail["capture_state"] == "intent_and_features_recorded"
+        assert second_detail["recovery"] == first_detail["recovery"]
+        assert first_detail["recovery"]["href"] == (
+            "/member/triage?view=needs_interpretation"
+            f"&item={first_detail['recovery']['intent_id']}"
+        )
         assert calls == 1
         events = client.portal.call(
             _events,
@@ -842,14 +1027,21 @@ def test_post_capture_governance_conflict_replays_one_recorded_interpretation(
         assert recovered.status_code == 202, recovered.text
         assert recovered.json()["duplicate"] is True
         assert calls == 1
-        [proposal_id] = recovered.json()["proposal_ids"]
-        surface = client.get(
-            f"/api/member/v1/surfaces/triage?item={proposal_id}", headers=AUTH
-        ).json()
-        recovered_item = next(
-            item for item in surface["items"] if item["proposal_id"] == proposal_id
+        proposal_ids = recovered.json()["proposal_ids"]
+        assert len(proposal_ids) == 2
+        surface = client.get("/api/member/v1/surfaces/triage", headers=AUTH).json()
+        recovered_items = [
+            item for item in surface["items"] if item["proposal_id"] in proposal_ids
+        ]
+        assert {item["target_kind"] for item in recovered_items} == {
+            "task",
+            "reminder",
+        }
+        assert not any(
+            item["source_kind"] == "member_intent"
+            and item["candidate"].get("exact_text") == body["text"]
+            for item in surface["items"]
         )
-        assert recovered_item["target_kind"] == "task"
 
 
 def test_proposal_requires_member_triage_before_official_task(

@@ -27,6 +27,7 @@ from adminme.products.commitment_service import (
 )
 from adminme.projections.commitments.queries import pending_approval
 from adminme.projections.interactions.queries import get_interaction, recent
+from adminme.projections.triage.queries import get_item as get_triage_item
 
 router = APIRouter(prefix="/api/comms", tags=["comms"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
@@ -274,6 +275,23 @@ async def approve_commitment(
             "delivery": None,
         }
     row = owned_commitment(runtime, session, commitment_id)
+    if runtime.projections is None:
+        raise HTTPException(503, "triage projection unavailable")
+    await runtime.wait_for_projection("triage", row["last_event_id"])
+    triage_item = get_triage_item(
+        runtime.projections.connection("triage"),
+        session,
+        proposal_id=commitment_id,
+    )
+    if (
+        triage_item is None
+        or triage_item.get("source_kind") != "commitment_proposal"
+        or triage_item.get("decision_disposition") != "decision"
+    ):
+        raise HTTPException(
+            409,
+            "supporting commitment evidence cannot create duplicate household truth",
+        )
     if row["confirmed_at"] is not None or row["status"] != "pending":
         raise HTTPException(409, "proposal is no longer awaiting approval")
     now = EventEnvelope.now_utc_iso()

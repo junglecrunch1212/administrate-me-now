@@ -190,7 +190,7 @@ async function seed(baseUrl) {
     identities.principal,
     "POST",
   );
-  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 8, triageContinuity.value);
+  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 9, triageContinuity.value);
   const triageFinalReady = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-final-ready",
@@ -867,6 +867,29 @@ async function run() {
     record("A lost confirmation response reconciles the exact terminal receipt without claiming rejection", ambiguousCommitStatus === 200 && await principal.page.getByRole("button", { name: /^Recent/ }).getAttribute("aria-pressed") === "true" && principal.page.url().includes("item=gate7-visual-ambiguous-task") && await principal.page.locator('[data-triage-item="gate7-visual-ambiguous-task"]').filter({ hasText: "Verify the summer camp packing list" }).count() === 1 && !(await principal.page.locator("#state-banner").textContent()).includes("Nothing was confirmed"), JSON.stringify({ ambiguousCommitStatus, url: principal.page.url(), banner: await principal.page.locator("#state-banner").textContent() }));
     await principal.page.unroute("**/api/member/v1/triage/gate7-visual-ambiguous-task/approve", ambiguousDecisionRoute);
     await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
+    await principal.page.locator(".triage-master-button").filter({ hasText: "Review the caregiver authorization receipt" }).click();
+    const mismatchedBrowserRequestIds = [];
+    let mismatchedOtherStatus = 0;
+    const mismatchedReceiptRoute = async (route) => {
+      const browserBody = JSON.parse(route.request().postData() || "{}");
+      mismatchedBrowserRequestIds.push(browserBody.request_id);
+      const other = await jsonRequest(
+        server.baseUrl,
+        "/api/member/v1/triage/gate7-visual-mismatched-receipt-task/approve",
+        identities.principal,
+        "POST",
+        { ...browserBody, request_id: "gate7-other-member-request" },
+      );
+      mismatchedOtherStatus = other.response.status;
+      expected503Console += 1;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted a different member request." }) });
+    };
+    await principal.page.route("**/api/member/v1/triage/gate7-visual-mismatched-receipt-task/approve", mismatchedReceiptRoute);
+    await principal.page.getByRole("button", { name: "Confirm and route" }).click();
+    await principal.page.getByText("could not prove an action-specific receipt", { exact: false }).waitFor();
+    record("A terminal receipt from another request cannot settle the browser's interrupted decision", mismatchedOtherStatus === 200 && mismatchedBrowserRequestIds.length === 2 && mismatchedBrowserRequestIds[0] === mismatchedBrowserRequestIds[1] && (await principal.page.locator("#state-banner").textContent()).includes("Reload this page before continuing") && await principal.page.getByRole("button", { name: /^Ready/ }).isDisabled(), JSON.stringify({ mismatchedOtherStatus, mismatchedBrowserRequestIds, banner: await principal.page.locator("#state-banner").textContent() }));
+    await principal.page.unroute("**/api/member/v1/triage/gate7-visual-mismatched-receipt-task/approve", mismatchedReceiptRoute);
+    await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
     await principal.page.locator(".triage-master-button").filter({ hasText: "Review the system-transition dismissal" }).click();
     await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
     const systemDismissDecisionRoute = async (route) => {
@@ -955,28 +978,103 @@ async function run() {
     const todayDialogOpenAfterRetry = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
     record("Shared Add for review preserves its form outside Triage and retries post-capture failure with one identity", intentArm.response.ok && todayDialogStayedOpen && !todayDialogOpenAfterRetry && todayIntentRequestIds.length === 2 && todayIntentRequestIds[0] === todayIntentRequestIds[1] && (todayIntentBanner.includes("saved in Triage") || todayIntentBanner.startsWith("Saved.")), JSON.stringify({ todayDialogStayedOpen, todayDialogOpenAfterRetry, todayIntentRequestIds, banner: todayIntentBanner }));
     await adult.page.unroute("**/api/member/v1/triage/intents", todayIntentRoute);
+
+    const unknownOutcomeRequestIds = [];
+    const unknownOutcomeRoute = async (route) => {
+      unknownOutcomeRequestIds.push(JSON.parse(route.request().postData() || "{}").client_request_id);
+      expected503Console += 1;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture cannot determine whether capture occurred." }) });
+    };
+    await adult.page.route("**/api/member/v1/triage/intents", unknownOutcomeRoute);
+    await adult.page.locator("#add-for-review").click();
+    await adult.page.getByLabel("Thought to hold").fill("Unknown transport outcome from Today");
+    await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).click();
+    const unknownOutcomeRecovery = adult.page.getByRole("button", { name: "Check Triage before retrying" });
+    await unknownOutcomeRecovery.waitFor();
+    await unknownOutcomeRecovery.click();
+    await adult.page.waitForURL(/\/member\/triage\?.*view=all_candidates/);
+    record("Unknown Add outcome outside Triage navigates to inventory before resubmission", unknownOutcomeRequestIds.length === 2 && unknownOutcomeRequestIds[0] === unknownOutcomeRequestIds[1] && adult.page.url().includes("view=all_candidates"), JSON.stringify({ unknownOutcomeRequestIds, url: adult.page.url() }));
+    await adult.page.unroute("**/api/member/v1/triage/intents", unknownOutcomeRoute);
+    await adult.page.goto(`${server.baseUrl}/member/today`);
+    await adult.page.getByRole("heading", { name: "Today", level: 1 }).waitFor();
+
+    const todayProposalArm = await jsonRequest(server.baseUrl, "/__gate7/fail-next-intent-proposals", identities.adult, "POST");
+    const todayRecoveryRequestIds = [];
+    const todayRecoveryRoute = async (route) => {
+      todayRecoveryRequestIds.push(JSON.parse(route.request().postData() || "{}").client_request_id);
+      const response = await route.fetch();
+      if (response.status() === 409) expected409Console += 1;
+      await route.fulfill({ response });
+    };
+    await adult.page.route("**/api/member/v1/triage/intents", todayRecoveryRoute);
+    await adult.page.locator("#add-for-review").click();
+    const todayRecoveryText = "Call the school office about the caregiver authorization tomorrow";
+    await adult.page.getByLabel("Thought to hold").fill(todayRecoveryText);
+    await adult.page.getByLabel("Type hint (optional)").selectOption("task");
+    await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).click();
+    const todayRecoveryButton = adult.page.getByRole("button", { name: "Open saved Triage item" });
+    await todayRecoveryButton.waitFor();
+    await todayRecoveryButton.click();
+    await adult.page.waitForURL(/\/member\/triage\?.*view=needs_interpretation.*item=intent_/);
+    const todayRecoveredItem = adult.page.locator("[data-triage-item^='intent_']").filter({ hasText: todayRecoveryText });
+    await todayRecoveredItem.waitFor();
+    record("Post-capture recovery outside Triage opens the exact saved holding item", todayProposalArm.response.ok && todayRecoveryRequestIds.length === 2 && todayRecoveryRequestIds[0] === todayRecoveryRequestIds[1] && await todayRecoveredItem.count() === 1 && adult.page.url().includes("view=needs_interpretation"), JSON.stringify({ todayRecoveryRequestIds, url: adult.page.url(), item: await todayRecoveredItem.textContent() }));
+    await adult.page.unroute("**/api/member/v1/triage/intents", todayRecoveryRoute);
     await adult.page.goto(`${server.baseUrl}/member/triage`);
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
+
+    let definiteIntentRequests = 0;
+    const definiteIntentRoute = async (route) => {
+      definiteIntentRequests += 1;
+      expected409Console += 1;
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this Add-for-review request before durable capture." }) });
+    };
+    await adult.page.route("**/api/member/v1/triage/intents", definiteIntentRoute);
+    await adult.page.locator("#add-for-review").click();
+    const definiteIntentText = "Keep this text after a definite pre-capture refusal";
+    await adult.page.getByLabel("Thought to hold").fill(definiteIntentText);
+    await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).click();
+    await adult.page.getByText("Your thought was not saved; the text is still here.", { exact: false }).waitFor();
+    const definiteState = {
+      requests: definiteIntentRequests,
+      dialogOpen: await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open),
+      retainedText: await adult.page.getByLabel("Thought to hold").inputValue(),
+      submitEnabled: await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).isEnabled(),
+      recoveryCount: await adult.page.getByRole("button", { name: "Reload and reconcile" }).count(),
+      banner: await adult.page.locator("#state-banner").textContent(),
+    };
+    record("A definite pre-capture Add refusal does not retry or claim ambiguous durable state", definiteState.requests === 1 && definiteState.dialogOpen && definiteState.retainedText === definiteIntentText && definiteState.submitEnabled && definiteState.recoveryCount === 0, JSON.stringify(definiteState));
+    await adult.page.unroute("**/api/member/v1/triage/intents", definiteIntentRoute);
+    await adult.page.getByRole("button", { name: "Cancel" }).click();
+
+    const triageProposalArm = await jsonRequest(server.baseUrl, "/__gate7/fail-next-intent-proposals", identities.adult, "POST");
     let releaseFailedIntent;
     let resolveFailedIntentStarted;
     const failedIntentStarted = new Promise((resolveStarted) => { resolveFailedIntentStarted = resolveStarted; });
     const failedIntentRelease = new Promise((resolveRelease) => { releaseFailedIntent = resolveRelease; });
+    const retainedIntentRequestIds = [];
     const failedIntentRoute = async (route) => {
-      resolveFailedIntentStarted();
-      await failedIntentRelease;
-      expected409Console += 1;
-      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture interrupted the Add-for-review request." }) });
+      const body = JSON.parse(route.request().postData() || "{}");
+      retainedIntentRequestIds.push(body.client_request_id);
+      if (retainedIntentRequestIds.length === 1) {
+        resolveFailedIntentStarted();
+        await failedIntentRelease;
+      }
+      const response = await route.fetch();
+      if (response.status() === 409) expected409Console += 1;
+      await route.fulfill({ response });
     };
     await adult.page.route("**/api/member/v1/triage/intents", failedIntentRoute);
     await adult.page.locator("#add-for-review").click();
     const retainedIntentText = "Retained exact-text form for the refresh-failure lock proof";
     await adult.page.getByLabel("Thought to hold").fill(retainedIntentText);
+    await adult.page.getByLabel("Type hint (optional)").selectOption("task");
     await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).click();
     await failedIntentStarted;
     await adult.page.keyboard.press("Escape");
     const dialogStayedOpenDuringIntent = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
     releaseFailedIntent();
-    const recoveryButton = adult.page.getByRole("button", { name: "Reload and reconcile" });
+    const recoveryButton = adult.page.getByRole("button", { name: "Open saved Triage item" });
     await recoveryButton.waitFor();
     const recoveryState = {
       dialogStayedOpenDuringIntent,
@@ -988,9 +1086,14 @@ async function run() {
       dialog: await adult.page.locator("#action-dialog").textContent(),
       banner: await adult.page.locator("#state-banner").textContent(),
     };
-    record("Ambiguous Add failure retains exact text with an accessible in-dialog recovery action", recoveryState.dialogStayedOpenDuringIntent && recoveryState.dialogOpen && recoveryState.retainedText === retainedIntentText && recoveryState.enabled && recoveryState.focused && recoveryState.status.includes("Reload this page"), JSON.stringify(recoveryState));
+    record("A proven post-capture Add failure retries one identity and retains exact text with accessible recovery", triageProposalArm.response.ok && recoveryState.dialogStayedOpenDuringIntent && recoveryState.dialogOpen && recoveryState.retainedText === retainedIntentText && recoveryState.enabled && recoveryState.focused && recoveryState.status.includes("Open the saved Triage item") && retainedIntentRequestIds.length === 2 && retainedIntentRequestIds[0] === retainedIntentRequestIds[1], JSON.stringify({ ...recoveryState, retainedIntentRequestIds }));
     await adult.page.unroute("**/api/member/v1/triage/intents", failedIntentRoute);
     await recoveryButton.click();
+    await adult.page.waitForURL(/\/member\/triage\?.*view=needs_interpretation.*item=intent_/);
+    const triageRecoveredItem = adult.page.locator("[data-triage-item^='intent_']").filter({ hasText: retainedIntentText });
+    await triageRecoveredItem.waitFor();
+    record("Post-capture recovery inside Triage opens the exact saved holding item", await triageRecoveredItem.count() === 1 && adult.page.url().includes("view=needs_interpretation"), JSON.stringify({ url: adult.page.url(), item: await triageRecoveredItem.textContent() }));
+    await adult.page.goto(`${server.baseUrl}/member/triage?view=ready`);
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
     let blockedRefreshFailureIntentRequests = 0;
     const blockedRefreshFailureIntentRoute = async (route) => {
@@ -1129,7 +1232,7 @@ async function run() {
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 6 && observedExpected503Console === 4, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
+    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 9 && observedExpected503Console === 8, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {

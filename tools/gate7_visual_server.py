@@ -85,6 +85,15 @@ def build_app():
         original_write = runtime.events.write
 
         async def checked_write(session, action, payload):
+            proposal_denials = getattr(app.state, "fail_next_intent_proposal_guards", 0)
+            if proposal_denials and action == "triage.item.proposed":
+                app.state.fail_next_intent_proposal_guards = proposal_denials - 1
+                return GuardedWriteResult(
+                    pass_=False,
+                    layer_failed="governance",
+                    reason="gate7_post_capture_proposal_fixture",
+                    correlation_id=session.correlation_id,
+                )
             if (
                 getattr(app.state, "fail_next_task_materialization", False)
                 and action == "task.created"
@@ -437,6 +446,10 @@ def build_app():
             ("gate7-visual-next-task", "Review the household insurance quote"),
             ("gate7-visual-ambiguous-task", "Verify the summer camp packing list"),
             (
+                "gate7-visual-mismatched-receipt-task",
+                "Review the caregiver authorization receipt",
+            ),
+            (
                 "gate7-visual-system-dismiss-task",
                 "Review the system-transition dismissal",
             ),
@@ -483,7 +496,7 @@ def build_app():
             )
         )
         await runtime.wait_for_projection("triage", superseded_id)
-        return {"seeded": 8, "last_event_id": superseded_id}
+        return {"seeded": 9, "last_event_id": superseded_id}
 
     @app.post("/__gate7/fail-next-triage-materialization")
     async def fail_next_triage_materialization():
@@ -499,6 +512,14 @@ def build_app():
 
         install_triage_failure_hooks()
         app.state.fail_next_intent_feature_append = True
+        return {"armed": True}
+
+    @app.post("/__gate7/fail-next-intent-proposals")
+    async def fail_next_intent_proposals():
+        """Deny both same-ID proposal attempts after intent/features exist."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_intent_proposal_guards = 2
         return {"armed": True}
 
     @app.post("/__gate7/seed-triage-final-ready")

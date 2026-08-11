@@ -2151,23 +2151,33 @@ latch. The enrichment endpoint returns computed review state, changed readiness
 stops before confirmation, and a rejected decision authoritatively refreshes
 the exact saved current revision outside ordinary pagination for immediate
 retry. Ambiguous transport/5xx and post-confirmation 4xx decision outcomes
-reconcile that exact candidate's action-specific immutable receipt, reuse the
+reconcile that exact candidate's event/request-specific immutable receipt, reuse the
 original request ID for one bounded continuation where needed, or keep every
 action locked until reload; HTTP class and generic resolved state are not
 settlement proof. A non-decision disposition change keeps exact focus in All
 candidates. Shared Add for review now owns an independent operation token on
 every member surface, preserves one client request ID across one ambiguous retry
 under a per-intent server lock, and blocks Escape/Close/Cancel/repeat submit and
-stale callbacks. Any response class may follow durable capture; a retry uses
-the existing feature event instead of invoking the language seam again, and a
-still-ambiguous dialog keeps an enabled reload/reconcile action beside the
-exact member text. Evidence-only and attach-existing candidates are
-non-approvable in both browser and API. Dismissal reconciliation requires the
-exact member-dismissal event/request receipt rather than generic resolved
-state. Triage projection v8 additively links the immutable pending
+stale callbacks. A generic definite 4xx is not retried; the server explicitly
+marks the post-capture case after intent and features are durable. That retry
+uses the existing feature event instead of invoking the language seam again,
+governance-preflights every missing child, and appends the complete proposal
+family atomically. A still-ambiguous dialog keeps an enabled action beside the
+exact member text that opens the exact saved Needs interpretation item when
+the server supplies capture coordinates; an unknown transport outcome opens
+All candidates so a member checks Triage before resubmitting. Evidence-only and attach-existing
+candidates are non-approvable in the browser, Triage route, and underlying
+commitment route. Confirmation and dismissal reconciliation require their
+exact member-action event/request receipts rather than generic resolved state.
+Materialization begins only after the Triage projection accepts that exact
+confirmation, so concurrently arriving canonical truth wins without a
+duplicate. Triage projection v8 additively links the immutable pending
 OpenClaw/provider-action receipt without changing external-write authority;
-the runner detects v7 metadata, migrates in place, and replays retained events
-from immutable event zero before live delivery without discarding legacy rows.
+Triage alone opts into reviewed version-change replay. The runner detects v7
+metadata, migrates in place, replays retained events from immutable event zero,
+and stamps v8 only after success. Exact confirmation receipts are backfilled
+even when a later historical outcome advanced the row. Interrupted replay
+retains v7 for retry and legacy rows remain intact.
 The generations rotate before interaction reopens.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
@@ -2181,17 +2191,22 @@ feedback preserved across a lens change, a dirty confirmation locked before
 enrichment and through decision, a readiness-changing enrichment that cannot
 advance to confirmation, a saved-enrichment/failed-decision/authoritative-
 refresh/current-revision retry with exact off-page identity, a committed
-decision followed by a lost-response exact-receipt reconciliation, a real
+decision followed by a lost-response exact-request receipt reconciliation and
+refusal to accept another request's terminal receipt, a real
 post-confirmation guard refusal resumed with one request identity, an exact
 evidence-only transition with no substituted matter, an all-surface
 Escape-resistant post-capture Add-for-review retry with one intent identity,
-one recorded interpretation, and operable ambiguous recovery; evidence-only
-confirmation denial; exact member-dismissal receipt proof; automatic v7-to-v8
-historical pending-action replay with legacy-row preservation,
+one recorded interpretation, atomic two-candidate recovery, a definite 4xx
+with no retry, and exact saved-item recovery from both Today and Triage;
+evidence-only confirmation
+denial through both routes; exact confirmation/dismissal receipt proof; a
+canonical-truth approval race with no duplicate materialization; explicit
+Triage-only v7-to-v8 historical pending-action replay with interrupted-replay
+retry and legacy-row preservation,
 and provenance-bounded lifecycle-receipt copy assertion in production
-composition. The repaired candidate passes 253 assertions and 39 screenshots
-with zero console/page/request failures. It also passes 51 strict acceptance
-gates, 1,796 root/code/pack tests, 60 bridge tests, all
+composition. The repaired candidate passes 259 assertions and 39 screenshots
+with zero console/page/request failures. It also passes 53 strict acceptance
+gates, 1,799 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,
 tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
 tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.

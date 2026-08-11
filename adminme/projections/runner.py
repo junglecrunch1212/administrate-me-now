@@ -145,7 +145,16 @@ class ProjectionRunner:
                 if db_existed
                 else None
             )
-            conn = await asyncio.to_thread(self._open_projection_db, name, projection)
+            version_changed = db_existed and stored_version != str(projection.version)
+            replay_version_change = version_changed and bool(
+                projection.replay_retained_events_on_version_change
+            )
+            conn = await asyncio.to_thread(
+                self._open_projection_db,
+                name,
+                projection,
+                not replay_version_change,
+            )
             self._conns[name] = conn
             self._write_locks[name] = asyncio.Lock()
             subscriber_id = f"projection:{name}"
@@ -159,7 +168,7 @@ class ProjectionRunner:
                 types,
                 self._make_callback(name, projection),
             )
-            if db_existed and stored_version != str(projection.version):
+            if replay_version_change:
                 replay_required.append(name)
         for name in replay_required:
             _log.info(
@@ -172,6 +181,11 @@ class ProjectionRunner:
                 latest = await self._log.latest_event_id()
                 if latest is not None:
                     await self._bus.set_checkpoint(f"projection:{name}", latest)
+                await asyncio.to_thread(
+                    self._stamp_projection_metadata,
+                    self._conns[name],
+                    projection,
+                )
         if start_bus:
             await self._bus.start()
 
@@ -333,6 +347,7 @@ class ProjectionRunner:
         self,
         name: str,
         projection: Projection,
+        stamp_version: bool = True,
     ) -> sqlcipher3.Connection:
         db_path = self._config.projection_db_path(name)
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,20 +372,29 @@ class ProjectionRunner:
         cur = conn.cursor()
         cur.executescript(schema_sql)
         projection.migrate_schema(conn)
-        # Stamp projection version in a tiny metadata table for debugging.
+        # A version-changing startup stamps only after retained-event replay
+        # succeeds, so a crash cannot make the next restart skip recovery.
         cur.executescript(
             "CREATE TABLE IF NOT EXISTS _projection_meta ("
             "  key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         )
         cur.execute(
             "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
-            ("version", str(projection.version)),
-        )
-        cur.execute(
-            "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
             ("name", projection.name),
         )
+        if stamp_version:
+            self._stamp_projection_metadata(conn, projection)
         return conn
+
+    @staticmethod
+    def _stamp_projection_metadata(
+        conn: sqlcipher3.Connection,
+        projection: Projection,
+    ) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO _projection_meta(key, value) VALUES (?, ?)",
+            ("version", str(projection.version)),
+        )
 
     def _stored_projection_version(self, name: str) -> str | None:
         """Read metadata before opening code can stamp the candidate version."""

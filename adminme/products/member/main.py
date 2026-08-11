@@ -2581,8 +2581,9 @@ async def _submit_triage_intent_locked(
         deterministic_candidates=deterministic_candidates,
     )
 
-    proposal_event_ids: list[str] = []
     proposal_ids: list[str] = []
+    proposal_event_by_id: dict[str, str] = {}
+    missing_proposals: list[tuple[str, dict[str, Any], EventEnvelope]] = []
     for candidate in candidates:
         candidate_values = candidate.feature_payload()
         candidate_fingerprint = hashlib.sha256(
@@ -2616,13 +2617,12 @@ async def _submit_triage_intent_locked(
             session.tenant_id, proposal_key
         )
         if prior_proposal is not None:
-            proposal_event_ids.append(str(prior_proposal["event_id"]))
+            proposal_event_by_id[proposal_id] = str(prior_proposal["event_id"])
             continue
-        await _guard_triage_write(
-            runtime, session, "triage.item.proposed", proposal_payload
-        )
-        proposal_event_ids.append(
-            await runtime.events.write(
+        missing_proposals.append(
+            (
+                proposal_id,
+                proposal_payload,
                 EventEnvelope(
                     event_at_ms=int(time.time() * 1000),
                     tenant_id=session.tenant_id,
@@ -2640,9 +2640,56 @@ async def _submit_triage_intent_locked(
                     idempotency_key=proposal_key,
                     raw_ref=f"candidate-sha256:{candidate_fingerprint}",
                     payload=proposal_payload,
-                )
+                ),
             )
         )
+
+    # Preflight the complete recorded family before appending any child. A
+    # denial must not leave a partial family after the first projected child
+    # has dismissed the durable member-intent holding row.
+    try:
+        for _proposal_id, proposal_payload, _envelope in missing_proposals:
+            await _guard_triage_write(
+                runtime, session, "triage.item.proposed", proposal_payload
+            )
+    except HTTPException as exc:
+        detail = exc.detail
+        reason = (
+            detail
+            if isinstance(detail, str)
+            else str(detail.get("reason") or detail.get("code") or "write denied")
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": "triage_intent_post_capture",
+                "capture_state": "intent_and_features_recorded",
+                "reason": reason,
+                "recovery": {
+                    "intent_id": intent_id,
+                    "href": (
+                        f"/member/triage?view=needs_interpretation&item={intent_id}"
+                    ),
+                },
+            },
+            headers=exc.headers,
+        ) from exc
+
+    if missing_proposals:
+        appended_ids = await runtime.events.write_batch(
+            [envelope for _proposal_id, _payload, envelope in missing_proposals]
+        )
+        proposal_event_by_id.update(
+            {
+                proposal_id: event_id
+                for (proposal_id, _payload, _envelope), event_id in zip(
+                    missing_proposals, appended_ids, strict=True
+                )
+            }
+        )
+    proposal_event_ids = [
+        proposal_event_by_id[proposal_id] for proposal_id in proposal_ids
+    ]
     if proposal_event_ids:
         await runtime.wait_for_projection("triage", proposal_event_ids[-1])
     else:
@@ -2966,6 +3013,11 @@ async def _approve_triage_item_locked(
     session: Session,
 ) -> dict[str, Any]:
     item = _owned_triage_item(runtime, session, proposal_id)
+    if item.get("decision_disposition") != "decision":
+        raise HTTPException(
+            409,
+            "supporting or existing-object evidence cannot create duplicate household truth",
+        )
     if item["source_kind"] == "commitment_proposal":
         result = await comms.approve_commitment(
             proposal_id,
@@ -2979,12 +3031,6 @@ async def _approve_triage_item_locked(
         )
         await runtime.wait_for_projection("triage", result["event_id"])
         return {**result, "triage_state": "confirmed"}
-
-    if item.get("decision_disposition") != "decision":
-        raise HTTPException(
-            409,
-            "supporting or existing-object evidence cannot create duplicate household truth",
-        )
 
     request_fingerprint = _triage_request_fingerprint(proposal_id, body)
     prior_confirmation = await _prior_triage_command(
@@ -3070,6 +3116,23 @@ async def _approve_triage_item_locked(
         )
         confirmation_event_id = await runtime.events.write(confirmation)
         await runtime.wait_for_projection("triage", confirmation_event_id)
+
+    # Projection acceptance, not append success, authorizes materialization.
+    # Canonical truth can arrive after the API read but before this decision is
+    # projected; in that race the handler deliberately rejects the transition.
+    confirmed_item = _owned_triage_item(runtime, session, proposal_id)
+    if not (
+        confirmed_item.get("decision_disposition") == "decision"
+        and confirmed_item.get("state") == "approved"
+        and confirmed_item.get("domain_approval_event_id") == confirmation_event_id
+        and confirmed_item.get("confirmation_event_id") == confirmation_event_id
+        and confirmed_item.get("confirmation_request_id") == body.request_id
+    ):
+        raise HTTPException(
+            409,
+            "triage confirmation was superseded before materialization; refresh",
+        )
+    item = confirmed_item
 
     if item["target_kind"] in {"calendar_event", "reminder", "list", "list_item"}:
         [external_candidate] = _materialization_envelopes(

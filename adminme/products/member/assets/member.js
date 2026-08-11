@@ -276,7 +276,7 @@ function finishAddForReviewOperation(token) {
   else releaseAddForReviewInteractionLock();
 }
 
-function latchAddForReviewRecovery(message) {
+function latchAddForReviewRecovery(message, recoveryHref = null) {
   state.addForReviewRecoveryRequired = true;
   const banner = $("#state-banner");
   banner.hidden = false;
@@ -290,10 +290,11 @@ function latchAddForReviewRecovery(message) {
       recovery.dataset.addRecoveryStatus = "true";
       recovery.setAttribute("role", "alert");
       const recoveryMessage = text("p", message, "state-note");
-      const reload = text("button", "Reload and reconcile", "button button-primary");
+      const destination = recoveryHref || "/member/triage?view=all_candidates";
+      const reload = text("button", recoveryHref ? "Open saved Triage item" : "Check Triage before retrying", "button button-primary");
       reload.type = "button";
       reload.dataset.addRecovery = "true";
-      reload.addEventListener("click", () => window.location.reload());
+      reload.addEventListener("click", () => window.location.assign(destination));
       recovery.append(recoveryMessage, reload);
       form.append(recovery);
     }
@@ -349,6 +350,7 @@ function latchTriageRefreshFailure(message) {
 }
 
 function requestDefinitelyRejected(error) {
+  if (error.body?.detail?.capture_state === "intent_and_features_recorded") return false;
   return Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408;
 }
 
@@ -359,6 +361,7 @@ function triageDecisionHasDurableReceipt(item, action, requestId) {
       && Boolean(item.dismissal_event_id)
       && item.dismissal_request_id === requestId;
   }
+  if (!item.confirmation_event_id || item.confirmation_request_id !== requestId) return false;
   if (item.state === "approved") {
     return ["approved_awaiting_openclaw", "approved_awaiting_provider"].includes(item.resolution_reason)
       && Boolean(item.domain_approval_event_id)
@@ -2271,6 +2274,7 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
       try {
         result = await api("/api/member/v1/triage/intents", intentRequest);
       } catch (initialError) {
+        if (requestDefinitelyRejected(initialError)) throw initialError;
         try {
           result = await api("/api/member/v1/triage/intents", intentRequest);
         } catch (retryError) {
@@ -2295,8 +2299,12 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
       if (triageActive && intentRecorded) {
         latchTriageRefreshFailure(`Your thought was saved, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
       } else if (error.ambiguousAfterRetry) {
-        const recoveryMessage = `The Add-for-review response remained interrupted after an idempotent retry: ${error.message} Your exact words are still visible. Reload this page before trying again so Triage can reconcile the durable intent.`;
-        latchAddForReviewRecovery(recoveryMessage);
+        const recoveryHref = error.body?.detail?.recovery?.href || null;
+        const recoveryInstruction = recoveryHref
+          ? "Open the saved Triage item to reconcile the durable intent before trying again."
+          : "Open Triage and check for the retained thought before trying again; the durable outcome is unknown.";
+        const recoveryMessage = `The Add-for-review response remained interrupted after an idempotent retry: ${error.message} Your exact words are still visible. ${recoveryInstruction}`;
+        latchAddForReviewRecovery(recoveryMessage, recoveryHref);
         if (triageActive) latchTriageRefreshFailure(recoveryMessage);
       } else {
         delete form.dataset.clientRequestId;

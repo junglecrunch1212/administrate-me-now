@@ -33,6 +33,7 @@ class Projection(ABC):
     version: int
     subscribes_to: list[str] | str
     schema_path: Path
+    replay_retained_events_on_version_change: bool = False
 
     @abstractmethod
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:

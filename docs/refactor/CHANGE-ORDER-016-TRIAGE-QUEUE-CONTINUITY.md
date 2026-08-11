@@ -64,16 +64,17 @@ The defect was presentation state and authority legibility.
   ordinary cursor, retains that identity in its current deterministic review
   lens—including All candidates after an evidence-only/attach-existing
   transition—and never substitutes a first-page matter. HTTP class alone is
-  never settlement proof: local confirmation requires its materialization
+  never settlement proof: every confirmation requires the exact immutable
+  confirmation event and request ID; local confirmation also requires its materialization
   receipt; an external route requires its durable pending-action receipt; and
   provider completion/failure requires its outcome receipt. A definite
   client-visible rejection may say no decision was recorded only while the
   exact candidate remains pending. An interrupted or post-confirmation failure
   retries once with the original request ID when continuation is required,
   then reports proven action-specific truth or fails closed until reload.
-- A dismissal is reconciled only from the exact immutable member-dismissal
-  event and request ID. A system supersession or another member action cannot
-  masquerade as the requested dismissal.
+- A confirmation or dismissal is reconciled only from the exact immutable
+  member-action event and request ID. A different request, system supersession,
+  or unrelated resolved state cannot masquerade as the requested action.
 - Evidence-only and attach-existing candidates never advertise or accept
   confirmation. They remain reviewable evidence and cannot create a duplicate
   canonical object even if a stale or forged client calls the approval route.
@@ -81,13 +82,25 @@ The defect was presentation state and authority legibility.
   Escape, repeat submission, and a stale callback cannot discard or replace
   the form on Today or any other member surface. Ambiguous capture retries once
   with the original client request ID under a server-side per-intent lock; a
-  still-ambiguous result retains the exact visible words, presents an enabled
-  and focused reload/reconcile action inside the dialog, and fails closed until
-  reload. Every response class is treated as potentially post-capture because
-  a governance conflict can occur after the immutable intent was appended.
+  still-ambiguous result retains the exact visible words and presents an enabled
+  focused action inside the dialog. When the server proves durable intent and
+  features, that action opens the exact saved Needs interpretation item from
+  any source surface; when the transport provides no coordinates, it opens
+  All candidates so the member checks Triage before resubmitting. A definite
+  unprovenanced client 4xx is handled as pre-capture and is
+  not retried. A server response that explicitly attests
+  `intent_and_features_recorded` is treated as post-capture because proposal
+  governance can fail after both immutable events were appended.
 - Once intent features are recorded, retries rehydrate proposals only from
   that durable feature event; the language seam is not invoked again and
-  cannot produce a second interpretation or proposal family.
+  cannot produce a second interpretation or proposal family. All missing
+  children are governance-preflighted before one atomic batch append, so a
+  denial cannot strand a partial family or prematurely dismiss its holding row.
+- Approval is authorized by the projection's acceptance of the exact
+  confirmation request, not event append alone. If matching canonical truth
+  arrives between the API read and confirmation, the candidate becomes
+  attach-existing, the confirmation transition fails closed, and no duplicate
+  materialization or provider-action receipt is created.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -108,13 +121,14 @@ The defect was presentation state and authority legibility.
 | Return and honor computed review state after enrichment | HARDEN | Additive member API response metadata derived from the current projection; no new truth, model decision, or automatic confirmation. |
 | Preserve successful enrichment across a following decision failure | HARDEN | The current immutable enrichment event/revision remains authoritative; no failed decision is invented or retried automatically. |
 | Reconcile the exact candidate after rejection or an ambiguous response | HARDEN | Current projection truth and immutable receipts decide what the browser may claim; ordinary pagination cannot substitute another matter. |
-| Require an exact member-dismissal event/request receipt | HARDEN | System supersessions and unrelated resolved state remain immutable but cannot settle a member dismissal. |
+| Require exact member confirmation/dismissal event and request receipts | HARDEN | Another request, system supersession, and unrelated resolved state remain immutable but cannot settle the member's action. |
 | Block approval of evidence-only/attach-existing candidates | HARDEN | Evidence remains linked and editable; only a decision disposition may create canonical household truth. |
 | Project the durable pending provider-action receipt into Triage v8 | MODERNIZE | Additive deterministic read-model linkage only; immutable domain approval, OpenClaw approval, provider command, and outcome events retain separate authority. |
 | Serialize Add-for-review under a stable client request ID on every surface | HARDEN | Exact member text remains one idempotent intent; ambiguous transport cannot mint a second identity or permit stale dialog callbacks. |
-| Replay recorded intent features after post-capture failure | HARDEN | The immutable extraction event fixes interpretation identity; retries never ask the language seam to decide again. |
+| Replay recorded intent features and append each recorded proposal family atomically after post-capture failure | HARDEN | The immutable extraction event fixes interpretation identity; retries never ask the language seam to decide again, and partial families cannot escape review. |
 | Prevent native dialog cancellation during an Add-for-review write | HARDEN | Ephemeral input remains visible until a definite pre-write failure or authoritative recorded result is known. |
-| Replay a projection when its reviewed version changes | HARDEN | The migrated read model receives deterministic event-zero replay before live delivery, preserving legacy rows that predate retained events; no source fact is rewritten. |
+| Opt Triage v8 into reviewed version-change replay | HARDEN | Only an explicitly reviewed projection may receive deterministic event-zero replay; its candidate version is stamped only after replay succeeds, legacy rows are preserved, and no source fact is rewritten. |
+| Re-read exact projected confirmation before materialization | HARDEN | Concurrent canonical truth wins the race; append success alone never authorizes duplicate domain truth or a provider action. |
 | Type non-continuation banners before display | HARDEN | Presentation provenance only; lens changes cannot erase a real progress, success, or error state. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
@@ -123,10 +137,15 @@ No event schema, dependency, runtime, adapter, pipeline, model, canonical
 object, provider object, projection count, or external-write authority changes.
 Triage advances from projection v7 to v8 so replay links existing immutable
 `member.provider_action.confirmed` receipts to their originating approved
-candidate and exact member-dismissal receipts to their requests. The runner
-detects the reviewed version change before metadata stamping, migrates in
-place, and replays retained events from event zero before live delivery; no
-source event, legacy read-model row, or provider state is rewritten.
+candidate and exact member confirmation/dismissal receipts to their requests.
+Triage explicitly opts into the runner's reviewed version-change recovery.
+The runner detects v7 before metadata stamping, migrates in place, replays
+retained events from event zero before live delivery, and stamps v8 only after
+successful replay. It backfills exact confirmation receipts even for
+historical rows whose later local/provider outcome already advanced
+`last_event_id`. An interrupted replay therefore leaves v7 stamped and is
+retried on the next start. No other projection is opted in, and no source
+event, legacy read-model row, or provider state is rewritten.
 
 ## Acceptance
 
@@ -145,13 +164,18 @@ successful enrichment followed by a failed decision, authoritative refresh,
 and immediate current-revision retry; exact off-page inclusion during both
 reconciliation paths; a real post-confirmation guard refusal resumed with one
 request ID through local materialization; commit followed by an interrupted
-response and exact terminal-receipt recovery; a concurrent non-decision
+response and exact-request terminal-receipt recovery, including refusal to
+accept a different request's receipt; a concurrent non-decision
 transition retaining exact focus in All candidates; native Escape on Today
 during a post-capture Add-for-review failure, with one client request ID across
-idempotent retry and one recorded interpretation; in-dialog recovery after a
-still-ambiguous response; evidence-only/attach-existing confirmation denial;
-exact member-dismissal receipt reconciliation; v7-to-v8 restart replay of
-historical provider-action evidence; native Escape during a definite failing Triage capture,
+idempotent retry and one recorded interpretation; a definite pre-capture 4xx
+with no retry; exact saved-item recovery from Triage and Today after a
+still-ambiguous response; atomic
+two-candidate recovery after proposal-governance denial;
+evidence-only/attach-existing confirmation denial, including commitment
+proposals; exact member-action receipt reconciliation; a canonical-truth race
+that cannot materialize a duplicate; Triage-only v7-to-v8 restart replay of
+historical provider-action evidence with interrupted-replay retry; native Escape during a definite failing Triage capture,
 provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

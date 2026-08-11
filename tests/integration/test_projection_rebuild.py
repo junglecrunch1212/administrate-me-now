@@ -127,6 +127,7 @@ def _fake_embedding(text: str, dim: int = 1536) -> list[float]:
 @pytest.mark.asyncio
 async def test_version_change_replays_triage_before_live_delivery(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A populated v7 cursor cannot skip the v8 pending-action receipt."""
 
@@ -193,6 +194,7 @@ async def test_version_change_replays_triage_before_live_delivery(
             owner_scope="private:member-a",
             visibility_scope="private:member-a",
             causation_id=proposed_id,
+            idempotency_key=("triage:triage.item.confirmed:member-a:upgrade-request"),
             payload={
                 "proposal_id": "proposal-upgrade",
                 "confirmed_at": now,
@@ -227,7 +229,99 @@ async def test_version_change_replays_triage_before_live_delivery(
             },
         )
     )
-    await bus_v7.notify(pending_id)
+    local_proposal_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.proposed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="test",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id="local-source-event",
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "target_kind": "task",
+                "owner_member_id": "member-a",
+                "title": "Historical local task",
+                "candidate": {"description": "Historical local task"},
+                "route": {"member_id": "member-a"},
+                "source_event_id": "local-source-event",
+                "confidence": None,
+                "reasons": ["fixture"],
+                "parent_intent_id": None,
+                "candidate_key": "candidate-local-upgrade",
+                "extraction_event_id": "feature-local-event",
+                "eligibility_rule_ids": ["fixture_v1"],
+            },
+        )
+    )
+    local_confirmation_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.confirmed",
+            schema_version=2,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_proposal_id,
+            idempotency_key=(
+                "triage:triage.item.confirmed:member-a:local-upgrade-request"
+            ),
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "confirmed_at": now,
+                "confirmed_by_member_id": "member-a",
+                "expected_last_event_id": local_proposal_id,
+                "candidate_fingerprint": "c" * 64,
+            },
+        )
+    )
+    local_task_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="task.created",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_confirmation_id,
+            payload={
+                "task_id": "task-local-upgrade",
+                "title": "Historical local task",
+                "owner_member_id": "member-a",
+            },
+        )
+    )
+    local_receipt_id = await log_v7.append(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id="tenant-a",
+            type="triage.item.materialized",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="member-portal",
+            source_account_id="member-a",
+            owner_scope="private:member-a",
+            visibility_scope="private:member-a",
+            causation_id=local_task_id,
+            payload={
+                "proposal_id": "proposal-local-upgrade",
+                "confirmation_event_id": local_confirmation_id,
+                "materialized_event_ids": [local_task_id],
+                "materialized_at": now,
+            },
+        )
+    )
+    await bus_v7.notify(local_receipt_id)
     await _wait_idle(bus_v7, "projection:triage")
     before = (
         runner_v7.connection("triage")
@@ -238,8 +332,47 @@ async def test_version_change_replays_triage_before_live_delivery(
         .fetchone()
     )
     assert tuple(before) == ("approved", None)
+    local_before = (
+        runner_v7.connection("triage")
+        .execute(
+            "SELECT state, domain_approval_event_id, last_event_id "
+            "FROM triage_items WHERE proposal_id='proposal-local-upgrade'"
+        )
+        .fetchone()
+    )
+    assert tuple(local_before) == (
+        "confirmed",
+        local_confirmation_id,
+        local_receipt_id,
+    )
+    runner_v7.connection("triage").execute(
+        "UPDATE triage_items SET confirmation_event_id=NULL, "
+        "confirmation_request_id=NULL"
+    )
     await runner_v7.stop()
     await log_v7.close()
+
+    failed_log = EventLog(config, TEST_KEY)
+    failed_bus = EventBus(failed_log, config.bus_checkpoint_path)
+    failed_runner = ProjectionRunner(
+        failed_bus, failed_log, config, encryption_key=TEST_KEY
+    )
+    failed_runner.register(TriageProjection())
+
+    async def interrupted_replay(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("fixture interrupted version replay")
+
+    monkeypatch.setattr(failed_runner, "_replay_through", interrupted_replay)
+    with pytest.raises(RuntimeError, match="interrupted version replay"):
+        await failed_runner.start()
+    interrupted_version = (
+        failed_runner.connection("triage")
+        .execute("SELECT value FROM _projection_meta WHERE key='version'")
+        .fetchone()[0]
+    )
+    assert interrupted_version == "7"
+    await failed_runner.stop()
+    await failed_log.close()
 
     log_v8 = EventLog(config, TEST_KEY)
     bus_v8 = EventBus(log_v8, config.bus_checkpoint_path)
@@ -261,6 +394,21 @@ async def test_version_change_replays_triage_before_live_delivery(
             "approved_awaiting_openclaw",
             confirmation_id,
             pending_id,
+        )
+        local_after = (
+            runner_v8.connection("triage")
+            .execute(
+                "SELECT state, confirmation_event_id, confirmation_request_id, "
+                "last_event_id FROM triage_items "
+                "WHERE proposal_id='proposal-local-upgrade'"
+            )
+            .fetchone()
+        )
+        assert tuple(local_after) == (
+            "confirmed",
+            local_confirmation_id,
+            "local-upgrade-request",
+            local_receipt_id,
         )
         version = (
             runner_v8.connection("triage")

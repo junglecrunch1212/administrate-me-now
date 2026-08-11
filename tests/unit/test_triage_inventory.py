@@ -284,6 +284,9 @@ def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
         "event_id": "event-9998",
         "type": "triage.item.confirmed",
         "schema_version": 2,
+        "idempotency_key": (
+            f"triage:triage.item.confirmed:{MEMBER}:confirm-request-0001"
+        ),
         "payload": {
             "proposal_id": "proposal-0001",
             "confirmed_at": "2030-01-02T00:00:00Z",
@@ -313,6 +316,7 @@ def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
     projection.apply(pending, conn)
     receipt = conn.execute(
         """SELECT state, resolution_reason, domain_approval_event_id,
+                  confirmation_event_id, confirmation_request_id,
                   materialization_event_id, last_event_id
              FROM triage_items WHERE proposal_id='proposal-0001'"""
     ).fetchone()
@@ -320,8 +324,63 @@ def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
         "approved",
         "approved_awaiting_openclaw",
         "event-9998",
+        "event-9998",
+        "confirm-request-0001",
         "event-9999",
         "event-9999",
+    )
+
+
+def test_commitment_decisions_project_exact_member_request_receipts() -> None:
+    projection, conn = _projection()
+
+    for index, action in enumerate(("confirmed", "dismissed"), start=1):
+        commitment_id = f"commitment-{action}"
+        proposed = {
+            **_event(index),
+            "type": "commitment.proposed",
+            "payload": {
+                "commitment_id": commitment_id,
+                "owed_by_member_id": MEMBER,
+                "text_summary": f"Fixture commitment {action}",
+                "confidence": 0.9,
+                "classify_reasons": ["fixture"],
+            },
+        }
+        projection.apply(proposed, conn)
+        decision = {
+            **_event(index + 10),
+            "type": f"commitment.{action}",
+            "idempotency_key": (
+                f"command:commitment.{action}:{commitment_id}:{action}-request"
+            ),
+            "payload": {
+                "commitment_id": commitment_id,
+                f"{action}_at": "2030-01-03T00:00:00Z",
+                (
+                    "confirmed_by_member_id"
+                    if action == "confirmed"
+                    else "dismissed_by_party_id"
+                ): MEMBER,
+            },
+        }
+        projection.apply(decision, conn)
+
+    confirmed = conn.execute(
+        "SELECT confirmation_event_id, confirmation_request_id "
+        "FROM triage_items WHERE proposal_id='commitment-confirmed'"
+    ).fetchone()
+    dismissed = conn.execute(
+        "SELECT dismissal_event_id, dismissal_request_id "
+        "FROM triage_items WHERE proposal_id='commitment-dismissed'"
+    ).fetchone()
+    assert tuple(confirmed) == (
+        "event-0011",
+        "confirmed-request",
+    )
+    assert tuple(dismissed) == (
+        "event-0012",
+        "dismissed-request",
     )
 
 

@@ -29,8 +29,8 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
   surface controls, the shared Add-for-review button, and a retained
   Add-for-review form through active/different-lens clicks and programmatic
   submission until successful reload;
-- a pending Add-for-review request resisting native Escape and retaining its
-  exact input after a definite pre-write failure;
+- a pending Add-for-review request resisting native Escape, plus a definite
+  pre-capture 409 that is not retried and retains its editable exact input;
 - a load-more request begun and held before confirmation, then released only
   after the authoritative refresh, with browser-side response consumption
   observed before asserting that its stale result cannot overwrite the queue;
@@ -47,24 +47,38 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
   exact saved input and revision are authoritatively refreshed independently
   of the ordinary cursor and an immediate retry succeeds;
 - a committed confirmation whose response is replaced by a 503, proving the
-  browser reconciles the exact action-specific terminal receipt instead of
-  claiming rejection or substituting another matter;
+  browser reconciles the exact event/request-specific terminal receipt instead
+  of claiming rejection or substituting another matter, and a separate case
+  proving another request's terminal receipt cannot settle the browser action;
 - an actual guard refusal inside the local materialization handler after domain
   confirmation, followed by one continuation with the identical request ID and
   a proven local materialization receipt;
 - an exact pending candidate changing to evidence-only during reconciliation,
   remaining visible in All candidates without an unrelated matter replacing it
-  and without a confirm capability in either browser or API;
-- an ambiguous dismissal response settling only from the exact member-authored
-  dismissal event and request receipt, never a system supersession;
+  and without a confirm capability in the browser, Triage API, or underlying
+  commitment approval route;
+- ambiguous confirmation/dismissal responses settling only from the exact
+  member-authored event and request receipt, never another request or a system
+  supersession;
 - Add for review from Today held through native Escape, failed inside the
   handler after exact intent capture, and completed on one retry with the same
   client request ID and the one recorded feature interpretation;
-- a second ambiguous Add-for-review response retaining the exact dialog and an
-  enabled, focused reload/reconcile action; and
-- a v7 Triage read model restarted under v8, migrated in place, and replayed
-  from retained event zero so an existing pending provider-action receipt
-  becomes visible without deleting legacy rows;
+- a structured post-capture 409 receiving one same-ID retry, then retaining the
+  exact dialog and an enabled, focused action that opens the exact durable
+  Needs interpretation item from both Today and Triage;
+- an unknown 503 outcome from Today retaining the one request identity and
+  opening All candidates for inspection before any resubmission;
+- two recorded candidates governance-preflighted before atomic append, proving
+  a denial on the second child leaves no partial proposal family and recovery
+  reuses the one recorded interpretation;
+- matching canonical truth injected between API read and confirmation
+  projection, proving confirmation is not accepted and no duplicate Task is
+  materialized;
+- a v7 Triage read model explicitly opted into v8 replay from retained event
+  zero so an existing pending provider-action receipt becomes visible without
+  deleting legacy rows or missing exact confirmation receipts after a later
+  local outcome, plus an interrupted replay that leaves v7 stamped and retries
+  successfully on the next start; no generic projection replay is enabled;
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -76,14 +90,14 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 
 ```text
 Focused Triage/projection/pipeline/production-composition tests
-23 passed
+27 passed
 
 Gate 7 rendered production composition
-253 assertions; 39 screenshots; 0 console errors; 0 page errors;
+259 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite
-51 strict acceptance gates; 1,796 root/code/pack tests; 60 bridge tests;
+53 strict acceptance gates; 1,799 root/code/pack tests; 60 bridge tests;
 Ruff/format/mypy/Pyright; dependency audits; performance budgets;
 architecture checks; clean install; tenant isolation; backup/restore;
 pinned OpenClaw contract, 17 plugin tests, build, package, and audit
