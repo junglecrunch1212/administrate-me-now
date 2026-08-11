@@ -11,26 +11,12 @@ import sqlcipher3
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.runtime.application import RuntimeSettings, create_application
+from bootstrap.contracts import PROJECTION_NAMES
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_KEY = b"a" * 32
-EXPECTED_PROJECTIONS = {
-    "parties",
-    "interactions",
-    "artifacts",
-    "commitments",
-    "tasks",
-    "recurrences",
-    "calendars",
-    "places_assets_accounts",
-    "money",
-    "vector_search",
-    "xlsx_workbooks",
-    "member_knowledge",
-    "lists",
-    "triage",
-}
+EXPECTED_PROJECTIONS = set(PROJECTION_NAMES)
 
 
 def _seed_v2_triage_projection(settings: RuntimeSettings) -> None:

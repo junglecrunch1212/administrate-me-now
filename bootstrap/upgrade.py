@@ -34,7 +34,7 @@ class UpgradeError(RuntimeError):
 
 _TRANSIENT_POST_SWITCH_CHECKS = frozenset(
     {
-        "fourteen_projections_and_checkpoints",
+        "fifteen_projections_and_checkpoints",
         "openclaw_compatibility_and_plugin_discovery",
         "openclaw_cron_reconciliation",
         "launchd_and_process_state",

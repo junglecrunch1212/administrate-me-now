@@ -25,6 +25,7 @@ PROJECTION_NAMES = (
     "member_knowledge",
     "lists",
     "triage",
+    "context_fabric",
 )
 
 ADAPTER_CATEGORIES = (

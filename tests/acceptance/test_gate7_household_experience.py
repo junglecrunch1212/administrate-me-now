@@ -550,7 +550,10 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
         assert "Time guardrails" in js_asset.text
         assert "Month at a glance" in js_asset.text
         assert "Calendars in view" in js_asset.text
-        assert "window.prompt" not in js_asset.text
+        assert all(
+            forbidden not in js_asset.text
+            for forbidden in ("window.prompt", "window.confirm", "window.alert")
+        )
         assert "triage-workspace" in css_asset.text
         assert "observation-banner" in member_page.text
         assert "calendar-time-grid" in css_asset.text
@@ -1958,7 +1961,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
     with TestClient(app) as client:
         runtime = app.state.runtime
         projection_names = runtime.projections.projection_names()
-        assert len(projection_names) == 14
+        assert len(projection_names) == 15
         before_counts = _domain_counts(runtime)
         create = client.post(
             "/api/member/v1/temporary-surfaces",
@@ -2067,7 +2070,7 @@ def test_private_quest_is_a_disposable_scope_filtered_lens(tmp_path: Path) -> No
             == 404
         )
         assert _domain_counts(runtime) == before_counts
-        assert len(runtime.projections.projection_names()) == 14
+        assert len(runtime.projections.projection_names()) == 15
         assert not any(
             "project" in name for name in runtime.projections.projection_names()
         )
@@ -2529,7 +2532,7 @@ def test_ac31_settings_is_a_truthful_member_control_plane(tmp_path: Path) -> Non
         assert settings_response.status_code == 200, settings_response.text
         settings = settings_response.json()
         assert settings["control"]["identity"]["can_mutate"] is True
-        assert settings["system"]["runtime"]["projection_count"] == 14
+        assert settings["system"]["runtime"]["projection_count"] == 15
         [registry_account] = settings["registry"]["accounts"]
         assert registry_account["lifecycle_status"] == "active"
         [connection] = settings["control"]["connections"]

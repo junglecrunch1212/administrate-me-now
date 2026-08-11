@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from adminme.context_fabric import (
+    evidence_state,
+    exact_text_fingerprint,
+    lifecycle_state,
+    ownership_state,
+    queue_lane,
+    stable_digest,
+)
 
 from adminme.projections.base import Projection
 from adminme.projections.triage import handlers
@@ -11,7 +22,7 @@ from adminme.projections.triage import handlers
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 6
+    version = 7
     subscribes_to = [
         "triage.item.proposed",
         "triage.item.enriched",
@@ -30,6 +41,14 @@ class TriageProjection(Projection):
         "external_sync.write_requested",
         "external_sync.write_completed",
         "external_sync.write_failed",
+        "task.created",
+        "recurrence.added",
+        "calendar.event_added",
+        "list_item.added",
+        "list_item.updated",
+        "triage.feedback.recorded",
+        "triage.policy_rule.approved",
+        "triage.policy_rule.revoked",
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -48,18 +67,14 @@ class TriageProjection(Projection):
             info = list(conn.execute("PRAGMA table_info(triage_items)"))
             columns = {row[1]: row for row in info}
         target_is_required = bool(columns.get("target_kind", [None] * 4)[3])
-        if (
+        current_shape = (
             "domain_approval_event_id" in columns
             and "parent_intent_id" in columns
             and not target_is_required
-        ):
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent "
-                "ON triage_items(tenant_id, parent_intent_id)"
-            )
-            return
-        conn.executescript(
-            """
+        )
+        if not current_shape:
+            conn.executescript(
+                """
             DROP TABLE IF EXISTS triage_items_v4;
             CREATE TABLE triage_items_v4 (
                 proposal_id TEXT NOT NULL,
@@ -118,11 +133,239 @@ class TriageProjection(Projection):
                 ON triage_items(tenant_id, owner_member_id, state, proposed_at);
             CREATE INDEX IF NOT EXISTS idx_triage_tenant_source
                 ON triage_items(tenant_id, source_event_id);
+                """
+            )
+        info = list(conn.execute("PRAGMA table_info(triage_items)"))
+        columns = {row[1]: row for row in info}
+        additions = {
+            "context_id": "TEXT NOT NULL DEFAULT ''",
+            "context_kind": "TEXT NOT NULL DEFAULT 'isolated_source'",
+            "group_label": "TEXT",
+            "title_fingerprint": "TEXT NOT NULL DEFAULT ''",
+            "object_match_fingerprint": "TEXT NOT NULL DEFAULT ''",
+            "queue_lane": "TEXT NOT NULL DEFAULT 'standard'",
+            "evidence_state": "TEXT NOT NULL DEFAULT 'source_link_only'",
+            "ownership_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "lifecycle_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "decision_disposition": "TEXT NOT NULL DEFAULT 'decision'",
+            "duplicate_of_proposal_id": "TEXT",
+            "existing_object_kind": "TEXT",
+            "existing_object_id": "TEXT",
+            "policy_disposition": "TEXT NOT NULL DEFAULT 'none'",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE triage_items ADD COLUMN {name} {sql_type}")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS triage_context_sessions (
+                tenant_id TEXT NOT NULL, owner_member_id TEXT NOT NULL,
+                thread_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+                context_id TEXT NOT NULL, first_proposed_at TEXT NOT NULL,
+                last_proposed_at TEXT NOT NULL, last_source_event_id TEXT NOT NULL,
+                source_count INTEGER NOT NULL, last_event_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, owner_member_id, thread_key, sequence),
+                UNIQUE (tenant_id, context_id)
+            );
+            CREATE TABLE IF NOT EXISTS triage_context_session_sources (
+                tenant_id TEXT NOT NULL, owner_member_id TEXT NOT NULL,
+                thread_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+                source_event_id TEXT NOT NULL,
+                PRIMARY KEY (
+                    tenant_id, owner_member_id, thread_key, sequence,
+                    source_event_id
+                )
+            );
             """
         )
+        rows = conn.execute(
+            """SELECT tenant_id, proposal_id, owner_member_id, target_kind,
+                      title, source_event_id, candidate_json, reasons_json,
+                      interpretation_json, proposed_at, last_event_id,
+                      object_match_fingerprint
+                 FROM triage_items
+                WHERE context_id='' OR title_fingerprint=''
+                   OR object_match_fingerprint=''
+                ORDER BY tenant_id, owner_member_id, proposed_at, proposal_id"""
+        ).fetchall()
+        sessions: dict[tuple[str, str, str], dict[str, Any]] = {}
+        completed_sessions: list[tuple[tuple[str, str, str], dict[str, Any]]] = []
+        for row in rows:
+            interpretation = json.loads(row[8]) if row[8] else None
+            payload = {
+                "owner_member_id": row[2],
+                "target_kind": row[3],
+                "title": row[4],
+                "source_event_id": row[5],
+                "candidate": json.loads(row[6] or "{}"),
+                "reasons": json.loads(row[7] or "[]"),
+                "interpretation": interpretation,
+            }
+            object_match = exact_text_fingerprint(
+                row[3],
+                (
+                    f"{payload['candidate'].get('kind', '')}|"
+                    f"{payload['candidate'].get('rrule', '')}"
+                    if row[3] == "recurrence" and payload["candidate"].get("kind")
+                    else row[4]
+                ),
+            )
+            thread_key = (
+                str(interpretation.get("thread_key") or "")
+                if isinstance(interpretation, dict)
+                else ""
+            )
+            context_kind = "isolated_source"
+            if thread_key:
+                key = (str(row[0]), str(row[2]), thread_key)
+                proposed = datetime.fromisoformat(str(row[9]).replace("Z", "+00:00"))
+                if proposed.tzinfo is None:
+                    proposed = proposed.replace(tzinfo=timezone.utc)
+                session = sessions.get(key)
+                new_session = session is None
+                if session is not None and str(row[5]) not in session["sources"]:
+                    new_session = (
+                        len(session["sources"]) >= 100
+                        or abs((proposed - session["first"]).days) > 30
+                    )
+                if new_session:
+                    if session is not None:
+                        completed_sessions.append((key, dict(session)))
+                    sequence = 0 if session is None else int(session["sequence"]) + 1
+                    session = {
+                        "sequence": sequence,
+                        "first": proposed,
+                        "first_text": str(row[9]),
+                        "last_text": str(row[9]),
+                        "last_source": str(row[5]),
+                        "sources": {str(row[5])},
+                        "last_event_id": str(row[10]),
+                    }
+                    sessions[key] = session
+                assert session is not None
+                if not new_session and str(row[5]) not in session["sources"]:
+                    session["last_text"] = str(row[9])
+                    session["last_source"] = str(row[5])
+                    session["sources"].add(str(row[5]))
+                    session["last_event_id"] = str(row[10])
+                context_id = "ctx_matter_" + stable_digest(
+                    row[0], row[2], thread_key, session["sequence"]
+                )
+                context_kind = "deterministic_matter"
+            else:
+                context_id = "ctx_source_" + stable_digest(row[0], row[2], row[5])
+            conn.execute(
+                """UPDATE triage_items SET
+                       context_id=?, context_kind=?, group_label=?,
+                       title_fingerprint=?, object_match_fingerprint=?,
+                       queue_lane=?, evidence_state=?,
+                       ownership_state=?, lifecycle_state=?
+                     WHERE tenant_id=? AND proposal_id=?""",
+                (
+                    context_id,
+                    context_kind,
+                    interpretation.get("compact_summary")
+                    if isinstance(interpretation, dict)
+                    else row[4],
+                    exact_text_fingerprint(row[3], row[4]),
+                    object_match,
+                    queue_lane(payload),
+                    evidence_state(payload),
+                    ownership_state(payload),
+                    lifecycle_state(payload),
+                    row[0],
+                    row[1],
+                ),
+            )
+        completed_sessions.extend(
+            (key, dict(session)) for key, session in sessions.items()
+        )
+        for (tenant_id, owner_id, thread_key), session in completed_sessions:
+            context_id = "ctx_matter_" + stable_digest(
+                tenant_id, owner_id, thread_key, session["sequence"]
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO triage_context_sessions (
+                       tenant_id, owner_member_id, thread_key, sequence,
+                       context_id, first_proposed_at, last_proposed_at,
+                       last_source_event_id, source_count, last_event_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    tenant_id,
+                    owner_id,
+                    thread_key,
+                    session["sequence"],
+                    context_id,
+                    session["first_text"],
+                    session["last_text"],
+                    session["last_source"],
+                    len(session["sources"]),
+                    session["last_event_id"],
+                ),
+            )
+            conn.executemany(
+                """INSERT OR IGNORE INTO triage_context_session_sources (
+                       tenant_id, owner_member_id, thread_key, sequence,
+                       source_event_id
+                   ) VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (
+                        tenant_id,
+                        owner_id,
+                        thread_key,
+                        session["sequence"],
+                        source_event_id,
+                    )
+                    for source_event_id in sorted(session["sources"])
+                ],
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_triage_tenant_parent_intent "
             "ON triage_items(tenant_id, parent_intent_id)"
+        )
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_triage_member_context_state
+                ON triage_items(tenant_id, owner_member_id, context_id, state, proposed_at);
+            CREATE INDEX IF NOT EXISTS idx_triage_member_inventory
+                ON triage_items(tenant_id, owner_member_id, state, proposed_at, proposal_id);
+            CREATE INDEX IF NOT EXISTS idx_triage_exact_match
+                ON triage_items(tenant_id, owner_member_id, target_kind, title_fingerprint, state);
+            CREATE TABLE IF NOT EXISTS canonical_object_fingerprints (
+                tenant_id TEXT NOT NULL, owner_member_id TEXT, target_kind TEXT NOT NULL,
+                object_id TEXT NOT NULL, title_fingerprint TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'active', owner_scope TEXT NOT NULL,
+                visibility_scope TEXT NOT NULL, sensitivity TEXT NOT NULL,
+                last_event_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, target_kind, object_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_fingerprint_lookup
+                ON canonical_object_fingerprints(
+                    tenant_id, owner_member_id, target_kind, title_fingerprint, state
+                );
+            CREATE TABLE IF NOT EXISTS triage_context_sessions (
+                tenant_id TEXT NOT NULL, owner_member_id TEXT NOT NULL,
+                thread_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+                context_id TEXT NOT NULL, first_proposed_at TEXT NOT NULL,
+                last_proposed_at TEXT NOT NULL, last_source_event_id TEXT NOT NULL,
+                source_count INTEGER NOT NULL, last_event_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, owner_member_id, thread_key, sequence),
+                UNIQUE (tenant_id, context_id)
+            );
+            CREATE TABLE IF NOT EXISTS triage_context_session_sources (
+                tenant_id TEXT NOT NULL, owner_member_id TEXT NOT NULL,
+                thread_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+                source_event_id TEXT NOT NULL,
+                PRIMARY KEY (
+                    tenant_id, owner_member_id, thread_key, sequence,
+                    source_event_id
+                )
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_context_session_latest
+                ON triage_context_sessions(
+                    tenant_id, owner_member_id, thread_key, sequence
+                );
+            """
         )
 
 

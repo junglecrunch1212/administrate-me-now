@@ -21,26 +21,12 @@ from adminme.runtime.application import (
     RuntimeSettings,
     create_application,
 )
+from bootstrap.contracts import PROJECTION_NAMES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_KEY = b"r" * 32
 
-PROJECTIONS = {
-    "parties",
-    "interactions",
-    "artifacts",
-    "commitments",
-    "tasks",
-    "recurrences",
-    "calendars",
-    "places_assets_accounts",
-    "money",
-    "vector_search",
-    "xlsx_workbooks",
-    "member_knowledge",
-    "lists",
-    "triage",
-}
+PROJECTIONS = set(PROJECTION_NAMES)
 
 REACTIVE_PIPELINES = {
     "pipeline:commitment_extraction",

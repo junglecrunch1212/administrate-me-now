@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 214,
-    "technical_event_types": 184,
+    "technical_event_schemas": 222,
+    "technical_event_types": 191,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -6421,6 +6421,178 @@
     },
     {
       "additional_properties": false,
+      "event_type": "context.membership.confirmed",
+      "family": "context",
+      "properties": {
+        "confirmed_at": {
+          "format": "date-time",
+          "title": "Confirmed At",
+          "type": "string"
+        },
+        "confirmed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Confirmed By Member Id",
+          "type": "string"
+        },
+        "context_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Context Id",
+          "type": "string"
+        },
+        "expected_last_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Last Event Id"
+        },
+        "object_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_kind": {
+          "enum": [
+            "source_event",
+            "triage_candidate",
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "recurrence",
+            "note",
+            "party",
+            "asset",
+            "account",
+            "context"
+          ],
+          "title": "Object Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "context_id",
+        "object_kind",
+        "object_id",
+        "confirmed_by_member_id",
+        "confirmed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.membership.revoked",
+      "family": "context",
+      "properties": {
+        "context_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Context Id",
+          "type": "string"
+        },
+        "object_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Object Id",
+          "type": "string"
+        },
+        "object_kind": {
+          "enum": [
+            "source_event",
+            "triage_candidate",
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "recurrence",
+            "note",
+            "party",
+            "asset",
+            "account",
+            "context"
+          ],
+          "title": "Object Kind",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "context_id",
+        "object_kind",
+        "object_id",
+        "revoked_by_member_id",
+        "revoked_at",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.merged",
+      "family": "context",
+      "properties": {
+        "merged_at": {
+          "format": "date-time",
+          "title": "Merged At",
+          "type": "string"
+        },
+        "merged_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Merged By Member Id",
+          "type": "string"
+        },
+        "source_context_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 2,
+          "title": "Source Context Ids",
+          "type": "array"
+        },
+        "target_context_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Target Context Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_context_ids",
+        "target_context_id",
+        "merged_by_member_id",
+        "merged_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "context.signal.observed",
       "family": "context",
       "properties": {
@@ -6574,6 +6746,72 @@
         "kind",
         "state",
         "observed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.split",
+      "family": "context",
+      "properties": {
+        "object_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Object Ids",
+          "type": "array"
+        },
+        "object_kind": {
+          "enum": [
+            "source_event",
+            "triage_candidate",
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "recurrence",
+            "note",
+            "party",
+            "asset",
+            "account",
+            "context"
+          ],
+          "title": "Object Kind",
+          "type": "string"
+        },
+        "source_context_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Context Id",
+          "type": "string"
+        },
+        "split_at": {
+          "format": "date-time",
+          "title": "Split At",
+          "type": "string"
+        },
+        "split_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Split By Member Id",
+          "type": "string"
+        },
+        "target_context_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Target Context Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_context_id",
+        "target_context_id",
+        "object_kind",
+        "object_ids",
+        "split_by_member_id",
+        "split_at"
       ],
       "schema_version": 1
     },
@@ -20219,6 +20457,143 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.feedback.recorded",
+      "family": "triage",
+      "properties": {
+        "context_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Id"
+        },
+        "feedback_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Feedback Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Account Id"
+        },
+        "reason": {
+          "enum": [
+            "not_mine",
+            "not_actionable",
+            "already_done",
+            "duplicate",
+            "wrong_kind",
+            "wrong_context",
+            "wrong_owner",
+            "recurring_normal",
+            "low_signal",
+            "spam",
+            "provider_promotion",
+            "other"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "sender_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sender Digest"
+        },
+        "source_adapter": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Adapter"
+        },
+        "target_kind": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Kind"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "enum": [
+                "personal",
+                "work"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace"
+        }
+      },
+      "required": [
+        "feedback_id",
+        "proposal_id",
+        "member_id",
+        "reason",
+        "recorded_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.intent.features_extracted",
       "family": "triage",
       "properties": {
@@ -21105,6 +21480,163 @@
     },
     {
       "additional_properties": false,
+      "event_type": "triage.item.proposed",
+      "family": "triage",
+      "properties": {
+        "candidate": {
+          "additionalProperties": true,
+          "title": "Candidate",
+          "type": "object"
+        },
+        "candidate_key": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Key"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "eligibility_rule_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Eligibility Rule Ids",
+          "type": "array"
+        },
+        "extraction_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extraction Event Id"
+        },
+        "interpretation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TriageContextInterpretationV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "parent_intent_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Intent Id"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TriageRouteV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "target_kind": {
+          "enum": [
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "list",
+            "list_item",
+            "recurrence",
+            "party_identifier",
+            "party_candidate",
+            "party_relationship",
+            "relationship_fact"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "target_kind",
+        "owner_member_id",
+        "title",
+        "source_event_id",
+        "eligibility_rule_ids"
+      ],
+      "schema_version": 3
+    },
+    {
+      "additional_properties": false,
       "event_type": "triage.item.superseded",
       "family": "triage",
       "properties": {
@@ -21183,6 +21715,140 @@
         "reason"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.policy_rule.approved",
+      "family": "triage",
+      "properties": {
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Approved By Member Id",
+          "type": "string"
+        },
+        "disposition": {
+          "enum": [
+            "quiet",
+            "always_surface",
+            "route_to_low_signal"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "enforcement_mode": {
+          "const": "shadow",
+          "default": "shadow",
+          "title": "Enforcement Mode",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "preview_affected_count": {
+          "minimum": 0,
+          "title": "Preview Affected Count",
+          "type": "integer"
+        },
+        "rule_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "scope_kind": {
+          "enum": [
+            "candidate_kind",
+            "sender",
+            "context",
+            "account",
+            "workspace"
+          ],
+          "title": "Scope Kind",
+          "type": "string"
+        },
+        "scope_value_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Scope Value Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "member_id",
+        "scope_kind",
+        "scope_value_digest",
+        "disposition",
+        "preview_affected_count",
+        "approved_by_member_id",
+        "approved_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.policy_rule.revoked",
+      "family": "triage",
+      "properties": {
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "date-time",
+          "title": "Revoked At",
+          "type": "string"
+        },
+        "revoked_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Revoked By Member Id",
+          "type": "string"
+        },
+        "rule_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "member_id",
+        "revoked_by_member_id",
+        "revoked_at",
+        "reason"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,

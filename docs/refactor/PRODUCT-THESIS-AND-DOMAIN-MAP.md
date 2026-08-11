@@ -154,6 +154,35 @@ sharing never becomes AdministrateMe authorization.
 
 Storage/process changes may be made, but a capability can be declared complete only when registration, live apply, replay equivalence, scope behavior, and shutdown are proven in the production composition root.
 
+## CO-014 context and decision-load amendment
+
+Context is infrastructure for explanation and organization, not a new truth
+domain. The encrypted event log remains the only AdministrateMe source of
+truth; source providers retain their documented external authority. The
+fifteenth `context_fabric` projection indexes typed references and temporal
+edges and is discarded/rebuilt like every projection.
+
+The hierarchy is explicit:
+
+1. provider conversation — exact provider/account/workspace/thread provenance;
+2. deterministic matter — a bounded 30-day/100-source episode used for first-
+   pass review;
+3. member-confirmed context — explicit merge, split, membership, or correction;
+4. semantic suggestion — model language output with no traversal, routing,
+   priority, suppression, merge, or write authority.
+
+Candidate Inventory is the complete event-derived set. Triage Decision Queue
+is a bounded projection of unresolved member decisions. A candidate may attach
+as evidence to an exact existing object or recurrence without being erased;
+ambiguous matches remain review. This reduces decision load without weakening
+source completeness. A model may name possible meaning and cite exact evidence,
+but fixed code and member decisions own every context boundary and consequence.
+
+All fifteen projections are now default-registered. The historical Gate 1
+status column above remains baseline provenance; current registration truth is
+owned by `bootstrap.contracts.PROJECTION_NAMES`, the runner, AC-02/07/39, and
+Doctor.
+
 ## Lifecycle vocabulary
 
 Required typed outcomes include: proposed, approved, rejected, held-for-review, completed, deferred, snoozed, blocked/unblocked, corrected/superseded, suppressed, dispatched, delivered, failed, reconciled, and verified. Each carries actor, timestamp, scope/sensitivity, correlation, causation, provenance, and idempotency identity as applicable. Completion or failure is feedback: it must update the relevant projections/workbook and alter what-now when relevant.

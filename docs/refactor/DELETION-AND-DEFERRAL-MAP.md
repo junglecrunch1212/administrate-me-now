@@ -10,7 +10,7 @@ runner. The immutable reference HTML remains acceptance vocabulary only.
 The missing non-admin chat capability is closed by a narrow OpenClaw protocol
 relay; OpenClaw still owns every generic chat/runtime concern. The missing
 quest capability is closed by atomic presentation configuration over existing
-authorized reads; no Project object, fourteenth projection, domain cache,
+authorized reads; no Project object, quest-specific projection, domain cache,
 workflow engine, executable template/code/SQL, or raw-log query was introduced.
 Only live optional providers and the supported-Mac rehearsal remain deferred
 to Phase 8.
@@ -63,7 +63,7 @@ Gate 1 deletes no production behavior. A future delete lands only in the same PR
 - `member_knowledge` and `vector_search`: domain read models, not generic OpenClaw memory.
 - Recurrences: domain meaning, not scheduler duplication.
 - Product route/ownership contracts when services become namespaces.
-- All thirteen domain projection capabilities plus the Triage adjudication projection, six product functions, five adapter categories, six pack kinds, five profiles, and four personas.
+- All thirteen domain projection capabilities plus the Triage adjudication and Context Fabric projections, six product functions, five adapter categories, six pack kinds, five profiles, and four personas.
 - Event schemas, governance, normalization, workbook semantics, and meaningful tests unless a cited migration proves replacement compatibility.
 - Historical prompts/memos as provenance; they lose authority but are not erased.
 

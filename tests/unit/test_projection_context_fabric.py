@@ -1,0 +1,275 @@
+"""CO-014 proofs for scoped, rebuildable context infrastructure."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import sqlcipher3
+
+from adminme.lib.session import build_internal_session
+from adminme.projections.context_fabric import ContextFabricProjection
+from adminme.projections.context_fabric.queries import bounded_traversal
+
+
+MEMBER = "fixture-context-member"  # fixture:tenant_data:ok
+OTHER = "fixture-other-member"  # fixture:tenant_data:ok
+
+
+def _conn(projection: ContextFabricProjection) -> sqlcipher3.Connection:
+    conn = sqlcipher3.connect(":memory:")
+    conn.row_factory = sqlcipher3.Row
+    conn.executescript(Path(projection.schema_path).read_text("utf-8"))
+    return conn
+
+
+def _event(
+    event_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    member: str = MEMBER,
+    causation_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "event_at_ms": 1,
+        "tenant_id": "fixture-context-tenant",  # fixture:tenant_data:ok
+        "type": event_type,
+        "schema_version": 1,
+        "occurred_at": "2030-01-01T00:00:00Z",
+        "recorded_at": "2030-01-01T00:00:00Z",
+        "source_adapter": "fixture",
+        "source_account_id": "fixture-account",
+        "owner_scope": f"private:{member}",
+        "visibility_scope": f"private:{member}",
+        "sensitivity": "normal",
+        "correlation_id": None,
+        "causation_id": causation_id,
+        "payload": payload,
+    }
+
+
+def test_context_fabric_replay_is_exact_and_model_edges_have_no_authority() -> None:
+    projection = ContextFabricProjection()
+    events = [
+        _event(
+            "source-1",
+            "messaging.received",
+            {
+                "member_id": MEMBER,
+                "provider": "gmail",
+                "provider_account_id": "fixture-account",
+                "workspace": "personal",
+                "source_channel": "gmail",
+                "thread_id": "provider-thread-1",
+                "body_text": "private body must not be copied into the fabric",
+            },
+        ),
+        _event(
+            "proposal-event-1",
+            "triage.item.proposed",
+            {
+                "proposal_id": "proposal-1",
+                "target_kind": "task",
+                "owner_member_id": MEMBER,
+                "title": "Return the fixture form",
+                "candidate": {},
+                "source_event_id": "source-1",
+                "reasons": ["exact fixture span"],
+                "interpretation": {
+                    "thread_key": "code-owned-thread-key",
+                    "compact_summary": "Fixture form",
+                    "related_source_event_ids": ["weak-related-source"],
+                },
+            },
+            causation_id="source-1",
+        ),
+        _event(
+            "sms-source-1",
+            "telephony.sms_received",
+            {
+                "from_number": "+15555550101",
+                "to_number": "+15555550102",
+                "body": "private SMS body must not be copied into the fabric",
+                "received_at": "2030-01-01T00:00:00Z",
+                "carrier_message_id": "carrier-fixture-1",
+            },
+        ),
+    ]
+    first = _conn(projection)
+    second = _conn(projection)
+    for event in events:
+        projection.apply(event, first)
+        projection.apply(event, second)
+    for event in events:
+        projection.apply(event, first)
+    tables = ["contexts", "context_nodes", "context_edges"]
+    for table in tables:
+        left = sorted(tuple(row) for row in first.execute(f"SELECT * FROM {table}"))
+        right = sorted(tuple(row) for row in second.execute(f"SELECT * FROM {table}"))
+        assert left == right
+    columns = {
+        row[1] for row in first.execute("PRAGMA table_info(context_nodes)").fetchall()
+    }
+    assert not {"body", "body_text", "subject", "content"} & columns
+    source_node = first.execute(
+        "SELECT provider, provider_account_id, workspace FROM context_nodes "
+        "WHERE tenant_id=? AND node_id='event:source-1'",
+        ("fixture-context-tenant",),
+    ).fetchone()
+    assert tuple(source_node) == ("gmail", "fixture-account", "personal")
+    assert all(
+        row[0] is None for row in first.execute("SELECT label FROM contexts").fetchall()
+    )
+    serialized_fabric = " ".join(
+        str(tuple(row))
+        for table in tables
+        for row in first.execute(f"SELECT * FROM {table}")
+    )
+    assert "+15555550101" not in serialized_fabric
+    assert "private SMS body" not in serialized_fabric
+    sms_node = first.execute(
+        "SELECT provider, provider_account_id FROM context_nodes "
+        "WHERE tenant_id=? AND node_id='event:sms-source-1'",
+        ("fixture-context-tenant",),
+    ).fetchone()
+    assert tuple(sms_node) == ("twilio_sms", "fixture-account")
+    session = build_internal_session(MEMBER, "principal", "fixture-context-tenant")
+    traversal = bounded_traversal(
+        first,
+        session,
+        start_node_id="triage:proposal-1",
+        member_id=MEMBER,
+        max_depth=4,
+        max_nodes=100,
+    )
+    assert "event:weak-related-source" not in traversal["node_ids"]
+    assert all(edge["authority"] != "llm_proposed" for edge in traversal["edges"])
+    assert len({edge["edge_id"] for edge in traversal["edges"]}) == len(
+        traversal["edges"]
+    )
+
+
+def test_context_traversal_fails_closed_across_member_scope() -> None:
+    projection = ContextFabricProjection()
+    conn = _conn(projection)
+    projection.apply(
+        _event(
+            "other-source",
+            "messaging.received",
+            {
+                "member_id": OTHER,
+                "provider": "gmail",
+                "provider_account_id": "other-account",
+                "workspace": "personal",
+                "source_channel": "gmail",
+                "thread_id": "other-thread",
+            },
+            member=OTHER,
+        ),
+        conn,
+    )
+    session = build_internal_session(MEMBER, "principal", "fixture-context-tenant")
+    result = bounded_traversal(
+        conn,
+        session,
+        start_node_id="event:other-source",
+        member_id=MEMBER,
+    )
+    assert result["node_ids"] == []
+    assert result["edges"] == []
+
+
+def test_context_traversal_applies_role_and_sensitivity_scope() -> None:
+    projection = ContextFabricProjection()
+    conn = _conn(projection)
+    sensitive = _event(
+        "sensitive-source",
+        "messaging.received",
+        {
+            "member_id": MEMBER,
+            "provider": "gmail",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "source_channel": "gmail",
+            "thread_id": "sensitive-thread",
+        },
+    )
+    sensitive["sensitivity"] = "sensitive"
+    projection.apply(sensitive, conn)
+    child = build_internal_session(MEMBER, "child", "fixture-context-tenant")
+    hidden = bounded_traversal(
+        conn,
+        child,
+        start_node_id="event:sensitive-source",
+        member_id=MEMBER,
+    )
+    assert hidden["node_ids"] == []
+    principal = build_internal_session(MEMBER, "principal", "fixture-context-tenant")
+    visible = bounded_traversal(
+        conn,
+        principal,
+        start_node_id="event:sensitive-source",
+        member_id=MEMBER,
+    )
+    assert "event:sensitive-source" in visible["node_ids"]
+
+
+def test_context_split_moves_membership_and_scope_mismatch_is_ignored() -> None:
+    projection = ContextFabricProjection()
+    conn = _conn(projection)
+    projection.apply(
+        _event(
+            "confirm-1",
+            "context.membership.confirmed",
+            {
+                "context_id": "context-source",
+                "object_kind": "task",
+                "object_id": "task-one",
+                "confirmed_by_member_id": MEMBER,
+                "confirmed_at": "2030-01-01T00:00:00Z",
+                "expected_last_event_id": None,
+            },
+        ),
+        conn,
+    )
+    projection.apply(
+        _event(
+            "split-2",
+            "context.split",
+            {
+                "source_context_id": "context-source",
+                "target_context_id": "context-target",
+                "object_kind": "task",
+                "object_ids": ["task-one"],
+                "split_by_member_id": MEMBER,
+                "split_at": "2030-01-02T00:00:00Z",
+            },
+        ),
+        conn,
+    )
+    edges = conn.execute(
+        """SELECT to_node_id, status FROM context_edges
+             WHERE tenant_id=? AND from_node_id='task:task-one'
+             ORDER BY to_node_id""",
+        ("fixture-context-tenant",),
+    ).fetchall()
+    assert [tuple(row) for row in edges] == [
+        ("context-source", "revoked"),
+        ("context-target", "active"),
+    ]
+
+    forged = _event(
+        "feedback-3",
+        "triage.feedback.recorded",
+        {
+            "feedback_id": "feedback-forged",
+            "proposal_id": "proposal-forged",
+            "member_id": OTHER,
+            "reason": "spam",
+            "recorded_at": "2030-01-03T00:00:00Z",
+        },
+    )
+    projection.apply(forged, conn)
+    assert conn.execute("SELECT COUNT(*) FROM triage_feedback").fetchone()[0] == 0

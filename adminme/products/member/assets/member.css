@@ -143,6 +143,10 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .triage-master-button { width: 100%; display: grid; gap: .22rem; border: 1px solid var(--line); border-radius: var(--radius); padding: .72rem; background: #fbf8f2; color: var(--ink); text-align: left; }
 .triage-master-button[aria-current="true"] { border-color: var(--teal); box-shadow: inset 3px 0 0 var(--teal); background: #edf6f3; }
 .triage-master-button small { color: var(--muted); }
+.triage-inventory { border-left: 4px solid var(--teal); }
+.triage-matter-detail { min-width: 0; display: grid; gap: .8rem; }
+.triage-matter-detail .triage-detail { margin: 0; }
+.triage-detail .button-row select { min-width: 12rem; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); padding: .58rem; background: var(--paper); color: var(--ink); }
 .triage-source-context { display: grid; gap: .7rem; margin: .85rem 0; padding: .85rem; border: 1px solid var(--line); border-radius: var(--radius-lg); background: #fbf8f2; }
 .triage-source-heading { display: flex; align-items: start; justify-content: space-between; gap: .65rem; }
 .triage-source-heading > * { min-width: 0; overflow-wrap: anywhere; }

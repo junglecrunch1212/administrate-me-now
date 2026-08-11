@@ -6,6 +6,39 @@ cd "$REPOSITORY_ROOT"
 
 export PYTHONPATH=.:bridge
 
+# The release rehearsal validates the candidate manifest, not whichever Node
+# happens to be globally linked on the host. Prefer the reviewed side-by-side
+# Homebrew formula when it is installed; GitHub's Apple runner instead supplies
+# the same compatible runtime through actions/setup-node.
+IFS=$'\t' read -r candidate_node_formula candidate_node_compatible < <(
+  poetry run python -c \
+    'import json; v=json.load(open("bootstrap/versions.json", encoding="utf-8"))["node"]; print(v["formula"], v["compatible"], sep="\t")'
+)
+[[ "$candidate_node_formula" =~ ^node@[0-9]+$ && -n "$candidate_node_compatible" ]] \
+  || { echo "invalid candidate Node coordinates" >&2; exit 1; }
+if command -v brew >/dev/null 2>&1 \
+  && candidate_node_prefix="$(brew --prefix "$candidate_node_formula" 2>/dev/null)" \
+  && [[ -x "$candidate_node_prefix/bin/node" ]]; then
+  PATH="$candidate_node_prefix/bin:$PATH"
+  export PATH
+fi
+candidate_node_executable="$(command -v node || true)"
+[[ -x "$candidate_node_executable" ]] \
+  || { echo "candidate Node runtime is unavailable" >&2; exit 1; }
+candidate_node_version="$("$candidate_node_executable" -p 'process.versions.node')"
+poetry run python - "$candidate_node_version" "$candidate_node_compatible" <<'PY'
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+import sys
+
+if Version(sys.argv[1]) not in SpecifierSet(sys.argv[2]):
+    raise SystemExit(
+        f"candidate Node {sys.argv[1]} does not satisfy {sys.argv[2]}"
+    )
+PY
+unset candidate_node_compatible candidate_node_executable candidate_node_formula
+unset candidate_node_prefix candidate_node_version
+
 poetry run pytest tests/acceptance -q --runxfail
 poetry run pytest tests packs -q --import-mode=importlib
 poetry -C bridge sync --with dev --no-interaction
