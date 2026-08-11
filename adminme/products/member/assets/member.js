@@ -670,10 +670,14 @@ function triageSurface(data) {
   const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
   for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring exceptions"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
     const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
-    const button = text("button", `${label} ${count}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
+    const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
+    const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
     button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; state.triageMatter = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
   }
-  controls.append(tabs); fragment.append(controls);
+  controls.append(tabs);
+  if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));
+  else controls.append(text("p", `All ${candidateCount} unresolved candidates are loaded; filter counts are complete.`, "state-note"));
+  fragment.append(controls);
   const visibleMatters = state.triageView === "recent"
     ? recent.map((item) => ({ context_id: `recent:${item.proposal_id}`, label: item.title, queue_lane: item.state, candidate_count: 1, source_count: 1, candidates: [item] }))
     : matterRows.map((matter) => ({ ...matter, candidates: (matter.candidates || []).filter((item) => triageCandidateMatches(item, state.triageView)) })).filter((matter) => matter.candidates.length);
