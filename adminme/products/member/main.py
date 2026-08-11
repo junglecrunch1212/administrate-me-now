@@ -62,6 +62,7 @@ from adminme.products.auth import require_principal, session_from_request
 from adminme.products.comms import main as comms
 from adminme.products.core import main as core
 from adminme.products.member.surfaces import (
+    _triage_review_state,
     authorize_surface,
     build_surface,
     communication_accounts,
@@ -894,6 +895,18 @@ def _owned_triage_item(
     )
     if item is None or item["owner_member_id"] != session.auth_member_id:
         raise HTTPException(404, "triage item not found")
+    return item
+
+
+def _owned_reviewable_triage_item(
+    runtime: Any,
+    session: Session,
+    proposal_id: str,
+) -> dict[str, Any]:
+    """Return current owned proposal truth plus the member review contract."""
+
+    item = _owned_triage_item(runtime, session, proposal_id)
+    item["review_state"] = _triage_review_state(item)
     return item
 
 
@@ -2775,7 +2788,10 @@ async def _enrich_triage_item_locked(
             session,
         )
         await runtime.wait_for_projection("triage", result["event_id"])
-        return {**result, "triage": _owned_triage_item(runtime, session, proposal_id)}
+        return {
+            **result,
+            "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
+        }
     selected_target = str(body.target_kind or item.get("target_kind") or "")
     selected_route = (
         body.route.model_dump(mode="json")
@@ -2800,7 +2816,7 @@ async def _enrich_triage_item_locked(
         await runtime.wait_for_projection("triage", prior["event_id"])
         return {
             "event_id": prior["event_id"],
-            "triage": _owned_triage_item(runtime, session, proposal_id),
+            "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
             "duplicate": True,
         }
     _require_current_triage(
@@ -2835,7 +2851,7 @@ async def _enrich_triage_item_locked(
     await runtime.wait_for_projection("triage", event_id)
     return {
         "event_id": event_id,
-        "triage": _owned_triage_item(runtime, session, proposal_id),
+        "triage": _owned_reviewable_triage_item(runtime, session, proposal_id),
     }
 
 

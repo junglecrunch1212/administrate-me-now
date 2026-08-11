@@ -947,6 +947,7 @@ def test_proposal_requires_member_triage_before_official_task(
         )
         assert enriched.status_code == 200, enriched.text
         enriched_item = enriched.json()["triage"]
+        assert enriched_item["review_state"]["state"] == "ready"
         retried_enrichment = client.post(
             f"/api/member/v1/triage/{calendar_candidate['proposal_id']}/enrich",
             headers=AUTH,
@@ -955,6 +956,7 @@ def test_proposal_requires_member_triage_before_official_task(
         assert retried_enrichment.status_code == 200, retried_enrichment.text
         assert retried_enrichment.json()["duplicate"] is True
         assert retried_enrichment.json()["event_id"] == enriched.json()["event_id"]
+        assert retried_enrichment.json()["triage"]["review_state"]["state"] == "ready"
         triage_surface = client.get(
             "/api/member/v1/surfaces/triage", headers=AUTH
         ).json()

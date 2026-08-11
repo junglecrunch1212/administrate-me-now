@@ -16,11 +16,15 @@ rewrite any durable record. The pagination generation is likewise ephemeral;
 it discards only transport results made obsolete by a later member action.
 The Triage-operation latch and causality token are ephemeral. Dirty confirmation
 acquires them before FormData enrichment and retains them through decision and
-authoritative refresh; save, learning-policy, and decision work is serialized,
-replacement renders inherit the disabled state, and older callbacks cannot
-clear feedback or a recorded-write refresh-failure latch. Successful enrichment
-is retained at its current revision when a following decision fails. No durable
-record is migrated or rewritten.
+authoritative refresh; save, Add-for-review intent, learning-policy, and
+decision work is serialized, replacement renders and retained shared-shell
+intent controls inherit the disabled state, and older callbacks cannot clear
+feedback or a recorded-write refresh-failure latch. Invalidated pagination is
+normalized before its transient state can be mistaken for semantic disabled
+state. The additive enrichment response now returns deterministic computed
+review state; changed readiness blocks confirmation, and a following decision
+rejection refreshes the saved current revision. Non-continuation banners carry
+their own presentation kind. No durable record is migrated or rewritten.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable

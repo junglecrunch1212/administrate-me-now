@@ -148,7 +148,7 @@ function moneyMinor(value, { compact = false } = {}) {
   }).format(amount);
 }
 
-async function reloadActiveSurface({ triageOperationToken = null } = {}) {
+async function reloadActiveSurface({ triageOperationToken = null, triageFocus = true } = {}) {
   const active = currentSurface();
   if (active.startsWith("quest:")) return;
   let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
@@ -159,7 +159,7 @@ async function reloadActiveSurface({ triageOperationToken = null } = {}) {
   }
   if (active === "triage") {
     const params = new URLSearchParams({ triage_lens: "all_candidates" });
-    if (state.triageSelected) params.set("triage_item", state.triageSelected);
+    if (triageFocus && state.triageSelected) params.set("triage_item", state.triageSelected);
     path += `?${params}`;
   }
   if (active === "notes") {
@@ -182,26 +182,45 @@ function triageInteractionLocked() {
   return state.triageOperationPending || state.triageRefreshRequired;
 }
 
+function triageLockControls() {
+  return document.querySelectorAll(
+    "#surface button, #surface input, #surface select, #surface textarea, "
+    + "#add-for-review, #action-dialog .add-for-review-form button, "
+    + "#action-dialog .add-for-review-form input, #action-dialog .add-for-review-form select, "
+    + "#action-dialog .add-for-review-form textarea, #action-dialog [data-close-action]",
+  );
+}
+
 function applyTriageInteractionLock() {
   if (!triageInteractionLocked()) return;
-  for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) {
+  for (const control of triageLockControls()) {
     if (!control.dataset.triagePriorDisabled) control.dataset.triagePriorDisabled = String(control.disabled);
     control.disabled = true;
   }
 }
 
 function releaseTriageInteractionLock() {
-  for (const control of document.querySelectorAll("#surface [data-triage-prior-disabled]")) {
+  for (const control of document.querySelectorAll("[data-triage-prior-disabled]")) {
     control.disabled = control.dataset.triagePriorDisabled === "true";
     delete control.dataset.triagePriorDisabled;
   }
 }
 
+function invalidateTriageLoad() {
+  state.triageLoadGeneration += 1;
+  const button = document.querySelector("[data-triage-more]");
+  if (button?.dataset.triageLoading === "true") {
+    button.disabled = false;
+    button.textContent = "Load next matters";
+    delete button.dataset.triageLoading;
+  }
+}
+
 function beginTriageOperation() {
   if (triageInteractionLocked()) return null;
+  invalidateTriageLoad();
   state.triageOperationPending = true;
   state.triageOperationGeneration += 1;
-  state.triageLoadGeneration += 1;
   applyTriageInteractionLock();
   return state.triageOperationGeneration;
 }
@@ -228,7 +247,7 @@ function latchTriageRefreshFailure(message) {
   applyTriageInteractionLock();
 }
 
-async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null } = {}) {
+async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null, refreshOnRejectedDecision = false } = {}) {
   const token = operationToken ?? beginTriageOperation();
   if (token == null || !triageOperationIsCurrent(token)) return;
   const banner = $("#state-banner"); banner.hidden = false;
@@ -270,7 +289,18 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
     if (decisionRecorded) {
       latchTriageRefreshFailure(`The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`);
     }
-    else {
+    else if (refreshOnRejectedDecision) {
+      const rejection = `${error.message} Nothing was confirmed or dismissed.`;
+      try {
+        const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageFocus: false });
+        if (!refreshed || !triageOperationIsCurrent(token)) return;
+        state.triageBannerKind = "error";
+        banner.hidden = false;
+        banner.textContent = rejection;
+      } catch (refreshError) {
+        latchTriageRefreshFailure(`The details were saved and the decision was not recorded, but Triage could not refresh: ${refreshError.message} Reload this page before continuing.`);
+      }
+    } else {
       state.triageBannerKind = "error";
       banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
     }
@@ -691,7 +721,24 @@ function triageDetail(item, data, readOnly = false) {
         finishTriageOperation(operationToken);
         return;
       }
-      await decideTriage(saved, "approve", buttons, null, { operationToken });
+      if (saved.review_state?.state !== "ready") {
+        state.triageView = saved.review_state?.state === "needs_interpretation" ? "needs_interpretation" : "needs_details";
+        replaceQuery({ view: state.triageView });
+        try {
+          const refreshed = await reloadActiveSurface({ triageOperationToken: operationToken, triageFocus: false });
+          if (refreshed && triageOperationIsCurrent(operationToken)) {
+            setBanner("Details saved. This candidate needs more review before it can be confirmed.");
+          }
+        } catch (error) {
+          if (triageOperationIsCurrent(operationToken)) {
+            latchTriageRefreshFailure(`The details were saved and now need more review, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+          }
+        } finally {
+          finishTriageOperation(operationToken);
+        }
+        return;
+      }
+      await decideTriage(saved, "approve", buttons, null, { operationToken, refreshOnRejectedDecision: true });
       return;
     }
     await decideTriage(item, "approve", buttons);
@@ -748,7 +795,7 @@ async function loadMoreTriage(data) {
   const cursor = data.triage?.next_cursor;
   if (!cursor) return;
   const generation = state.triageLoadGeneration;
-  const button = document.querySelector("[data-triage-more]"); if (button) { button.disabled = true; button.textContent = "Loading…"; }
+  const button = document.querySelector("[data-triage-more]"); if (button) { button.dataset.triageLoading = "true"; button.disabled = true; button.textContent = "Loading…"; }
   try {
     const params = new URLSearchParams({ triage_lens: "all_candidates", triage_cursor: cursor, triage_limit: "30" });
     const next = await api(`/api/member/v1/surfaces/triage?${params}`);
@@ -759,7 +806,7 @@ async function loadMoreTriage(data) {
     for (const item of next.items || []) if (!knownItems.has(item.proposal_id)) data.items.push(item);
     data.triage.next_cursor = next.triage?.next_cursor || null; data.triage.has_more = Boolean(next.triage?.has_more);
     renderSurface(data);
-  } catch (error) { if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
+  } catch (error) { if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return; state.triageBannerKind = "error"; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { delete button.dataset.triageLoading; button.disabled = false; button.textContent = "Load next matters"; } }
 }
 
 async function approveTriageSuggestion(suggestion, button) {
@@ -767,6 +814,7 @@ async function approveTriageSuggestion(suggestion, button) {
   if (token == null) return;
   const values = { scope_kind: suggestion.scope_kind, scope_value: suggestion.scope_value, disposition: suggestion.suggested_disposition };
   const banner = $("#state-banner"); banner.hidden = false;
+  state.triageBannerKind = "status";
   let ruleRecorded = false;
   try {
     if (!button.dataset.previewAffectedCount) {
@@ -795,6 +843,7 @@ async function revokeTriageRule(rule, button) {
   const token = beginTriageOperation();
   if (token == null) return;
   const banner = $("#state-banner"); banner.hidden = false;
+  state.triageBannerKind = "status";
   let revokeRecorded = false;
   try {
     await api(`/api/member/v1/triage-policy/${encodeURIComponent(rule.rule_id)}/revoke`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), reason: "Revoked from Triage learning controls" }) });
@@ -1020,6 +1069,7 @@ function todayDecisionExplanation(item) {
 }
 
 function setBanner(message) {
+  if (currentSurface() === "triage") state.triageBannerKind = "status";
   const banner = $("#state-banner");
   banner.hidden = false;
   banner.textContent = message;
@@ -1983,6 +2033,7 @@ function openActionDialog(title, content) {
 function closeActionDialog() { $("#action-dialog").close(); }
 
 function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface = null, dialogTitle = "Add for review" } = {}) {
+  if (currentSurface() === "triage" && triageInteractionLocked()) return;
   const form = document.createElement("form");
   form.className = "triage-review-form add-for-review-form";
   form.append(text("p", "This saves your thought in Triage. Nothing becomes a task, event, reminder, or provider change until you confirm it.", "state-note"));
@@ -2014,36 +2065,53 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
   form.append(note, actions);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const exactText = input.value.trim();
-    if (!exactText) return;
-    submit.disabled = true;
+    const submittedText = input.value.trim();
+    if (!submittedText) return;
+    const submittedHint = hint.value || null;
+    const triageActive = currentSurface() === "triage";
+    const operationToken = triageActive ? beginTriageOperation() : null;
+    if (triageActive && operationToken == null) return;
+    if (!triageActive) submit.disabled = true;
     setBanner("Saving your exact words before interpretation…");
     const allowedSurfaces = new Set(["today", "triage", "comms", "reminders", "calendar", "people", "notes", "finance", "scoreboard", "settings"]);
     const capturedSurface = allowedSurfaces.has(sourceSurface) ? sourceSurface : allowedSurfaces.has(currentSurface()) ? currentSurface() : "today";
+    let intentRecorded = false;
+    let refocus = false;
     try {
       const result = await api("/api/member/v1/triage/intents", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
         body: JSON.stringify({
-          text: exactText,
+          text: submittedText,
           source_surface: capturedSurface,
-          kind_hint: hint.value || null,
+          kind_hint: submittedHint,
           source_event_id: sourceEventId,
           client_request_id: crypto.randomUUID(),
         }),
       });
+      if (triageActive && !triageOperationIsCurrent(operationToken)) return;
+      intentRecorded = true;
       closeActionDialog();
-      setBanner(result.state === "pending_interpretation" ? "Saved. Triage needs you to choose what this is; nothing was lost or created." : `${result.proposal_ids.length} review item${result.proposal_ids.length === 1 ? "" : "s"} saved in Triage. Nothing is committed yet.`);
-      if (currentSurface() === "triage") {
+      const savedMessage = result.state === "pending_interpretation" ? "Saved. Triage needs you to choose what this is; nothing was lost or created." : `${result.proposal_ids.length} review item${result.proposal_ids.length === 1 ? "" : "s"} saved in Triage. Nothing is committed yet.`;
+      if (triageActive) {
         state.triageView = result.state === "pending_interpretation" ? "needs_interpretation" : "all_candidates";
         state.triageSelected = result.proposal_ids[0] || result.intent_id;
         replaceQuery({ view: state.triageView, item: state.triageSelected });
-        await reloadActiveSurface();
+        const refreshed = await reloadActiveSurface({ triageOperationToken: operationToken });
+        if (!refreshed || !triageOperationIsCurrent(operationToken)) return;
       }
+      setBanner(savedMessage);
     } catch (error) {
-      setBanner(`${error.message} Your thought was not saved; the text is still here.`);
-      submit.disabled = false;
-      input.focus();
+      if (triageActive && intentRecorded) {
+        latchTriageRefreshFailure(`Your thought was saved, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+      } else {
+        setBanner(`${error.message} Your thought was not saved; the text is still here.`);
+        if (!triageActive) submit.disabled = false;
+        refocus = true;
+      }
+    } finally {
+      if (triageActive) finishTriageOperation(operationToken);
+      if (refocus) input.focus();
     }
   });
   openActionDialog(dialogTitle, form);

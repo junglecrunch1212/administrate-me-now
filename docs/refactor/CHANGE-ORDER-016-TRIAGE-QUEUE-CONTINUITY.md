@@ -33,7 +33,9 @@ The defect was presentation state and authority legibility.
   Recent receipt.
 - Recent is plainly read-only audit history.
 - A deliberate lens change clears prior lens-relative continuation feedback so
-  it cannot describe the newly selected lens.
+  it cannot describe the newly selected lens. Progress, success, and failure
+  messages carry their own presentation kind and are never cleared as stale
+  continuation feedback.
 - Reselecting the active lens preserves its continuation feedback. If the
   decision write succeeds but refresh fails, the warning and stale controls
   remain latched until a successful reload.
@@ -43,15 +45,21 @@ The defect was presentation state and authority legibility.
   candidate, replace feedback, or restore stale action controls.
 - A single serialized Triage operation begins before enrichment in a dirty
   **Save & confirm** flow and remains held through the decision and authoritative
-  refresh. Every Triage control is visibly disabled; lens, matter, enrichment,
-  learning-policy, decision, and load-more handlers reject programmatic work;
-  and any operation-time render inherits the same lock. No earlier Triage
-  callback may overwrite its feedback or refresh. The generations rotate again
-  before ordinary interaction reopens.
+  refresh. Every Triage control—including the shared-shell **Add for review**
+  button and any retained Add-for-review dialog—is visibly disabled; lens,
+  matter, enrichment, intent, learning-policy, decision, and load-more handlers
+  reject programmatic work; and any operation-time render inherits the same
+  lock. Invalidating an already-loading page first restores the load-more
+  control's semantic state, so a no-render failure cannot strand transient
+  “Loading…” state. No earlier Triage callback may overwrite feedback or
+  refresh. The generations rotate again before ordinary interaction reopens.
 - If enrichment succeeds and the following decision fails, the saved values and
-  current revision remain visible and immediately retryable. A recorded-write
+  current revision are authoritatively refreshed, remain visible, and are
+  immediately retryable. Enrichment responses include the computed review
+  state; if an edit makes a candidate unready, the client moves it to the
+  appropriate review lens and does not attempt confirmation. A recorded-write
   refresh failure can be cleared only by a new page load, never by an older
-  callback.
+  callback or shared-shell intent.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -67,8 +75,11 @@ The defect was presentation state and authority legibility.
 | Clear lens-relative feedback on deliberate lens change | HARDEN | Browser presentation only; the decision and feedback receipts remain immutable. |
 | Latch a recorded-decision refresh failure until successful reload | HARDEN | Stale browser data cannot regain decision controls; the already-recorded decision is not retried or rewritten. |
 | Invalidate pre-decision pagination before a decision or lens change | HARDEN | Browser request ordering only; late transport results cannot supersede a newer projection read or mutate durable truth. |
-| Serialize the full Triage save/learning/decision interval and rotate pagination before reopening | HARDEN | Ephemeral browser concurrency only; no queue, event, projection, or provider authority changes. |
+| Normalize invalidated pagination before capturing semantic disabled state | HARDEN | Ephemeral browser state only; a no-render error cannot preserve a transient loading lock. |
+| Serialize the full Triage save/intent/learning/decision interval and rotate pagination before reopening | HARDEN | Ephemeral browser concurrency only; no queue, event, projection, or provider authority changes. |
+| Return and honor computed review state after enrichment | HARDEN | Additive member API response metadata derived from the current projection; no new truth, model decision, or automatic confirmation. |
 | Preserve successful enrichment across a following decision failure | HARDEN | The current immutable enrichment event/revision remains authoritative; no failed decision is invented or retried automatically. |
+| Type non-continuation banners before display | HARDEN | Presentation provenance only; lens changes cannot erase a real progress, success, or error state. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
@@ -81,12 +92,15 @@ AC-41 requires production-composition browser proof for confirm continuity,
 typed spam-dismiss continuity, next-matter selection, candidate/matter URL
 cleanup, a final-Ready-item caught-up state, explicit member navigation to Recent,
 actual-change-only continuation cleanup, a forced post-write refresh failure
-that keeps stale controls locked through lens clicks until reload,
+that keeps stale surface and shared-shell controls locked through lens clicks,
+Add-for-review opening, and retained-form submission until reload,
 a load-more held from before confirmation and consumed only after authoritative
-refresh; a dirty confirmation held before enrichment and through decision;
-lens, form, and pagination attempts proving all new work is handler-rejected;
-and successful enrichment followed by a failed decision and immediate
-current-revision retry,
+refresh; an invalidated load-more followed by a no-render enrichment failure;
+a dirty confirmation held before enrichment and through decision; lens, form,
+intent, and pagination attempts proving all new work is handler-rejected; a
+readiness-changing enrichment proving no decision request is made; and
+successful enrichment followed by a failed decision, authoritative refresh,
+and immediate current-revision retry,
 provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

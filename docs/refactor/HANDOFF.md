@@ -2139,22 +2139,30 @@ its eventual success or failure cannot replace the newer authoritative queue,
 restore a resolved candidate, alter decision feedback, or re-enable stale
 controls. A serialized Triage-operation latch is acquired before dirty-form
 enrichment and held through decision and authoritative refresh. It disables
-every Triage control, survives replacement renders, and makes lens, matter,
-enrichment, learning-policy, decision, and pagination handlers reject
-programmatic work. Older callbacks cannot replace feedback or clear the
-recorded-write refresh-failure latch. The generations rotate before interaction
-reopens; a successful enrichment also remains visible/current if its following
-decision fails, allowing an immediate clean retry.
+every Triage control—including the shared-shell Add-for-review button and
+retained intent form—survives replacement renders, and makes lens, matter,
+intent, enrichment, learning-policy, decision, and pagination handlers reject
+programmatic work. Invalidated pagination is normalized before disabled-state
+capture, so a no-render failure cannot strand its Loading state. Typed
+non-continuation feedback cannot be erased by a later lens change. Older
+callbacks cannot replace feedback or clear the recorded-write refresh-failure
+latch. The enrichment endpoint returns computed review state, changed readiness
+stops before confirmation, and a rejected decision authoritatively refreshes
+the saved current revision for immediate retry. The generations rotate before
+interaction reopens.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
 lens-change banner cleanup, active-lens preservation, a forced post-write
-refresh failure with stale-control lock and reload recovery, direct Recent
-selection, a pagination request held from before confirmation and observed
-through browser-side consumption after authoritative refresh, a dirty
-confirmation locked before enrichment and through decision, a saved-enrichment/
-failed-decision/current-revision retry, and provenance-bounded lifecycle-receipt
-copy assertion in production composition. The repaired candidate passes 243
+refresh failure with surface/shared-intent lock and reload recovery, direct
+Recent selection, a pagination request held from before confirmation and
+observed through browser-side consumption after authoritative refresh, an
+invalidated pagination request followed by a no-render failure, typed error
+feedback preserved across a lens change, a dirty confirmation locked before
+enrichment and through decision, a readiness-changing enrichment that cannot
+advance to confirmation, a saved-enrichment/failed-decision/authoritative-
+refresh/current-revision retry, and provenance-bounded lifecycle-receipt copy
+assertion in production composition. The repaired candidate passes 246
 assertions and 39
 screenshots with zero console/page/request failures. It also passes 49 strict
 acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all

@@ -360,10 +360,10 @@ async function run() {
     let triageEnrichmentStarted;
     let triageEnrichmentRoute;
     let triageEnrichmentBody;
+    let triageInitialPayload;
     let triageCursorRequestCount = 0;
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       if (surface === "triage") {
-        let initialPayload;
         let initialResponseModified = false;
         let resolveStaleTriageLoadStarted;
         staleTriageLoadStarted = new Promise((resolveStarted) => { resolveStaleTriageLoadStarted = resolveStarted; });
@@ -375,21 +375,22 @@ async function run() {
               triageCursorRequestCount += 1;
               resolveStaleTriageLoadStarted();
               await staleLoadRelease;
-              await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialPayload) });
+              await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(triageInitialPayload) });
               resolveSettled();
               return;
             }
-            if (!initialResponseModified) {
+            {
               const response = await route.fetch();
               const payload = await response.json();
-              initialPayload = structuredClone(payload);
+              if (!initialResponseModified) {
+                triageInitialPayload = structuredClone(payload);
+                initialResponseModified = true;
+              }
               payload.triage.has_more = true;
               payload.triage.next_cursor = "gate7-delayed-pre-decision-page";
-              initialResponseModified = true;
               await route.fulfill({ response, json: payload });
               return;
             }
-            await route.continue();
           };
         });
         await principal.page.route("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
@@ -414,11 +415,12 @@ async function run() {
       if (surface === "triage") {
         await principal.page.evaluate(() => {
           window.__gate7OriginalFetch = window.fetch;
-          window.__gate7FetchCounts = { cursorApplicationTurns: 0, enrich: 0, triageCursor: 0 };
+          window.__gate7FetchCounts = { cursorApplicationTurns: 0, enrich: 0, intents: 0, triageCursor: 0 };
           const originalFetch = window.fetch.bind(window);
           window.fetch = async (input, options) => {
             const url = typeof input === "string" ? input : input?.url || String(input);
             if (url.includes("/enrich")) window.__gate7FetchCounts.enrich += 1;
+            if (url.includes("/triage/intents")) window.__gate7FetchCounts.intents += 1;
             if (url.includes("triage_cursor=")) window.__gate7FetchCounts.triageCursor += 1;
             const response = await originalFetch(input, options);
             if (url.includes("triage_cursor=")) {
@@ -477,20 +479,22 @@ async function run() {
         await triageEnrichmentStarted;
         const readyLens = principal.page.getByRole("button", { name: /^Ready/ });
         const recentLens = principal.page.getByRole("button", { name: /^Recent/ });
-        const lockedBeforeEnrichment = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length) === 0;
+        const lockedBeforeEnrichment = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea, #add-for-review").evaluateAll((controls) => controls.filter((control) => !control.disabled).length) === 0;
         await recentLens.dispatchEvent("click");
+        await principal.page.locator("#add-for-review").dispatchEvent("click");
         await principal.page.locator('[data-triage-item="gate7-visual-triage-task"] form').dispatchEvent("submit");
         await principal.page.locator("[data-triage-more]").dispatchEvent("click");
         const preEnrichmentReleaseCounts = await principal.page.evaluate(() => ({ ...window.__gate7FetchCounts }));
-        record("Save and confirm locks Triage before enrichment and serializes the full operation", lockedBeforeEnrichment && await readyLens.getAttribute("aria-pressed") === "true" && await recentLens.getAttribute("aria-pressed") === "false" && preEnrichmentReleaseCounts.enrich === 1 && preEnrichmentReleaseCounts.triageCursor === preDecisionFetchCounts.triageCursor, JSON.stringify({ lockedBeforeEnrichment, preDecisionFetchCounts, preEnrichmentReleaseCounts, url: principal.page.url() }));
+        record("Save and confirm locks Triage before enrichment and serializes the full operation", lockedBeforeEnrichment && !await principal.page.locator("#action-dialog").evaluate((dialog) => dialog.open) && await readyLens.getAttribute("aria-pressed") === "true" && await recentLens.getAttribute("aria-pressed") === "false" && preEnrichmentReleaseCounts.enrich === 1 && preEnrichmentReleaseCounts.intents === preDecisionFetchCounts.intents && preEnrichmentReleaseCounts.triageCursor === preDecisionFetchCounts.triageCursor, JSON.stringify({ lockedBeforeEnrichment, preDecisionFetchCounts, preEnrichmentReleaseCounts, url: principal.page.url() }));
         releaseTriageEnrichment();
         try {
           await principal.page.getByText("Confirming this candidate through the household gate…").waitFor();
         } catch (error) {
           throw new Error(`${error.message}\nTriage banner: ${await principal.page.locator("#state-banner").textContent()}\nEnrichment body: ${triageEnrichmentBody}`);
         }
-        const enabledTriageControls = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length);
+        const enabledTriageControls = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea, #add-for-review").evaluateAll((controls) => controls.filter((control) => !control.disabled).length);
         await recentLens.dispatchEvent("click");
+        await principal.page.locator("#add-for-review").dispatchEvent("click");
         const heldForm = principal.page.locator('[data-triage-item="gate7-visual-triage-task"] form');
         await heldForm.dispatchEvent("submit");
         await principal.page.locator("[data-triage-more]").dispatchEvent("click");
@@ -499,6 +503,7 @@ async function run() {
           && await readyLens.getAttribute("aria-pressed") === "true"
           && await recentLens.getAttribute("aria-pressed") === "false"
           && duringDecisionFetchCounts.enrich === preDecisionFetchCounts.enrich + 1
+          && duringDecisionFetchCounts.intents === preDecisionFetchCounts.intents
           && duringDecisionFetchCounts.triageCursor === preDecisionFetchCounts.triageCursor;
         record("A pending decision locks every Triage control and rejects new lens, form, and pagination work", decisionIntervalStayedLocked && triageCursorRequestCount === 1, JSON.stringify({ enabledTriageControls, preDecisionFetchCounts, duringDecisionFetchCounts, triageCursorRequestCount, url: principal.page.url() }));
         releaseTriageDecision();
@@ -517,6 +522,77 @@ async function run() {
         await principal.page.unroute("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
         await principal.page.unroute("**/api/member/v1/triage/*/approve", triageDecisionRoute);
         await principal.page.unroute("**/api/member/v1/triage/*/enrich", triageEnrichmentRoute);
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Review the household insurance quote" }).click();
+        let releaseNoRenderLoad;
+        let resolveNoRenderLoadStarted;
+        let resolveNoRenderLoadSettled;
+        const noRenderLoadStarted = new Promise((resolveStarted) => { resolveNoRenderLoadStarted = resolveStarted; });
+        const noRenderLoadRelease = new Promise((resolveRelease) => { releaseNoRenderLoad = resolveRelease; });
+        const noRenderLoadSettled = new Promise((resolveSettled) => { resolveNoRenderLoadSettled = resolveSettled; });
+        let noRenderCursorRequests = 0;
+        const noRenderLoadRoute = async (route) => {
+          if (!new URL(route.request().url()).searchParams.has("triage_cursor")) {
+            await route.continue();
+            return;
+          }
+          noRenderCursorRequests += 1;
+          resolveNoRenderLoadStarted();
+          await noRenderLoadRelease;
+          await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(triageInitialPayload) });
+          resolveNoRenderLoadSettled();
+        };
+        let rejectNoRenderSave = true;
+        const noRenderSaveFailureRoute = async (route) => {
+          if (!rejectNoRenderSave) {
+            await route.continue();
+            return;
+          }
+          rejectNoRenderSave = false;
+          expected409Console += 1;
+          await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this enrichment before recording it." }) });
+        };
+        await principal.page.route("**/api/member/v1/surfaces/triage?*", noRenderLoadRoute);
+        await principal.page.route("**/api/member/v1/triage/*/enrich", noRenderSaveFailureRoute);
+        await principal.page.getByRole("button", { name: "Load next matters" }).click();
+        await noRenderLoadStarted;
+        await principal.page.getByLabel("Review title").fill("Review the household insurance quote after the broker replies");
+        await principal.page.getByRole("button", { name: "Save details" }).click();
+        await principal.page.getByText("The proposal was not changed.", { exact: false }).waitFor();
+        const failedEnrichmentText = await principal.page.locator("#state-banner").textContent();
+        const paginationNormalized = await principal.page.locator("[data-triage-more]").isEnabled()
+          && await principal.page.locator("[data-triage-more]").textContent() === "Load next matters";
+        await principal.page.getByRole("button", { name: /^Needs details/ }).click();
+        const failureSurvivedLensChange = await principal.page.locator("#state-banner").isVisible()
+          && await principal.page.locator("#state-banner").textContent() === failedEnrichmentText;
+        await principal.page.getByRole("button", { name: /^Ready/ }).click();
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Review the household insurance quote" }).click();
+        releaseNoRenderLoad();
+        await noRenderLoadSettled;
+        record("Invalidated pagination restores its semantic control state after a no-render failure", paginationNormalized && noRenderCursorRequests === 1 && await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0, JSON.stringify({ paginationNormalized, noRenderCursorRequests, banner: await principal.page.locator("#state-banner").textContent() }));
+        record("A non-continuation Triage failure survives a lens change after prior continuation feedback", failureSurvivedLensChange, JSON.stringify({ failedEnrichmentText, banner: await principal.page.locator("#state-banner").textContent() }));
+        await principal.page.unroute("**/api/member/v1/surfaces/triage?*", noRenderLoadRoute);
+        await principal.page.unroute("**/api/member/v1/triage/*/enrich", noRenderSaveFailureRoute);
+        let unreadyDecisionRequests = 0;
+        const unreadyEnrichmentRoute = async (route) => {
+          const response = await route.fetch();
+          const payload = await response.json();
+          payload.triage.review_state = { ...payload.triage.review_state, state: "needs_details", missing: ["due"] };
+          await route.fulfill({ response, json: payload });
+        };
+        const unreadyDecisionRoute = async (route) => {
+          unreadyDecisionRequests += 1;
+          await route.continue();
+        };
+        await principal.page.route("**/api/member/v1/triage/*/enrich", unreadyEnrichmentRoute);
+        await principal.page.route("**/api/member/v1/triage/*/approve", unreadyDecisionRoute);
+        await principal.page.getByLabel("Review title").fill("Review the household insurance quote after a readiness check");
+        await principal.page.getByRole("button", { name: "Save & confirm" }).click();
+        await principal.page.getByText("This candidate needs more review before it can be confirmed.", { exact: false }).waitFor();
+        record("Save and confirm reconciles changed readiness before attempting a decision", unreadyDecisionRequests === 0 && await principal.page.getByRole("button", { name: /^Needs details/ }).getAttribute("aria-pressed") === "true", JSON.stringify({ unreadyDecisionRequests, banner: await principal.page.locator("#state-banner").textContent() }));
+        await principal.page.unroute("**/api/member/v1/triage/*/enrich", unreadyEnrichmentRoute);
+        await principal.page.unroute("**/api/member/v1/triage/*/approve", unreadyDecisionRoute);
+        await principal.page.getByRole("button", { name: /^Ready/ }).click();
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Review the household insurance quote" }).click();
         let rejectedSavedDecision = false;
         const savedDecisionFailureRoute = async (route) => {
           if (!rejectedSavedDecision) {
@@ -528,7 +604,6 @@ async function run() {
           await route.continue();
         };
         await principal.page.route("**/api/member/v1/triage/*/approve", savedDecisionFailureRoute);
-        await principal.page.locator(".triage-master-button").filter({ hasText: "Review the household insurance quote" }).click();
         const savedTitle = "Review the updated household insurance quote";
         await principal.page.getByLabel("Review title").fill(savedTitle);
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
@@ -720,6 +795,15 @@ async function run() {
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
     await adult.page.goto(`${server.baseUrl}/member/triage`);
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
+    await adult.page.locator("#add-for-review").click();
+    await adult.page.getByLabel("Thought to hold").fill("Retained exact-text form for the refresh-failure lock proof");
+    await adult.page.getByRole("button", { name: "Cancel" }).click();
+    let blockedRefreshFailureIntentRequests = 0;
+    const blockedRefreshFailureIntentRoute = async (route) => {
+      blockedRefreshFailureIntentRequests += 1;
+      await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "This guarded request should never occur." }) });
+    };
+    await adult.page.route("**/api/member/v1/triage/intents", blockedRefreshFailureIntentRoute);
     await adult.page.locator(".triage-master-button").filter({ hasText: "Review the only ready household item" }).click();
     await adult.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
     let failNextTriageRefresh = true;
@@ -737,7 +821,10 @@ async function run() {
     const refreshFailureText = await adult.page.locator("#state-banner").textContent();
     await adult.page.getByRole("button", { name: /^Ready/ }).dispatchEvent("click");
     await adult.page.getByRole("button", { name: /^Recent/ }).dispatchEvent("click");
-    record("Post-write refresh failure latches Triage until a successful reload", await adult.page.locator("#state-banner").textContent() === refreshFailureText && await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() && await adult.page.locator(".triage-review-form button:not([disabled])").count() === 0, JSON.stringify({ banner: await adult.page.locator("#state-banner").textContent(), readyDisabled: await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() }));
+    await adult.page.locator("#add-for-review").dispatchEvent("click");
+    await adult.page.locator(".add-for-review-form").dispatchEvent("submit");
+    record("Post-write refresh failure latches Triage until a successful reload", await adult.page.locator("#state-banner").textContent() === refreshFailureText && await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() && await adult.page.locator(".triage-review-form button:not([disabled])").count() === 0 && await adult.page.locator("#add-for-review").isDisabled() && !await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open) && blockedRefreshFailureIntentRequests === 0, JSON.stringify({ banner: await adult.page.locator("#state-banner").textContent(), readyDisabled: await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled(), blockedRefreshFailureIntentRequests }));
+    await adult.page.unroute("**/api/member/v1/triage/intents", blockedRefreshFailureIntentRoute);
     await adult.page.unroute("**/api/member/v1/surfaces/triage?*", failTriageRefresh);
     await adult.page.reload();
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
@@ -849,7 +936,7 @@ async function run() {
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected saved-decision conflict handled", observedExpected409Console === 1, observedExpected409Console);
+    record("expected controlled Triage conflicts handled", observedExpected409Console === 2, observedExpected409Console);
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {
