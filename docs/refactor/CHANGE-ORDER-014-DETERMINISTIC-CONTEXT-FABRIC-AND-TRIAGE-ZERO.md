@@ -1,6 +1,6 @@
 # CO-014 — Deterministic Context Fabric, Candidate Inventory, and Triage Zero
 
-Status: **APPROVED; CANDIDATE GATES PASS; PUBLICATION/ACTIVATION PENDING**
+Status: **ACTIVATED IN OBSERVATION MODE; LIVE GATES PASS**
 
 Date: 2026-08-10
 
@@ -107,6 +107,30 @@ AC-39 owns this change order. Required evidence includes:
 Phase A is disposable/shadow only. Phase B begins only after reviewed merge and
 uses observation mode. Flat candidate inventory remains an advanced recovery
 lens. No provider write or automatic confirmation is authorized by CO-014.
+
+## Phase B activation evidence
+
+PR #327 merged the reviewed implementation as `4f42ad0`. The guarded updater
+created encrypted rollback backup
+`administrateme-20260811T004911Z.ambackup`, added Context Fabric without a
+runtime migration, and settled Doctor at 15/15 projections. Authenticated live
+review then found two presentation defects rather than hiding them: cursor-
+window counts were labelled as complete, and long source metadata could widen
+a 390 px phone document. PR #328 made complete inventory versus loaded-window
+counts explicit; PR #329 bounded and wrapped Triage matter-card content.
+
+The final reviewed `main` release is `0e0f13e`, activated through the attested
+same-runtime updater after encrypted backup
+`administrateme-20260811T013510Z.ambackup`. Independent final status and Doctor
+are healthy in observation mode: 15/15 projection stores/checkpoints, 8/8
+required pipeline subscribers, 62,573/62,573 source obligations accounted for,
+zero pending/missing/failed obligations, exact pinned OpenClaw and executable
+`llm-task`, and zero synthetic external side effects. Authenticated Triage
+showed the complete 474-candidate/213-matter inventory, advanced from 65/474 to
+124/474 across two stable cursor pages and 60 rendered matters, preserved
+independent nested decisions, and measured 375 px of document content in a
+390 px phone viewport. The final Gate 7 run passed 225 assertions with 36
+screenshots and zero console, page, or request failures.
 
 ## Constitutional disposition
 

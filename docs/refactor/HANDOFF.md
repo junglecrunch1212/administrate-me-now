@@ -1974,12 +1974,11 @@ authoritative statement of live-only and deferred behavior.
 Repository merge is authorized and completed only with green final-head checks.
 No tool has remotely installed or activated a household Mac or provider.
 
-## CO-014 candidate handoff — deterministic context and Triage Zero
+## CO-014 live handoff — deterministic context and Triage Zero
 
-CO-014 is approved and implemented in the candidate tree. Credential-free
-release and browser gates pass. It is not yet a live claim until reviewed
-publication, merge, migration staging, Doctor, settlement, and authenticated
-live-browser proof pass.
+CO-014 is reviewed, merged, and active in observation mode. Its complete
+credential-free, migration, Doctor, settlement, and authenticated live-browser
+gates pass.
 
 - The default registry is now exactly fifteen: thirteen domain projections,
   Triage, and the rebuildable non-authoritative `context_fabric` projection.
@@ -2000,14 +1999,22 @@ live-browser proof pass.
   priority admission, zero missing pages/cross-scope links/provider effects,
   zero base backlog at the end, and reviewed storage/query bounds. The retired
   flat model ends with 3,571/13,184/28,722 rows of backlog respectively.
-- Final-head candidate evidence on 2026-08-10 is green: 49 strict acceptance
+- Final-head release evidence on 2026-08-10 is green: 49 strict acceptance
   gates, 1,789 root/code/pack tests, 60 bridge tests, Ruff/format/mypy/Pyright,
   dependency audits, architecture invariants, performance budgets, clean
   install, tenant isolation, backup/restore, and the pinned OpenClaw contract,
-  17 plugin tests, build, package, and audit. Gate 7 produced 223 passing
+  17 plugin tests, build, package, and audit. Final Gate 7 produced 225 passing
   assertions and 36 screenshots across desktop/narrow states with no console,
   page, or request failures.
-- Remaining activation evidence: PR review/checks, merge, encrypted pre-switch
-  backup, staged observation deployment, additive live projection migration,
-  Doctor at 15/15, checkpoint/source settlement, and authenticated live-browser
-  verification.
+- PRs #327, #328, and #329 merged the implementation and two defects found by
+  authenticated live review. The final active release is `0e0f13e`, selected
+  through the attested same-runtime updater after encrypted rollback backup
+  `administrateme-20260811T013510Z.ambackup`.
+- Independent final status and Doctor are healthy in observation mode: 15/15
+  projection stores/checkpoints, 8/8 pipelines, 62,573/62,573 source
+  obligations accounted for with zero pending/missing/failed, exact OpenClaw
+  and `llm-task` execution, and zero synthetic external side effects.
+- Authenticated Triage shows the complete 474-candidate/213-matter inventory,
+  advances from 65/474 to 124/474 through two stable pages and 60 matter rows,
+  preserves independently reviewable nested children, and has no horizontal
+  overflow: the live document is 375 px inside a 390 px phone viewport.
