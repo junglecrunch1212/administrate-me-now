@@ -26,6 +26,31 @@ def test_exact_link_encodes_object_without_authorizing_action() -> None:
     assert value["evidence_event_ids"] == ["event-a"]
 
 
+def test_all_ten_member_surfaces_share_the_typed_link_contract() -> None:
+    for surface in (
+        "today",
+        "triage",
+        "comms",
+        "reminders",
+        "calendar",
+        "people",
+        "notes",
+        "finance",
+        "scoreboard",
+        "settings",
+    ):
+        value = surface_link(
+            surface,
+            object_kind="item",
+            object_id="fixture/item",
+            params={"view": "fixture-view"},
+        )
+        assert value["surface"] == surface
+        assert value["href"] == (
+            f"/member/{surface}?item=fixture%2Fitem&view=fixture-view"
+        )
+
+
 def test_attention_and_provider_action_contracts_name_the_decision_boundary() -> None:
     attention = attention_explanation(
         rule_id="comms.focus-v2",

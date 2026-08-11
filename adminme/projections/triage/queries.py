@@ -140,6 +140,74 @@ _LANE_ORDER = {
 }
 
 
+def matter_for_proposal(
+    conn: sqlcipher3.Connection,
+    session: Session,
+    *,
+    member_id: str,
+    proposal_id: str,
+) -> dict[str, Any] | None:
+    """Return one exact pending matter independent of cursor position.
+
+    The requested candidate still passes tenant, member, private-scope, and
+    row-level authorization checks. This read helper does not change queue
+    ordering or candidate state; it only makes a typed deep link resolvable.
+    """
+
+    focused = get_item(conn, session, proposal_id=proposal_id)
+    private_scope = f"private:{member_id}"
+    if (
+        focused is None
+        or focused.get("owner_member_id") != member_id
+        or focused.get("owner_scope") != private_scope
+        or focused.get("visibility_scope") != private_scope
+        or focused.get("state") not in {"pending_interpretation", "pending_review"}
+    ):
+        return None
+    context_id = str(focused.get("context_id") or proposal_id)
+    rows = conn.execute(
+        """SELECT * FROM triage_items
+             WHERE tenant_id=? AND owner_member_id=?
+               AND owner_scope=? AND visibility_scope=?
+               AND state IN ('pending_interpretation','pending_review')
+               AND context_id=?
+             ORDER BY proposed_at, proposal_id""",
+        (
+            session.tenant_id,
+            member_id,
+            private_scope,
+            private_scope,
+            context_id,
+        ),
+    ).fetchall()
+    children = [
+        _public(row) for row in filter_rows(session, [dict(value) for value in rows])
+    ]
+    if not children:
+        return None
+    root = min(
+        children,
+        key=lambda item: (
+            _LANE_ORDER.get(str(item.get("queue_lane") or "standard"), 99),
+            str(item.get("proposed_at") or ""),
+            str(item.get("proposal_id") or ""),
+        ),
+    )
+    return {
+        "context_id": context_id,
+        "context_kind": root.get("context_kind"),
+        "label": root.get("group_label") or root.get("title"),
+        "queue_lane": root.get("queue_lane"),
+        "root_proposal_id": root.get("proposal_id"),
+        "candidate_count": len(children),
+        "source_count": len({str(child["source_event_id"]) for child in children}),
+        "oldest_proposed_at": min(
+            str(child.get("proposed_at") or "") for child in children
+        ),
+        "candidates": children,
+    }
+
+
 def _cursor_encode(rank: int, proposed_at: str, proposal_id: str) -> str:
     raw = json.dumps([rank, proposed_at, proposal_id], separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -396,6 +464,7 @@ def recent_for_member(
 
 __all__ = [
     "get_item",
+    "matter_for_proposal",
     "pending_for_member",
     "pending_for_sources",
     "recent_for_member",

@@ -335,6 +335,15 @@ async function run() {
         record("Today defaults to Day Brief", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await principal.page.locator("#surface").textContent());
         record("Today offers Carousel and What Now", await principal.page.getByRole("button", { name: "Carousel" }).count() === 1 && await principal.page.getByRole("button", { name: "What Now?" }).count() === 1, await principal.page.locator(".today-controls").textContent());
         record("Today hides internal profile and member identifiers", !(await principal.page.locator("#mode-label").textContent()).includes("carousel") && !(await principal.page.locator("#mode-label").textContent()).includes("visual_principal"), await principal.page.locator("#mode-label").textContent());
+        const decisionCard = principal.page.locator(".day-item-clarifying-question").filter({ hasText: "Send the completed enrollment form" });
+        const decisionText = await decisionCard.textContent();
+        record("Today decisions name the question, context, source, and consequence boundary", decisionText.includes("Should AdministrateMe add this task") && decisionText.includes("What happened:") && decisionText.includes("Why it is here:") && decisionText.includes("Your choices") && decisionText.includes("Correct"), decisionText);
+        await decisionCard.getByRole("button", { name: "Review" }).click();
+        await principal.page.waitForURL(/\/member\/triage\?.*item=gate7-visual-triage-task/);
+        await principal.page.locator('[data-triage-item="gate7-visual-triage-task"]').waitFor();
+        record("Today Review opens the exact Triage candidate and matter", principal.page.url().includes("matter=") && principal.page.url().includes("view=all_candidates") && await principal.page.locator('[data-triage-item="gate7-visual-triage-task"]').count() === 1, principal.page.url());
+        await principal.page.goBack();
+        await principal.page.getByRole("button", { name: "Day Brief" }).waitFor();
         await screenshot(principal.page, "surface-today-day-brief-desktop.png");
         await principal.page.getByRole("button", { name: "Carousel" }).click();
         await principal.page.locator(".carousel-card").waitFor();
@@ -351,7 +360,7 @@ async function run() {
         await screenshot(principal.page, "surface-triage-task-desktop.png");
         await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
-        await principal.page.getByRole("link", { name: "Open Reminders" }).waitFor();
+        await principal.page.locator("#state-banner").getByRole("link", { name: "Open Reminders" }).waitFor();
         record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
         const bootstrap = await jsonRequest(server.baseUrl, "/api/member/v1/bootstrap", identities.principal);
         const triageAfterConfirmation = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/triage", identities.principal);
@@ -369,7 +378,9 @@ async function run() {
         routedTaskHref = await destinationLink.getAttribute("href") || "";
         record("Recent decision retains destination receipt", await destinationLink.count() === 1 && routedTaskHref.includes("item=task%3A"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-routed-recent-desktop.png");
-        await principal.page.getByRole("button", { name: /^Needs details/ }).click();
+        const needsDetails = principal.page.getByRole("button", { name: /^Needs details/ });
+        await needsDetails.click();
+        await principal.page.waitForFunction(() => [...document.querySelectorAll(".comms-filter")].some((node) => node.textContent?.startsWith("Needs details") && node.getAttribute("aria-pressed") === "true"));
         await principal.page.locator(".triage-master-button").filter({ hasText: "Renew the annual registration" }).click();
         record("Google Tasks uses only its reviewed date capability", await principal.page.getByLabel("Scheduled date date").count() === 1 && await principal.page.getByLabel("Scheduled date time (optional)").count() === 0 && await principal.page.getByText("Available from", { exact: true }).count() === 0 && (await principal.page.locator(".triage-detail").textContent()).includes("discards due time"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-google-tasks-desktop.png");
@@ -430,7 +441,8 @@ async function run() {
         record("Notes preserves provider sources and master list", await principal.page.locator(".notes-source-button").count() === 3 && await principal.page.locator(".notes-master-button").count() === 2, await principal.page.locator("#surface").textContent());
         await principal.page.locator(".notes-master-button").filter({ hasText: "School planning call" }).click();
         record("Notes detail retains exact source identity", (await principal.page.locator(".notes-detail").textContent()).includes("Meeting notes"), await principal.page.locator(".notes-detail").textContent());
-        record("Notes links candidates to Triage without inline approval", await principal.page.getByRole("link", { name: "Review 1 in Triage" }).count() === 1 && await principal.page.getByRole("button", { name: "Confirm and route" }).count() === 0, await principal.page.locator(".notes-detail").textContent());
+        const noteTriageHref = await principal.page.getByRole("link", { name: "Review 1 in Triage" }).getAttribute("href") || "";
+        record("Notes links exact candidates to Triage without inline approval", noteTriageHref.includes("item=") && noteTriageHref.includes("matter=") && noteTriageHref.includes("view=all_candidates") && await principal.page.getByRole("button", { name: "Confirm and route" }).count() === 0, noteTriageHref);
         record("Notes sharing is explicit and read-search only", await principal.page.locator(".notes-share-form select").count() === 1 && await principal.page.locator(".notes-share-form input").inputValue() === "Read and search" && await principal.page.getByRole("button", { name: "Share note" }).count() === 1, await principal.page.locator(".notes-sharing").textContent());
         await principal.page.locator(".notes-search input").fill("autumn pickup");
         await principal.page.getByRole("button", { name: "Search", exact: true }).click();
@@ -463,6 +475,8 @@ async function run() {
         const scoreboardText = await principal.page.locator("#surface").textContent();
         record("Scoreboard receives the confirmed canonical task", scoreboardText.includes("Send the completed enrollment form"), scoreboardText);
         record("Scoreboard presents the internal task inbox status as Open", scoreboardText.includes("Open") && !scoreboardText.includes("Inbox"), scoreboardText);
+        const scoreboardTaskLink = principal.page.locator(".item").filter({ hasText: "Send the completed enrollment form" }).getByRole("link", { name: "Open item" });
+        record("Scoreboard next steps retain an exact Reminders destination", await scoreboardTaskLink.count() === 1 && (await scoreboardTaskLink.getAttribute("href") || "").includes("/member/reminders?item=task%3A"), await scoreboardTaskLink.getAttribute("href"));
         await screenshot(principal.page, "surface-scoreboard-desktop.png");
       } else if (surface === "settings") {
         record("Settings identifies the deterministic control plane", await principal.page.locator("#mode-label").textContent() === "Private · deterministic control plane", await principal.page.locator("#mode-label").textContent());

@@ -1,5 +1,17 @@
 # UX behavior contract
 
+CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
+`member-decision-context-v1` review contract with a direct member question,
+what happened, why it is present, authorized source identity, unresolved
+questions, fixed choice consequences, smallest next step, candidate id, and
+matter id. Bounded language may supply labelled review-aid prose but never the
+choice set, authority, target, route, priority, truth, or effect. Review links
+resolve the exact candidate independent of the loaded Triage cursor, survive
+reload and resolved state, and fail closed without substituting another item.
+Comms and Notes link each extracted candidate and matter; Scoreboard next steps
+return to the exact canonical item. `surface-link-v1` covers all ten stable
+adult routes and remains presentation-only.
+
 CO-012 amendment (2026-08-10): Triage treats a privacy-scoped provider thread,
 not one isolated body, as the bounded interpretation context while preserving
 one independently reviewable typed candidate per distinct ask. Compact cards
@@ -114,7 +126,7 @@ The reference is a mock, not a security implementation. Its `innerHTML` patterns
 | Finance | Scope-filtered accounts/transactions/budgets/subscriptions and workbook state; privileged owner-only details and audit. | Any client-only masking or demo values. |
 | Calendar | Member-isolated Day/Week/Month/Agenda/Find time cockpit plus progressively disclosed Rules over every authorized provider calendar; anchored date navigation; spatial time grids and all-day lanes; route-stable source colors and visibility controls; route-scoped provenance; duplicate-copy grouping; explicit hard-block, soft-load, context, and ignore semantics; tentative/custody policy; typed buffers; protected household windows; conflict/pressure explanations; provider capability truth; and reviewed write destinations shared with Triage. | Treating calendar as the universal task model, treating every observed event as busy, equating a hidden display calendar with free time, model-decided availability, silent duplicate deletion, or writing to an unreviewed calendar. |
 | Scoreboard | Age/role-appropriate household progress and dual-path rewards; child-safe data only. | Client-side hidden navigation as a security boundary. |
-| Settings | Seven-section deterministic member control plane: visible authenticated/read/action identity; bounded profile/fine tuning; connection setup/runtime/permission/safety axes; bridge requests; household/privacy invariants; observation, workbooks, and diagnostics with progressive disclosure. | Opaque initials/internal ids, a static or truncated capability dump, config-as-health, secret entry in ordinary forms, principal control over another adult's private source, or broad OpenClaw operator controls. |
+| Settings | Nine-section deterministic member control plane: visible authenticated/read/action identity; bounded profile/fine tuning; connection setup/runtime/permission/safety axes; candidate-identification policy; bridge requests; household/privacy invariants; observation, workbooks, registry, and diagnostics with progressive disclosure. | Opaque initials/internal ids, a static or truncated capability dump, config-as-health, secret entry in ordinary forms, principal control over another adult's private source, or broad OpenClaw operator controls. |
 
 Generic chat remains an OpenClaw surface. A narrow chat pane may embed/hand off to OpenClaw for authorized members, but AdministrateMe must not persist a second generic transcript or expose operator administration. Members without safe operator access use a narrow member portal.
 
@@ -194,6 +206,10 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-52 | Exact duplicate and unambiguous existing Task/Calendar/Reminder/Recurrence matches remain nested evidence with explicit labels. They do not create an additional default decision, but remain individually inspectable and recoverable. Ambiguous or cross-scope matches fail to review. |
 | UX-53 | Dismissal requires a typed reason. Repeated scoped outcomes may produce a member-visible rule suggestion; preview states the affected history and provider effects. Approval is explicit, reversible, and shadow-only in CO-014. It cannot confirm, suppress, route, materialize, or write a candidate. |
 | UX-54 | Context views expose edge type, authority, reasons, source IDs, temporal state, and revocation without copying source bodies. `llm_proposed` edges are visually suggestions and never enter authoritative traversal. Cross-member/account/workspace/sensitivity context is neither counted nor displayed. |
+| UX-55 | A Today clarifying-decision card must answer the direct member question, what happened, why the item is present now, authorized source identity, remaining uncertainty, fixed confirmation/correction/dismissal consequences, and smallest next step through `member-decision-context-v1`. Compact view must not dump source bodies; expanded context labels bounded language as review aid and preserves exact evidence separately. |
+| UX-56 | Today, Comms, Notes, and any other candidate-bearing surface link the exact Triage candidate and matter. Triage resolves a scoped `triage_item` independently of its ordinary cursor and returns explicit pending, resolved, or unavailable focus state. Reload/history/filter state cannot substitute another candidate, reopen a decision, or change queue truth. |
+| UX-57 | A deliberate Triage lens change clears exact-link focus. An asynchronous or stale focus response cannot force the member back to the linked lens after that choice. The selected candidate receives keyboard focus without creating a decision or provider effect. |
+| UX-58 | Every stable adult surface participates in `surface-link-v1`. Where a surface shows a canonical item owned by another surface, it exposes an exact return path or explicitly states that no destination surface exists; generic top-of-page navigation is not an object link. |
 
 ## State model
 

@@ -2412,7 +2412,16 @@ def test_ac28_five_surface_executive_loop_is_typed_linked_and_human_gated(
         assert thread["bucket"] == "focus"
         assert thread["attention"]["rule_id"] == "comms.focus-v2"
         assert thread["surface_link"]["href"].startswith("/member/comms?thread=")
-        assert thread["triage_count"] == 1
+        assert thread["triage_count"] >= 1
+        assert thread["triage_matter_count"] >= 1
+        linked_candidate = next(
+            item
+            for item in thread["triage_candidates"]
+            if item["candidate_id"] == "ac28-school-form"
+        )
+        assert linked_candidate["surface_link"]["href"].startswith(
+            "/member/triage?item=ac28-school-form&matter="
+        )
 
         triage = client.get(
             "/api/member/v1/surfaces/triage", headers=HEADERS[PRINCIPAL]

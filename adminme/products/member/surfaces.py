@@ -85,7 +85,11 @@ from adminme.projections.triage.queries import (
     pending_for_sources as pending_triage_for_sources,
 )
 from adminme.projections.triage.queries import recent_for_member as recent_triage
-from adminme.projections.triage.queries import triage_page_for_member
+from adminme.projections.triage.queries import (
+    get_item as get_triage_item,
+    matter_for_proposal as triage_matter_for_proposal,
+    triage_page_for_member,
+)
 from adminme.projections.context_fabric.queries import (
     feedback_pattern_counts,
     policy_rules_for_member,
@@ -764,6 +768,7 @@ def build_surface(
     triage_lens: str = "all_candidates",
     triage_cursor: str | None = None,
     triage_limit: int = 30,
+    triage_item: str | None = None,
 ) -> dict[str, Any]:
     authorize_surface(session, surface)
     if runtime.projections is None:
@@ -915,16 +920,57 @@ def build_surface(
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        focused_item = (
+            get_triage_item(triage_conn, session, proposal_id=triage_item)
+            if triage_item
+            else None
+        )
+        if focused_item is not None and focused_item.get("owner_member_id") != member:
+            focused_item = None
+        focused_matter = (
+            triage_matter_for_proposal(
+                triage_conn,
+                session,
+                member_id=member,
+                proposal_id=triage_item,
+            )
+            if triage_item
+            else None
+        )
+        if focused_matter is not None and not any(
+            matter["context_id"] == focused_matter["context_id"]
+            for matter in triage_page["matters"]
+        ):
+            triage_page["matters"].insert(0, focused_matter)
         items = [
             item for matter in triage_page["matters"] for item in matter["candidates"]
         ]
         recent_items = recent_triage(triage_conn, session, member_id=member)
+        if (
+            focused_item is not None
+            and focused_item.get("state")
+            not in {"pending_interpretation", "pending_review"}
+            and not any(
+                item["proposal_id"] == focused_item["proposal_id"]
+                for item in recent_items
+            )
+        ):
+            recent_items.insert(0, focused_item)
         for item in [*items, *recent_items]:
             item["review_state"] = _triage_review_state(item)
             item["surface_link"] = surface_link(
                 "triage",
                 object_kind="item",
                 object_id=str(item["proposal_id"]),
+                params={
+                    "matter": str(item.get("context_id") or item["proposal_id"]),
+                    "view": (
+                        "recent"
+                        if item.get("state")
+                        not in {"pending_interpretation", "pending_review"}
+                        else "all_candidates"
+                    ),
+                },
                 evidence_event_ids=[str(item.get("source_event_id") or "")],
             )
         for item in recent_items:
@@ -942,6 +988,25 @@ def build_surface(
         base["items"] = items
         base["recent_items"] = recent_items
         base["triage"] = triage_page
+        base["focus"] = {
+            "requested_candidate_id": triage_item,
+            "state": (
+                "not_requested"
+                if not triage_item
+                else "not_found"
+                if focused_item is None
+                else "pending"
+                if focused_item.get("state")
+                in {"pending_interpretation", "pending_review"}
+                else "resolved"
+            ),
+            "candidate_state": focused_item.get("state") if focused_item else None,
+            "matter_id": (
+                str(focused_item.get("context_id") or focused_item["proposal_id"])
+                if focused_item
+                else None
+            ),
+        }
         feedback_patterns = feedback_pattern_counts(
             runtime.projections.connection("context_fabric"),
             session,
@@ -1469,7 +1534,21 @@ def build_surface(
             )
             note["triage_count"] = len(note_candidates)
             note["triage_href"] = (
-                f"/member/triage?item={note_candidates[0]['proposal_id']}"
+                surface_link(
+                    "triage",
+                    object_kind="item",
+                    object_id=str(note_candidates[0]["proposal_id"]),
+                    params={
+                        "matter": str(
+                            note_candidates[0].get("context_id")
+                            or note_candidates[0]["proposal_id"]
+                        ),
+                        "view": "all_candidates",
+                    },
+                    evidence_event_ids=[
+                        str(note_candidates[0].get("source_event_id") or "")
+                    ],
+                )["href"]
                 if note_candidates
                 else None
             )
@@ -1731,9 +1810,34 @@ def build_surface(
             member_party_id=member,
             limit=50,
         )
+        next_steps = []
+        for task in tasks[:3]:
+            task_id = str(task.get("task_id") or task.get("id") or "")
+            next_steps.append(
+                {
+                    **task,
+                    "surface_link": surface_link(
+                        "reminders",
+                        object_kind="item",
+                        object_id=f"task:{task_id}",
+                        evidence_event_ids=[str(task.get("last_event_id") or "")],
+                    ),
+                }
+            )
+        for outcome in outcomes:
+            object_id = str(outcome.get("id") or outcome.get("task_id") or "")
+            object_kind = str(outcome.get("object_kind") or "task")
+            if object_kind == "task":
+                outcome["surface_link"] = surface_link(
+                    "reminders",
+                    object_kind="item",
+                    object_id=f"task:{object_id}",
+                    params={"view": "completed"},
+                    evidence_event_ids=[str(outcome.get("last_event_id") or "")],
+                )
         base["scoreboard"] = {
             "open_count": len(tasks),
-            "next_steps": tasks[:3],
+            "next_steps": next_steps,
             "completed_count": sum(
                 1 for task in outcomes if task["outcome_kind"] == "completed"
             ),
