@@ -15,7 +15,8 @@ const state = {
   triageBannerKind: null,
   triageRefreshRequired: false,
   triageLoadGeneration: 0,
-  triageDecisionPending: false,
+  triageOperationGeneration: 0,
+  triageOperationPending: false,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -147,7 +148,7 @@ function moneyMinor(value, { compact = false } = {}) {
   }).format(amount);
 }
 
-async function reloadActiveSurface() {
+async function reloadActiveSurface({ triageOperationToken = null } = {}) {
   const active = currentSurface();
   if (active.startsWith("quest:")) return;
   let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
@@ -169,28 +170,67 @@ async function reloadActiveSurface() {
     replaceQuery({ q: null });
   }
   const data = await api(path);
-  if (active === "triage" && state.triageRefreshRequired) {
-    state.triageRefreshRequired = false;
-    if (state.triageBannerKind === "refresh_failure") clearBanner();
+  if (active === "triage") {
+    if (triageOperationToken != null && !triageOperationIsCurrent(triageOperationToken)) return null;
+    if (state.triageRefreshRequired) return null;
   }
   renderSurface(data);
   return data;
 }
 
 function triageInteractionLocked() {
-  return state.triageDecisionPending || state.triageRefreshRequired;
+  return state.triageOperationPending || state.triageRefreshRequired;
 }
 
 function applyTriageInteractionLock() {
   if (!triageInteractionLocked()) return;
-  for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) control.disabled = true;
+  for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) {
+    if (!control.dataset.triagePriorDisabled) control.dataset.triagePriorDisabled = String(control.disabled);
+    control.disabled = true;
+  }
 }
 
-async function decideTriage(item, action, buttons, feedbackReason = null) {
-  if (state.triageDecisionPending) return;
-  state.triageDecisionPending = true;
+function releaseTriageInteractionLock() {
+  for (const control of document.querySelectorAll("#surface [data-triage-prior-disabled]")) {
+    control.disabled = control.dataset.triagePriorDisabled === "true";
+    delete control.dataset.triagePriorDisabled;
+  }
+}
+
+function beginTriageOperation() {
+  if (triageInteractionLocked()) return null;
+  state.triageOperationPending = true;
+  state.triageOperationGeneration += 1;
   state.triageLoadGeneration += 1;
   applyTriageInteractionLock();
+  return state.triageOperationGeneration;
+}
+
+function triageOperationIsCurrent(token) {
+  return state.triageOperationPending && token === state.triageOperationGeneration;
+}
+
+function finishTriageOperation(token) {
+  if (!triageOperationIsCurrent(token)) return;
+  state.triageLoadGeneration += 1;
+  state.triageOperationPending = false;
+  state.triageOperationGeneration += 1;
+  if (state.triageRefreshRequired) applyTriageInteractionLock();
+  else releaseTriageInteractionLock();
+}
+
+function latchTriageRefreshFailure(message) {
+  state.triageBannerKind = "refresh_failure";
+  state.triageRefreshRequired = true;
+  const banner = $("#state-banner");
+  banner.hidden = false;
+  banner.textContent = message;
+  applyTriageInteractionLock();
+}
+
+async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null } = {}) {
+  const token = operationToken ?? beginTriageOperation();
+  if (token == null || !triageOperationIsCurrent(token)) return;
   const banner = $("#state-banner"); banner.hidden = false;
   state.triageBannerKind = "progress";
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
@@ -207,7 +247,8 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
     state.triageMatter = null;
     state.triageFocusPending = false;
     replaceQuery({ view: workingView, item: null, matter: null });
-    const refreshed = await reloadActiveSurface();
+    const refreshed = await reloadActiveSurface({ triageOperationToken: token });
+    if (!refreshed || !triageOperationIsCurrent(token)) return;
     const hasNextDecision = triageVisibleMatters(refreshed, workingView).length > 0;
     const continuation = hasNextDecision
       ? "The next decision in this view is ready."
@@ -227,22 +268,14 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
     }
   } catch (error) {
     if (decisionRecorded) {
-      state.triageBannerKind = "refresh_failure";
-      state.triageRefreshRequired = true;
-      banner.textContent = `The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`;
-      applyTriageInteractionLock();
+      latchTriageRefreshFailure(`The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`);
     }
     else {
       state.triageBannerKind = "error";
       banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
-      buttons.forEach((button) => { button.disabled = false; });
-      const loadMore = document.querySelector("[data-triage-more]");
-      if (loadMore) { loadMore.disabled = false; loadMore.textContent = "Load next matters"; }
     }
   } finally {
-    state.triageLoadGeneration += 1;
-    state.triageDecisionPending = false;
-    if (!state.triageRefreshRequired && currentSurface() === "triage" && state.surface?.surface === "triage") renderSurface(state.surface);
+    finishTriageOperation(token);
   }
 }
 
@@ -357,8 +390,8 @@ function triageFieldControl(spec, candidate, data) {
   const input = document.createElement("input"); input.type = spec.control === "url" ? "url" : spec.control === "color" ? "color" : "text"; input.name = spec.name; input.value = current || ""; return input;
 }
 
-function triageCandidateUpdates(form, targetKind, schema) {
-  const values = new FormData(form); const updates = {};
+function triageCandidateUpdates(form, targetKind, schema, formValues = null) {
+  const values = formValues ?? new FormData(form); const updates = {};
   const activeProvider = String(values.get("provider") || "");
   const target = schema?.targets?.[targetKind] || {};
   const source = target.fields_from ? schema.targets?.[target.fields_from] : target;
@@ -393,11 +426,13 @@ function triageCandidateUpdates(form, targetKind, schema) {
   return updates;
 }
 
-async function saveTriageForm(item, form, { reload = true } = {}) {
-  if (triageInteractionLocked()) return null;
-  const values = new FormData(form);
+async function saveTriageForm(item, form, { reload = true, operationToken = null, formValues = null } = {}) {
+  const values = formValues ?? new FormData(form);
+  const ownsOperation = operationToken == null;
+  const token = operationToken ?? beginTriageOperation();
+  if (token == null || !triageOperationIsCurrent(token)) return null;
   const targetKind = String(values.get("target_kind") || item.target_kind);
-  const candidateUpdates = triageCandidateUpdates(form, targetKind, state.surface?.enrichment_schema);
+  const candidateUpdates = triageCandidateUpdates(form, targetKind, state.surface?.enrichment_schema, values);
   let route = null;
   if (item.source_kind !== "commitment_proposal") {
     route = {
@@ -407,9 +442,8 @@ async function saveTriageForm(item, form, { reload = true } = {}) {
       container_external_id: String(values.get("container_external_id") || "") || null,
     };
   }
-  const buttons = [...form.querySelectorAll("button")];
-  buttons.forEach((button) => { button.disabled = true; });
   setBanner("Saving these details as a proposal—nothing official is being created yet…");
+  let saveRecorded = false;
   try {
     const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/enrich`, {
       method: "POST",
@@ -423,13 +457,27 @@ async function saveTriageForm(item, form, { reload = true } = {}) {
         route,
       }),
     });
+    if (!triageOperationIsCurrent(token)) return null;
+    saveRecorded = true;
+    Object.assign(item, result.triage);
+    delete form.dataset.dirty;
+    delete form.dataset.structuralChanged;
+    const confirm = [...form.querySelectorAll("button")].find((button) => ["Save & confirm", "Save destination", "Confirm and route"].includes(button.textContent));
+    if (confirm) confirm.textContent = "Confirm and route";
     setBanner("Details saved. Review the destination and preview once more before confirming.");
-    if (reload) await reloadActiveSurface();
+    if (reload) {
+      const refreshed = await reloadActiveSurface({ triageOperationToken: token });
+      if (!refreshed || !triageOperationIsCurrent(token)) return null;
+    }
     return result.triage;
   } catch (error) {
-    setBanner(`${error.message} The proposal was not changed.`);
-    buttons.forEach((button) => { button.disabled = false; });
+    if (!triageOperationIsCurrent(token)) return null;
+    if (saveRecorded) {
+      latchTriageRefreshFailure(`The details were saved, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+    } else setBanner(`${error.message} The proposal was not changed.`);
     return null;
+  } finally {
+    if (ownsOperation) finishTriageOperation(token);
   }
 }
 
@@ -591,9 +639,9 @@ function triageDetail(item, data, readOnly = false) {
       replaceSelectOptions(account, options, selectedAccount, "Choose account…");
       refreshContainers(selectedContainer);
     };
-    provider.addEventListener("change", () => { refreshAccounts(); form.dataset.structuralChanged = "true"; });
-    account.addEventListener("change", () => { refreshContainers(); form.dataset.structuralChanged = "true"; });
-    container.addEventListener("change", () => { form.dataset.structuralChanged = "true"; });
+    provider.addEventListener("change", () => { if (triageInteractionLocked()) return; refreshAccounts(); form.dataset.structuralChanged = "true"; });
+    account.addEventListener("change", () => { if (triageInteractionLocked()) return; refreshContainers(); form.dataset.structuralChanged = "true"; });
+    container.addEventListener("change", () => { if (triageInteractionLocked()) return; form.dataset.structuralChanged = "true"; });
     refreshAccounts(item.route?.provider_account_id || "", item.route?.container_external_id || "");
     grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
   }
@@ -627,22 +675,28 @@ function triageDetail(item, data, readOnly = false) {
   const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
   const buttons = [save, approve, dismiss];
   form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
-  const markDirty = () => { form.dataset.dirty = "true"; approve.textContent = form.dataset.structuralChanged ? "Save destination" : "Save & confirm"; };
-  target.addEventListener("change", () => { form.dataset.structuralChanged = "true"; markDirty(); });
-  member.addEventListener("change", () => { form.dataset.structuralChanged = "true"; markDirty(); });
+  const markDirty = () => { if (triageInteractionLocked()) return; form.dataset.dirty = "true"; approve.textContent = form.dataset.structuralChanged ? "Save destination" : "Save & confirm"; };
+  target.addEventListener("change", () => { if (triageInteractionLocked()) return; form.dataset.structuralChanged = "true"; markDirty(); });
+  member.addEventListener("change", () => { if (triageInteractionLocked()) return; form.dataset.structuralChanged = "true"; markDirty(); });
   form.addEventListener("input", markDirty);
   form.addEventListener("change", markDirty);
   approve.addEventListener("click", async () => {
     if (form.dataset.dirty) {
+      const formValues = new FormData(form);
+      const operationToken = beginTriageOperation();
+      if (operationToken == null) return;
       const structuralChange = Boolean(form.dataset.structuralChanged);
-      const saved = await saveTriageForm(item, form, { reload: structuralChange });
-      if (!saved || structuralChange) return;
-      await decideTriage(saved, "approve", buttons);
+      const saved = await saveTriageForm(item, form, { reload: structuralChange, operationToken, formValues });
+      if (!saved || structuralChange) {
+        finishTriageOperation(operationToken);
+        return;
+      }
+      await decideTriage(saved, "approve", buttons, null, { operationToken });
       return;
     }
     await decideTriage(item, "approve", buttons);
   });
-  feedback.addEventListener("change", () => { dismiss.disabled = !feedback.value; });
+  feedback.addEventListener("change", () => { if (triageInteractionLocked()) return; dismiss.disabled = !feedback.value; });
   dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons, feedback.value));
   evidence.addEventListener("click", () => showEvidence(item.source_event_id));
   row.append(save, approve, feedback, dismiss, evidence); form.append(row); section.append(form);
@@ -698,42 +752,62 @@ async function loadMoreTriage(data) {
   try {
     const params = new URLSearchParams({ triage_lens: "all_candidates", triage_cursor: cursor, triage_limit: "30" });
     const next = await api(`/api/member/v1/surfaces/triage?${params}`);
-    if (state.triageDecisionPending || state.triageRefreshRequired || generation !== state.triageLoadGeneration) return;
+    if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return;
     const known = new Set((data.triage.matters || []).map((matter) => matter.context_id));
     for (const matter of next.triage?.matters || []) if (!known.has(matter.context_id)) data.triage.matters.push(matter);
     const knownItems = new Set((data.items || []).map((item) => item.proposal_id));
     for (const item of next.items || []) if (!knownItems.has(item.proposal_id)) data.items.push(item);
     data.triage.next_cursor = next.triage?.next_cursor || null; data.triage.has_more = Boolean(next.triage?.has_more);
     renderSurface(data);
-  } catch (error) { if (state.triageDecisionPending || state.triageRefreshRequired || generation !== state.triageLoadGeneration) return; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
+  } catch (error) { if (triageInteractionLocked() || generation !== state.triageLoadGeneration) return; const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
 }
 
 async function approveTriageSuggestion(suggestion, button) {
-  if (triageInteractionLocked()) return;
-  button.disabled = true;
+  const token = beginTriageOperation();
+  if (token == null) return;
   const values = { scope_kind: suggestion.scope_kind, scope_value: suggestion.scope_value, disposition: suggestion.suggested_disposition };
   const banner = $("#state-banner"); banner.hidden = false;
+  let ruleRecorded = false;
   try {
     if (!button.dataset.previewAffectedCount) {
       const preview = await api("/api/member/v1/triage-policy/preview", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(values) });
+      if (!triageOperationIsCurrent(token)) return;
       button.dataset.previewAffectedCount = String(preview.affected_feedback_count);
       button.textContent = "Approve shadow rule";
-      button.disabled = false;
       banner.textContent = `${preview.affected_feedback_count} matching feedback decisions. Select “Approve shadow rule” to confirm. It will not suppress, confirm, route, or write candidates.`;
       return;
     }
     const expectedAffectedCount = Number(button.dataset.previewAffectedCount);
     await api("/api/member/v1/triage-policy/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ ...values, request_id: crypto.randomUUID(), expected_affected_count: expectedAffectedCount }) });
+    if (!triageOperationIsCurrent(token)) return;
+    ruleRecorded = true;
     banner.textContent = "Shadow rule recorded. It is reversible and has no automatic candidate or provider effect in this rollout.";
-    await reloadActiveSurface();
-  } catch (error) { banner.textContent = `${error.message} No rule was approved.`; button.disabled = false; }
+    const refreshed = await reloadActiveSurface({ triageOperationToken: token });
+    if (!refreshed || !triageOperationIsCurrent(token)) return;
+  } catch (error) {
+    if (!triageOperationIsCurrent(token)) return;
+    if (ruleRecorded) latchTriageRefreshFailure(`The shadow rule was recorded, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+    else banner.textContent = `${error.message} No rule was approved.`;
+  } finally { finishTriageOperation(token); }
 }
 
 async function revokeTriageRule(rule, button) {
-  if (triageInteractionLocked()) return;
-  button.disabled = true; const banner = $("#state-banner"); banner.hidden = false;
-  try { await api(`/api/member/v1/triage-policy/${encodeURIComponent(rule.rule_id)}/revoke`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), reason: "Revoked from Triage learning controls" }) }); banner.textContent = "Shadow rule revoked."; await reloadActiveSurface(); }
-  catch (error) { banner.textContent = `${error.message} The rule remains unchanged.`; button.disabled = false; }
+  const token = beginTriageOperation();
+  if (token == null) return;
+  const banner = $("#state-banner"); banner.hidden = false;
+  let revokeRecorded = false;
+  try {
+    await api(`/api/member/v1/triage-policy/${encodeURIComponent(rule.rule_id)}/revoke`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), reason: "Revoked from Triage learning controls" }) });
+    if (!triageOperationIsCurrent(token)) return;
+    revokeRecorded = true;
+    banner.textContent = "Shadow rule revoked.";
+    const refreshed = await reloadActiveSurface({ triageOperationToken: token });
+    if (!refreshed || !triageOperationIsCurrent(token)) return;
+  } catch (error) {
+    if (!triageOperationIsCurrent(token)) return;
+    if (revokeRecorded) latchTriageRefreshFailure(`The shadow rule was revoked, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+    else banner.textContent = `${error.message} The rule remains unchanged.`;
+  } finally { finishTriageOperation(token); }
 }
 
 function triageSurface(data) {

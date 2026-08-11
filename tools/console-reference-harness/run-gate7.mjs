@@ -26,6 +26,8 @@ const requestFailures = [];
 const screenshots = {};
 let expected404Console = 0;
 let observedExpected404Console = 0;
+let expected409Console = 0;
+let observedExpected409Console = 0;
 let browserDescription = "installed Chromium browser via playwright-core@1.62.0";
 
 function record(name, pass, detail) {
@@ -232,6 +234,11 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
       observedExpected404Console += 1;
       return;
     }
+    if (expected409Console > 0 && message.text().includes("409")) {
+      expected409Console -= 1;
+      observedExpected409Console += 1;
+      return;
+    }
     consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -349,6 +356,10 @@ async function run() {
     let staleTriageLoadRoute;
     let releaseTriageDecision;
     let triageDecisionRoute;
+    let releaseTriageEnrichment;
+    let triageEnrichmentStarted;
+    let triageEnrichmentRoute;
+    let triageEnrichmentBody;
     let triageCursorRequestCount = 0;
     for (const [surface, label] of Object.entries(surfaceLabels)) {
       if (surface === "triage") {
@@ -388,18 +399,37 @@ async function run() {
           await route.continue();
         };
         await principal.page.route("**/api/member/v1/triage/*/approve", triageDecisionRoute);
+        let resolveTriageEnrichmentStarted;
+        triageEnrichmentStarted = new Promise((resolveStarted) => { resolveTriageEnrichmentStarted = resolveStarted; });
+        const triageEnrichmentRelease = new Promise((resolveRelease) => { releaseTriageEnrichment = resolveRelease; });
+        triageEnrichmentRoute = async (route) => {
+          triageEnrichmentBody = route.request().postData();
+          resolveTriageEnrichmentStarted();
+          await triageEnrichmentRelease;
+          await route.continue();
+        };
+        await principal.page.route("**/api/member/v1/triage/*/enrich", triageEnrichmentRoute);
       }
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "triage") {
         await principal.page.evaluate(() => {
           window.__gate7OriginalFetch = window.fetch;
-          window.__gate7FetchCounts = { enrich: 0, triageCursor: 0 };
+          window.__gate7FetchCounts = { cursorApplicationTurns: 0, enrich: 0, triageCursor: 0 };
           const originalFetch = window.fetch.bind(window);
-          window.fetch = (input, options) => {
+          window.fetch = async (input, options) => {
             const url = typeof input === "string" ? input : input?.url || String(input);
             if (url.includes("/enrich")) window.__gate7FetchCounts.enrich += 1;
             if (url.includes("triage_cursor=")) window.__gate7FetchCounts.triageCursor += 1;
-            return originalFetch(input, options);
+            const response = await originalFetch(input, options);
+            if (url.includes("triage_cursor=")) {
+              const originalJson = response.json.bind(response);
+              response.json = async () => {
+                const body = await originalJson();
+                setTimeout(() => { window.__gate7FetchCounts.cursorApplicationTurns += 1; }, 0);
+                return body;
+              };
+            }
+            return response;
           };
         });
       }
@@ -444,10 +474,22 @@ async function run() {
         const preDecisionFetchCounts = await principal.page.evaluate(() => ({ ...window.__gate7FetchCounts }));
         await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
-        await principal.page.getByText("Confirming this candidate through the household gate…").waitFor();
-        const enabledTriageControls = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length);
+        await triageEnrichmentStarted;
         const readyLens = principal.page.getByRole("button", { name: /^Ready/ });
         const recentLens = principal.page.getByRole("button", { name: /^Recent/ });
+        const lockedBeforeEnrichment = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length) === 0;
+        await recentLens.dispatchEvent("click");
+        await principal.page.locator('[data-triage-item="gate7-visual-triage-task"] form').dispatchEvent("submit");
+        await principal.page.locator("[data-triage-more]").dispatchEvent("click");
+        const preEnrichmentReleaseCounts = await principal.page.evaluate(() => ({ ...window.__gate7FetchCounts }));
+        record("Save and confirm locks Triage before enrichment and serializes the full operation", lockedBeforeEnrichment && await readyLens.getAttribute("aria-pressed") === "true" && await recentLens.getAttribute("aria-pressed") === "false" && preEnrichmentReleaseCounts.enrich === 1 && preEnrichmentReleaseCounts.triageCursor === preDecisionFetchCounts.triageCursor, JSON.stringify({ lockedBeforeEnrichment, preDecisionFetchCounts, preEnrichmentReleaseCounts, url: principal.page.url() }));
+        releaseTriageEnrichment();
+        try {
+          await principal.page.getByText("Confirming this candidate through the household gate…").waitFor();
+        } catch (error) {
+          throw new Error(`${error.message}\nTriage banner: ${await principal.page.locator("#state-banner").textContent()}\nEnrichment body: ${triageEnrichmentBody}`);
+        }
+        const enabledTriageControls = await principal.page.locator("#surface button, #surface input, #surface select, #surface textarea").evaluateAll((controls) => controls.filter((control) => !control.disabled).length);
         await recentLens.dispatchEvent("click");
         const heldForm = principal.page.locator('[data-triage-item="gate7-visual-triage-task"] form');
         await heldForm.dispatchEvent("submit");
@@ -465,7 +507,7 @@ async function run() {
         record("Triage confirmation continues the active work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.getByRole("heading", { name: "Matters awaiting review" }).count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
         releaseStaleTriageLoad();
         await staleTriageLoadSettled;
-        await principal.page.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+        await principal.page.waitForFunction(() => window.__gate7FetchCounts.cursorApplicationTurns === 1);
         record("Pagination begun before a decision cannot resurrect its resolved candidate", triageCursorRequestCount === 1 && await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), JSON.stringify({ triageCursorRequestCount, surface: await principal.page.locator("#surface").textContent() }));
         await principal.page.evaluate(() => {
           window.fetch = window.__gate7OriginalFetch;
@@ -474,6 +516,28 @@ async function run() {
         });
         await principal.page.unroute("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
         await principal.page.unroute("**/api/member/v1/triage/*/approve", triageDecisionRoute);
+        await principal.page.unroute("**/api/member/v1/triage/*/enrich", triageEnrichmentRoute);
+        let rejectedSavedDecision = false;
+        const savedDecisionFailureRoute = async (route) => {
+          if (!rejectedSavedDecision) {
+            rejectedSavedDecision = true;
+            expected409Console += 1;
+            await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture rejected this decision after saving its details." }) });
+            return;
+          }
+          await route.continue();
+        };
+        await principal.page.route("**/api/member/v1/triage/*/approve", savedDecisionFailureRoute);
+        await principal.page.locator(".triage-master-button").filter({ hasText: "Review the household insurance quote" }).click();
+        const savedTitle = "Review the updated household insurance quote";
+        await principal.page.getByLabel("Review title").fill(savedTitle);
+        await principal.page.getByRole("button", { name: "Save & confirm" }).click();
+        await principal.page.getByText("Nothing was confirmed or dismissed.", { exact: false }).waitFor();
+        const retainedSavedTitle = await principal.page.getByLabel("Review title").inputValue();
+        await principal.page.getByRole("button", { name: "Confirm and route" }).click();
+        await principal.page.getByText("Confirmed and added to Reminders", { exact: false }).waitFor();
+        record("A decision failure after enrichment preserves saved input and retries its current revision", retainedSavedTitle === savedTitle && rejectedSavedDecision && await principal.page.locator(".triage-master-button").filter({ hasText: savedTitle }).count() === 0, JSON.stringify({ retainedSavedTitle, rejectedSavedDecision, banner: await principal.page.locator("#state-banner").textContent() }));
+        await principal.page.unroute("**/api/member/v1/triage/*/approve", savedDecisionFailureRoute);
         await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();
         await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("spam");
         await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
@@ -785,6 +849,7 @@ async function run() {
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
+    record("expected saved-decision conflict handled", observedExpected409Console === 1, observedExpected409Console);
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {

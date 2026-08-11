@@ -14,10 +14,13 @@ Rollback restores the prior navigation/copy only and cannot remove decisions
 or feedback. The latch is ephemeral browser state and does not migrate or
 rewrite any durable record. The pagination generation is likewise ephemeral;
 it discards only transport results made obsolete by a later member action.
-The decision-pending latch is ephemeral and admits no lens, matter, enrichment,
-or pagination work until the decision attempt settles. Replacement renders
-inherit the disabled state; a successful decision requires the authoritative
-refresh and a second generation rotation before interaction reopens.
+The Triage-operation latch and causality token are ephemeral. Dirty confirmation
+acquires them before FormData enrichment and retains them through decision and
+authoritative refresh; save, learning-policy, and decision work is serialized,
+replacement renders inherit the disabled state, and older callbacks cannot
+clear feedback or a recorded-write refresh-failure latch. Successful enrichment
+is retained at its current revision when a following decision fails. No durable
+record is migrated or rewritten.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable

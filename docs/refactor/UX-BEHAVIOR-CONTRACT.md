@@ -17,11 +17,14 @@ latched until a successful reload. Beginning a decision or deliberately
 changing lenses invalidates any older in-flight pagination request; neither a
 late success nor a late failure may replace the newer authoritative surface,
 restore a resolved candidate, clear decision feedback, or re-enable stale
-controls. Every Triage control is disabled for the full decision interval; any
-decision-time render inherits that lock, and lens, matter, form, and pagination
-handlers reject programmatic work. The request generation rotates again before
-interaction reopens, closing the window for pagination attempted after the
-decision began.
+controls. A dirty Save & confirm acquires one serialized Triage operation before
+enrichment and retains it through decision and authoritative refresh. Every
+Triage control is disabled; any operation-time render inherits that lock; and
+lens, matter, form, learning-policy, decision, and pagination handlers reject
+programmatic work. Earlier callbacks cannot clear feedback or refresh-failure
+safety. The generations rotate again before interaction reopens. If enrichment
+succeeds but the following decision fails, the saved values and current revision
+remain visible and immediately retryable.
 
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,
