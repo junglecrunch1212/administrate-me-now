@@ -133,8 +133,11 @@ The defect was presentation state and authority legibility.
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
-No event schema, dependency, runtime, adapter, pipeline, model, canonical
-object, provider object, projection count, or external-write authority changes.
+No event schema, dependency/runtime version, adapter, pipeline, model,
+canonical object, provider object, projection count, or external-write
+authority changes. The reviewed behavior change is confined to Triage's
+deterministic read model and the projection runner's opt-in version-change
+replay/stamping path described below.
 Triage advances from projection v7 to v8 so replay links existing immutable
 `member.provider_action.confirmed` receipts to their originating approved
 candidate and exact member confirmation/dismissal receipts to their requests.

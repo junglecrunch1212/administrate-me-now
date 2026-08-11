@@ -2132,8 +2132,13 @@ safety latch preserves the reload warning and disables stale Triage controls
 through every lens click until successful reload. Recent identifies itself as
 read-only audit history, and eligibility-rule supersession copy states only
 that context or eligibility changed rather than claiming a migration or
-learned sender rule. No event/projection/schema/runtime/provider behavior
-changes. A request generation also invalidates any pre-decision load-more
+learned sender rule. That presentation-only copy correction changes no event
+schema, canonical or provider truth, or external-write authority. This
+candidate separately changes the Triage projection schema and v7-to-v8 replay,
+plus the projection runner's explicitly opted-in version replay/stamping path,
+as recorded below. Dependency/runtime versions, adapters, pipelines, and other
+projection replay policies remain unchanged. A request generation also
+invalidates any pre-decision load-more
 request before the decision begins (and before a deliberate lens change), so
 its eventual success or failure cannot replace the newer authoritative queue,
 restore a resolved candidate, alter decision feedback, or re-enable stale
