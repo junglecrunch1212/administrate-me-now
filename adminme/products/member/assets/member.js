@@ -17,6 +17,9 @@ const state = {
   triageLoadGeneration: 0,
   triageOperationGeneration: 0,
   triageOperationPending: false,
+  addForReviewOperationGeneration: 0,
+  addForReviewOperationPending: false,
+  addForReviewRecoveryRequired: false,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -149,6 +152,7 @@ function moneyMinor(value, { compact = false } = {}) {
 }
 
 function triageReviewView(item) {
+  if (item?.decision_disposition && item.decision_disposition !== "decision") return "all_candidates";
   if (item?.review_state?.state === "needs_interpretation") return "needs_interpretation";
   if (item?.review_state?.state === "needs_details") return "needs_details";
   if (item?.review_state?.state === "ready") return "ready";
@@ -209,16 +213,75 @@ function triageLockControls() {
 function applyTriageInteractionLock() {
   if (!triageInteractionLocked()) return;
   for (const control of triageLockControls()) {
-    if (!control.dataset.triagePriorDisabled) control.dataset.triagePriorDisabled = String(control.disabled);
+    if (!control.dataset.triagePriorDisabled) {
+      control.dataset.triagePriorDisabled = control.dataset.addForReviewPriorDisabled ?? String(control.disabled);
+    }
     control.disabled = true;
   }
 }
 
 function releaseTriageInteractionLock() {
   for (const control of document.querySelectorAll("[data-triage-prior-disabled]")) {
-    control.disabled = control.dataset.triagePriorDisabled === "true";
+    control.disabled = control.dataset.triagePriorDisabled === "true" || addForReviewInteractionLocked();
     delete control.dataset.triagePriorDisabled;
   }
+}
+
+function addForReviewInteractionLocked() {
+  return state.addForReviewOperationPending || state.addForReviewRecoveryRequired;
+}
+
+function addForReviewLockControls() {
+  return document.querySelectorAll(
+    "#add-for-review, #action-dialog .add-for-review-form button, "
+    + "#action-dialog .add-for-review-form input, #action-dialog .add-for-review-form select, "
+    + "#action-dialog .add-for-review-form textarea, #action-dialog [data-close-action]",
+  );
+}
+
+function applyAddForReviewInteractionLock() {
+  if (!addForReviewInteractionLocked()) return;
+  for (const control of addForReviewLockControls()) {
+    if (!control.dataset.addForReviewPriorDisabled) {
+      control.dataset.addForReviewPriorDisabled = control.dataset.triagePriorDisabled ?? String(control.disabled);
+    }
+    control.disabled = true;
+  }
+}
+
+function releaseAddForReviewInteractionLock() {
+  for (const control of document.querySelectorAll("[data-add-for-review-prior-disabled]")) {
+    control.disabled = control.dataset.addForReviewPriorDisabled === "true" || triageInteractionLocked();
+    delete control.dataset.addForReviewPriorDisabled;
+  }
+}
+
+function beginAddForReviewOperation() {
+  if (addForReviewInteractionLocked()) return null;
+  state.addForReviewOperationPending = true;
+  state.addForReviewOperationGeneration += 1;
+  applyAddForReviewInteractionLock();
+  return state.addForReviewOperationGeneration;
+}
+
+function addForReviewOperationIsCurrent(token) {
+  return state.addForReviewOperationPending && token === state.addForReviewOperationGeneration;
+}
+
+function finishAddForReviewOperation(token) {
+  if (!addForReviewOperationIsCurrent(token)) return;
+  state.addForReviewOperationPending = false;
+  state.addForReviewOperationGeneration += 1;
+  if (state.addForReviewRecoveryRequired) applyAddForReviewInteractionLock();
+  else releaseAddForReviewInteractionLock();
+}
+
+function latchAddForReviewRecovery(message) {
+  state.addForReviewRecoveryRequired = true;
+  const banner = $("#state-banner");
+  banner.hidden = false;
+  banner.textContent = message;
+  applyAddForReviewInteractionLock();
 }
 
 function invalidateTriageLoad() {
@@ -262,29 +325,49 @@ function latchTriageRefreshFailure(message) {
   applyTriageInteractionLock();
 }
 
-function triageDecisionDefinitelyRejected(error) {
+function requestDefinitelyRejected(error) {
   return Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408;
 }
 
-async function reconcileAmbiguousTriageDecision(item, action, token, error, banner) {
+function triageDecisionHasDurableReceipt(item, action) {
+  if (!item) return false;
+  if (action === "dismiss") return item.state === "dismissed";
+  if (item.state === "approved") {
+    return ["approved_awaiting_openclaw", "approved_awaiting_provider"].includes(item.resolution_reason)
+      && Boolean(item.domain_approval_event_id)
+      && Boolean(item.materialization_event_id);
+  }
+  if (item.state === "failed") return Boolean(item.outcome_event_id);
+  if (item.state !== "confirmed") return false;
+  return Boolean(item.outcome_event_id) || (item.materialized_event_ids || []).length > 0;
+}
+
+async function reconcileTriageDecision(item, action, token, error, banner, { mayReportRejection = false } = {}) {
   try {
     const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageReconcileExact: true });
-    if (!refreshed || !triageOperationIsCurrent(token)) return;
+    if (!refreshed || !triageOperationIsCurrent(token)) return "unresolved";
     const exact = [...(refreshed.items || []), ...(refreshed.recent_items || [])].find((candidate) => candidate.proposal_id === item.proposal_id);
-    if (refreshed.focus?.requested_candidate_id === item.proposal_id && refreshed.focus.state === "resolved" && exact) {
+    if (refreshed.focus?.requested_candidate_id === item.proposal_id && exact && triageDecisionHasDurableReceipt(exact, action)) {
       const operation = action === "approve" ? "confirmation" : "dismissal";
       state.triageBannerKind = "reconciliation";
       banner.hidden = false;
       banner.textContent = `The ${operation} response was interrupted, but Triage reconciled this exact candidate as ${memberStatusLabel(exact.state).toLowerCase()}. Review this receipt before taking another action.`;
-      return;
+      return "settled";
     }
-    latchTriageRefreshFailure(`The decision response was interrupted and Triage could not prove this exact candidate's terminal state: ${error.message} Reload this page before continuing.`);
+    if (mayReportRejection && refreshed.focus?.requested_candidate_id === item.proposal_id && ["pending_interpretation", "pending_review"].includes(exact?.state)) {
+      state.triageBannerKind = "error";
+      banner.hidden = false;
+      banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
+      return "rejected";
+    }
+    if (action === "approve" && exact?.state === "approved" && exact.domain_approval_event_id) return "continuation_required";
+    return "unresolved";
   } catch (refreshError) {
-    latchTriageRefreshFailure(`The decision response was interrupted and exact reconciliation failed: ${refreshError.message} Reload this page before continuing.`);
+    return "unresolved";
   }
 }
 
-async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null, refreshOnRejectedDecision = false } = {}) {
+async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null } = {}) {
   const token = operationToken ?? beginTriageOperation();
   if (token == null || !triageOperationIsCurrent(token)) return;
   const banner = $("#state-banner"); banner.hidden = false;
@@ -292,11 +375,34 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
   const workingView = state.triageView === "recent" ? "all_candidates" : state.triageView;
   let decisionRecorded = false;
+  const decisionRequest = {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+    body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
+  };
   try {
-    const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
-    });
+    const decisionPath = `/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`;
+    let result;
+    try {
+      result = await api(decisionPath, decisionRequest);
+    } catch (initialError) {
+      const definitelyRejected = requestDefinitelyRejected(initialError);
+      const reconciliation = await reconcileTriageDecision(
+        item, action, token, initialError, banner, { mayReportRejection: definitelyRejected },
+      );
+      if (["settled", "rejected"].includes(reconciliation)) return;
+      if (definitelyRejected && reconciliation !== "continuation_required") {
+        latchTriageRefreshFailure(`The decision failed and Triage could not prove this exact candidate remained undecided: ${initialError.message} Reload this page before continuing.`);
+        return;
+      }
+      try {
+        result = await api(decisionPath, decisionRequest);
+      } catch (retryError) {
+        const retryReconciliation = await reconcileTriageDecision(item, action, token, retryError, banner);
+        if (["settled", "rejected"].includes(retryReconciliation)) return;
+        latchTriageRefreshFailure(`The decision response was interrupted and Triage could not prove an action-specific receipt after an idempotent retry: ${retryError.message} Reload this page before continuing.`);
+        return;
+      }
+    }
     decisionRecorded = true;
     state.triageView = workingView;
     state.triageSelected = null;
@@ -326,24 +432,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
     if (decisionRecorded) {
       latchTriageRefreshFailure(`The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`);
     }
-    else if (!triageDecisionDefinitelyRejected(error)) {
-      await reconcileAmbiguousTriageDecision(item, action, token, error, banner);
-    }
-    else if (refreshOnRejectedDecision) {
-      const rejection = `${error.message} Nothing was confirmed or dismissed.`;
-      try {
-        const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageReconcileExact: true });
-        if (!refreshed || !triageOperationIsCurrent(token)) return;
-        state.triageBannerKind = "error";
-        banner.hidden = false;
-        banner.textContent = rejection;
-      } catch (refreshError) {
-        latchTriageRefreshFailure(`The details were saved and the decision was not recorded, but Triage could not refresh: ${refreshError.message} Reload this page before continuing.`);
-      }
-    } else {
-      state.triageBannerKind = "error";
-      banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
-    }
+    else latchTriageRefreshFailure(`Triage could not finish or reconcile this decision: ${error.message} Reload this page before continuing.`);
   } finally {
     finishTriageOperation(token);
   }
@@ -778,7 +867,7 @@ function triageDetail(item, data, readOnly = false) {
         }
         return;
       }
-      await decideTriage(saved, "approve", buttons, null, { operationToken, refreshOnRejectedDecision: true });
+      await decideTriage(saved, "approve", buttons, null, { operationToken });
       return;
     }
     await decideTriage(item, "approve", buttons);
@@ -2070,10 +2159,14 @@ function openActionDialog(title, content) {
   content.querySelector("input, select, textarea, button")?.focus();
 }
 
-function closeActionDialog() { $("#action-dialog").close(); }
+function closeActionDialog({ force = false } = {}) {
+  const dialog = $("#action-dialog");
+  if (!force && addForReviewInteractionLocked() && dialog.querySelector(".add-for-review-form")) return;
+  dialog.close();
+}
 
 function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface = null, dialogTitle = "Add for review" } = {}) {
-  if (currentSurface() === "triage" && triageInteractionLocked()) return;
+  if (addForReviewInteractionLocked() || (currentSurface() === "triage" && triageInteractionLocked())) return;
   const form = document.createElement("form");
   form.className = "triage-review-form add-for-review-form";
   form.append(text("p", "This saves your thought in Triage. Nothing becomes a task, event, reminder, or provider change until you confirm it.", "state-note"));
@@ -2109,29 +2202,48 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
     if (!submittedText) return;
     const submittedHint = hint.value || null;
     const triageActive = currentSurface() === "triage";
+    const addOperationToken = beginAddForReviewOperation();
+    if (addOperationToken == null) return;
     const operationToken = triageActive ? beginTriageOperation() : null;
-    if (triageActive && operationToken == null) return;
-    if (!triageActive) submit.disabled = true;
+    if (triageActive && operationToken == null) {
+      finishAddForReviewOperation(addOperationToken);
+      return;
+    }
     setBanner("Saving your exact words before interpretation…");
     const allowedSurfaces = new Set(["today", "triage", "comms", "reminders", "calendar", "people", "notes", "finance", "scoreboard", "settings"]);
     const capturedSurface = allowedSurfaces.has(sourceSurface) ? sourceSurface : allowedSurfaces.has(currentSurface()) ? currentSurface() : "today";
+    const clientRequestId = form.dataset.clientRequestId || crypto.randomUUID();
+    form.dataset.clientRequestId = clientRequestId;
+    const intentRequest = {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+      body: JSON.stringify({
+        text: submittedText,
+        source_surface: capturedSurface,
+        kind_hint: submittedHint,
+        source_event_id: sourceEventId,
+        client_request_id: clientRequestId,
+      }),
+    };
     let intentRecorded = false;
     let refocus = false;
     try {
-      const result = await api("/api/member/v1/triage/intents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-        body: JSON.stringify({
-          text: submittedText,
-          source_surface: capturedSurface,
-          kind_hint: submittedHint,
-          source_event_id: sourceEventId,
-          client_request_id: crypto.randomUUID(),
-        }),
-      });
-      if (triageActive && !triageOperationIsCurrent(operationToken)) return;
+      let result;
+      try {
+        result = await api("/api/member/v1/triage/intents", intentRequest);
+      } catch (initialError) {
+        if (requestDefinitelyRejected(initialError)) throw initialError;
+        try {
+          result = await api("/api/member/v1/triage/intents", intentRequest);
+        } catch (retryError) {
+          retryError.ambiguousAfterRetry = true;
+          throw retryError;
+        }
+      }
+      if (!addForReviewOperationIsCurrent(addOperationToken) || (triageActive && !triageOperationIsCurrent(operationToken))) return;
       intentRecorded = true;
-      closeActionDialog();
+      delete form.dataset.clientRequestId;
+      closeActionDialog({ force: true });
       const savedMessage = result.state === "pending_interpretation" ? "Saved. Triage needs you to choose what this is; nothing was lost or created." : `${result.proposal_ids.length} review item${result.proposal_ids.length === 1 ? "" : "s"} saved in Triage. Nothing is committed yet.`;
       if (triageActive) {
         state.triageView = result.state === "pending_interpretation" ? "needs_interpretation" : "all_candidates";
@@ -2144,14 +2256,19 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
     } catch (error) {
       if (triageActive && intentRecorded) {
         latchTriageRefreshFailure(`Your thought was saved, but Triage could not refresh: ${error.message} Reload this page before continuing.`);
+      } else if (error.ambiguousAfterRetry) {
+        const recoveryMessage = `The Add-for-review response remained interrupted after an idempotent retry: ${error.message} Your exact words are still visible. Reload this page before trying again so Triage can reconcile the durable intent.`;
+        latchAddForReviewRecovery(recoveryMessage);
+        if (triageActive) latchTriageRefreshFailure(recoveryMessage);
       } else {
+        delete form.dataset.clientRequestId;
         setBanner(`${error.message} Your thought was not saved; the text is still here.`);
-        if (!triageActive) submit.disabled = false;
         refocus = true;
       }
     } finally {
+      finishAddForReviewOperation(addOperationToken);
       if (triageActive) finishTriageOperation(operationToken);
-      if (refocus) input.focus();
+      if (refocus && !addForReviewInteractionLocked()) input.focus();
     }
   });
   openActionDialog(dialogTitle, form);
@@ -3671,7 +3788,7 @@ async function initialize() {
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
   $("[data-close-action]").addEventListener("click", closeActionDialog);
   $("#action-dialog").addEventListener("cancel", (event) => {
-    if (state.triageOperationPending && event.currentTarget.querySelector(".add-for-review-form")) event.preventDefault();
+    if (addForReviewInteractionLocked() && event.currentTarget.querySelector(".add-for-review-form")) event.preventDefault();
   });
   $("#add-for-review").addEventListener("click", openAddForReview);
   try {

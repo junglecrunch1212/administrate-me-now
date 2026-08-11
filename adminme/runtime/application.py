@@ -424,6 +424,8 @@ class AdministrateMeRuntime:
         self.run_skill_fn: Any = run_skill
         self.commitment_command_locks: dict[str, asyncio.Lock] = {}
         self.triage_command_locks: dict[str, asyncio.Lock] = {}
+        self.triage_intent_command_locks: dict[str, asyncio.Lock] = {}
+        self.triage_intent_command_lock_users: dict[str, int] = {}
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
         self.settings_command_locks: dict[str, asyncio.Lock] = {}

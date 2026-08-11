@@ -22,7 +22,7 @@ from adminme.projections.triage import handlers
 
 class TriageProjection(Projection):
     name = "triage"
-    version = 7
+    version = 8
     subscribes_to = [
         "triage.item.proposed",
         "triage.item.enriched",
@@ -38,6 +38,7 @@ class TriageProjection(Projection):
         "commitment.edited",
         "commitment.confirmed",
         "commitment.dismissed",
+        "member.provider_action.confirmed",
         "external_sync.write_requested",
         "external_sync.write_completed",
         "external_sync.write_failed",

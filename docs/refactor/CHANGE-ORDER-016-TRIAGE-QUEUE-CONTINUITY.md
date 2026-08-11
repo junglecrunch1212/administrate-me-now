@@ -62,11 +62,21 @@ The defect was presentation state and authority legibility.
   callback or shared-shell intent.
 - Reconciliation always requests the exact candidate independently of the
   ordinary cursor, retains that identity in its current deterministic review
-  lens, and never substitutes a first-page matter. A definite client-visible
-  rejection may say no decision was recorded. A transport interruption or 5xx
-  after a decision request is ambiguous: Triage resolves the exact candidate's
-  current receipt, reports a proven terminal state, or fails closed with every
-  action locked until reload. It never claims rejection from transport alone.
+  lens—including All candidates after an evidence-only/attach-existing
+  transition—and never substitutes a first-page matter. HTTP class alone is
+  never settlement proof: local confirmation requires its materialization
+  receipt; an external route requires its durable pending-action receipt; and
+  provider completion/failure requires its outcome receipt. A definite
+  client-visible rejection may say no decision was recorded only while the
+  exact candidate remains pending. An interrupted or post-confirmation failure
+  retries once with the original request ID when continuation is required,
+  then reports proven action-specific truth or fails closed until reload.
+- Add for review owns a surface-independent operation token. Cancel, Close,
+  Escape, repeat submission, and a stale callback cannot discard or replace
+  the form on Today or any other member surface. Ambiguous capture retries once
+  with the original client request ID under a server-side per-intent lock; a
+  still-ambiguous result retains the exact visible words and fails closed until
+  reload.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -87,13 +97,18 @@ The defect was presentation state and authority legibility.
 | Return and honor computed review state after enrichment | HARDEN | Additive member API response metadata derived from the current projection; no new truth, model decision, or automatic confirmation. |
 | Preserve successful enrichment across a following decision failure | HARDEN | The current immutable enrichment event/revision remains authoritative; no failed decision is invented or retried automatically. |
 | Reconcile the exact candidate after rejection or an ambiguous response | HARDEN | Current projection truth and immutable receipts decide what the browser may claim; ordinary pagination cannot substitute another matter. |
+| Project the durable pending provider-action receipt into Triage v8 | MODERNIZE | Additive deterministic read-model linkage only; immutable domain approval, OpenClaw approval, provider command, and outcome events retain separate authority. |
+| Serialize Add-for-review under a stable client request ID on every surface | HARDEN | Exact member text remains one idempotent intent; ambiguous transport cannot mint a second identity or permit stale dialog callbacks. |
 | Prevent native dialog cancellation during an Add-for-review write | HARDEN | Ephemeral input remains visible until a definite pre-write failure or authoritative recorded result is known. |
 | Type non-continuation banners before display | HARDEN | Presentation provenance only; lens changes cannot erase a real progress, success, or error state. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
-No schema, migration, dependency, runtime, adapter, pipeline, model, canonical
-object, provider object, projection count, or external-write path changes.
+No event schema, dependency, runtime, adapter, pipeline, model, canonical
+object, provider object, projection count, or external-write authority changes.
+Triage advances from projection v7 to v8 so replay links existing immutable
+`member.provider_action.confirmed` receipts to their originating approved
+candidate; no source event or provider state is rewritten.
 
 ## Acceptance
 
@@ -110,8 +125,12 @@ intent, and pagination attempts proving all new work is handler-rejected; a
 readiness-changing enrichment proving no decision request is made; and
 successful enrichment followed by a failed decision, authoritative refresh,
 and immediate current-revision retry; exact off-page inclusion during both
-reconciliation paths; commit followed by an interrupted response and exact
-terminal-receipt recovery; native Escape during a failing Add-for-review write,
+reconciliation paths; a real post-confirmation guard refusal resumed with one
+request ID through local materialization; commit followed by an interrupted
+response and exact terminal-receipt recovery; a concurrent non-decision
+transition retaining exact focus in All candidates; native Escape on Today
+during a post-capture Add-for-review failure, with one client request ID across
+idempotent retry; native Escape during a definite failing Triage capture,
 provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

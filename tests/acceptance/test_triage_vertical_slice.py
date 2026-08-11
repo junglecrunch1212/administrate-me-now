@@ -569,6 +569,8 @@ def test_add_for_review_holds_exact_text_and_splits_typed_candidates(
             ).status_code
             == 403
         )
+        assert app.state.runtime.triage_intent_command_locks == {}
+        assert app.state.runtime.triage_intent_command_lock_users == {}
 
         canonical = client.portal.call(
             _events,
@@ -989,6 +991,20 @@ def test_proposal_requires_member_triage_before_official_task(
             pending_action["payload"]["origin_proposal_id"]
             == (calendar_candidate["proposal_id"])
         )
+        pending_receipt = next(
+            item
+            for item in client.get(
+                "/api/member/v1/surfaces/triage", headers=AUTH
+            ).json()["recent_items"]
+            if item["proposal_id"] == calendar_candidate["proposal_id"]
+        )
+        assert pending_receipt["state"] == "approved"
+        assert (
+            pending_receipt["domain_approval_event_id"]
+            == (calendar_approved.json()["confirmation_event_id"])
+        )
+        assert pending_receipt["materialization_event_id"] == pending_action["event_id"]
+        assert pending_receipt["resolution_reason"] == "approved_awaiting_openclaw"
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []
         )

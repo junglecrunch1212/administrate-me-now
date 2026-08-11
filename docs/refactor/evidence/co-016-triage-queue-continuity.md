@@ -47,8 +47,16 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
   exact saved input and revision are authoritatively refreshed independently
   of the ordinary cursor and an immediate retry succeeds;
 - a committed confirmation whose response is replaced by a 503, proving the
-  browser reconciles the exact terminal receipt instead of claiming rejection
-  or substituting another matter;
+  browser reconciles the exact action-specific terminal receipt instead of
+  claiming rejection or substituting another matter;
+- an actual guard refusal inside the local materialization handler after domain
+  confirmation, followed by one continuation with the identical request ID and
+  a proven local materialization receipt;
+- an exact pending candidate changing to evidence-only during reconciliation,
+  remaining visible in All candidates without an unrelated matter replacing it;
+- Add for review from Today held through native Escape, failed inside the
+  handler after exact intent capture, and completed on one retry with the same
+  client request ID; and
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -60,14 +68,14 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 
 ```text
 Focused Triage/projection/pipeline/production-composition tests
-48 passed
+32 passed
 
 Gate 7 rendered production composition
-250 assertions; 39 screenshots; 0 console errors; 0 page errors;
+253 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite
-49 strict acceptance gates; 1,792 root/code/pack tests; 60 bridge tests;
+49 strict acceptance gates; 1,793 root/code/pack tests; 60 bridge tests;
 Ruff/format/mypy/Pyright; dependency audits; performance budgets;
 architecture checks; clean install; tenant isolation; backup/restore;
 pinned OpenClaw contract, 17 plugin tests, build, package, and audit

@@ -190,7 +190,7 @@ async function seed(baseUrl) {
     identities.principal,
     "POST",
   );
-  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 5, triageContinuity.value);
+  record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 7, triageContinuity.value);
   const triageFinalReady = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-final-ready",
@@ -811,6 +811,48 @@ async function run() {
     record("ten principal navigation items", await principal.page.locator("#primary-nav .nav-link").count() === 10, await principal.page.locator("#primary-nav .nav-link").count());
     await auditAccessibility(principal.page, "desktop");
     await visit(principal.page, server.baseUrl, "/member/triage?view=ready", "Triage");
+    await principal.page.locator(".triage-master-button").filter({ hasText: "Attach the insurance note to its existing task" }).click();
+    const dispositionDecisionRoute = async (route) => {
+      expected409Console += 1;
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Fixture changed this candidate's disposition before recording the decision." }) });
+    };
+    const dispositionSurfaceRoute = async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      const updateCandidate = (candidate) => candidate.proposal_id === "gate7-visual-disposition-task"
+        ? { ...candidate, decision_disposition: "evidence_only", review_state: { ...candidate.review_state, state: "ready" } }
+        : candidate;
+      payload.items = (payload.items || []).map(updateCandidate);
+      payload.triage.matters = (payload.triage.matters || []).map((matter) => ({
+        ...matter,
+        candidates: (matter.candidates || []).map(updateCandidate),
+      }));
+      await route.fulfill({ response, json: payload });
+    };
+    await principal.page.route("**/api/member/v1/triage/gate7-visual-disposition-task/approve", dispositionDecisionRoute);
+    await principal.page.route("**/api/member/v1/surfaces/triage?*", dispositionSurfaceRoute);
+    await principal.page.getByRole("button", { name: "Confirm and route" }).click();
+    await principal.page.getByText("Nothing was confirmed or dismissed.", { exact: false }).waitFor();
+    record("Exact reconciliation keeps a non-decision candidate visible without substituting another matter", await principal.page.getByRole("button", { name: /^All candidates/ }).getAttribute("aria-pressed") === "true" && principal.page.url().includes("item=gate7-visual-disposition-task") && await principal.page.locator('[data-triage-item="gate7-visual-disposition-task"]').filter({ hasText: "Attach the insurance note to its existing task" }).count() === 1, JSON.stringify({ url: principal.page.url(), surface: await principal.page.locator("#surface").textContent() }));
+    await principal.page.unroute("**/api/member/v1/triage/gate7-visual-disposition-task/approve", dispositionDecisionRoute);
+    await principal.page.unroute("**/api/member/v1/surfaces/triage?*", dispositionSurfaceRoute);
+    await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
+    await principal.page.locator(".triage-master-button").filter({ hasText: "Reconcile the guarded camp form" }).click();
+    const guardedArm = await jsonRequest(server.baseUrl, "/__gate7/fail-next-triage-materialization", identities.principal, "POST");
+    const guardedRequestIds = [];
+    const guardedDecisionRoute = async (route) => {
+      guardedRequestIds.push(JSON.parse(route.request().postData() || "{}").request_id);
+      await route.continue();
+    };
+    expected409Console += 1;
+    await principal.page.route("**/api/member/v1/triage/gate7-visual-guarded-task/approve", guardedDecisionRoute);
+    await principal.page.getByRole("button", { name: "Confirm and route" }).click();
+    await principal.page.getByText("Confirmed and added to Reminders", { exact: false }).waitFor();
+    const guardedSurface = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/triage", identities.principal);
+    const guardedReceipt = guardedSurface.value.recent_items?.find((item) => item.proposal_id === "gate7-visual-guarded-task");
+    record("A post-confirmation guard refusal resumes with one idempotency key until local materialization is receipted", guardedArm.response.ok && guardedRequestIds.length === 2 && guardedRequestIds[0] === guardedRequestIds[1] && guardedReceipt?.state === "confirmed" && guardedReceipt?.resolution_reason === "confirmed_local" && guardedReceipt?.materialized_event_ids?.length === 1, JSON.stringify({ guardedRequestIds, guardedReceipt }));
+    await principal.page.unroute("**/api/member/v1/triage/gate7-visual-guarded-task/approve", guardedDecisionRoute);
+    await principal.page.goto(`${server.baseUrl}/member/triage?view=ready`);
     await principal.page.locator(".triage-master-button").filter({ hasText: "Verify the summer camp packing list" }).click();
     let ambiguousCommitStatus = 0;
     const ambiguousDecisionRoute = async (route) => {
@@ -853,6 +895,38 @@ async function run() {
     await principalPhone.context.close();
 
     const adult = await newContext(browser, identities.adult, { width: 820, height: 1180 }, "reduce");
+    await adult.page.goto(`${server.baseUrl}/member/today`);
+    await adult.page.getByRole("heading", { name: "Today", level: 1 }).waitFor();
+    const intentArm = await jsonRequest(server.baseUrl, "/__gate7/fail-next-intent-after-capture", identities.adult, "POST");
+    let releaseTodayIntent;
+    let resolveTodayIntentStarted;
+    const todayIntentStarted = new Promise((resolveStarted) => { resolveTodayIntentStarted = resolveStarted; });
+    const todayIntentRelease = new Promise((resolveRelease) => { releaseTodayIntent = resolveRelease; });
+    const todayIntentRequestIds = [];
+    const todayIntentRoute = async (route) => {
+      const body = JSON.parse(route.request().postData() || "{}");
+      todayIntentRequestIds.push(body.client_request_id);
+      if (todayIntentRequestIds.length === 1) {
+        resolveTodayIntentStarted();
+        await todayIntentRelease;
+      }
+      await route.continue();
+    };
+    await adult.page.route("**/api/member/v1/triage/intents", todayIntentRoute);
+    await adult.page.locator("#add-for-review").click();
+    const todayIntentText = "Maybe something about the school folder";
+    await adult.page.getByLabel("Thought to hold").fill(todayIntentText);
+    await adult.page.locator(".add-for-review-form").getByRole("button", { name: "Add for review" }).click();
+    await todayIntentStarted;
+    await adult.page.keyboard.press("Escape");
+    const todayDialogStayedOpen = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
+    expected503Console += 1;
+    releaseTodayIntent();
+    await adult.page.waitForFunction(() => !document.querySelector("#action-dialog")?.open, null, { timeout: 5_000 }).catch(() => {});
+    const todayIntentBanner = await adult.page.locator("#state-banner").textContent();
+    const todayDialogOpenAfterRetry = await adult.page.locator("#action-dialog").evaluate((dialog) => dialog.open);
+    record("Shared Add for review preserves its form outside Triage and retries post-capture failure with one identity", intentArm.response.ok && todayDialogStayedOpen && !todayDialogOpenAfterRetry && todayIntentRequestIds.length === 2 && todayIntentRequestIds[0] === todayIntentRequestIds[1] && (todayIntentBanner.includes("saved in Triage") || todayIntentBanner.startsWith("Saved.")), JSON.stringify({ todayDialogStayedOpen, todayDialogOpenAfterRetry, todayIntentRequestIds, banner: todayIntentBanner }));
+    await adult.page.unroute("**/api/member/v1/triage/intents", todayIntentRoute);
     await adult.page.goto(`${server.baseUrl}/member/triage`);
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
     let releaseFailedIntent;
@@ -1016,7 +1090,7 @@ async function run() {
 
     record("no browser console errors", consoleErrors.length === 0, consoleErrors);
     record("expected unavailable-view 404s handled", observedExpected404Console === 2, observedExpected404Console);
-    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 3 && observedExpected503Console === 1, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
+    record("expected controlled Triage conflicts and ambiguous response handled", observedExpected409Console === 5 && observedExpected503Console === 2, JSON.stringify({ observedExpected409Console, observedExpected503Console }));
     record("no uncaught page errors", pageErrors.length === 0, pageErrors);
     record("no failed browser requests", requestFailures.length === 0, requestFailures);
   } finally {

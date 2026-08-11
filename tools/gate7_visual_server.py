@@ -8,9 +8,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import uvicorn
+from fastapi import HTTPException
 
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.events.envelope import EventEnvelope
+from adminme.lib.governance import GuardedWriteResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +74,45 @@ def build_app():
         deterministic_member_chat_fixture=True,
     )
     app = create_application(settings)
+
+    def install_triage_failure_hooks() -> None:
+        """Install opt-in, one-shot failures inside the production handlers."""
+
+        runtime = app.state.runtime
+        if getattr(app.state, "triage_failure_hooks_installed", False):
+            return
+        original_check = runtime.guarded_write.check
+        original_write = runtime.events.write
+
+        async def checked_write(session, action, payload):
+            if (
+                getattr(app.state, "fail_next_task_materialization", False)
+                and action == "task.created"
+            ):
+                app.state.fail_next_task_materialization = False
+                return GuardedWriteResult(
+                    pass_=False,
+                    layer_failed="governance",
+                    reason="gate7_post_confirmation_fixture",
+                    correlation_id=session.correlation_id,
+                )
+            return await original_check(session, action, payload)
+
+        async def event_write(envelope, **kwargs):
+            if (
+                getattr(app.state, "fail_next_intent_feature_append", False)
+                and envelope.type == "triage.intent.features_extracted"
+            ):
+                app.state.fail_next_intent_feature_append = False
+                raise HTTPException(
+                    503,
+                    "gate7 fixture interrupted intent processing after durable capture",
+                )
+            return await original_write(envelope, **kwargs)
+
+        runtime.guarded_write.check = checked_write
+        runtime.events.write = event_write
+        app.state.triage_failure_hooks_installed = True
 
     @app.middleware("http")
     async def local_fixture_identity(request, call_next):
@@ -395,6 +436,11 @@ def build_app():
             ("gate7-visual-dismiss-task", "Ignore the promotional digest"),
             ("gate7-visual-next-task", "Review the household insurance quote"),
             ("gate7-visual-ambiguous-task", "Verify the summer camp packing list"),
+            ("gate7-visual-guarded-task", "Reconcile the guarded camp form"),
+            (
+                "gate7-visual-disposition-task",
+                "Attach the insurance note to its existing task",
+            ),
             ("gate7-visual-retired-task", "Archive the outdated enrollment reminder"),
         ]
         event_ids: list[str] = []
@@ -433,7 +479,23 @@ def build_app():
             )
         )
         await runtime.wait_for_projection("triage", superseded_id)
-        return {"seeded": 5, "last_event_id": superseded_id}
+        return {"seeded": 7, "last_event_id": superseded_id}
+
+    @app.post("/__gate7/fail-next-triage-materialization")
+    async def fail_next_triage_materialization():
+        """Force one local guard refusal after its domain confirmation append."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_task_materialization = True
+        return {"armed": True}
+
+    @app.post("/__gate7/fail-next-intent-after-capture")
+    async def fail_next_intent_after_capture():
+        """Force one handler failure after exact intent text is durable."""
+
+        install_triage_failure_hooks()
+        app.state.fail_next_intent_feature_append = True
+        return {"armed": True}
 
     @app.post("/__gate7/seed-triage-final-ready")
     async def seed_triage_final_ready():

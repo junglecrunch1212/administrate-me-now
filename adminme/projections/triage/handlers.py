@@ -760,6 +760,24 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
                     envelope["event_id"],
                 ),
             )
+    elif event_type == "member.provider_action.confirmed":
+        proposal_id = payload.get("origin_proposal_id")
+        if proposal_id:
+            conn.execute(
+                """UPDATE triage_items
+                      SET resolution_reason='approved_awaiting_openclaw',
+                          materialization_event_id=?, last_event_id=?
+                    WHERE tenant_id=? AND proposal_id=? AND state='approved'
+                      AND domain_approval_event_id=? AND last_event_id < ?""",
+                (
+                    envelope["event_id"],
+                    envelope["event_id"],
+                    envelope["tenant_id"],
+                    proposal_id,
+                    envelope.get("causation_id"),
+                    envelope["event_id"],
+                ),
+            )
     elif event_type == "external_sync.write_requested":
         proposal_id = payload.get("origin_proposal_id")
         if proposal_id:

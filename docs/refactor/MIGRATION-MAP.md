@@ -3,9 +3,9 @@
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
 cleanup, a post-write refresh-failure safety latch, generation-invalidated
-pagination with full decision-interval exclusion, and presentation copy. No
-event, projection row, schema, adapter,
-pipeline, provider object,
+pagination with full decision-interval exclusion, action-specific settlement,
+all-surface capture serialization, and presentation copy. No source event,
+event schema, adapter, pipeline, provider object,
 credential, runtime, or dependency migrates. Existing
 `eligibility_rule_replaced` supersession events and feedback receipts remain
 immutable; the member surface now labels their different authority correctly
@@ -26,8 +26,14 @@ review state; changed readiness blocks confirmation, and a following decision
 rejection refreshes the exact saved current revision independently of the
 ordinary cursor. Ambiguous decision responses reconcile immutable exact-candidate
 state and fail closed if terminal truth cannot be proven. Native dialog cancel
-cannot discard an in-flight Add-for-review form. Non-continuation banners carry
-their own presentation kind. No durable record is migrated or rewritten.
+cannot discard an in-flight Add-for-review form on any surface; one stable
+client request ID and a server-side per-intent lock make an ambiguous retry
+idempotent. Triage projection v8 replays immutable
+`member.provider_action.confirmed` facts and additively links the pending-action
+receipt to the originating approved candidate. This is a rebuildable read-model
+upgrade only: no durable event, domain approval, provider command, outcome, or
+provider state is migrated or rewritten. Non-continuation banners carry their
+own presentation kind.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE
 REVIEWED CANDIDATE**. Existing incremental cursors, dedupe receipts, immutable

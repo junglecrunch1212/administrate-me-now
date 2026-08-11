@@ -2150,10 +2150,17 @@ callbacks cannot replace feedback or clear the recorded-write refresh-failure
 latch. The enrichment endpoint returns computed review state, changed readiness
 stops before confirmation, and a rejected decision authoritatively refreshes
 the exact saved current revision outside ordinary pagination for immediate
-retry. Ambiguous transport/5xx decision outcomes reconcile that exact
-candidate's immutable terminal receipt or keep every action locked until
-reload; response loss is never presented as definite rejection. The generations
-rotate before interaction reopens.
+retry. Ambiguous transport/5xx and post-confirmation 4xx decision outcomes
+reconcile that exact candidate's action-specific immutable receipt, reuse the
+original request ID for one bounded continuation where needed, or keep every
+action locked until reload; HTTP class and generic resolved state are not
+settlement proof. A non-decision disposition change keeps exact focus in All
+candidates. Shared Add for review now owns an independent operation token on
+every member surface, preserves one client request ID across one ambiguous retry
+under a per-intent server lock, and blocks Escape/Close/Cancel/repeat submit and
+stale callbacks. Triage projection v8 additively links the immutable pending
+OpenClaw/provider-action receipt without changing external-write authority. The
+generations rotate before interaction reopens.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
@@ -2166,12 +2173,14 @@ feedback preserved across a lens change, a dirty confirmation locked before
 enrichment and through decision, a readiness-changing enrichment that cannot
 advance to confirmation, a saved-enrichment/failed-decision/authoritative-
 refresh/current-revision retry with exact off-page identity, a committed
-decision followed by a lost-response exact-receipt reconciliation, an
-Escape-resistant failing Add-for-review write, and provenance-bounded
-lifecycle-receipt copy assertion in production composition. The repaired candidate passes 250
-assertions and 39
-screenshots with zero console/page/request failures. It also passes 49 strict
-acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
+decision followed by a lost-response exact-receipt reconciliation, a real
+post-confirmation guard refusal resumed with one request identity, an exact
+evidence-only transition with no substituted matter, an all-surface
+Escape-resistant post-capture Add-for-review retry with one intent identity,
+and provenance-bounded lifecycle-receipt copy assertion in production
+composition. The repaired candidate passes 253 assertions and 39 screenshots
+with zero console/page/request failures. It also passes 49 strict acceptance
+gates, 1,793 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,
 tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
 tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.

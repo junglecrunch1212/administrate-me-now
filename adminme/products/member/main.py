@@ -2287,10 +2287,32 @@ async def submit_triage_intent(
 ) -> dict[str, Any]:
     """Durably hold exact member text before deterministic interpretation."""
 
+    runtime = _runtime(request)
+    lock_key = f"{session.tenant_id}:{session.auth_member_id}:{body.client_request_id}"
+    lock = runtime.triage_intent_command_locks.setdefault(lock_key, asyncio.Lock())
+    runtime.triage_intent_command_lock_users[lock_key] = (
+        runtime.triage_intent_command_lock_users.get(lock_key, 0) + 1
+    )
+    try:
+        async with lock:
+            return await _submit_triage_intent_locked(body, session, runtime)
+    finally:
+        remaining = runtime.triage_intent_command_lock_users[lock_key] - 1
+        if remaining:
+            runtime.triage_intent_command_lock_users[lock_key] = remaining
+        else:
+            runtime.triage_intent_command_lock_users.pop(lock_key, None)
+            runtime.triage_intent_command_locks.pop(lock_key, None)
+
+
+async def _submit_triage_intent_locked(
+    body: TriageIntentRequest,
+    session: Session,
+    runtime: Any,
+) -> dict[str, Any]:
     require_principal(session)
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(403, "Add for review is unavailable in view-as mode")
-    runtime = _runtime(request)
     if runtime.events is None or runtime.event_log is None:
         raise HTTPException(503, "Triage capture is unavailable")
 
@@ -3001,6 +3023,7 @@ async def _approve_triage_item_locked(
             causation_id=confirmation_event_id,
             origin_proposal_id=proposal_id,
         )
+        await runtime.wait_for_projection("triage", pending_event_id)
         return {
             "event_id": confirmation_event_id,
             "confirmation_event_id": confirmation_event_id,

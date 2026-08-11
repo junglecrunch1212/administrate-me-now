@@ -264,6 +264,55 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
     assert state == "dismissed"
 
 
+def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
+    projection, conn = _projection()
+    projection.apply(_event(1), conn)
+    confirmation = {
+        **_event(2),
+        "event_id": "event-9998",
+        "type": "triage.item.confirmed",
+        "schema_version": 2,
+        "payload": {
+            "proposal_id": "proposal-0001",
+            "confirmed_at": "2030-01-02T00:00:00Z",
+            "confirmed_by_member_id": MEMBER,
+            "expected_last_event_id": "event-0001",
+            "candidate_fingerprint": "fixture-fingerprint",
+        },
+    }
+    projection.apply(confirmation, conn)
+    pending = {
+        **_event(3),
+        "event_id": "event-9999",
+        "type": "member.provider_action.confirmed",
+        "causation_id": "event-9998",
+        "payload": {
+            "action_id": "fixture-action",
+            "member_id": MEMBER,
+            "provider": "apple_calendar",
+            "provider_account_id": MEMBER,
+            "operation": "create_event",
+            "command_payload": {},
+            "request_fingerprint": "fixture-fingerprint",
+            "confirmed_at": "2030-01-02T00:01:00Z",
+            "origin_proposal_id": "proposal-0001",
+        },
+    }
+    projection.apply(pending, conn)
+    receipt = conn.execute(
+        """SELECT state, resolution_reason, domain_approval_event_id,
+                  materialization_event_id, last_event_id
+             FROM triage_items WHERE proposal_id='proposal-0001'"""
+    ).fetchone()
+    assert tuple(receipt) == (
+        "approved",
+        "approved_awaiting_openclaw",
+        "event-9998",
+        "event-9999",
+        "event-9999",
+    )
+
+
 def test_continuous_long_chat_is_bounded_into_temporal_matters() -> None:
     projection, conn = _projection()
     for index in range(101):
