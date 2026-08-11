@@ -148,7 +148,14 @@ function moneyMinor(value, { compact = false } = {}) {
   }).format(amount);
 }
 
-async function reloadActiveSurface({ triageOperationToken = null, triageFocus = true } = {}) {
+function triageReviewView(item) {
+  if (item?.review_state?.state === "needs_interpretation") return "needs_interpretation";
+  if (item?.review_state?.state === "needs_details") return "needs_details";
+  if (item?.review_state?.state === "ready") return "ready";
+  return "all_candidates";
+}
+
+async function reloadActiveSurface({ triageOperationToken = null, triageFocus = true, triageReconcileExact = false } = {}) {
   const active = currentSurface();
   if (active.startsWith("quest:")) return;
   let path = `/api/member/v1/surfaces/${encodeURIComponent(active)}`;
@@ -173,8 +180,16 @@ async function reloadActiveSurface({ triageOperationToken = null, triageFocus = 
   if (active === "triage") {
     if (triageOperationToken != null && !triageOperationIsCurrent(triageOperationToken)) return null;
     if (state.triageRefreshRequired) return null;
+    if (triageReconcileExact && state.triageSelected) {
+      const exact = [...(data.items || []), ...(data.recent_items || [])].find((candidate) => candidate.proposal_id === state.triageSelected);
+      if (data.focus?.state === "resolved") state.triageView = "recent";
+      else if (data.focus?.state === "pending" && exact && !triageCandidateMatches(exact, state.triageView)) state.triageView = triageReviewView(exact);
+      state.triageMatter = data.focus?.state === "not_found" ? null : data.focus?.matter_id || state.triageMatter;
+      state.triageFocusPending = data.focus?.state !== "not_found";
+      replaceQuery({ view: state.triageView, item: state.triageSelected, matter: state.triageMatter });
+    }
   }
-  renderSurface(data);
+  renderSurface(data, { preserveTriageView: triageReconcileExact });
   return data;
 }
 
@@ -247,6 +262,28 @@ function latchTriageRefreshFailure(message) {
   applyTriageInteractionLock();
 }
 
+function triageDecisionDefinitelyRejected(error) {
+  return Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && error.status !== 408;
+}
+
+async function reconcileAmbiguousTriageDecision(item, action, token, error, banner) {
+  try {
+    const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageReconcileExact: true });
+    if (!refreshed || !triageOperationIsCurrent(token)) return;
+    const exact = [...(refreshed.items || []), ...(refreshed.recent_items || [])].find((candidate) => candidate.proposal_id === item.proposal_id);
+    if (refreshed.focus?.requested_candidate_id === item.proposal_id && refreshed.focus.state === "resolved" && exact) {
+      const operation = action === "approve" ? "confirmation" : "dismissal";
+      state.triageBannerKind = "reconciliation";
+      banner.hidden = false;
+      banner.textContent = `The ${operation} response was interrupted, but Triage reconciled this exact candidate as ${memberStatusLabel(exact.state).toLowerCase()}. Review this receipt before taking another action.`;
+      return;
+    }
+    latchTriageRefreshFailure(`The decision response was interrupted and Triage could not prove this exact candidate's terminal state: ${error.message} Reload this page before continuing.`);
+  } catch (refreshError) {
+    latchTriageRefreshFailure(`The decision response was interrupted and exact reconciliation failed: ${refreshError.message} Reload this page before continuing.`);
+  }
+}
+
 async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null, refreshOnRejectedDecision = false } = {}) {
   const token = operationToken ?? beginTriageOperation();
   if (token == null || !triageOperationIsCurrent(token)) return;
@@ -289,10 +326,13 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
     if (decisionRecorded) {
       latchTriageRefreshFailure(`The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`);
     }
+    else if (!triageDecisionDefinitelyRejected(error)) {
+      await reconcileAmbiguousTriageDecision(item, action, token, error, banner);
+    }
     else if (refreshOnRejectedDecision) {
       const rejection = `${error.message} Nothing was confirmed or dismissed.`;
       try {
-        const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageFocus: false });
+        const refreshed = await reloadActiveSurface({ triageOperationToken: token, triageReconcileExact: true });
         if (!refreshed || !triageOperationIsCurrent(token)) return;
         state.triageBannerKind = "error";
         banner.hidden = false;
@@ -725,7 +765,7 @@ function triageDetail(item, data, readOnly = false) {
         state.triageView = saved.review_state?.state === "needs_interpretation" ? "needs_interpretation" : "needs_details";
         replaceQuery({ view: state.triageView });
         try {
-          const refreshed = await reloadActiveSurface({ triageOperationToken: operationToken, triageFocus: false });
+          const refreshed = await reloadActiveSurface({ triageOperationToken: operationToken, triageReconcileExact: true });
           if (refreshed && triageOperationIsCurrent(operationToken)) {
             setBanner("Details saved. This candidate needs more review before it can be confirmed.");
           }
@@ -859,7 +899,7 @@ async function revokeTriageRule(rule, button) {
   } finally { finishTriageOperation(token); }
 }
 
-function triageSurface(data) {
+function triageSurface(data, { preserveView = false } = {}) {
   const fragment = document.createDocumentFragment();
   const intro = document.createElement("section"); intro.className = "hero-card";
   intro.append(text("p", "HUMAN GATE", "eyebrow"), text("h2", "One decision at a time.", "action-title"), text("p", "Derived candidates wait here until you verify their meaning and destination. Raw provider observations never enter this queue."));
@@ -889,8 +929,8 @@ function triageSurface(data) {
   }
   const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
   if (!views.has(state.triageView)) state.triageView = "ready";
-  if (state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
-  if (state.triageSelected && data.focus?.state === "resolved") state.triageView = "recent";
+  if (!preserveView && state.triageSelected && data.focus?.state === "pending") state.triageView = "all_candidates";
+  if (!preserveView && state.triageSelected && data.focus?.state === "resolved") state.triageView = "recent";
   const controls = document.createElement("section"); controls.className = "card comms-controls";
   const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
   for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring exceptions"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
@@ -3467,7 +3507,7 @@ function freshnessStrip(data) {
   return strip;
 }
 
-function renderSurface(data) {
+function renderSurface(data, { preserveTriageView = false } = {}) {
   state.surface = data;
   document.body.dataset.surface = data.surface;
   const root = $("#surface");
@@ -3480,7 +3520,7 @@ function renderSurface(data) {
     state.carouselIndex = 0;
     renderToday(data);
   } else if (data.surface === "triage") {
-    root.append(freshnessStrip(data), triageSurface(data));
+    root.append(freshnessStrip(data), triageSurface(data, { preserveView: preserveTriageView }));
     applyTriageInteractionLock();
   } else if (data.surface === "comms") {
     renderComms(data);
@@ -3630,6 +3670,9 @@ async function initialize() {
   $("#chat-stop").addEventListener("click", async () => { state.controller?.abort(); await fetch("/api/member/v1/chat/abort", { method: "POST", credentials: "same-origin" }); });
   $("[data-close-dialog]").addEventListener("click", () => $("#evidence-dialog").close());
   $("[data-close-action]").addEventListener("click", closeActionDialog);
+  $("#action-dialog").addEventListener("cancel", (event) => {
+    if (state.triageOperationPending && event.currentTarget.querySelector(".add-for-review-form")) event.preventDefault();
+  });
   $("#add-for-review").addEventListener("click", openAddForReview);
   try {
     state.bootstrap = await api("/api/member/v1/bootstrap"); renderNavigation(combinedNavigation(state.bootstrap)); configureChat(state.bootstrap.chat);

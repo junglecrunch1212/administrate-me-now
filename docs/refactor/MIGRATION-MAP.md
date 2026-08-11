@@ -23,7 +23,10 @@ feedback or a recorded-write refresh-failure latch. Invalidated pagination is
 normalized before its transient state can be mistaken for semantic disabled
 state. The additive enrichment response now returns deterministic computed
 review state; changed readiness blocks confirmation, and a following decision
-rejection refreshes the saved current revision. Non-continuation banners carry
+rejection refreshes the exact saved current revision independently of the
+ordinary cursor. Ambiguous decision responses reconcile immutable exact-candidate
+state and fail closed if terminal truth cannot be proven. Native dialog cancel
+cannot discard an in-flight Add-for-review form. Non-continuation banners carry
 their own presentation kind. No durable record is migrated or rewritten.
 
 CO-013 update (2026-08-10): Gmail source acquisition is **HARDENED IN THE

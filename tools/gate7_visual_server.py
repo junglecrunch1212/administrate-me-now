@@ -394,6 +394,7 @@ def build_app():
         proposals = [
             ("gate7-visual-dismiss-task", "Ignore the promotional digest"),
             ("gate7-visual-next-task", "Review the household insurance quote"),
+            ("gate7-visual-ambiguous-task", "Verify the summer camp packing list"),
             ("gate7-visual-retired-task", "Archive the outdated enrollment reminder"),
         ]
         event_ids: list[str] = []
@@ -432,7 +433,7 @@ def build_app():
             )
         )
         await runtime.wait_for_projection("triage", superseded_id)
-        return {"seeded": 4, "last_event_id": superseded_id}
+        return {"seeded": 5, "last_event_id": superseded_id}
 
     @app.post("/__gate7/seed-triage-final-ready")
     async def seed_triage_final_ready():

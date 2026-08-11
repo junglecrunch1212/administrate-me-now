@@ -29,6 +29,8 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
   surface controls, the shared Add-for-review button, and a retained
   Add-for-review form through active/different-lens clicks and programmatic
   submission until successful reload;
+- a pending Add-for-review request resisting native Escape and retaining its
+  exact input after a definite pre-write failure;
 - a load-more request begun and held before confirmation, then released only
   after the authoritative refresh, with browser-side response consumption
   observed before asserting that its stale result cannot overwrite the queue;
@@ -39,10 +41,14 @@ Gate 7 contains generated tenant-neutral fixtures and assertions for:
 - invalidated load-more state normalized before a forced no-render enrichment
   failure, with the late response unable to alter the later view;
 - an enrichment response changing review state to Needs details and preventing
-  any automatic decision request;
+  any automatic decision request while exact selection is preserved outside
+  the ordinary first-page response;
 - successful enrichment followed by a forced decision conflict, proving the
-  saved input and revision are authoritatively refreshed and an immediate retry
-  succeeds;
+  exact saved input and revision are authoritatively refreshed independently
+  of the ordinary cursor and an immediate retry succeeds;
+- a committed confirmation whose response is replaced by a 503, proving the
+  browser reconciles the exact terminal receipt instead of claiming rejection
+  or substituting another matter;
 - explicit navigation to Recent;
 - exact selection of an eligibility-retired historical candidate;
 - provenance-bounded lifecycle-receipt language that cannot be mistaken for a
@@ -57,7 +63,7 @@ Focused Triage/projection/pipeline/production-composition tests
 48 passed
 
 Gate 7 rendered production composition
-246 assertions; 39 screenshots; 0 console errors; 0 page errors;
+250 assertions; 39 screenshots; 0 console errors; 0 page errors;
 0 request failures
 
 Full release-candidate suite

@@ -48,8 +48,8 @@ The defect was presentation state and authority legibility.
   refresh. Every Triage control—including the shared-shell **Add for review**
   button and any retained Add-for-review dialog—is visibly disabled; lens,
   matter, enrichment, intent, learning-policy, decision, and load-more handlers
-  reject programmatic work; and any operation-time render inherits the same
-  lock. Invalidating an already-loading page first restores the load-more
+  reject programmatic work; native Escape cannot dismiss a pending intent form;
+  and any operation-time render inherits the same lock. Invalidating an already-loading page first restores the load-more
   control's semantic state, so a no-render failure cannot strand transient
   “Loading…” state. No earlier Triage callback may overwrite feedback or
   refresh. The generations rotate again before ordinary interaction reopens.
@@ -60,6 +60,13 @@ The defect was presentation state and authority legibility.
   appropriate review lens and does not attempt confirmation. A recorded-write
   refresh failure can be cleared only by a new page load, never by an older
   callback or shared-shell intent.
+- Reconciliation always requests the exact candidate independently of the
+  ordinary cursor, retains that identity in its current deterministic review
+  lens, and never substitutes a first-page matter. A definite client-visible
+  rejection may say no decision was recorded. A transport interruption or 5xx
+  after a decision request is ambiguous: Triage resolves the exact candidate's
+  current receipt, reports a proven terminal state, or fails closed with every
+  action locked until reload. It never claims rejection from transport alone.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -79,6 +86,8 @@ The defect was presentation state and authority legibility.
 | Serialize the full Triage save/intent/learning/decision interval and rotate pagination before reopening | HARDEN | Ephemeral browser concurrency only; no queue, event, projection, or provider authority changes. |
 | Return and honor computed review state after enrichment | HARDEN | Additive member API response metadata derived from the current projection; no new truth, model decision, or automatic confirmation. |
 | Preserve successful enrichment across a following decision failure | HARDEN | The current immutable enrichment event/revision remains authoritative; no failed decision is invented or retried automatically. |
+| Reconcile the exact candidate after rejection or an ambiguous response | HARDEN | Current projection truth and immutable receipts decide what the browser may claim; ordinary pagination cannot substitute another matter. |
+| Prevent native dialog cancellation during an Add-for-review write | HARDEN | Ephemeral input remains visible until a definite pre-write failure or authoritative recorded result is known. |
 | Type non-continuation banners before display | HARDEN | Presentation provenance only; lens changes cannot erase a real progress, success, or error state. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
@@ -100,7 +109,9 @@ a dirty confirmation held before enrichment and through decision; lens, form,
 intent, and pagination attempts proving all new work is handler-rejected; a
 readiness-changing enrichment proving no decision request is made; and
 successful enrichment followed by a failed decision, authoritative refresh,
-and immediate current-revision retry,
+and immediate current-revision retry; exact off-page inclusion during both
+reconciliation paths; commit followed by an interrupted response and exact
+terminal-receipt recovery; native Escape during a failing Add-for-review write,
 provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

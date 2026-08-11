@@ -12,10 +12,15 @@ to another Triage lens clears the prior lens-relative continuation message;
 reselecting the active lens does not, and non-continuation feedback is never
 misclassified and cleared. A recorded-decision refresh failure keeps its
 warning, stale surface controls, shared Add-for-review control, and retained
-intent form locked until a successful reload. Invalidated loading state is
+intent form locked until a successful reload; native Escape cannot discard a
+pending intent form. Invalidated loading state is
 normalized before semantic locking. Enrichment returns computed readiness;
 changed readiness prevents confirmation, while a rejected decision triggers an
-authoritative refresh of the saved current revision.
+authoritative exact-candidate refresh of the saved current revision independent
+of ordinary pagination. Ambiguous transport or 5xx decision outcomes reconcile
+the exact current receipt and either report proven terminal truth or remain
+locked until reload; they never claim that nothing was recorded merely because
+the response was lost.
 
 CO-015 live evidence (2026-08-11): PR #331 exact head
 `ca1a29033e48d5d6d32a0cd77de3fc0c1266778f` passed independent full-diff

@@ -2142,14 +2142,18 @@ enrichment and held through decision and authoritative refresh. It disables
 every Triage control—including the shared-shell Add-for-review button and
 retained intent form—survives replacement renders, and makes lens, matter,
 intent, enrichment, learning-policy, decision, and pagination handlers reject
-programmatic work. Invalidated pagination is normalized before disabled-state
+programmatic work, and native Escape cannot discard a pending Add-for-review
+form. Invalidated pagination is normalized before disabled-state
 capture, so a no-render failure cannot strand its Loading state. Typed
 non-continuation feedback cannot be erased by a later lens change. Older
 callbacks cannot replace feedback or clear the recorded-write refresh-failure
 latch. The enrichment endpoint returns computed review state, changed readiness
 stops before confirmation, and a rejected decision authoritatively refreshes
-the saved current revision for immediate retry. The generations rotate before
-interaction reopens.
+the exact saved current revision outside ordinary pagination for immediate
+retry. Ambiguous transport/5xx decision outcomes reconcile that exact
+candidate's immutable terminal receipt or keep every action locked until
+reload; response loss is never presented as definite rejection. The generations
+rotate before interaction reopens.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
@@ -2161,8 +2165,10 @@ invalidated pagination request followed by a no-render failure, typed error
 feedback preserved across a lens change, a dirty confirmation locked before
 enrichment and through decision, a readiness-changing enrichment that cannot
 advance to confirmation, a saved-enrichment/failed-decision/authoritative-
-refresh/current-revision retry, and provenance-bounded lifecycle-receipt copy
-assertion in production composition. The repaired candidate passes 246
+refresh/current-revision retry with exact off-page identity, a committed
+decision followed by a lost-response exact-receipt reconciliation, an
+Escape-resistant failing Add-for-review write, and provenance-bounded
+lifecycle-receipt copy assertion in production composition. The repaired candidate passes 250
 assertions and 39
 screenshots with zero console/page/request failures. It also passes 49 strict
 acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
