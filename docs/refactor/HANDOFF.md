@@ -17,6 +17,38 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-10 G-001 controlled-release governance bootstrap
+
+The household owner approved G-001 to remove the deadlock between the
+repository's deny-by-default merge rule and the requirement that Phase B begin
+only after review and merge. This is a governance-only change: no application,
+bootstrap, bridge, pack, plugin, workflow, configuration, dependency, lock,
+test, fixture, runtime, credential, permission, provider, or household-data
+behavior changes.
+
+ADR-0009 preserves “do not merge” as the default and defines one explicit
+capability: a current-task owner instruction must name one PR and exact
+40-character head. A non-author human or separate non-implementing Codex task
+must review that same head. Current `origin/main` must be contained, every
+required final-head gate must pass, all findings must be resolved, and only a
+GitHub merge commit may change `main`. Base drift requires a non-rewriting
+merge into the candidate, complete rereview and retest, and a new exact-head
+authorization.
+
+Phase B remains post-merge only. It accepts the immutable merged SHA through
+the guarded updater after a verified encrypted backup, retains observation,
+rolls back on any new degradation, and requires settlement, full Doctor,
+privacy/isolation, authenticated read-only browser acceptance, and zero
+unintended provider effects. Runtime/dependency migration, Keychain or
+permission change, provider enrollment/write activation, unrelated repair,
+and installed-release editing remain outside the authority. One hosted-green
+governing-docs-only follow-up may record release evidence.
+
+This governance PR cannot authorize its own merge and does not authorize any
+existing product PR. It becomes effective only when the owner manually merges
+it to `main`. The exact product PR/head must then receive a fresh controlled-
+release instruction in a newly created task that loads the merged rule.
+
 ## 2026-08-10 CO-013 bounded Gmail history activation
 
 Live investigation after CO-012 found the missing-source cause: Gmail's first
