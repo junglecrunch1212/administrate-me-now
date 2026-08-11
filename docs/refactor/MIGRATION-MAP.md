@@ -518,6 +518,18 @@ Gate 1 itself changed no production file. Gate 2 has now executed the runtime-sp
 | Assurance freshness | Any running refresh was labeled stale; the first correction still age-rescanned a settled immutable revision every 30 seconds. | Refresh activity is independent. An exact current revision with zero pending obligations remains settled without a wall-clock rescan. Revision changes refresh immediately; pending obligations recheck every 30 seconds; refresh exception fails immediately and an unsettled proof fails stale after five minutes. | SUPERSEDE |
 | Doctor settlement | Required healthy, exact terminal counts, zero pending/missing/failed, and a fresh proof. | Preserved and tightened: the explicit bounded-watermark proof must also match the current event/checkpoint revision; its age and refresh activity are separately visible. | PRESERVE/HARDEN |
 
+## G-001 release-governance migration delta
+
+| Release stage | Before G-001 | Controlled result | Classification |
+|---|---|---|---|
+| Default authority | “Do not merge” correctly prevented silent activation but left no bounded path from a green reviewed PR to Phase B; older blanket chat overrides were not bound to a release object. | Merge and Phase B remain denied unless one current-task owner instruction names one PR and exact 40-character head under the merged G-001 policy. The G-001 PR cannot authorize itself. | PRESERVE deny-by-default; SUPERSEDE blanket overrides |
+| Review identity | Implementation review, hosted checks, and owner intent could exist without one auditable independent-review receipt. | A non-author human approval or separate user-visible, non-implementing Codex task comment binds review scope, commands, findings, conclusion, and task/thread to the exact head; an implementation subagent is insufficient. Any head change invalidates it. | HARDEN |
+| Base drift | A PR could remain green while `main` advanced, leaving ambiguity about which combined tree was authorized. | Current `origin/main` must be contained. Drift is merged without rebase/force/history rewrite; the new head receives complete review, gates, and new exact-head owner authorization. | HARDEN |
+| Merge | The implementation task had no permitted merge path. | Only a GitHub merge commit for the named PR at the authorized head may change `main`; direct push and protection bypass remain forbidden. | MODERNIZE |
+| Phase B | Reviewed merge, backup, guarded update, Doctor, and live evidence were required operationally but were not one explicit authority transaction. | The merged immutable SHA enters observation-only guarded activation after baseline and verified encrypted backup, with automatic rollback, bounded settlement, full Doctor, isolation/privacy, authenticated read-only browser proof, and zero unintended provider effects. | PRESERVE/HARDEN |
+| Adjacent changes | A pressure to finish could invite opportunistic runtime, dependency, permission, provider, or installed-release repair. | Those changes require separate named approval; any mismatch stops or rolls back without improvisation. | HARDEN |
+| Closure | Live evidence was commonly recorded by a later PR without explicit continuation of the release authority. | One exact governing-docs-only, hosted-green evidence PR may close the transaction; executable/configuration changes require a new ordinary authorization. | MODERNIZE |
+
 ## Gate 2 migration delta
 
 | Subsystem | Gate 2 result | Remaining boundary |
