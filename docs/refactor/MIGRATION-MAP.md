@@ -13,7 +13,8 @@ whole-log replay to escape an occupied prior-generation idempotency key.
 Delivery rechecks observation and tenant identity, and distinct requests for
 one failed source are single-flight through the terminal append. Request-bound
 base execution may retry the predecessor's old causal failure once while its
-own durable result remains replay-safe. Fresh-process derived IDs are ordered
+own exact durable result remains replay-safe even after a later sibling attempt
+fails. Fresh-process derived IDs are ordered
 after the command rather than copied from the retained source timestamp.
 
 The guarded updater contains one explicit, expiring baseline exception for the

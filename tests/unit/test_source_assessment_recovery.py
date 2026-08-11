@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
 from adminme.lib.session import build_internal_session
-from adminme.lib.skill_runner import OpenClawUnreachable, SkillResult
+from adminme.lib.skill_runner import OpenClawUnreachable, SkillResult, run_skill
+from adminme.lib.skill_runner.wrapper import _Runtime
 from adminme.pipelines.base import PipelineContext
 from adminme.pipelines.pack_loader import invalidate_cache, load_pipeline_pack
 from adminme.source_assessment_recovery import (
@@ -345,6 +347,128 @@ async def test_duplicate_and_restart_during_recovery_reuse_one_invocation(
             and event["schema_version"] == 4
         ]
         assert len(replacements) == 1
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_after_provider_call", [1, 2])
+async def test_mid_retry_restart_never_repeats_a_spent_invocation_identity(
+    tmp_path: Path,
+    crash_after_provider_call: int,
+) -> None:
+    """A crash after base/recovery-1 cannot replay either spent identity."""
+
+    class _FixtureCrash(BaseException):
+        pass
+
+    log = EventLog(tmp_path / "mid-retry-restart.db", b"x" * 32)
+    try:
+        source_id = await log.append(_source())
+        failed_id = await _failed_assessment(log, source_id)
+        request = await _append_request(
+            log, source_id, failed_id, "request-mid-retry-1"
+        )
+        provider_requests: list[httpx.Request] = []
+
+        def unavailable(request_value: httpx.Request) -> httpx.Response:
+            provider_requests.append(request_value)
+            return httpx.Response(503, text="fixture gateway unavailable")
+
+        transport = httpx.MockTransport(unavailable)
+
+        def client_factory() -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=transport, timeout=10.0)
+
+        raw_events_dir = tmp_path / "raw-events"
+        raw_events_dir.mkdir()
+        runtime = _Runtime(
+            event_sink=_Sink(log),  # type: ignore[arg-type]
+            event_log=log,
+            raw_events_dir=raw_events_dir,
+            httpx_client_factory=client_factory,
+        )
+
+        async def crash_after_recovery_one(
+            skill_id: str, inputs: dict[str, Any], skill_ctx: Any
+        ) -> SkillResult:
+            try:
+                return await run_skill(
+                    skill_id,
+                    inputs,
+                    skill_ctx,
+                    _runtime=runtime,
+                )
+            except OpenClawUnreachable:
+                if len(provider_requests) == crash_after_provider_call:
+                    raise _FixtureCrash
+                raise
+
+        async def durable_unavailable(
+            skill_id: str, inputs: dict[str, Any], skill_ctx: Any
+        ) -> SkillResult:
+            return await run_skill(
+                skill_id,
+                inputs,
+                skill_ctx,
+                _runtime=runtime,
+            )
+
+        invalidate_cache()
+        first_pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+        globals_map = (
+            first_pipeline._run_skill_with_transient_recovery.__func__.__globals__
+        )
+        prior_delays = globals_map["_TRANSIENT_RECOVERY_DELAYS_SECONDS"]
+        globals_map["_TRANSIENT_RECOVERY_DELAYS_SECONDS"] = (0.0, 0.0)
+        try:
+            with pytest.raises(_FixtureCrash):
+                await first_pipeline.handle(
+                    request,
+                    _context(
+                        log,
+                        _Sink(log),
+                        crash_after_recovery_one,
+                        request["event_id"],
+                    ),
+                )
+            assert len(provider_requests) == crash_after_provider_call
+
+            invalidate_cache()
+            restarted_pipeline: Any = load_pipeline_pack(PACK_ROOT).instance
+            await restarted_pipeline.handle(
+                request,
+                _context(
+                    log,
+                    _Sink(log),
+                    durable_unavailable,
+                    request["event_id"],
+                ),
+            )
+            await restarted_pipeline.handle(
+                request,
+                _context(
+                    log,
+                    _Sink(log),
+                    durable_unavailable,
+                    request["event_id"],
+                ),
+            )
+        finally:
+            globals_map["_TRANSIENT_RECOVERY_DELAYS_SECONDS"] = prior_delays
+
+        assert len(provider_requests) == 3
+        failures = [
+            event async for event in log.read_since(None, types=["skill.call.failed"])
+        ]
+        assert len(failures) == 3
+        failure_keys = [str(event["idempotency_key"]) for event in failures]
+        assert sum(":recovery-1:" in key for key in failure_keys) == 1
+        assert sum(":recovery-2:" in key for key in failure_keys) == 1
+        latest = await latest_source_assessment(log, source_id)
+        assert latest is not None
+        assert latest["schema_version"] == 4
+        assert latest["payload"]["assessment_outcome"] == "failed"
     finally:
         await log.close()
 

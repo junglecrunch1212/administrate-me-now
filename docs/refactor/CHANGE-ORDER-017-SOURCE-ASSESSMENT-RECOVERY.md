@@ -46,7 +46,10 @@ events. The failed assessments remain valid historical evidence.
   pinned OpenClaw `llm-task` seam, with no provider SDK or second model router.
   The request-bound base identity is explicitly allowed to bypass the selected
   predecessor's old causal failure once; its own durable terminal result still
-  prevents repetition. At most two requests execute concurrently.
+  prevents repetition. Base, recovery-1, and recovery-2 each inspect their own
+  exact terminal identity even when a later sibling attempt is the newest
+  source-causal event, so a mid-retry restart cannot spend an attempt twice. At
+  most two requests execute concurrently.
 - A successful or newly failed result is appended as
   `triage.intent.features_extracted@v4`, linked to the superseded failed
   assessment and recovery request. The old failure is never updated or deleted.

@@ -634,16 +634,14 @@ async def run_skill(
                 duration_ms=int(payload["duration_ms"]),
             )
         related = await runtime.event_log.get_by_causation(ctx.triggering_event_id)
-        prior_terminal = next(
-            (
-                event
-                for event in reversed(related)
-                if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
-                and event["payload"].get("skill_name") == pack_id_str
-                and event["payload"].get("skill_version") == pack_version
-            ),
-            None,
-        )
+        related_terminals = [
+            event
+            for event in related
+            if event["type"] in {"skill.call.failed", "skill.call.suppressed"}
+            and event["payload"].get("skill_name") == pack_id_str
+            and event["payload"].get("skill_version") == pack_version
+        ]
+        prior_terminal = related_terminals[-1] if related_terminals else None
         if prior_terminal is not None:
             payload = prior_terminal["payload"]
             if prior_terminal["type"] == "skill.call.suppressed":
@@ -659,13 +657,29 @@ async def run_skill(
                     cost_usd=None,
                     duration_ms=0,
                 )
-            retry_failure_prefix = (
+            exact_failure_prefix = (
                 f"skill:failed:{invocation_identity}:{pack_id_str}:{pack_version}:"
             )
-            already_retried_this_generation = str(
-                prior_terminal.get("idempotency_key") or ""
-            ).startswith(retry_failure_prefix)
-            if ctx.retry_prior_failure and not already_retried_this_generation:
+            exact_invocation_failure = next(
+                (
+                    event
+                    for event in reversed(related_terminals)
+                    if event["type"] == "skill.call.failed"
+                    and str(event.get("idempotency_key") or "").startswith(
+                        exact_failure_prefix
+                    )
+                ),
+                None,
+            )
+            if exact_invocation_failure is not None:
+                # A later sibling attempt can be the newest causal terminal.
+                # The current identity is nevertheless already spent and must
+                # remain terminal across a crash/restart.
+                prior_terminal = exact_invocation_failure
+            elif ctx.retry_prior_failure:
+                # No result exists for this exact reviewed identity. It may
+                # bypass one older causal failure, then its own failure key
+                # will make every replay terminal.
                 prior_terminal = None
         if prior_terminal is not None:
             payload = prior_terminal["payload"]

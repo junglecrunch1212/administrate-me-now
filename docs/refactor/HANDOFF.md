@@ -42,7 +42,9 @@ Delivery rechecks observation, tenant, and current-predecessor truth. Distinct
 requests for one source are single-flight through terminal append; derived
 events are ordered after their command on cold reopen; and the request-bound
 base call may bypass the predecessor's old causal skill failure once without
-repeating its own result. Duplicate delivery and restart reuse durable
+repeating its own result. Base, recovery-1, and recovery-2 each find their exact
+durable terminal across a mid-retry restart even when a sibling failed later.
+Duplicate delivery and restart reuse durable
 identities, refusal is terminal for its exact command, and a persistent failure
 remains explicit.
 

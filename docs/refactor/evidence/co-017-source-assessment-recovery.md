@@ -45,7 +45,7 @@ recovery is claimed by this file.
 
 | Command or slice | Result |
 |---|---|
-| `PYTHONPATH=bridge poetry run pytest -q tests/unit/test_source_assessment_recovery.py` | 7 passed |
+| `PYTHONPATH=bridge poetry run pytest -q tests/unit/test_source_assessment_recovery.py` | 9 passed |
 | Production-composition recovery endpoint integration slice | 1 passed |
 | `PYTHONPATH=bridge poetry run pytest -q tests/unit/bootstrap/test_source_assessment_repair.py` | 3 passed, including rollback-checkpoint advance |
 | Existing noise-filtering, source-assurance, and updater regression slices | 91 passed |
@@ -57,9 +57,9 @@ recovery is claimed by this file.
 | Gate | Result |
 |---|---|
 | `poetry sync --with dev` | Current project installed; no dependency change |
-| `PYTHONPATH=bridge poetry run pytest -q` | 1,645 passed; one upstream Starlette deprecation warning |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,647 passed; one upstream Starlette deprecation warning |
 | `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q` | 55 passed; one upstream Starlette deprecation warning |
-| `bash scripts/acceptance/release-candidate.sh` | PASS: 1,812 root/package tests, 60 bridge tests, Ruff format/lint, mypy, Pyright, both dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw contract/test/build/audit, shellcheck, syntax, and diff checks |
+| `bash scripts/acceptance/release-candidate.sh` | PASS: 1,814 root/package tests, 60 bridge tests, Ruff format/lint, mypy, Pyright, both dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw contract/test/build/audit, shellcheck, syntax, and diff checks |
 | `poetry run ruff check adminme bridge/adminme_bridge` | Passed |
 | `poetry run mypy adminme bridge/adminme_bridge` | 219 source files passed |
 | `bash scripts/verify_invariants.sh` | Passed |
@@ -82,6 +82,16 @@ literal type. Independent preflight also reported
 catalog was regenerated and its checked mode passed. Neither interrupted run
 is counted as the final aggregate result above; the complete suite was rerun
 from the beginning after both repairs.
+
+Independent review then withheld approval from replacement head
+`bd93ef2833a3a3a91bccc0797d83fc9ee0abe5d8`: after base and recovery-1 had
+failed, the wrapper consulted only the newest source-causal terminal and could
+spend the older base identity again after a crash. The wrapper now selects an
+exact invocation failure before allowing predecessor-failure bypass. A
+production-path test uses the real wrapper and crashes separately after the
+base and recovery-1 failures; each restart completes with exactly three total
+provider requests and one failure event per attempt identity. The invalid head
+is not the candidate described by the final gate table.
 
 The first direct macOS rehearsal resolved its hard-coded `python3` to a host
 interpreter without the candidate environment and failed before lab mutation
