@@ -2133,14 +2133,19 @@ through every lens click until successful reload. Recent identifies itself as
 read-only audit history, and eligibility-rule supersession copy states only
 that context or eligibility changed rather than claiming a migration or
 learned sender rule. No event/projection/schema/runtime/provider behavior
-changes.
+changes. A request generation also invalidates any pre-decision load-more
+request before the decision begins (and before a deliberate lens change), so
+its eventual success or failure cannot replace the newer authoritative queue,
+restore a resolved candidate, alter decision feedback, or re-enable stale
+controls.
 
 Gate 7 now performs a real task confirmation, a typed spam dismissal, next-
 matter continuation, final-Ready-item caught-up feedback, URL cleanup,
 lens-change banner cleanup, active-lens preservation, a forced post-write
 refresh failure with stale-control lock and reload recovery, direct Recent
-selection, and provenance-bounded lifecycle-receipt copy assertion in
-production composition. The repaired candidate passes 238 assertions and 39
+selection, a deliberately delayed pre-decision pagination response released
+after the authoritative refresh, and provenance-bounded lifecycle-receipt copy
+assertion in production composition. The repaired candidate passes 239 assertions and 39
 screenshots with zero console/page/request failures. It also passes 49 strict
 acceptance gates, 1,792 root/code/pack tests, 60 bridge tests, all
 static/dependency/performance/architecture/package gates, clean install,

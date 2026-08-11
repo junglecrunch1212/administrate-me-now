@@ -13,7 +13,11 @@ continue to open their immutable receipt. Deliberately changing Triage lenses
 clears prior lens-relative continuation feedback before rendering the new lens;
 reselecting the active lens does not. If a decision is recorded but the
 post-write refresh fails, its reload warning and disabled stale controls remain
-latched until a successful reload.
+latched until a successful reload. Beginning a decision or deliberately
+changing lenses invalidates any older in-flight pagination request; neither a
+late success nor a late failure may replace the newer authoritative surface,
+restore a resolved candidate, clear decision feedback, or re-enable stale
+controls.
 
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,

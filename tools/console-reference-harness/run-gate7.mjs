@@ -343,7 +343,38 @@ async function run() {
     };
     let routedTaskBucket = "scheduled";
     let routedTaskHref = "";
+    let releaseStaleTriageLoad;
+    let staleTriageLoadSettled;
+    let staleTriageLoadRoute;
     for (const [surface, label] of Object.entries(surfaceLabels)) {
+      if (surface === "triage") {
+        let initialPayload;
+        let initialResponseModified = false;
+        const staleLoadRelease = new Promise((resolveRelease) => { releaseStaleTriageLoad = resolveRelease; });
+        staleTriageLoadSettled = new Promise((resolveSettled) => {
+          staleTriageLoadRoute = async (route) => {
+            const url = new URL(route.request().url());
+            if (url.searchParams.has("triage_cursor")) {
+              await staleLoadRelease;
+              await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(initialPayload) });
+              resolveSettled();
+              return;
+            }
+            if (!initialResponseModified) {
+              const response = await route.fetch();
+              const payload = await response.json();
+              initialPayload = structuredClone(payload);
+              payload.triage.has_more = true;
+              payload.triage.next_cursor = "gate7-delayed-pre-decision-page";
+              initialResponseModified = true;
+              await route.fulfill({ response, json: payload });
+              return;
+            }
+            await route.continue();
+          };
+        });
+        await principal.page.route("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
+      }
       await visit(principal.page, server.baseUrl, `/member/${surface}`, label);
       if (surface === "today") {
         record("Today defaults to Day Brief", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await principal.page.locator("#surface").textContent());
@@ -375,16 +406,24 @@ async function run() {
         const inventoryHeading = await principal.page.locator(".triage-inventory h2").textContent();
         const inventoryTotal = Number.parseInt(inventoryHeading || "0", 10);
         const allCandidatesLabel = await principal.page.getByRole("button", { name: /^All candidates/ }).textContent();
-        record("Triage distinguishes loaded lens counts from complete inventory", inventoryTotal > 0 && allCandidatesLabel.includes(` / ${inventoryTotal}`) && (await principal.page.locator(".comms-controls .state-note").textContent()).includes("filter counts"), JSON.stringify({ inventoryHeading, allCandidatesLabel }));
+        const triageControlsNote = await principal.page.locator(".comms-controls .state-note").textContent();
+        record("Triage distinguishes loaded lens counts from complete inventory", inventoryTotal > 0 && allCandidatesLabel.includes(` / ${inventoryTotal}`) && triageControlsNote.toLowerCase().includes("filter counts"), JSON.stringify({ inventoryHeading, allCandidatesLabel, triageControlsNote }));
         await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).click();
         record("Triage renders typed task properties", await principal.page.getByLabel("Due date").count() === 1 && await principal.page.getByText("Available from", { exact: true }).count() === 1 && await principal.page.getByText("Energy needed", { exact: true }).count() === 1 && await principal.page.getByText("First tiny step", { exact: true }).count() === 1, await principal.page.locator(".triage-detail").textContent());
         record("Triage removed machine-format date entry", !(await principal.page.locator(".triage-detail").textContent()).includes("ISO 8601"), await principal.page.locator(".triage-detail").textContent());
         await screenshot(principal.page, "surface-triage-task-desktop.png");
         await principal.page.getByLabel("First tiny step").fill("Open the enrollment portal and attach the signed form");
+        await principal.page.getByRole("button", { name: "Load next matters" }).click();
+        await principal.page.getByRole("button", { name: "Loading…" }).waitFor();
         await principal.page.getByRole("button", { name: "Save & confirm" }).click();
         await principal.page.locator("#state-banner").getByRole("link", { name: "Open Reminders" }).waitFor();
         record("Triage saves visible edits before confirmation", (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#state-banner").textContent());
         record("Triage confirmation continues the active work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.getByRole("heading", { name: "Matters awaiting review" }).count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
+        releaseStaleTriageLoad();
+        await staleTriageLoadSettled;
+        await principal.page.evaluate(() => new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+        record("Late pre-decision load-more response cannot resurrect a resolved candidate", await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).count() === 0 && (await principal.page.locator("#state-banner").textContent()).includes("Confirmed and added to Reminders"), await principal.page.locator("#surface").textContent());
+        await principal.page.unroute("**/api/member/v1/surfaces/triage?*", staleTriageLoadRoute);
         await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).click();
         await principal.page.getByLabel("Why this candidate should leave Triage").selectOption("spam");
         await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
