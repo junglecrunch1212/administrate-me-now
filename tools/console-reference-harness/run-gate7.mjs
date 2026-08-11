@@ -390,6 +390,9 @@ async function run() {
         await principal.page.getByRole("button", { name: "Dismiss & teach" }).click();
         await principal.page.getByText("Your reversible feedback was recorded. The next decision in this view is ready.").waitFor();
         record("Triage dismissal records feedback without leaving the work queue", await principal.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await principal.page.locator(".triage-master-button").filter({ hasText: "Ignore the promotional digest" }).count() === 0 && await principal.page.locator(".triage-master-button[aria-current=true]").count() === 1 && !principal.page.url().includes("item=") && !principal.page.url().includes("matter="), principal.page.url());
+        const continuationBannerText = await principal.page.locator("#state-banner").textContent();
+        await principal.page.getByRole("button", { name: /^Ready/ }).click();
+        record("Selecting the active Triage lens preserves its continuation feedback", await principal.page.locator("#state-banner").textContent() === continuationBannerText && await principal.page.locator("#state-banner").isVisible(), await principal.page.locator("#state-banner").textContent());
         await screenshot(principal.page, "surface-triage-queue-continuity-desktop.png");
         const bootstrap = await jsonRequest(server.baseUrl, "/api/member/v1/bootstrap", identities.principal);
         const triageAfterConfirmation = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/triage", identities.principal);
@@ -566,9 +569,26 @@ async function run() {
     await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
     await adult.page.locator(".triage-master-button").filter({ hasText: "Review the only ready household item" }).click();
     await adult.page.getByLabel("Why this candidate should leave Triage").selectOption("not_actionable");
+    let failNextTriageRefresh = true;
+    const failTriageRefresh = async (route) => {
+      if (failNextTriageRefresh && route.request().method() === "GET") {
+        failNextTriageRefresh = false;
+        await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+        return;
+      }
+      await route.continue();
+    };
+    await adult.page.route("**/api/member/v1/surfaces/triage?*", failTriageRefresh);
     await adult.page.getByRole("button", { name: "Dismiss & teach" }).click();
-    await adult.page.getByText("Your reversible feedback was recorded. You're caught up in this view.").waitFor();
-    record("Triage final Ready dismissal reports the empty refreshed queue truthfully", await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.locator(".triage-master-button").count() === 0 && (await adult.page.locator(".triage-master").textContent()).includes("Nothing is ready to confirm"), await adult.page.locator("#state-banner").textContent());
+    await adult.page.getByText(/The decision was recorded, but Triage could not refresh:/).waitFor();
+    const refreshFailureText = await adult.page.locator("#state-banner").textContent();
+    await adult.page.getByRole("button", { name: /^Ready/ }).dispatchEvent("click");
+    await adult.page.getByRole("button", { name: /^Recent/ }).dispatchEvent("click");
+    record("Post-write refresh failure latches Triage until a successful reload", await adult.page.locator("#state-banner").textContent() === refreshFailureText && await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() && await adult.page.locator(".triage-review-form button:not([disabled])").count() === 0, JSON.stringify({ banner: await adult.page.locator("#state-banner").textContent(), readyDisabled: await adult.page.getByRole("button", { name: /^Ready/ }).isDisabled() }));
+    await adult.page.unroute("**/api/member/v1/surfaces/triage?*", failTriageRefresh);
+    await adult.page.reload();
+    await adult.page.getByRole("heading", { name: "Triage", level: 1 }).waitFor();
+    record("Triage final Ready dismissal reports the empty refreshed queue truthfully", await adult.page.locator("#state-banner").isHidden() && await adult.page.getByRole("button", { name: /^Ready/ }).getAttribute("aria-pressed") === "true" && await adult.page.locator(".triage-master-button").count() === 0 && (await adult.page.locator(".triage-master").textContent()).includes("Nothing is ready to confirm"), await adult.page.locator("#state-banner").textContent());
     await screenshot(adult.page, "surface-triage-final-ready-caught-up-tablet.png");
     await visit(adult.page, server.baseUrl, "/member/today", "Today");
     record("tablet Day Brief default", await adult.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "true", await adult.page.locator("#surface").textContent());

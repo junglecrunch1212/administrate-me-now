@@ -12,6 +12,8 @@ const state = {
   triageSelected: null,
   triageMatter: null,
   triageFocusPending: false,
+  triageBannerKind: null,
+  triageRefreshRequired: false,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -165,13 +167,22 @@ async function reloadActiveSurface() {
     replaceQuery({ q: null });
   }
   const data = await api(path);
+  if (active === "triage" && state.triageRefreshRequired) {
+    state.triageRefreshRequired = false;
+    if (state.triageBannerKind === "refresh_failure") clearBanner();
+  }
   renderSurface(data);
   return data;
+}
+
+function lockTriageUntilReload() {
+  for (const control of document.querySelectorAll("#surface button, #surface input, #surface select, #surface textarea")) control.disabled = true;
 }
 
 async function decideTriage(item, action, buttons, feedbackReason = null) {
   buttons.forEach((button) => { button.disabled = true; });
   const banner = $("#state-banner"); banner.hidden = false;
+  state.triageBannerKind = "progress";
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
   const workingView = state.triageView === "recent" ? "all_candidates" : state.triageView;
   let decisionRecorded = false;
@@ -193,6 +204,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
       : refreshed.triage?.has_more
         ? "No other decision is loaded in this view. Load more matters or choose another view."
         : "You're caught up in this view.";
+    state.triageBannerKind = "continuation";
     banner.replaceChildren();
     if (action === "approve") {
       if (result.destination) {
@@ -204,8 +216,14 @@ async function decideTriage(item, action, buttons, feedbackReason = null) {
       banner.textContent = feedbackReason ? `Dismissed. No household record was created. Your reversible feedback was recorded. ${continuation}` : `Dismissed. No household record or provider write was created. ${continuation}`;
     }
   } catch (error) {
-    if (decisionRecorded) banner.textContent = `The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`;
+    if (decisionRecorded) {
+      state.triageBannerKind = "refresh_failure";
+      state.triageRefreshRequired = true;
+      banner.textContent = `The decision was recorded, but Triage could not refresh: ${error.message} Reload this page before deciding another item.`;
+      lockTriageUntilReload();
+    }
     else {
+      state.triageBannerKind = "error";
       banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
       buttons.forEach((button) => { button.disabled = false; });
     }
@@ -734,7 +752,13 @@ function triageSurface(data) {
     const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
     const countLabel = key === "recent" ? `${count}` : key === "all_candidates" ? `${count} / ${candidateCount}` : `${count} loaded`;
     const button = text("button", `${label} ${countLabel}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
-    button.addEventListener("click", () => { clearBanner(); state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false; data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null }; replaceQuery({ view: key, item: null, matter: null }); renderSurface(data); }); tabs.append(button);
+    button.addEventListener("click", () => {
+      if (state.triageView === key || state.triageRefreshRequired) return;
+      if (state.triageBannerKind === "continuation") clearBanner();
+      state.triageView = key; state.triageSelected = null; state.triageMatter = null; state.triageFocusPending = false;
+      data.focus = { requested_candidate_id: null, state: "not_requested", candidate_state: null, matter_id: null };
+      replaceQuery({ view: key, item: null, matter: null }); renderSurface(data);
+    }); tabs.append(button);
   }
   controls.append(tabs);
   if (data.triage?.has_more) controls.append(text("p", `${pending.length} of ${candidateCount} candidates are loaded. Filter counts marked “loaded” cover this cursor window; the complete inventory totals are above. Load more matters to continue toward zero.`, "state-note"));
@@ -906,6 +930,7 @@ function setBanner(message) {
 
 function clearBanner() {
   const banner = $("#state-banner"); banner.hidden = true; banner.textContent = "";
+  state.triageBannerKind = null;
 }
 
 async function executeTodayAction(item, action, container) {

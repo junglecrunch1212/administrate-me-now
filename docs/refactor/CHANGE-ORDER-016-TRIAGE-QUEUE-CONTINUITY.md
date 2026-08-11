@@ -34,6 +34,9 @@ The defect was presentation state and authority legibility.
 - Recent is plainly read-only audit history.
 - A deliberate lens change clears prior lens-relative continuation feedback so
   it cannot describe the newly selected lens.
+- Reselecting the active lens preserves its continuation feedback. If the
+  decision write succeeds but refresh fails, the warning and stale controls
+  remain latched until a successful reload.
 - `eligibility_rule_replaced` is rendered as context-or-eligibility
   replacement, not as a proven migration or rule created by the current
   dismissal.
@@ -47,6 +50,7 @@ The defect was presentation state and authority legibility.
 | Consume exact focus after successful decision | HARDEN | Client presentation only; the audited result remains immutable and exactly linkable. |
 | Preserve the active working lens and choose the next visible matter | MODERNIZE | Deterministic existing ordering; no model rank, hidden suppression, or new queue store. |
 | Clear lens-relative feedback on deliberate lens change | HARDEN | Browser presentation only; the decision and feedback receipts remain immutable. |
+| Latch a recorded-decision refresh failure until successful reload | HARDEN | Stale browser data cannot regain decision controls; the already-recorded decision is not retried or rewritten. |
 | Relabel eligibility supersession receipts without inferring provenance | HARDEN | Copy changes; event reason and projection state are not rewritten. |
 | Keep resolved deep links read-only and exact | PRESERVE | CO-015 scope checks and no-substitution behavior remain authoritative. |
 
@@ -58,7 +62,8 @@ object, provider object, projection count, or external-write path changes.
 AC-41 requires production-composition browser proof for confirm continuity,
 typed spam-dismiss continuity, next-matter selection, candidate/matter URL
 cleanup, a final-Ready-item caught-up state, explicit member navigation to Recent,
-cleared lens-relative continuation copy, provenance-bounded lifecycle-receipt
-copy, and preserved destination receipts.
+actual-change-only continuation cleanup, a forced post-write refresh failure
+that keeps stale controls locked through lens clicks until reload,
+provenance-bounded lifecycle-receipt copy, and preserved destination receipts.
 Existing Triage projection/API, feedback, learning-policy, replay,
 privacy/isolation, release, and observation gates must remain green.

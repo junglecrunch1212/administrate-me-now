@@ -10,7 +10,10 @@ audit history and distinguishes historical context-or-eligibility replacement
 receipts from member-authored feedback and learned-rule state without claiming
 unproven migration provenance. Direct exact links to resolved candidates
 continue to open their immutable receipt. Deliberately changing Triage lenses
-clears prior lens-relative continuation feedback before rendering the new lens.
+clears prior lens-relative continuation feedback before rendering the new lens;
+reselecting the active lens does not. If a decision is recorded but the
+post-write refresh fails, its reload warning and disabled stale controls remain
+latched until a successful reload.
 
 CO-015 amendment (2026-08-10): every Today clarifying decision publishes a
 `member-decision-context-v1` review contract with a direct member question,
@@ -222,7 +225,7 @@ Each `UX-*` item is executable through browser/API/accessibility tests in Gate 3
 | UX-56 | Today, Comms, Notes, and any other candidate-bearing surface link the exact Triage candidate and matter. Triage resolves a scoped `triage_item` independently of its ordinary cursor and returns explicit pending, resolved, or unavailable focus state. Reload/history/filter state cannot substitute another candidate, reopen a decision, or change queue truth. |
 | UX-57 | A deliberate Triage lens change clears exact-link focus. An asynchronous or stale focus response cannot force the member back to the linked lens after that choice. The selected candidate receives keyboard focus without creating a decision or provider effect. |
 | UX-58 | Every stable adult surface participates in `surface-link-v1`. Where a surface shows a canonical item owned by another surface, it exposes an exact return path or explicitly states that no destination surface exists; generic top-of-page navigation is not an object link. |
-| UX-59 | After confirm or Dismiss & teach, Triage clears the resolved candidate and matter from URL and client focus, preserves Ready/Needs details/Needs interpretation/Low signal/Recurring exceptions/Learned rules/All candidates, and derives its continuation message from the refreshed visible lens: select the next matter when one remains, say the member is caught up when none remains, or disclose that more matters must be loaded. Deliberately changing lenses clears that lens-relative message before the new lens renders. Recent is entered only by explicit member choice or an exact resolved deep link. Historical `eligibility_rule_replaced` receipts say only that source context or eligibility changed; they do not claim a system migration or a sender-wide rule created by the current dismissal. |
+| UX-59 | After confirm or Dismiss & teach, Triage clears the resolved candidate and matter from URL and client focus, preserves Ready/Needs details/Needs interpretation/Low signal/Recurring exceptions/Learned rules/All candidates, and derives its continuation message from the refreshed visible lens: select the next matter when one remains, say the member is caught up when none remains, or disclose that more matters must be loaded. Deliberately changing lenses clears only that lens-relative success message before the new lens renders; reselecting the active lens preserves it. If the decision was recorded but refresh failed, its warning and disabled stale controls remain latched through every lens click until a successful reload. Recent is entered only by explicit member choice or an exact resolved deep link. Historical `eligibility_rule_replaced` receipts say only that source context or eligibility changed; they do not claim a system migration or a sender-wide rule created by the current dismissal. |
 
 ## State model
 
