@@ -1,5 +1,14 @@
 # UX behavior contract
 
+CO-017 amendment (2026-08-11): terminal source-assessment recovery is an
+authenticated operator/release control, not a member Triage action. It adds no
+confirm, dismiss, ranking, or provider-write affordance. Existing Triage and
+Settings source-assurance totals may report content-free requested, succeeded,
+failed, refused, and pending recovery counts, but never source text, subject,
+sender, account identity, or a cross-member identifier. Until the newer valid
+assessment is appended, the source remains explicitly failed rather than
+appearing empty or silently recovered.
+
 CO-016 amendment (2026-08-11): a successful Triage confirmation or typed
 dismissal clears exact-link focus, stays in the member's active working lens,
 and advances to the next independently manageable candidate when one remains.

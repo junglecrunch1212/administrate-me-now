@@ -1435,6 +1435,7 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("temporary_surface.", "temporary_surface"),
     ("xlsx.", "workbook_runtime"),
     ("runtime.", "runtime"),
+    ("source.assessment.", "source_assurance"),
     ("bridge.", "bridge"),
     ("reward.", "outcome_feedback"),
     ("digest.", "proactive_program"),

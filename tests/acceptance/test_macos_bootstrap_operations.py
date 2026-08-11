@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adminme.runtime.application import RuntimeSettings, create_application
@@ -20,7 +21,7 @@ from bootstrap.contracts import DeploymentPaths
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
 from bootstrap.services import ServiceManager
-from bootstrap.upgrade import UpgradeManager
+from bootstrap.upgrade import UpgradeError, UpgradeManager
 from bootstrap.wizard import BootstrapWizard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -154,6 +155,165 @@ def test_reviewed_candidate_controller_completes_guarded_upgrade(
     assert pointer["commit"] == commit
     assert Path(pointer["path"]).is_dir()
     assert reconciled == [(Path(pointer["path"]), True)]
+
+
+def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-repair-upgrade")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    policy = object()
+    online_validations: list[object] = []
+    offline_states: list[str] = []
+    monkeypatch.setattr(
+        "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
+    )
+
+    def validate_online(self, selected_policy):
+        assert selected_policy is policy
+        online_validations.append(selected_policy)
+        return {"capabilities": {}, "observation_active": True}
+
+    monkeypatch.setattr(
+        UpgradeManager, "_validate_source_repair_online", validate_online
+    )
+
+    def activate_repair(selected_paths, **kwargs):
+        assert selected_paths == paths
+        assert kwargs["policy"] is policy
+        assert kwargs["append_requests"] is True
+        offline_states.append(ServiceManager(paths, test_mode=True).status().status)
+        return {
+            "contract": "source-assessment-degraded-baseline-v1",
+            "request_event_ids": ["ev_recovery_request"],
+            "requested": 1,
+            "content_exposed": False,
+            "expires_after_activation": True,
+        }
+
+    monkeypatch.setattr(
+        "bootstrap.upgrade.offline_validate_repair_baseline", activate_repair
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+
+    result = UpgradeManager(
+        paths,
+        root=REPO_ROOT,
+        test_mode=True,
+        approve_source_assessment_repair=True,
+    ).activate(REPO_ROOT)
+
+    assert len(online_validations) == 2
+    assert offline_states == ["stopped"]
+    assert result["source_assessment_repair"] == {
+        "contract": "source-assessment-degraded-baseline-v1",
+        "request_event_ids": ["ev_recovery_request"],
+        "requested": 1,
+        "content_exposed": False,
+        "expires_after_activation": True,
+    }
+    assert ServiceManager(paths, test_mode=True).status().status == "healthy"
+
+
+def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-repair-rollback")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_args, **_kwargs: {"ok": True},
+    )
+    # Establish an immutable predecessor inside the reviewed releases root.
+    UpgradeManager(paths, root=REPO_ROOT, test_mode=True).activate(REPO_ROOT)
+    previous = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
+    ServiceManager(paths, test_mode=True).start()
+    policy = object()
+    monkeypatch.setattr(
+        "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
+    )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_validate_source_repair_online",
+        lambda _self, _policy: {
+            "capabilities": {},
+            "observation_active": True,
+        },
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.offline_validate_repair_baseline",
+        lambda *_args, **_kwargs: {
+            "contract": "source-assessment-degraded-baseline-v1",
+            "request_event_ids": ["ev_recovery_request"],
+            "requested": 1,
+            "content_exposed": False,
+            "expires_after_activation": True,
+        },
+    )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_post_switch_doctor",
+        lambda _self, _release: {
+            "status": "failed",
+            "checks": [{"name": "unexpected_capability", "ok": False}],
+        },
+    )
+
+    with pytest.raises(UpgradeError, match="candidate failed post-switch Doctor"):
+        UpgradeManager(
+            paths,
+            root=REPO_ROOT,
+            test_mode=True,
+            approve_source_assessment_repair=True,
+        ).activate(REPO_ROOT)
+
+    restored = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
+    assert restored == previous
+    assert ServiceManager(paths, test_mode=True).status().status == "healthy"
 
 
 def test_doctor_fails_when_required_triage_pipeline_is_poisoned(

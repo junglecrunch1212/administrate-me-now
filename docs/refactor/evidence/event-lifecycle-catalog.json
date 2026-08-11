@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 222,
-    "technical_event_types": 191,
+    "technical_event_schemas": 225,
+    "technical_event_types": 193,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -19516,6 +19516,140 @@
     },
     {
       "additional_properties": false,
+      "event_type": "source.assessment.recovery_refused",
+      "family": "source_assurance",
+      "properties": {
+        "policy": {
+          "const": "source-assessment-recovery-v1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "source_not_found",
+            "unsupported_source_type",
+            "source_not_private",
+            "source_privileged",
+            "source_scope_mismatch",
+            "request_scope_mismatch",
+            "failed_assessment_not_current",
+            "assessment_not_failed",
+            "failure_reason_changed",
+            "failure_not_retryable"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_event_id",
+        "source_event_id",
+        "reason",
+        "policy"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "source.assessment.recovery_requested",
+      "family": "source_assurance",
+      "properties": {
+        "attempt_limit": {
+          "const": 3,
+          "title": "Attempt Limit",
+          "type": "integer"
+        },
+        "authority": {
+          "enum": [
+            "member_principal",
+            "guarded_release_exception"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "batch_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Batch Fingerprint",
+          "type": "string"
+        },
+        "expected_failure_reason": {
+          "enum": [
+            "language_seam_OpenClawTimeout",
+            "language_seam_OpenClawUnreachable"
+          ],
+          "title": "Expected Failure Reason",
+          "type": "string"
+        },
+        "failed_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Failed Assessment Event Id",
+          "type": "string"
+        },
+        "max_concurrency": {
+          "const": 2,
+          "title": "Max Concurrency",
+          "type": "integer"
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "policy": {
+          "const": "source-assessment-recovery-v1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_by_actor": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Requested By Actor",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "batch_fingerprint",
+        "source_event_id",
+        "failed_assessment_event_id",
+        "expected_failure_reason",
+        "owner_member_id",
+        "requested_by_actor",
+        "authority",
+        "policy",
+        "attempt_limit",
+        "max_concurrency"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "task.blocked",
       "family": "task",
       "properties": {
@@ -20885,6 +21019,146 @@
         "reason_codes"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.intent.features_extracted",
+      "family": "triage",
+      "properties": {
+        "assessment_outcome": {
+          "enum": [
+            "eligible_candidates",
+            "no_candidate",
+            "quarantined",
+            "failed"
+          ],
+          "title": "Assessment Outcome",
+          "type": "string"
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/TriageFeatureCandidateV1"
+          },
+          "maxItems": 20,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "extracted_at": {
+          "format": "date-time",
+          "title": "Extracted At",
+          "type": "string"
+        },
+        "extraction_state": {
+          "enum": [
+            "complete",
+            "defensive_default",
+            "unavailable",
+            "invalid"
+          ],
+          "title": "Extraction State",
+          "type": "string"
+        },
+        "extractor_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Extractor Id",
+          "type": "string"
+        },
+        "intent_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Reason Codes",
+          "type": "array"
+        },
+        "recovery_attempt_limit": {
+          "const": 3,
+          "title": "Recovery Attempt Limit",
+          "type": "integer"
+        },
+        "recovery_policy": {
+          "const": "source-assessment-recovery-v1",
+          "title": "Recovery Policy",
+          "type": "string"
+        },
+        "recovery_reason": {
+          "enum": [
+            "language_seam_OpenClawTimeout",
+            "language_seam_OpenClawUnreachable"
+          ],
+          "title": "Recovery Reason",
+          "type": "string"
+        },
+        "recovery_request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Recovery Request Event Id",
+          "type": "string"
+        },
+        "skill_call_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Call Event Id"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "supersedes_assessment_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Supersedes Assessment Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent_id",
+        "source_event_id",
+        "extractor_id",
+        "extraction_state",
+        "extracted_at",
+        "assessment_outcome",
+        "reason_codes",
+        "supersedes_assessment_event_id",
+        "recovery_request_event_id",
+        "recovery_reason",
+        "recovery_policy",
+        "recovery_attempt_limit"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,
