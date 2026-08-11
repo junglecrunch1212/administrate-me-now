@@ -341,6 +341,10 @@ async function run() {
         record("Today Carousel is interactive", await principal.page.getByRole("button", { name: "Day Brief" }).getAttribute("aria-pressed") === "false", await principal.page.locator("#surface").textContent());
         await screenshot(principal.page, "surface-today-carousel-desktop.png");
       } else if (surface === "triage") {
+        const inventoryHeading = await principal.page.locator(".triage-inventory h2").textContent();
+        const inventoryTotal = Number.parseInt(inventoryHeading || "0", 10);
+        const allCandidatesLabel = await principal.page.getByRole("button", { name: /^All candidates/ }).textContent();
+        record("Triage distinguishes loaded lens counts from complete inventory", inventoryTotal > 0 && allCandidatesLabel.includes(` / ${inventoryTotal}`) && (await principal.page.locator(".comms-controls .state-note").textContent()).includes("filter counts"), JSON.stringify({ inventoryHeading, allCandidatesLabel }));
         await principal.page.locator(".triage-master-button").filter({ hasText: "Send the completed enrollment form" }).click();
         record("Triage renders typed task properties", await principal.page.getByLabel("Due date").count() === 1 && await principal.page.getByText("Available from", { exact: true }).count() === 1 && await principal.page.getByText("Energy needed", { exact: true }).count() === 1 && await principal.page.getByText("First tiny step", { exact: true }).count() === 1, await principal.page.locator(".triage-detail").textContent());
         record("Triage removed machine-format date entry", !(await principal.page.locator(".triage-detail").textContent()).includes("ISO 8601"), await principal.page.locator(".triage-detail").textContent());
