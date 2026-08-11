@@ -39,6 +39,7 @@ from adminme.projections.base import Projection
 from adminme.projections.artifacts import ArtifactsProjection
 from adminme.projections.calendars import CalendarsProjection
 from adminme.projections.commitments import CommitmentsProjection
+from adminme.projections.context_fabric import ContextFabricProjection
 from adminme.projections.interactions import InteractionsProjection
 from adminme.projections.lists import ListsProjection
 from adminme.projections.member_knowledge import MemberKnowledgeProjection
@@ -55,9 +56,10 @@ _log = logging.getLogger(__name__)
 
 # Default projection classes the runner registers when no caller has supplied an
 # explicit set. Pack-provided projections register separately via the pack runner.
-# [D18] enumerated the original 13 first-party projections. [D26] adds the
-# Triage adjudication projection; this tuple remains the registration anchor
-# consumed by integration tests and bootstrap code.
+# [D18] enumerated the original 13 first-party projections. [D26] added the
+# Triage adjudication projection. ADR-0008 adds the rebuildable Context Fabric
+# relationship index; this tuple remains the registration anchor consumed by
+# integration tests and bootstrap code.
 DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
     PartiesProjection,
     InteractionsProjection,
@@ -73,6 +75,7 @@ DEFAULT_PROJECTION_CLASSES: tuple[type[Projection], ...] = (
     MemberKnowledgeProjection,
     ListsProjection,
     TriageProjection,
+    ContextFabricProjection,
 )
 
 

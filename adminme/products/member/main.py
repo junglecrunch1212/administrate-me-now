@@ -23,6 +23,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field, ValidationError
 
 from adminme.comms import validate_outbound_communication
+from adminme.context_fabric import policy_scope_digest
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.extensions import ExtensionError
@@ -100,6 +101,10 @@ from adminme.projections.member_knowledge.queries import (
     search_visible as search_visible_notes,
 )
 from adminme.projections.triage.queries import get_item as get_triage_item
+from adminme.projections.context_fabric.queries import (
+    feedback_scope_count,
+    get_policy_rule,
+)
 from adminme.projections.tasks.queries import get_task
 from adminme.projections.money.queries import get_finance_goal
 from adminme.candidate_policy import validate_policy_override
@@ -559,6 +564,41 @@ class TriageDecisionRequest(BaseModel):
     request_id: str = Field(min_length=8, max_length=120)
     expected_last_event_id: str = Field(min_length=1)
     reason: str | None = Field(default=None, max_length=500)
+    feedback_reason: (
+        Literal[
+            "not_mine",
+            "not_actionable",
+            "already_done",
+            "duplicate",
+            "wrong_kind",
+            "wrong_context",
+            "wrong_owner",
+            "recurring_normal",
+            "low_signal",
+            "spam",
+            "provider_promotion",
+            "other",
+        ]
+        | None
+    ) = None
+
+
+class TriagePolicyPreviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    scope_kind: Literal["candidate_kind", "sender", "context", "account", "workspace"]
+    scope_value: str = Field(min_length=1, max_length=500)
+    disposition: Literal["quiet", "always_surface", "route_to_low_signal"]
+
+
+class TriagePolicyApproveRequest(TriagePolicyPreviewRequest):
+    request_id: str = Field(min_length=8, max_length=120)
+    expected_affected_count: int = Field(ge=0)
+
+
+class TriagePolicyRevokeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    reason: str = Field(min_length=1, max_length=240)
 
 
 class TriageIntentRequest(BaseModel):
@@ -856,8 +896,16 @@ def _owned_triage_item(
     return item
 
 
-def _require_current_triage(item: dict[str, Any], expected_last_event_id: str) -> None:
-    if item["state"] != "pending_review":
+def _require_current_triage(
+    item: dict[str, Any],
+    expected_last_event_id: str,
+    *,
+    allow_pending_interpretation: bool = False,
+) -> None:
+    allowed_states = {"pending_review"}
+    if allow_pending_interpretation:
+        allowed_states.add("pending_interpretation")
+    if item["state"] not in allowed_states:
         raise HTTPException(409, "triage item is no longer awaiting review")
     if item["last_event_id"] != expected_last_event_id:
         raise HTTPException(409, "triage item changed; refresh before deciding")
@@ -870,7 +918,7 @@ def _triage_event(
     payload: dict[str, Any],
     request_id: str,
     request_fingerprint: str,
-    causation_id: str,
+    causation_id: str | None,
     sensitivity: Sensitivity = "normal",
     schema_version: int = 1,
 ) -> EventEnvelope:
@@ -2512,6 +2560,173 @@ async def submit_triage_intent(
     }
 
 
+def _require_self_triage_policy(session: Session) -> None:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "Triage learning controls are read-only while viewing another member"
+        )
+
+
+def _triage_policy_digest(scope_kind: str, scope_value: str) -> str:
+    return policy_scope_digest(scope_kind, scope_value)
+
+
+@router.post("/api/member/v1/triage-policy/preview")
+async def preview_triage_policy(
+    body: TriagePolicyPreviewRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    try:
+        affected = feedback_scope_count(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=session.auth_member_id,
+            scope_kind=body.scope_kind,
+            scope_value=body.scope_value,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "scope_kind": body.scope_kind,
+        "scope_value_digest": _triage_policy_digest(body.scope_kind, body.scope_value),
+        "disposition": body.disposition,
+        "affected_feedback_count": affected,
+        "enforcement_mode": "shadow",
+        "provider_effects": 0,
+        "explanation": (
+            "Approval records a reversible shadow rule. It cannot suppress, "
+            "confirm, route, or write a candidate in this rollout."
+        ),
+    }
+
+
+@router.post("/api/member/v1/triage-policy/approve")
+async def approve_triage_policy(
+    body: TriagePolicyApproveRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    affected = feedback_scope_count(
+        runtime.projections.connection("context_fabric"),
+        session,
+        member_id=session.auth_member_id,
+        scope_kind=body.scope_kind,
+        scope_value=body.scope_value,
+    )
+    if affected != body.expected_affected_count:
+        raise HTTPException(409, "feedback pattern changed; preview the rule again")
+    scope_digest = _triage_policy_digest(body.scope_kind, body.scope_value)
+    rule_id = (
+        "triage_rule_"
+        + hashlib.sha256(
+            (
+                f"{session.tenant_id}|{session.auth_member_id}|{body.scope_kind}|"
+                f"{scope_digest}|{body.disposition}"
+            ).encode()
+        ).hexdigest()[:28]
+    )
+    request_fingerprint = _triage_request_fingerprint(rule_id, body)
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="triage.policy_rule.approved",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("context_fabric", prior["event_id"])
+        return {
+            "event_id": prior["event_id"],
+            "rule_id": rule_id,
+            "state": "shadow",
+            "duplicate": True,
+        }
+    payload = {
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "scope_kind": body.scope_kind,
+        "scope_value_digest": scope_digest,
+        "disposition": body.disposition,
+        "enforcement_mode": "shadow",
+        "preview_affected_count": affected,
+        "approved_by_member_id": session.auth_member_id,
+        "approved_at": EventEnvelope.now_utc_iso(),
+        "expires_at": None,
+    }
+    await _guard_triage_write(runtime, session, "triage.policy_rule.approved", payload)
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.policy_rule.approved",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=request_fingerprint,
+            causation_id=None,
+        )
+    )
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {
+        "event_id": event_id,
+        "rule_id": rule_id,
+        "state": "shadow",
+        "duplicate": False,
+    }
+
+
+@router.post("/api/member/v1/triage-policy/{rule_id}/revoke")
+async def revoke_triage_policy(
+    rule_id: str,
+    body: TriagePolicyRevokeRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    _require_self_triage_policy(session)
+    runtime = _runtime(request)
+    if runtime.projections is None:
+        raise HTTPException(503, "context policy projection unavailable")
+    rule = get_policy_rule(
+        runtime.projections.connection("context_fabric"),
+        session,
+        member_id=session.auth_member_id,
+        rule_id=rule_id,
+    )
+    if rule is None:
+        raise HTTPException(404, "triage policy rule not found")
+    if rule["status"] != "active":
+        return {"rule_id": rule_id, "state": "revoked", "duplicate": True}
+    request_fingerprint = _triage_request_fingerprint(rule_id, body)
+    payload = {
+        "rule_id": rule_id,
+        "member_id": session.auth_member_id,
+        "revoked_by_member_id": session.auth_member_id,
+        "revoked_at": EventEnvelope.now_utc_iso(),
+        "reason": body.reason,
+    }
+    await _guard_triage_write(runtime, session, "triage.policy_rule.revoked", payload)
+    event_id = await runtime.events.write(
+        _triage_event(
+            session,
+            event_type="triage.policy_rule.revoked",
+            payload=payload,
+            request_id=body.request_id,
+            request_fingerprint=request_fingerprint,
+            causation_id=str(rule["last_event_id"]),
+        )
+    )
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {"event_id": event_id, "rule_id": rule_id, "state": "revoked"}
+
+
 @router.post("/api/member/v1/triage/{proposal_id}/enrich")
 async def enrich_triage_item(
     proposal_id: str,
@@ -2587,7 +2802,11 @@ async def _enrich_triage_item_locked(
             "triage": _owned_triage_item(runtime, session, proposal_id),
             "duplicate": True,
         }
-    _require_current_triage(item, body.expected_last_event_id)
+    _require_current_triage(
+        item,
+        body.expected_last_event_id,
+        allow_pending_interpretation=True,
+    )
     payload = {
         "proposal_id": proposal_id,
         "enriched_at": EventEnvelope.now_utc_iso(),
@@ -2888,7 +3107,11 @@ async def _dismiss_triage_item_locked(
     if prior is not None:
         await runtime.wait_for_projection("triage", prior["event_id"])
         return {"event_id": prior["event_id"], "state": "dismissed", "duplicate": True}
-    _require_current_triage(item, body.expected_last_event_id)
+    _require_current_triage(
+        item,
+        body.expected_last_event_id,
+        allow_pending_interpretation=True,
+    )
     payload = {
         "proposal_id": proposal_id,
         "dismissed_at": EventEnvelope.now_utc_iso(),
@@ -2905,9 +3128,78 @@ async def _dismiss_triage_item_locked(
         causation_id=item["last_event_id"],
         sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
     )
-    event_id = await runtime.events.write(envelope)
+    envelopes = [envelope]
+    if body.feedback_reason is not None:
+        source = (
+            await runtime.event_log.get(str(item["source_event_id"]))
+            if runtime.event_log is not None
+            else None
+        )
+        source_payload = source.get("payload") or {} if isinstance(source, dict) else {}
+        sender = str(
+            source_payload.get("from_identifier")
+            or source_payload.get("from_number")
+            or ""
+        ).strip()
+        recorded_at = EventEnvelope.now_utc_iso()
+        feedback_id = (
+            "feedback_"
+            + hashlib.sha256(
+                (
+                    f"{session.tenant_id}|{session.auth_member_id}|{proposal_id}|"
+                    f"{body.request_id}|{body.feedback_reason}"
+                ).encode()
+            ).hexdigest()[:28]
+        )
+        envelopes.append(
+            _triage_event(
+                session,
+                event_type="triage.feedback.recorded",
+                payload={
+                    "feedback_id": feedback_id,
+                    "proposal_id": proposal_id,
+                    "member_id": session.auth_member_id,
+                    "reason": body.feedback_reason,
+                    "context_id": item.get("context_id") or None,
+                    "target_kind": item.get("target_kind"),
+                    "source_adapter": (
+                        str(source.get("source_adapter")) if source else None
+                    ),
+                    "provider_account_id": (
+                        str(
+                            source_payload.get("provider_account_id")
+                            or source.get("source_account_id")
+                        )
+                        if source
+                        else None
+                    ),
+                    "workspace": (
+                        source_payload.get("workspace")
+                        if source_payload.get("workspace") in {"personal", "work"}
+                        else None
+                    ),
+                    "sender_digest": (
+                        hashlib.sha256(sender.casefold().encode()).hexdigest()
+                        if sender
+                        else None
+                    ),
+                    "recorded_at": recorded_at,
+                },
+                request_id=f"{body.request_id}:feedback",
+                request_fingerprint=request_fingerprint,
+                causation_id=item["last_event_id"],
+                sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+            )
+        )
+    event_ids = await runtime.events.write_batch(envelopes)
+    event_id = event_ids[0]
     await runtime.wait_for_projection("triage", event_id)
-    return {"event_id": event_id, "state": "dismissed"}
+    if len(event_ids) > 1:
+        await runtime.wait_for_projection("context_fabric", event_ids[-1])
+    result = {"event_id": event_id, "state": "dismissed"}
+    if len(event_ids) > 1:
+        result["feedback_event_id"] = event_ids[-1]
+    return result
 
 
 def _chat_policy(runtime: Any, session: Session) -> dict[str, Any]:
@@ -3689,6 +3981,17 @@ async def surface(
     session: SessionDep,
     calendar_date: date | None = Query(default=None, alias="date"),
     view: Literal["day", "week", "month", "agenda", "find", "rules"] = "week",
+    triage_lens: Literal[
+        "ready",
+        "needs_details",
+        "needs_interpretation",
+        "low_signal",
+        "recurring_exceptions",
+        "learned_rules",
+        "all_candidates",
+    ] = "all_candidates",
+    triage_cursor: str | None = Query(default=None, max_length=500),
+    triage_limit: int = Query(default=30, ge=1, le=100),
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     await runtime._refresh_capability_registry()
@@ -3712,6 +4015,9 @@ async def surface(
         surface,
         calendar_anchor=calendar_date,
         calendar_view=view,
+        triage_lens=triage_lens,
+        triage_cursor=triage_cursor,
+        triage_limit=triage_limit,
     )
     if surface == "triage":
         await add_triage_source_context(runtime, session, result)

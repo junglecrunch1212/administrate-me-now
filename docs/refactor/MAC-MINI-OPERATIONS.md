@@ -213,8 +213,9 @@ Restore only a file inside the configured backup directory:
 ```
 
 Restore decrypts and authenticates into a staging directory, rejects links and
-path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 14
-registered projections (13 domain projections plus Triage) and workbooks from
+path traversal, verifies every hash, opens the SQLCipher log, rebuilds all 15
+registered projections (13 domain projections plus Triage and Context Fabric)
+and workbooks from
 the event log, then and only then replaces active state. The previous state
 moves to the `rollback` directory. If post-restore Doctor fails, the previous
 state is automatically put back.

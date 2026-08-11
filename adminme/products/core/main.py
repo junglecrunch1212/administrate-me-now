@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import get_party
 from adminme.projections.recurrences.queries import for_member as recurrences_for_member
 from adminme.projections.recurrences.queries import routine_occurrences_at
 from adminme.projections.tasks.queries import actionable_for_member
-from adminme.projections.triage.queries import pending_for_member as pending_triage
+from adminme.projections.triage.queries import triage_page_for_member
 from adminme.what_now import rank_what_now
 
 router = APIRouter(prefix="/api/core", tags=["core"])
@@ -106,26 +106,44 @@ async def what_now(request: Request, session: SessionDep) -> dict[str, Any]:
 
 
 @router.get("/v1/triage")
-async def triage(request: Request, session: SessionDep) -> dict[str, Any]:
+async def triage(
+    request: Request,
+    session: SessionDep,
+    cursor: str | None = None,
+    limit: int = 30,
+) -> dict[str, Any]:
     """Return only derived candidates awaiting this member's adjudication."""
     runtime = request.app.state.runtime
     if runtime.projections is None:
         raise HTTPException(503, "triage projection unavailable")
-    return {
-        "member_id": session.view_member_id,
-        "surface": "triage",
-        "items": pending_triage(
+    if cursor is not None and len(cursor) > 500:
+        raise HTTPException(422, "triage cursor is too long")
+    try:
+        page = triage_page_for_member(
             runtime.projections.connection("triage"),
             session,
             member_id=session.view_member_id,
-        ),
+            lens="all_candidates",
+            cursor=cursor,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "member_id": session.view_member_id,
+        "surface": "triage",
+        "items": [item for matter in page["matters"] for item in matter["candidates"]],
+        "inventory": page["inventory"],
+        "matters": page["matters"],
+        "next_cursor": page["next_cursor"],
+        "has_more": page["has_more"],
     }
 
 
 @router.get("/v1/inbox", deprecated=True)
 async def inbox(request: Request, session: SessionDep) -> dict[str, Any]:
     """Deprecated compatibility alias for pre-D26 clients."""
-    result = await triage(request, session)
+    result = await triage(request, session, cursor=None, limit=30)
     return {
         **result,
         "deprecated_alias": "inbox",

@@ -1,0 +1,824 @@
+"""Pure deterministic handlers for the rebuildable Context Fabric."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
+
+import sqlcipher3
+
+from adminme.context_fabric import (
+    CONTEXT_ALGORITHM,
+    owner_member_id,
+    provider_conversation_context_id,
+    provider_coordinates,
+    stable_digest,
+    triage_context_id,
+)
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _event_node_id(event_id: str) -> str:
+    return f"event:{event_id}"
+
+
+def _is_private_member_envelope(envelope: Mapping[str, Any], member_id: object) -> bool:
+    member = str(member_id or "")
+    expected = f"private:{member}"
+    return (
+        bool(member)
+        and envelope.get("owner_scope") == expected
+        and envelope.get("visibility_scope") == expected
+    )
+
+
+def _parsed_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _matter_context_id(
+    envelope: Mapping[str, Any],
+    conn: sqlcipher3.Connection,
+    payload: Mapping[str, Any],
+) -> tuple[str, str]:
+    interpretation = payload.get("interpretation")
+    thread_key = (
+        str(interpretation.get("thread_key") or "")
+        if isinstance(interpretation, Mapping)
+        else ""
+    )
+    if not thread_key:
+        return triage_context_id(envelope, payload)
+    tenant = str(envelope["tenant_id"])
+    owner = str(payload["owner_member_id"])
+    source_id = str(payload["source_event_id"])
+    proposed_at = str(envelope["occurred_at"])
+    latest = conn.execute(
+        """SELECT * FROM context_matter_sessions
+            WHERE tenant_id=? AND owner_member_id=? AND thread_key=?
+            ORDER BY sequence DESC LIMIT 1""",
+        (tenant, owner, thread_key),
+    ).fetchone()
+    if latest is not None:
+        source_already_counted = (
+            conn.execute(
+                """SELECT 1 FROM context_matter_session_sources
+                    WHERE tenant_id=? AND owner_member_id=? AND thread_key=?
+                      AND sequence=? AND source_event_id=?""",
+                (tenant, owner, thread_key, int(latest["sequence"]), source_id),
+            ).fetchone()
+            is not None
+        )
+        if source_already_counted:
+            return str(latest["context_id"]), "deterministic_matter"
+    new_session = latest is None
+    if latest is not None:
+        age_days = abs(
+            (
+                _parsed_time(proposed_at)
+                - _parsed_time(str(latest["first_proposed_at"]))
+            ).days
+        )
+        new_session = int(latest["source_count"]) >= 100 or age_days > 30
+    if new_session:
+        sequence = 0 if latest is None else int(latest["sequence"]) + 1
+        context_id = "ctx_matter_" + stable_digest(tenant, owner, thread_key, sequence)
+        conn.execute(
+            """INSERT INTO context_matter_sessions (
+                   tenant_id, owner_member_id, thread_key, sequence, context_id,
+                   first_proposed_at, last_proposed_at, last_source_event_id,
+                   source_count, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+            (
+                tenant,
+                owner,
+                thread_key,
+                sequence,
+                context_id,
+                proposed_at,
+                proposed_at,
+                source_id,
+                envelope["event_id"],
+            ),
+        )
+        conn.execute(
+            """INSERT INTO context_matter_session_sources (
+                   tenant_id, owner_member_id, thread_key, sequence, source_event_id
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (tenant, owner, thread_key, sequence, source_id),
+        )
+        return context_id, "deterministic_matter"
+    conn.execute(
+        """UPDATE context_matter_sessions
+              SET last_proposed_at=?, last_source_event_id=?,
+                  source_count=source_count+1, last_event_id=?
+            WHERE tenant_id=? AND owner_member_id=? AND thread_key=?
+              AND sequence=? AND last_event_id < ?""",
+        (
+            proposed_at,
+            source_id,
+            envelope["event_id"],
+            tenant,
+            owner,
+            thread_key,
+            int(latest["sequence"]),
+            envelope["event_id"],
+        ),
+    )
+    conn.execute(
+        """INSERT OR IGNORE INTO context_matter_session_sources (
+               tenant_id, owner_member_id, thread_key, sequence, source_event_id
+           ) VALUES (?, ?, ?, ?, ?)""",
+        (tenant, owner, thread_key, int(latest["sequence"]), source_id),
+    )
+    return str(latest["context_id"]), "deterministic_matter"
+
+
+def _put_node(
+    envelope: Mapping[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    node_id: str,
+    node_kind: str,
+    authority: str,
+    provider: str | None = None,
+    provider_account_id: str | None = None,
+    workspace: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO context_nodes (
+            tenant_id, node_id, node_kind, owner_member_id, owner_scope,
+            visibility_scope, sensitivity, provider, provider_account_id,
+            workspace, authority, created_at, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, node_id) DO UPDATE SET
+            node_kind=excluded.node_kind,
+            authority=CASE
+              WHEN context_nodes.authority='member_confirmed' THEN context_nodes.authority
+              ELSE excluded.authority END,
+            provider=COALESCE(excluded.provider, context_nodes.provider),
+            provider_account_id=COALESCE(
+                excluded.provider_account_id, context_nodes.provider_account_id
+            ),
+            workspace=COALESCE(excluded.workspace, context_nodes.workspace),
+            last_event_id=excluded.last_event_id
+        WHERE context_nodes.last_event_id <= excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            node_id,
+            node_kind,
+            owner_member_id(envelope),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            provider,
+            provider_account_id,
+            workspace,
+            authority,
+            envelope["occurred_at"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _put_context(
+    envelope: Mapping[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    context_id: str,
+    level: str,
+    label: str | None = None,
+    member_confirmed: bool = False,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO contexts (
+            tenant_id, context_id, context_level, label, member_confirmed,
+            owner_member_id, owner_scope, visibility_scope, sensitivity,
+            created_at, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, context_id) DO UPDATE SET
+            context_level=CASE WHEN excluded.member_confirmed=1
+                THEN 'member_confirmed' ELSE contexts.context_level END,
+            label=COALESCE(excluded.label, contexts.label),
+            member_confirmed=MAX(contexts.member_confirmed, excluded.member_confirmed),
+            last_event_id=excluded.last_event_id
+        WHERE contexts.last_event_id < excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            context_id,
+            level,
+            label,
+            int(member_confirmed),
+            owner_member_id(envelope),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["occurred_at"],
+            envelope["event_id"],
+        ),
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=context_id,
+        node_kind="context",
+        authority="member_confirmed" if member_confirmed else "deterministic_derived",
+    )
+
+
+def _put_edge(
+    envelope: Mapping[str, Any],
+    conn: sqlcipher3.Connection,
+    *,
+    from_node_id: str,
+    to_node_id: str,
+    edge_type: str,
+    authority: str,
+    reason_codes: list[str],
+    source_event_ids: list[str] | None = None,
+    valid_to: str | None = None,
+    status: str = "active",
+    revoked_by_event_id: str | None = None,
+) -> str:
+    edge_id = "edge_" + stable_digest(
+        envelope["tenant_id"], from_node_id, to_node_id, edge_type
+    )
+    conn.execute(
+        """
+        INSERT INTO context_edges (
+            tenant_id, edge_id, from_node_id, to_node_id, edge_type,
+            authority, reason_codes_json, source_event_ids_json, algorithm_id,
+            schema_version, valid_from, valid_to, status, revoked_by_event_id,
+            owner_member_id, owner_scope, visibility_scope, sensitivity,
+            last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, edge_id) DO UPDATE SET
+            authority=excluded.authority,
+            reason_codes_json=excluded.reason_codes_json,
+            source_event_ids_json=excluded.source_event_ids_json,
+            valid_to=excluded.valid_to,
+            status=excluded.status,
+            revoked_by_event_id=excluded.revoked_by_event_id,
+            last_event_id=excluded.last_event_id
+        WHERE context_edges.last_event_id < excluded.last_event_id
+        """,
+        (
+            envelope["tenant_id"],
+            edge_id,
+            from_node_id,
+            to_node_id,
+            edge_type,
+            authority,
+            _json(reason_codes),
+            _json(source_event_ids or [str(envelope["event_id"])]),
+            CONTEXT_ALGORITHM,
+            envelope["occurred_at"],
+            valid_to,
+            status,
+            revoked_by_event_id,
+            owner_member_id(envelope),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+    return edge_id
+
+
+def _record_lineage(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> None:
+    current = _event_node_id(str(envelope["event_id"]))
+    for field, edge_type in (
+        ("causation_id", "caused_by"),
+        ("correlation_id", "correlated_with"),
+    ):
+        related = envelope.get(field)
+        if not related:
+            continue
+        target = _event_node_id(str(related))
+        _put_node(
+            envelope,
+            conn,
+            node_id=target,
+            node_kind="source_event_reference",
+            authority="deterministic_derived",
+        )
+        _put_edge(
+            envelope,
+            conn,
+            from_node_id=current,
+            to_node_id=target,
+            edge_type=edge_type,
+            authority="deterministic_derived",
+            reason_codes=[f"envelope_{field}"],
+        )
+
+
+def _record_message(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> None:
+    payload = envelope["payload"]
+    member, provider, account, workspace = provider_coordinates(envelope, payload)
+    if not _is_private_member_envelope(envelope, member):
+        return
+    context_id = provider_conversation_context_id(envelope, payload)
+    if context_id is None:
+        return
+    _put_context(
+        envelope,
+        conn,
+        context_id=context_id,
+        level="provider_conversation",
+    )
+    _put_edge(
+        envelope,
+        conn,
+        from_node_id=_event_node_id(str(envelope["event_id"])),
+        to_node_id=context_id,
+        edge_type="member_of_context",
+        authority="provider_exact",
+        reason_codes=["provider_thread_id", "scope_exact"],
+    )
+    # Coordinates are retained on the source node, not exposed as graph labels.
+    _put_node(
+        envelope,
+        conn,
+        node_id=_event_node_id(str(envelope["event_id"])),
+        node_kind="source_event",
+        authority="source_fact",
+        provider=provider,
+        provider_account_id=account,
+        workspace=workspace,
+    )
+
+
+def _record_telephony(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> None:
+    """Index one exact SMS address pair without storing message text or numbers."""
+
+    payload = envelope["payload"]
+    member = owner_member_id(envelope)
+    if not _is_private_member_envelope(envelope, member):
+        return
+    from_number = str(payload.get("from_number") or "").strip()
+    to_number = str(payload.get("to_number") or "").strip()
+    account = str(envelope.get("source_account_id") or "")
+    if not from_number or not to_number or not account:
+        return
+    participant_pair_digest = stable_digest(
+        *sorted((from_number, to_number)), length=64
+    )
+    context_id = "ctx_provider_" + stable_digest(
+        envelope["tenant_id"],
+        member,
+        "twilio_sms",
+        account,
+        "personal",
+        participant_pair_digest,
+    )
+    _put_context(
+        envelope,
+        conn,
+        context_id=context_id,
+        level="provider_conversation",
+    )
+    _put_edge(
+        envelope,
+        conn,
+        from_node_id=_event_node_id(str(envelope["event_id"])),
+        to_node_id=context_id,
+        edge_type="member_of_context",
+        authority="provider_exact",
+        reason_codes=["telephony_party_pair", "scope_exact"],
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=_event_node_id(str(envelope["event_id"])),
+        node_kind="source_event",
+        authority="source_fact",
+        provider="twilio_sms",
+        provider_account_id=account,
+        workspace="personal",
+    )
+
+
+def _record_triage_proposal(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("owner_member_id")):
+        return
+    proposal_node = f"triage:{payload['proposal_id']}"
+    if (
+        conn.execute(
+            "SELECT 1 FROM context_nodes WHERE tenant_id=? AND node_id=?",
+            (envelope["tenant_id"], proposal_node),
+        ).fetchone()
+        is not None
+    ):
+        return
+    context_id, level = _matter_context_id(envelope, conn, payload)
+    source_node = _event_node_id(str(payload["source_event_id"]))
+    interpretation = payload.get("interpretation")
+    # A model-authored compact summary remains on the Triage proposal where
+    # its provenance is explicit.  It is never promoted to a graph label.
+    _put_context(envelope, conn, context_id=context_id, level=level)
+    _put_node(
+        envelope,
+        conn,
+        node_id=proposal_node,
+        node_kind="triage_candidate",
+        authority="deterministic_derived",
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=source_node,
+        node_kind="source_event_reference",
+        authority="deterministic_derived",
+    )
+    _put_edge(
+        envelope,
+        conn,
+        from_node_id=proposal_node,
+        to_node_id=source_node,
+        edge_type="extracted_from",
+        authority="deterministic_derived",
+        reason_codes=["explicit_source_event_id"],
+        source_event_ids=[str(payload["source_event_id"]), str(envelope["event_id"])],
+    )
+    _put_edge(
+        envelope,
+        conn,
+        from_node_id=proposal_node,
+        to_node_id=context_id,
+        edge_type="member_of_context",
+        authority=(
+            "provider_exact"
+            if level == "provider_conversation"
+            else "deterministic_derived"
+        ),
+        reason_codes=[
+            "code_owned_thread_key"
+            if level == "provider_conversation"
+            else "isolated_source"
+        ],
+        source_event_ids=[str(payload["source_event_id"]), str(envelope["event_id"])],
+    )
+    if isinstance(interpretation, Mapping):
+        for related_id in interpretation.get("related_source_event_ids") or []:
+            related_node = _event_node_id(str(related_id))
+            _put_node(
+                envelope,
+                conn,
+                node_id=related_node,
+                node_kind="source_event_reference",
+                authority="llm_proposed",
+            )
+            _put_edge(
+                envelope,
+                conn,
+                from_node_id=proposal_node,
+                to_node_id=related_node,
+                edge_type="semantic_support_suggestion",
+                authority="llm_proposed",
+                reason_codes=["bounded_interpretation_reference"],
+                source_event_ids=[str(envelope["event_id"]), str(related_id)],
+            )
+
+
+def _record_materialization(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    proposal_node = f"triage:{payload['proposal_id']}"
+    for event_id in payload.get("materialized_event_ids") or []:
+        canonical_node = _event_node_id(str(event_id))
+        _put_node(
+            envelope,
+            conn,
+            node_id=canonical_node,
+            node_kind="canonical_event_reference",
+            authority="deterministic_derived",
+        )
+        _put_edge(
+            envelope,
+            conn,
+            from_node_id=proposal_node,
+            to_node_id=canonical_node,
+            edge_type="materialized_as",
+            authority="member_confirmed",
+            reason_codes=["confirmed_materialization_receipt"],
+        )
+
+
+def _record_membership_decision(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    actor_field = (
+        "revoked_by_member_id"
+        if envelope["type"] == "context.membership.revoked"
+        else "confirmed_by_member_id"
+    )
+    if not _is_private_member_envelope(envelope, payload.get(actor_field)):
+        return
+    object_node = f"{payload['object_kind']}:{payload['object_id']}"
+    context_id = str(payload["context_id"])
+    _put_context(
+        envelope,
+        conn,
+        context_id=context_id,
+        level="member_confirmed",
+        member_confirmed=True,
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=object_node,
+        node_kind=str(payload["object_kind"]),
+        authority="member_confirmed",
+    )
+    edge_id = "edge_" + stable_digest(
+        envelope["tenant_id"], object_node, context_id, "member_of_context"
+    )
+    if envelope["type"] == "context.membership.revoked":
+        conn.execute(
+            """UPDATE context_edges
+                  SET status='revoked', valid_to=?, revoked_by_event_id=?,
+                      last_event_id=?
+                WHERE tenant_id=? AND edge_id=? AND status='active'
+                  AND last_event_id < ?""",
+            (
+                envelope["occurred_at"],
+                envelope["event_id"],
+                envelope["event_id"],
+                envelope["tenant_id"],
+                edge_id,
+                envelope["event_id"],
+            ),
+        )
+    else:
+        _put_edge(
+            envelope,
+            conn,
+            from_node_id=object_node,
+            to_node_id=context_id,
+            edge_type="member_of_context",
+            authority="member_confirmed",
+            reason_codes=["explicit_member_confirmation"],
+        )
+
+
+def _record_merge_or_split(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    actor_field = (
+        "merged_by_member_id"
+        if envelope["type"] == "context.merged"
+        else "split_by_member_id"
+    )
+    if not _is_private_member_envelope(envelope, payload.get(actor_field)):
+        return
+    if envelope["type"] == "context.merged":
+        target = str(payload["target_context_id"])
+        _put_context(
+            envelope,
+            conn,
+            context_id=target,
+            level="member_confirmed",
+            member_confirmed=True,
+        )
+        for source in payload["source_context_ids"]:
+            _put_context(
+                envelope, conn, context_id=str(source), level="member_confirmed"
+            )
+            conn.execute(
+                """UPDATE contexts SET merged_into_context_id=?, last_event_id=?
+                    WHERE tenant_id=? AND context_id=? AND last_event_id < ?""",
+                (
+                    target,
+                    envelope["event_id"],
+                    envelope["tenant_id"],
+                    source,
+                    envelope["event_id"],
+                ),
+            )
+            _put_edge(
+                envelope,
+                conn,
+                from_node_id=str(source),
+                to_node_id=target,
+                edge_type="merged_into",
+                authority="member_confirmed",
+                reason_codes=["explicit_member_merge"],
+            )
+    else:
+        source = str(payload["source_context_id"])
+        target = str(payload["target_context_id"])
+        _put_context(
+            envelope,
+            conn,
+            context_id=source,
+            level="member_confirmed",
+            member_confirmed=True,
+        )
+        _put_context(
+            envelope,
+            conn,
+            context_id=target,
+            level="member_confirmed",
+            member_confirmed=True,
+        )
+        for object_id in payload["object_ids"]:
+            object_node = f"{payload['object_kind']}:{object_id}"
+            _put_node(
+                envelope,
+                conn,
+                node_id=object_node,
+                node_kind=str(payload["object_kind"]),
+                authority="member_confirmed",
+            )
+            source_edge_id = "edge_" + stable_digest(
+                envelope["tenant_id"], object_node, source, "member_of_context"
+            )
+            conn.execute(
+                """UPDATE context_edges
+                      SET status='revoked', valid_to=?, revoked_by_event_id=?,
+                          last_event_id=?
+                    WHERE tenant_id=? AND edge_id=? AND status='active'
+                      AND last_event_id < ?""",
+                (
+                    envelope["occurred_at"],
+                    envelope["event_id"],
+                    envelope["event_id"],
+                    envelope["tenant_id"],
+                    source_edge_id,
+                    envelope["event_id"],
+                ),
+            )
+            _put_edge(
+                envelope,
+                conn,
+                from_node_id=object_node,
+                to_node_id=target,
+                edge_type="member_of_context",
+                authority="member_confirmed",
+                reason_codes=["explicit_member_split"],
+            )
+
+
+def _record_feedback(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("member_id")):
+        return
+    conn.execute(
+        """INSERT INTO triage_feedback (
+               tenant_id, feedback_id, proposal_id, member_id, reason, context_id,
+               target_kind, source_adapter, provider_account_id, workspace,
+               sender_digest, recorded_at, owner_scope, visibility_scope,
+               sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, feedback_id) DO NOTHING""",
+        (
+            envelope["tenant_id"],
+            payload["feedback_id"],
+            payload["proposal_id"],
+            payload["member_id"],
+            payload["reason"],
+            payload.get("context_id"),
+            payload.get("target_kind"),
+            payload.get("source_adapter"),
+            payload.get("provider_account_id"),
+            payload.get("workspace"),
+            payload.get("sender_digest"),
+            payload["recorded_at"],
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _record_policy(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("member_id")):
+        return
+    if envelope["type"] == "triage.policy_rule.approved":
+        conn.execute(
+            """INSERT INTO triage_policy_rules (
+                   tenant_id, rule_id, member_id, scope_kind, scope_value_digest,
+                   disposition, enforcement_mode, preview_affected_count,
+                   status, approved_at,
+                   approved_by_member_id, expires_at, owner_scope,
+                   visibility_scope, sensitivity, last_event_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(tenant_id, rule_id) DO UPDATE SET
+                   disposition=excluded.disposition,
+                   enforcement_mode='shadow',
+                   preview_affected_count=excluded.preview_affected_count,
+                   status='active', approved_at=excluded.approved_at,
+                   approved_by_member_id=excluded.approved_by_member_id,
+                   expires_at=excluded.expires_at, revoked_at=NULL,
+                   revoked_by_member_id=NULL, revoke_reason=NULL,
+                   last_event_id=excluded.last_event_id
+               WHERE triage_policy_rules.last_event_id < excluded.last_event_id""",
+            (
+                envelope["tenant_id"],
+                payload["rule_id"],
+                payload["member_id"],
+                payload["scope_kind"],
+                payload["scope_value_digest"],
+                payload["disposition"],
+                payload["enforcement_mode"],
+                payload["preview_affected_count"],
+                payload["approved_at"],
+                payload["approved_by_member_id"],
+                payload.get("expires_at"),
+                envelope["owner_scope"],
+                envelope["visibility_scope"],
+                envelope["sensitivity"],
+                envelope["event_id"],
+            ),
+        )
+    else:
+        conn.execute(
+            """UPDATE triage_policy_rules
+                  SET status='revoked', revoked_at=?, revoked_by_member_id=?,
+                      revoke_reason=?, last_event_id=?
+                WHERE tenant_id=? AND rule_id=? AND member_id=?
+                  AND status='active' AND last_event_id < ?""",
+            (
+                payload["revoked_at"],
+                payload["revoked_by_member_id"],
+                payload["reason"],
+                envelope["event_id"],
+                envelope["tenant_id"],
+                payload["rule_id"],
+                payload["member_id"],
+                envelope["event_id"],
+            ),
+        )
+
+
+def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
+    """Index one envelope without reading another projection or the network."""
+
+    payload = envelope.get("payload") or {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+    event_type = str(envelope["type"])
+    message_payload = (
+        payload if event_type in {"messaging.received", "messaging.sent"} else {}
+    )
+    _, message_provider, message_account, message_workspace = (
+        provider_coordinates(envelope, message_payload)
+        if message_payload
+        else ("", "", "", "")
+    )
+    _put_node(
+        envelope,
+        conn,
+        node_id=_event_node_id(str(envelope["event_id"])),
+        node_kind="source_event"
+        if event_type
+        in {
+            "messaging.received",
+            "messaging.sent",
+            "telephony.sms_received",
+            "calendar.event_added",
+            "artifact.received",
+        }
+        else "event",
+        authority="source_fact",
+        provider=message_provider or None,
+        provider_account_id=message_account or None,
+        workspace=message_workspace or None,
+    )
+    _record_lineage(envelope, conn)
+    if event_type in {"messaging.received", "messaging.sent"}:
+        _record_message(envelope, conn)
+    elif event_type == "telephony.sms_received":
+        _record_telephony(envelope, conn)
+    elif event_type == "triage.item.proposed":
+        _record_triage_proposal(envelope, conn)
+    elif event_type == "triage.item.materialized":
+        _record_materialization(envelope, conn)
+    elif event_type in {"context.membership.confirmed", "context.membership.revoked"}:
+        _record_membership_decision(envelope, conn)
+    elif event_type in {"context.merged", "context.split"}:
+        _record_merge_or_split(envelope, conn)
+    elif event_type == "triage.feedback.recorded":
+        _record_feedback(envelope, conn)
+    elif event_type in {"triage.policy_rule.approved", "triage.policy_rule.revoked"}:
+        _record_policy(envelope, conn)

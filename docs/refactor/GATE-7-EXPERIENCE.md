@@ -68,8 +68,8 @@ device/ambient audiences are rejected. A child audience additionally requires
 `child` compatibility plus the child query/action allowlists. Every read and
 action repeats visibility, role, capability, and domain authorization. Expiry
 or archive removes navigation; bookmarks show a calm unavailable shell with no
-spec or domain payload. The underlying log and all fourteen registered projections remain
-unchanged.
+spec or domain payload. The underlying log and all fifteen registered
+projections remain unchanged.
 
 ## Routes and experience modes
 

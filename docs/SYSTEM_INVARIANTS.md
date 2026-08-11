@@ -9,6 +9,11 @@ Every declared member/adapter source must prove one manifest-bound terminal
 disposition, and missing/failed processing must degrade health rather than
 render as an empty queue.
 
+CO-014 amendment (2026-08-10): a fifteenth rebuildable `context_fabric`
+projection indexes scoped, typed, temporal relationships without becoming
+truth or model memory. Candidate Inventory remains complete; the Triage
+Decision Queue is a bounded, member-controlled view over that inventory.
+
 Format: each invariant is numbered within its section, stated in one sentence (or at most two), and cites its source. Citation shorthand:
 
 - `[arch §N]` → `docs/architecture-summary.md` section N
@@ -46,7 +51,7 @@ Projections at L3 are read-only consumers of the event log; they synthesize stat
 2. Projections **never write back to the event log** — they are strictly read-only consumers; a projection emitting an event is a bug. [arch §4, BUILD.md §L3]
 3. Projection handlers are deterministic: no wall-clock reads, no random, no UUID generation, no network calls, no calls to other projections, no calls to the event log beyond the cursor advance — `apply(event)` is a pure function over `(state, event)`. [arch §4]
 4. Each projection has a `name`, a `version` integer (bumped to trigger rebuild), an event-type subscription list, a durable cursor, an idempotent `apply(event)`, and a `rebuild()`. [arch §4]
-5. There are exactly **14 registered projections**: the original twelve (`parties`, `interactions`, `artifacts`, `commitments`, `tasks`, `recurrences`, `calendars`, `places_assets_accounts`, `money`, `vector_search`, `xlsx_workbooks`, `member_knowledge`), `lists` as the thirteenth domain projection per D18, and `triage` as the fourteenth derived adjudication projection per D26. The original thirteen domain-truth capabilities remain intact; Triage is rebuildable proposal state and never authoritative household truth. [arch §1, arch §4, D17, D18, D26]
+5. There are exactly **15 registered projections**: the original twelve (`parties`, `interactions`, `artifacts`, `commitments`, `tasks`, `recurrences`, `calendars`, `places_assets_accounts`, `money`, `vector_search`, `xlsx_workbooks`, `member_knowledge`), `lists` as the thirteenth domain projection per D18, `triage` as the fourteenth derived adjudication projection per D26, and `context_fabric` as the fifteenth rebuildable relationship index per ADR-0008 and C110. The original thirteen domain-truth capabilities remain intact; neither Triage nor Context Fabric is authoritative household truth. [arch §1, arch §4, D17, D18, D26, ADR-0008, C110]
 6. Plugin-provided projections namespace their tables under the plugin's dotted id; they never share table names with core projections, and the projection schema is not part of the authority model (authority is checked at Session construction, not at projection-row level). [arch §4, arch §6]
 7. Projection schemas never embed hardcoded tenant identity; all tenant-specific values come from row data populated by events, which in turn originate in the instance's config/bootstrap. [BUILD.md §CRITICAL OPERATING RULES rule 4, arch §4]
 

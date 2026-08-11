@@ -1,0 +1,451 @@
+"""Complete cursor and matter grouping proofs for CO-014 Triage."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import sqlcipher3
+
+from adminme.lib.session import build_internal_session
+from adminme.projections.triage import TriageProjection
+from adminme.projections.triage.queries import (
+    pending_for_sources,
+    triage_page_for_member,
+)
+
+
+MEMBER = "fixture-triage-member"  # fixture:tenant_data:ok
+TENANT = "fixture-triage-tenant"  # fixture:tenant_data:ok
+
+
+def _event(
+    index: int, *, thread_key: str | None = None, title: str | None = None
+) -> dict[str, Any]:
+    interpretation = None
+    if thread_key:
+        interpretation = {
+            "thread_key": thread_key,
+            "compact_summary": f"Matter {thread_key}",
+            "action_owner": "member",
+            "lifecycle_state": "open",
+            "evidence_refs": [
+                {"source_event_id": f"source-{index}", "quote": "fixture"}
+            ],
+        }
+    return {
+        "event_id": f"event-{index:04d}",
+        "tenant_id": TENANT,
+        "type": "triage.item.proposed",
+        "schema_version": 3,
+        "occurred_at": f"2030-01-{1 + index // 24:02d}T{index % 24:02d}:00:00Z",
+        "owner_scope": f"private:{MEMBER}",
+        "visibility_scope": f"private:{MEMBER}",
+        "sensitivity": "normal",
+        "payload": {
+            "proposal_id": f"proposal-{index:04d}",
+            "target_kind": "task",
+            "owner_member_id": MEMBER,
+            "title": title or f"Fixture task {index:04d}",
+            "candidate": {},
+            "route": {"member_id": MEMBER},
+            "source_event_id": f"source-{index}",
+            "confidence": 0.99,
+            "reasons": ["fixture evidence"],
+            "interpretation": interpretation,
+        },
+    }
+
+
+def _projection() -> tuple[TriageProjection, sqlcipher3.Connection]:
+    projection = TriageProjection()
+    conn = sqlcipher3.connect(":memory:")
+    conn.row_factory = sqlcipher3.Row
+    conn.executescript(Path(projection.schema_path).read_text("utf-8"))
+    projection.migrate_schema(conn)
+    return projection, conn
+
+
+def test_every_candidate_is_reachable_once_across_stable_pages() -> None:
+    projection, conn = _projection()
+    for index in range(125):
+        projection.apply(_event(index), conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+    cursor = None
+    seen_matters: list[str] = []
+    seen_candidates: list[str] = []
+    while True:
+        page = triage_page_for_member(
+            conn,
+            session,
+            member_id=MEMBER,
+            lens="all_candidates",
+            cursor=cursor,
+            limit=17,
+        )
+        seen_matters.extend(matter["context_id"] for matter in page["matters"])
+        seen_candidates.extend(
+            candidate["proposal_id"]
+            for matter in page["matters"]
+            for candidate in matter["candidates"]
+        )
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert len(seen_matters) == len(set(seen_matters)) == 125
+    assert len(seen_candidates) == len(set(seen_candidates)) == 125
+
+
+def test_cross_surface_candidate_lookup_reads_only_visible_source_rows() -> None:
+    projection, conn = _projection()
+    for index in range(125):
+        projection.apply(_event(index), conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+    linked = pending_for_sources(
+        conn,
+        session,
+        member_id=MEMBER,
+        source_event_ids=["source-1", "source-124", "not-visible"],
+    )
+    assert [item["proposal_id"] for item in linked] == [
+        "proposal-0124",
+        "proposal-0001",
+    ]
+
+
+def test_one_provider_conversation_is_one_matter_with_independent_candidates() -> None:
+    projection, conn = _projection()
+    for index in range(5):
+        projection.apply(
+            _event(index, thread_key="shared-thread", title=f"Instruction {index}"),
+            conn,
+        )
+    session = build_internal_session(MEMBER, "principal", TENANT)
+    page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates"
+    )
+    assert page["inventory"]["total_candidates"] == 5
+    assert page["inventory"]["total_matters"] == 1
+    [matter] = page["matters"]
+    assert matter["candidate_count"] == 5
+    assert [item["proposal_id"] for item in matter["candidates"]] == [
+        f"proposal-{index:04d}" for index in range(5)
+    ]
+
+
+def test_exact_duplicate_is_retained_as_evidence_not_an_extra_decision() -> None:
+    projection, conn = _projection()
+    projection.apply(_event(1, thread_key="same", title="Pay fixture bill"), conn)
+    projection.apply(_event(2, thread_key="same", title="Pay fixture bill"), conn)
+    rows = conn.execute(
+        """SELECT proposal_id, decision_disposition, duplicate_of_proposal_id
+             FROM triage_items ORDER BY proposal_id"""
+    ).fetchall()
+    assert tuple(rows[0]) == ("proposal-0001", "decision", None)
+    assert tuple(rows[1]) == ("proposal-0002", "evidence_only", "proposal-0001")
+
+
+def test_extracted_candidate_never_deduplicates_against_its_parent_intent() -> None:
+    projection, conn = _projection()
+    parent = _event(1)
+    parent.update(type="triage.intent.submitted")
+    parent["payload"] = {
+        "intent_id": "member-intent-1",
+        "member_id": MEMBER,
+        "text": "Review the fixture instruction",
+        "source_surface": "triage",
+        "kind_hint": "task",
+    }
+    projection.apply(parent, conn)
+    child = _event(2, title="Review the fixture instruction")
+    child["payload"].update(
+        source_event_id="event-0001",
+        parent_intent_id="member-intent-1",
+    )
+    projection.apply(child, conn)
+    rows = {
+        row["proposal_id"]: dict(row)
+        for row in conn.execute(
+            """SELECT proposal_id, state, decision_disposition,
+                      duplicate_of_proposal_id
+                 FROM triage_items"""
+        )
+    }
+    assert rows["member-intent-1"]["state"] == "dismissed"
+    assert rows["proposal-0002"]["state"] == "pending_review"
+    assert rows["proposal-0002"]["decision_disposition"] == "decision"
+    assert rows["proposal-0002"]["duplicate_of_proposal_id"] is None
+
+
+def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() -> None:
+    projection, conn = _projection()
+    projection.apply(_event(1, thread_key="same", title="Keep this fixture"), conn)
+    projection.apply(_event(2, thread_key="same", title="Different fixture"), conn)
+    enriched = _event(3)
+    enriched.update(event_id="event-9000", type="triage.item.enriched")
+    enriched["payload"] = {
+        "proposal_id": "proposal-0002",
+        "enriched_at": "2030-01-02T00:00:00Z",
+        "enriched_by_member_id": MEMBER,
+        "title": "Keep this fixture",
+        "target_kind": "task",
+        "candidate_updates": {"due": "2030-01-05T12:00:00Z"},
+        "route": {"member_id": MEMBER},
+    }
+    projection.apply(enriched, conn)
+    reconciled = conn.execute(
+        """SELECT decision_disposition, duplicate_of_proposal_id, queue_lane
+             FROM triage_items WHERE proposal_id='proposal-0002'"""
+    ).fetchone()
+    assert tuple(reconciled) == (
+        "evidence_only",
+        "proposal-0001",
+        "member_promise",
+    )
+
+    intent = _event(4)
+    intent.update(event_id="event-9001", type="triage.intent.submitted")
+    intent["payload"] = {
+        "intent_id": "pending-intent",
+        "member_id": MEMBER,
+        "text": "Unclassified fixture note",
+        "source_surface": "triage",
+        "kind_hint": None,
+    }
+    projection.apply(intent, conn)
+    dismissed = _event(5)
+    dismissed.update(event_id="event-9002", type="triage.item.dismissed")
+    dismissed["payload"] = {
+        "proposal_id": "pending-intent",
+        "dismissed_at": "2030-01-03T00:00:00Z",
+        "dismissed_by_member_id": MEMBER,
+        "reason": "not_actionable",
+    }
+    projection.apply(dismissed, conn)
+    state = conn.execute(
+        "SELECT state FROM triage_items WHERE proposal_id='pending-intent'"
+    ).fetchone()[0]
+    assert state == "dismissed"
+
+
+def test_continuous_long_chat_is_bounded_into_temporal_matters() -> None:
+    projection, conn = _projection()
+    for index in range(101):
+        projection.apply(_event(index, thread_key="years-long-chat"), conn)
+    session = build_internal_session(MEMBER, "principal", TENANT)
+    page = triage_page_for_member(
+        conn, session, member_id=MEMBER, lens="all_candidates", limit=10
+    )
+    assert page["inventory"]["total_matters"] == 2
+    assert sorted(matter["candidate_count"] for matter in page["matters"]) == [1, 100]
+
+
+def test_matter_limit_counts_distinct_sources_not_candidate_interleaving() -> None:
+    projection, conn = _projection()
+    events = [
+        _event(1, thread_key="interleaved"),
+        _event(2, thread_key="interleaved"),
+        _event(3, thread_key="interleaved"),
+    ]
+    events[2]["payload"]["source_event_id"] = "source-1"
+    for event in events:
+        projection.apply(event, conn)
+    [session] = conn.execute("SELECT * FROM triage_context_sessions").fetchall()
+    assert session["source_count"] == 2
+    assert (
+        conn.execute("SELECT COUNT(*) FROM triage_context_session_sources").fetchone()[
+            0
+        ]
+        == 2
+    )
+
+
+def test_exact_existing_task_and_recurrence_become_evidence_not_new_work() -> None:
+    projection, conn = _projection()
+    projection.apply(
+        {
+            **_event(1),
+            "event_id": "task-created-1",
+            "type": "task.created",
+            "payload": {
+                "task_id": "task-existing",
+                "title": "File fixture return",
+                "owner_member_id": MEMBER,
+            },
+        },
+        conn,
+    )
+    projection.apply(_event(2, title="File fixture return"), conn)
+    recurrence = _event(3, title="File the fixture return every Friday")
+    recurrence["payload"]["target_kind"] = "recurrence"
+    recurrence["payload"]["candidate"] = {
+        "kind": "fixture_return",
+        "rrule": "FREQ=WEEKLY;BYDAY=FR",
+    }
+    projection.apply(recurrence, conn)
+    projection.apply(
+        {
+            **_event(4),
+            "event_id": "recurrence-added-1",
+            "type": "recurrence.added",
+            "payload": {
+                "recurrence_id": "recurrence-existing",
+                "linked_kind": "household",
+                "linked_id": "fixture-household",
+                "kind": "fixture_return",
+                "rrule": "FREQ=WEEKLY;BYDAY=FR",
+                "next_occurrence": "2030-01-11T12:00:00Z",
+                "owner_member_id": MEMBER,
+            },
+        },
+        conn,
+    )
+    rows = {
+        row["proposal_id"]: dict(row)
+        for row in conn.execute(
+            """SELECT proposal_id, decision_disposition,
+                      existing_object_kind, existing_object_id
+                 FROM triage_items"""
+        )
+    }
+    assert rows["proposal-0002"]["decision_disposition"] == "attach_existing"
+    assert rows["proposal-0002"]["existing_object_id"] == "task-existing"
+    assert rows["proposal-0003"]["decision_disposition"] == "attach_existing"
+    assert rows["proposal-0003"]["existing_object_id"] == "recurrence-existing"
+
+
+def test_exact_existing_list_item_matches_reminder_and_list_item_candidates() -> None:
+    projection, conn = _projection()
+    for index, target_kind in enumerate(("reminder", "list_item"), start=1):
+        proposal = _event(index, title="Bring the fixture folder")
+        proposal["payload"]["target_kind"] = target_kind
+        projection.apply(proposal, conn)
+    provider_event = _event(3)
+    provider_event.update(event_id="list-item-added-1", type="list_item.added")
+    provider_event["payload"] = {
+        "item_external_id": "provider-item-existing",
+        "list_external_id": "provider-list-existing",
+        "title": "Bring the fixture folder",
+        "owner_member_id": MEMBER,
+    }
+    projection.apply(provider_event, conn)
+    rows = conn.execute(
+        """SELECT target_kind, decision_disposition, existing_object_id
+             FROM triage_items ORDER BY target_kind"""
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("list_item", "attach_existing", "provider-item-existing"),
+        ("reminder", "attach_existing", "provider-item-existing"),
+    ]
+
+
+def test_v6_migration_preserves_every_temporal_matter_and_matches_replay() -> None:
+    projection, replay = _projection()
+    events = [
+        _event(index, thread_key="long-lived-provider-thread") for index in range(101)
+    ]
+    for event in events:
+        projection.apply(event, replay)
+
+    legacy = sqlcipher3.connect(":memory:")
+    legacy.row_factory = sqlcipher3.Row
+    legacy.executescript(
+        """
+        CREATE TABLE triage_items (
+            proposal_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL, target_kind TEXT,
+            owner_member_id TEXT NOT NULL, title TEXT NOT NULL,
+            candidate_json TEXT NOT NULL DEFAULT '{}', route_json TEXT,
+            source_event_id TEXT NOT NULL, parent_intent_id TEXT,
+            candidate_key TEXT, extraction_event_id TEXT,
+            eligibility_rule_ids_json TEXT NOT NULL DEFAULT '[]',
+            confidence REAL, reasons_json TEXT NOT NULL DEFAULT '[]',
+            interpretation_json TEXT, state TEXT NOT NULL,
+            proposed_at TEXT NOT NULL, resolved_at TEXT, resolved_by TEXT,
+            resolution_reason TEXT,
+            materialized_event_ids_json TEXT NOT NULL DEFAULT '[]',
+            domain_approval_event_id TEXT, materialization_event_id TEXT,
+            outcome_event_id TEXT, owner_scope TEXT NOT NULL,
+            visibility_scope TEXT NOT NULL, sensitivity TEXT NOT NULL,
+            last_event_id TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, proposal_id)
+        );
+        """
+    )
+    legacy_columns = [
+        "proposal_id",
+        "tenant_id",
+        "source_kind",
+        "target_kind",
+        "owner_member_id",
+        "title",
+        "candidate_json",
+        "route_json",
+        "source_event_id",
+        "parent_intent_id",
+        "candidate_key",
+        "extraction_event_id",
+        "eligibility_rule_ids_json",
+        "confidence",
+        "reasons_json",
+        "interpretation_json",
+        "state",
+        "proposed_at",
+        "resolved_at",
+        "resolved_by",
+        "resolution_reason",
+        "materialized_event_ids_json",
+        "domain_approval_event_id",
+        "materialization_event_id",
+        "outcome_event_id",
+        "owner_scope",
+        "visibility_scope",
+        "sensitivity",
+        "last_event_id",
+    ]
+    column_sql = ", ".join(legacy_columns)
+    placeholders = ", ".join("?" for _ in legacy_columns)
+    for row in replay.execute(f"SELECT {column_sql} FROM triage_items"):
+        legacy.execute(
+            f"INSERT INTO triage_items ({column_sql}) VALUES ({placeholders})",
+            tuple(row),
+        )
+
+    # Production opens the current schema before invoking the additive migration.
+    legacy.executescript(Path(projection.schema_path).read_text("utf-8"))
+    projection.migrate_schema(legacy)
+
+    migrated_items = legacy.execute(
+        """SELECT proposal_id, context_id, context_kind, title_fingerprint,
+                  object_match_fingerprint, queue_lane, evidence_state,
+                  ownership_state, lifecycle_state
+             FROM triage_items ORDER BY proposal_id"""
+    ).fetchall()
+    replayed_items = replay.execute(
+        """SELECT proposal_id, context_id, context_kind, title_fingerprint,
+                  object_match_fingerprint, queue_lane, evidence_state,
+                  ownership_state, lifecycle_state
+             FROM triage_items ORDER BY proposal_id"""
+    ).fetchall()
+    assert [tuple(row) for row in migrated_items] == [
+        tuple(row) for row in replayed_items
+    ]
+    migrated_sessions = legacy.execute(
+        "SELECT * FROM triage_context_sessions ORDER BY sequence"
+    ).fetchall()
+    replayed_sessions = replay.execute(
+        "SELECT * FROM triage_context_sessions ORDER BY sequence"
+    ).fetchall()
+    assert [tuple(row) for row in migrated_sessions] == [
+        tuple(row) for row in replayed_sessions
+    ]
+    assert [row[3] for row in migrated_sessions] == [0, 1]
+    migrated_sources = legacy.execute(
+        "SELECT * FROM triage_context_session_sources ORDER BY sequence, source_event_id"
+    ).fetchall()
+    replayed_sources = replay.execute(
+        "SELECT * FROM triage_context_session_sources ORDER BY sequence, source_event_id"
+    ).fetchall()
+    assert [tuple(row) for row in migrated_sources] == [
+        tuple(row) for row in replayed_sources
+    ]

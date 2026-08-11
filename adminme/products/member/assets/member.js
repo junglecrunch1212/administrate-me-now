@@ -10,6 +10,7 @@ const state = {
   carouselItems: [],
   triageView: "ready",
   triageSelected: null,
+  triageMatter: null,
   commsView: "focus",
   commsAccount: "all",
   commsThread: null,
@@ -147,6 +148,7 @@ async function reloadActiveSurface() {
     if (state.calendarAnchor) params.set("date", state.calendarAnchor);
     path += `?${params}`;
   }
+  if (active === "triage") path += "?triage_lens=all_candidates";
   if (active === "notes") {
     state.notesResults = null; state.notesQuery = ""; replaceQuery({ q: null });
   }
@@ -157,14 +159,14 @@ async function reloadActiveSurface() {
   renderSurface(await api(path));
 }
 
-async function decideTriage(item, action, buttons) {
+async function decideTriage(item, action, buttons, feedbackReason = null) {
   buttons.forEach((button) => { button.disabled = true; });
   const banner = $("#state-banner"); banner.hidden = false;
   banner.textContent = action === "approve" ? "Confirming this candidate through the household gate…" : "Dismissing this candidate…";
   try {
     const result = await api(`/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`, {
       method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null }),
+      body: JSON.stringify({ request_id: crypto.randomUUID(), expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
     });
     await reloadActiveSurface();
     banner.replaceChildren();
@@ -173,7 +175,7 @@ async function decideTriage(item, action, buttons) {
       banner.append(document.createTextNode(pending ? `Confirmed. The governed provider action is awaiting approval. ` : `Confirmed and added to ${result.destination.label || titleCase(result.destination.surface)}. `));
       const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
     } else {
-      banner.textContent = "Dismissed. No household record or provider write was created.";
+      banner.textContent = feedbackReason ? "Dismissed. No household record was created, and this reason is now part of your reversible feedback history." : "Dismissed. No household record or provider write was created.";
     }
   } catch (error) {
     banner.textContent = `${error.message} Nothing was confirmed or dismissed.`;
@@ -551,7 +553,9 @@ function triageDetail(item, data, readOnly = false) {
   const row = document.createElement("div"); row.className = "button-row";
   const save = text("button", "Save details", "button button-quiet"); save.type = "submit";
   const approve = text("button", "Confirm and route", "button button-primary"); approve.type = "button"; approve.disabled = missing.length > 0;
-  const dismiss = text("button", "Dismiss", "button button-quiet"); dismiss.type = "button";
+  const feedback = document.createElement("select"); feedback.setAttribute("aria-label", "Why this candidate should leave Triage");
+  for (const [value, label] of [["", "Choose dismissal reason…"], ["not_actionable", "Not actionable"], ["already_done", "Already done"], ["duplicate", "Duplicate"], ["wrong_kind", "Wrong kind"], ["wrong_context", "Wrong context"], ["wrong_owner", "Wrong owner"], ["not_mine", "Not mine"], ["recurring_normal", "Normal recurrence"], ["low_signal", "Low signal"], ["provider_promotion", "Promotion / marketing"], ["spam", "Spam"], ["other", "Other"]]) { const option = document.createElement("option"); option.value = value; option.textContent = label; feedback.append(option); }
+  const dismiss = text("button", "Dismiss & teach", "button button-quiet"); dismiss.type = "button"; dismiss.disabled = true;
   const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
   const buttons = [save, approve, dismiss];
   form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
@@ -570,10 +574,65 @@ function triageDetail(item, data, readOnly = false) {
     }
     await decideTriage(item, "approve", buttons);
   });
-  dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons));
+  feedback.addEventListener("change", () => { dismiss.disabled = !feedback.value; });
+  dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons, feedback.value));
   evidence.addEventListener("click", () => showEvidence(item.source_event_id));
-  row.append(save, approve, dismiss, evidence); form.append(row); section.append(form);
+  row.append(save, approve, feedback, dismiss, evidence); form.append(row); section.append(form);
   return section;
+}
+
+function triageCandidateMatches(item, view) {
+  if (view === "recent") return false;
+  if (view === "all_candidates") return true;
+  if (view === "needs_interpretation") return item.review_state?.state === "needs_interpretation";
+  if (view === "needs_details") return item.review_state?.state === "needs_details" && item.decision_disposition === "decision";
+  if (view === "ready") return item.review_state?.state === "ready" && item.decision_disposition === "decision";
+  if (view === "low_signal") return item.queue_lane === "standard" && item.ownership_state === "unknown" && item.lifecycle_state === "unknown";
+  if (view === "recurring_exceptions") return item.queue_lane === "recurring_exception";
+  if (view === "learned_rules") return item.policy_disposition !== "none";
+  return true;
+}
+
+async function loadMoreTriage(data) {
+  const cursor = data.triage?.next_cursor;
+  if (!cursor) return;
+  const button = document.querySelector("[data-triage-more]"); if (button) { button.disabled = true; button.textContent = "Loading…"; }
+  try {
+    const params = new URLSearchParams({ triage_lens: "all_candidates", triage_cursor: cursor, triage_limit: "30" });
+    const next = await api(`/api/member/v1/surfaces/triage?${params}`);
+    const known = new Set((data.triage.matters || []).map((matter) => matter.context_id));
+    for (const matter of next.triage?.matters || []) if (!known.has(matter.context_id)) data.triage.matters.push(matter);
+    const knownItems = new Set((data.items || []).map((item) => item.proposal_id));
+    for (const item of next.items || []) if (!knownItems.has(item.proposal_id)) data.items.push(item);
+    data.triage.next_cursor = next.triage?.next_cursor || null; data.triage.has_more = Boolean(next.triage?.has_more);
+    renderSurface(data);
+  } catch (error) { const banner = $("#state-banner"); banner.hidden = false; banner.textContent = error.message; if (button) { button.disabled = false; button.textContent = "Load next matters"; } }
+}
+
+async function approveTriageSuggestion(suggestion, button) {
+  button.disabled = true;
+  const values = { scope_kind: suggestion.scope_kind, scope_value: suggestion.scope_value, disposition: suggestion.suggested_disposition };
+  const banner = $("#state-banner"); banner.hidden = false;
+  try {
+    if (!button.dataset.previewAffectedCount) {
+      const preview = await api("/api/member/v1/triage-policy/preview", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(values) });
+      button.dataset.previewAffectedCount = String(preview.affected_feedback_count);
+      button.textContent = "Approve shadow rule";
+      button.disabled = false;
+      banner.textContent = `${preview.affected_feedback_count} matching feedback decisions. Select “Approve shadow rule” to confirm. It will not suppress, confirm, route, or write candidates.`;
+      return;
+    }
+    const expectedAffectedCount = Number(button.dataset.previewAffectedCount);
+    await api("/api/member/v1/triage-policy/approve", { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ ...values, request_id: crypto.randomUUID(), expected_affected_count: expectedAffectedCount }) });
+    banner.textContent = "Shadow rule recorded. It is reversible and has no automatic candidate or provider effect in this rollout.";
+    await reloadActiveSurface();
+  } catch (error) { banner.textContent = `${error.message} No rule was approved.`; button.disabled = false; }
+}
+
+async function revokeTriageRule(rule, button) {
+  button.disabled = true; const banner = $("#state-banner"); banner.hidden = false;
+  try { await api(`/api/member/v1/triage-policy/${encodeURIComponent(rule.rule_id)}/revoke`, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify({ request_id: crypto.randomUUID(), reason: "Revoked from Triage learning controls" }) }); banner.textContent = "Shadow rule revoked."; await reloadActiveSurface(); }
+  catch (error) { banner.textContent = `${error.message} The rule remains unchanged.`; button.disabled = false; }
 }
 
 function triageSurface(data) {
@@ -590,36 +649,53 @@ function triageSurface(data) {
   fragment.append(intro);
   const pending = data.items || [];
   const recent = data.recent_items || [];
-  const groups = {
-    needs_interpretation: pending.filter((item) => item.review_state?.state === "needs_interpretation"),
-    ready: pending.filter((item) => item.review_state?.state === "ready"),
-    needs_details: pending.filter((item) => item.review_state?.state === "needs_details"),
-    recent,
-  };
-  if (!groups[state.triageView]) state.triageView = "ready";
+  const inventory = data.triage?.inventory || {};
+  const inventoryCard = document.createElement("section"); inventoryCard.className = "card triage-inventory";
+  const candidateCount = inventory.total_candidates || 0; const matterCount = inventory.total_matters || 0;
+  inventoryCard.append(text("p", "CANDIDATE INVENTORY", "eyebrow"), text("h2", `${candidateCount} candidate${candidateCount === 1 ? "" : "s"} across ${matterCount} matter${matterCount === 1 ? "" : "s"}`), text("p", `${inventory.decision_candidates || 0} still need decisions · ${inventory.duplicate_evidence || 0} exact duplicates retained as evidence · ${inventory.existing_object_evidence || 0} linked to existing work.`, "state-note"));
+  fragment.append(inventoryCard);
+  const suggestions = data.triage?.feedback_suggestions || [];
+  const policyRules = data.triage?.policy_rules || [];
+  const activePolicyRules = policyRules.filter((rule) => rule.status === "active");
+  if (suggestions.length || activePolicyRules.length) {
+    const learning = document.createElement("section"); learning.className = "card"; learning.append(text("p", "REVERSIBLE LEARNING", "eyebrow"), text("h2", `${suggestions.length} suggested pattern${suggestions.length === 1 ? "" : "s"} · ${activePolicyRules.length} shadow rule${activePolicyRules.length === 1 ? "" : "s"}`), text("p", "Rules begin in shadow mode. They can be inspected and revoked, and they cannot silently confirm or suppress life truth.", "state-note"));
+    for (const suggestion of suggestions.slice(0, 5)) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${suggestion.occurrences} × ${titleCase(suggestion.reason)} in ${titleCase(suggestion.scope_kind)}`)); const approve = text("button", "Preview & approve shadow rule", "button button-quiet"); approve.type = "button"; approve.addEventListener("click", () => approveTriageSuggestion(suggestion, approve)); row.append(approve); learning.append(row); }
+    for (const rule of activePolicyRules) { const row = document.createElement("div"); row.className = "button-row"; row.append(text("span", `${titleCase(rule.disposition)} · ${titleCase(rule.scope_kind)} · shadow only`)); const revoke = text("button", "Revoke", "button button-quiet"); revoke.type = "button"; revoke.addEventListener("click", () => revokeTriageRule(rule, revoke)); row.append(revoke); learning.append(row); }
+    fragment.append(learning);
+  }
+  const matterRows = data.triage?.matters || pending.map((item) => ({ context_id: item.context_id || item.proposal_id, label: item.group_label || item.title, queue_lane: item.queue_lane || "standard", candidate_count: 1, source_count: 1, candidates: [item] }));
+  const views = new Set(["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"]);
+  if (!views.has(state.triageView)) state.triageView = "ready";
   const controls = document.createElement("section"); controls.className = "card comms-controls";
   const tabs = document.createElement("div"); tabs.className = "comms-filter-row"; tabs.setAttribute("role", "group"); tabs.setAttribute("aria-label", "Triage views");
-  for (const [key, label] of [["needs_interpretation", "Needs interpretation"], ["needs_details", "Needs details"], ["ready", "Ready"], ["recent", "Recent"]]) {
-    const button = text("button", `${label} ${groups[key].length}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
-    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
+  for (const [key, label] of [["ready", "Ready"], ["needs_details", "Needs details"], ["needs_interpretation", "Needs interpretation"], ["low_signal", "Low signal"], ["recurring_exceptions", "Recurring exceptions"], ["learned_rules", "Learned rules"], ["all_candidates", "All candidates"], ["recent", "Recent"]]) {
+    const count = key === "recent" ? recent.length : pending.filter((item) => triageCandidateMatches(item, key)).length;
+    const button = text("button", `${label} ${count}`, "comms-filter"); button.type = "button"; button.setAttribute("aria-pressed", String(state.triageView === key));
+    button.addEventListener("click", () => { state.triageView = key; state.triageSelected = null; state.triageMatter = null; replaceQuery({ view: key, item: null }); renderSurface(data); }); tabs.append(button);
   }
   controls.append(tabs); fragment.append(controls);
-  const visible = groups[state.triageView];
-  if (!state.triageSelected || !visible.some((item) => item.proposal_id === state.triageSelected)) state.triageSelected = visible[0]?.proposal_id || null;
-  const selected = visible.find((item) => item.proposal_id === state.triageSelected) || null;
+  const visibleMatters = state.triageView === "recent"
+    ? recent.map((item) => ({ context_id: `recent:${item.proposal_id}`, label: item.title, queue_lane: item.state, candidate_count: 1, source_count: 1, candidates: [item] }))
+    : matterRows.map((matter) => ({ ...matter, candidates: (matter.candidates || []).filter((item) => triageCandidateMatches(item, state.triageView)) })).filter((matter) => matter.candidates.length);
+  if (state.triageSelected) state.triageMatter = visibleMatters.find((matter) => matter.candidates.some((item) => item.proposal_id === state.triageSelected))?.context_id || state.triageMatter;
+  if (!state.triageMatter || !visibleMatters.some((matter) => matter.context_id === state.triageMatter)) state.triageMatter = visibleMatters[0]?.context_id || null;
+  const selectedMatter = visibleMatters.find((matter) => matter.context_id === state.triageMatter) || null;
   const workspace = document.createElement("div"); workspace.className = "triage-workspace";
-  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Awaiting review"));
-  if (!visible.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : "No recent decisions yet.", "empty"));
+  const master = document.createElement("section"); master.className = "card triage-master"; master.append(text("h2", state.triageView === "recent" ? "Recent decisions" : "Matters awaiting review"));
+  if (!visibleMatters.length) master.append(text("p", state.triageView === "ready" ? "Nothing is ready to confirm." : state.triageView === "needs_details" ? "No proposals need more details." : state.triageView === "needs_interpretation" ? "No thoughts are waiting for a type." : state.triageView === "recent" ? "No recent decisions yet." : "Nothing is in this lens on the loaded pages.", "empty"));
   const list = document.createElement("ul"); list.className = "triage-master-list";
-  for (const item of visible) {
-    const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(item.proposal_id === state.triageSelected));
-    const source = item.source_context?.state === "available" ? [item.source_context.channel && titleCase(item.source_context.channel), item.source_context.sender].filter(Boolean).join(" · ") : null;
-    const compactSummary = item.interpretation?.compact_summary || item.title;
-    const contextState = item.interpretation?.thread_state ? ` · ${titleCase(item.interpretation.thread_state)}` : "";
-    button.append(text("strong", compactSummary), text("small", `${item.target_kind ? titleCase(item.target_kind) : "Unclassified thought"} · ${state.triageView === "recent" ? titleCase(item.state) : titleCase(item.review_state?.state)}${contextState}${source ? ` · ${source}` : ""}`));
-    button.addEventListener("click", () => { state.triageSelected = item.proposal_id; replaceQuery({ view: state.triageView, item: item.proposal_id }); renderSurface(data); }); li.append(button); list.append(li);
+  for (const matter of visibleMatters) {
+    const li = document.createElement("li"); const button = document.createElement("button"); button.type = "button"; button.className = "triage-master-button"; button.setAttribute("aria-current", String(matter.context_id === state.triageMatter));
+    const first = matter.candidates[0]; const source = first?.source_context?.state === "available" ? [first.source_context.channel && titleCase(first.source_context.channel), first.source_context.sender].filter(Boolean).join(" · ") : null;
+    button.append(text("strong", matter.label || first?.title || "Review matter"), text("small", `${matter.candidates.length} candidate${matter.candidates.length === 1 ? "" : "s"} · ${matter.source_count || 1} source${matter.source_count === 1 ? "" : "s"} · ${titleCase(matter.queue_lane)}${source ? ` · ${source}` : ""}`));
+    button.addEventListener("click", () => { state.triageMatter = matter.context_id; state.triageSelected = matter.candidates[0]?.proposal_id || null; replaceQuery({ view: state.triageView, item: state.triageSelected }); renderSurface(data); }); li.append(button); list.append(li);
   }
-  master.append(list); workspace.append(master, triageDetail(selected, data, state.triageView === "recent")); fragment.append(workspace); return fragment;
+  master.append(list);
+  if (data.triage?.has_more && state.triageView !== "recent") { const more = text("button", "Load next matters", "button button-quiet"); more.type = "button"; more.dataset.triageMore = "true"; more.addEventListener("click", () => loadMoreTriage(data)); master.append(more); }
+  const detail = document.createElement("div"); detail.className = "triage-matter-detail";
+  if (!selectedMatter) detail.append(triageDetail(null, data, state.triageView === "recent"));
+  else { detail.append(text("p", `${selectedMatter.candidates.length} independently reviewable candidate${selectedMatter.candidates.length === 1 ? "" : "s"}; confirming one never confirms the others.`, "state-note")); for (const item of selectedMatter.candidates) detail.append(triageDetail(item, data, state.triageView === "recent")); }
+  workspace.append(master, detail); fragment.append(workspace); return fragment;
 }
 
 function rankedItems(value) {
@@ -1715,7 +1791,7 @@ function openAddForReview({ exactText = "", sourceEventId = null, sourceSurface 
       closeActionDialog();
       setBanner(result.state === "pending_interpretation" ? "Saved. Triage needs you to choose what this is; nothing was lost or created." : `${result.proposal_ids.length} review item${result.proposal_ids.length === 1 ? "" : "s"} saved in Triage. Nothing is committed yet.`);
       if (currentSurface() === "triage") {
-        state.triageView = result.state === "pending_interpretation" ? "needs_interpretation" : "needs_details";
+        state.triageView = result.state === "pending_interpretation" ? "needs_interpretation" : "all_candidates";
         state.triageSelected = result.proposal_ids[0] || result.intent_id;
         replaceQuery({ view: state.triageView, item: state.triageSelected });
         await reloadActiveSurface();
@@ -3040,7 +3116,7 @@ function registrySettings(data) {
 }
 
 function systemSettings(data) {
-  const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 14)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
+  const fragment = document.createDocumentFragment(); const safety = document.createElement("section"); safety.className = "card settings-safety"; safety.append(text("p", "EXTERNAL-WRITE SAFETY", "eyebrow"), text("h2", data.system.observation.active ? "Observation mode is protecting providers" : "Provider writes are enabled behind every gate"), text("p", data.system.observation.explanation)); const safetyFacts = document.createElement("dl"); safetyFacts.className = "settings-facts"; for (const [label, value] of [["External writes execute", data.system.observation.writes_execute ? "Only after all gates" : "No"], ["OpenClaw", titleCase(data.system.runtime.openclaw)], ["Python runtime", titleCase(data.system.runtime.state)], ["Registered projections", `${data.system.runtime.projection_count} (constitutional count: 15)`]]) safetyFacts.append(text("dt", label), text("dd", value)); safety.append(safetyFacts); fragment.append(safety);
   const assuranceCapability = data.system.capabilities.find((value) => value.name === "source-assurance");
   if (assuranceCapability?.details?.counts) { const counts = assuranceCapability.details.counts; const assurance = document.createElement("section"); assurance.className = "card"; assurance.append(text("p", "SOURCE ASSURANCE", "eyebrow"), text("h2", assuranceCapability.state === "healthy" ? "Every processed source has an accounted disposition" : "A source fact is missing its required disposition")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Source facts", counts.source_facts], ["Accounted obligations", `${counts.accounted} / ${counts.obligations}`], ["Candidate sources", `${counts.eligible_candidates} proposed · ${counts.no_candidate} none`], ["Quarantined / failed", `${counts.quarantined} / ${counts.failed}`], ["Processing / missing", `${counts.pending} / ${counts.missing}`]]) facts.append(text("dt", label), text("dd", value)); assurance.append(facts, text("p", "Empty is a recorded outcome. Missing means the expected assessor, projection, or terminal action result did not arrive after its checkpoint.", "state-note")); fragment.append(assurance); }
   const workbooks = document.createElement("section"); workbooks.className = "card"; workbooks.append(text("h2", "Recovery and workbooks")); const workbookList = document.createElement("ul"); workbookList.className = "household-settings-list"; for (const workbook of data.system.workbooks) { const item = document.createElement("li"); const body = document.createElement("div"); body.append(text("strong", workbook.name), text("small", workbook.updated_at ? `Updated ${new Date(workbook.updated_at).toLocaleString()}` : "No workbook file yet")); item.append(body, text("span", titleCase(workbook.state), `pill state-label state-${String(workbook.state).replaceAll("_", "-")}`)); workbookList.append(item); } workbooks.append(workbookList); fragment.append(workbooks);
@@ -3257,7 +3333,7 @@ async function initialize() {
     const requestedView = params.get("view");
     if (active === "today" && ["brief", "carousel"].includes(requestedView)) state.todayView = requestedView;
     if (active === "triage") {
-      if (["needs_interpretation", "ready", "needs_details", "recent"].includes(requestedView)) state.triageView = requestedView;
+      if (["needs_interpretation", "ready", "needs_details", "low_signal", "recurring_exceptions", "learned_rules", "all_candidates", "recent"].includes(requestedView)) state.triageView = requestedView;
       state.triageSelected = params.get("item");
     }
     if (active === "comms") {
@@ -3298,6 +3374,7 @@ async function initialize() {
       if (state.calendarAnchor) query.set("date", state.calendarAnchor);
       path += `?${query}`;
     }
+    if (active === "triage") path += "?triage_lens=all_candidates";
     let surfaceRequest;
     if (active.startsWith("quest:")) {
       surfaceRequest = api(`/api/member/v1/temporary-surfaces/${encodeURIComponent(active.slice(6))}/evaluate`).then(renderQuest);

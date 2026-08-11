@@ -1973,3 +1973,41 @@ authoritative statement of live-only and deferred behavior.
 
 Repository merge is authorized and completed only with green final-head checks.
 No tool has remotely installed or activated a household Mac or provider.
+
+## CO-014 candidate handoff — deterministic context and Triage Zero
+
+CO-014 is approved and implemented in the candidate tree. Credential-free
+release and browser gates pass. It is not yet a live claim until reviewed
+publication, merge, migration staging, Doctor, settlement, and authenticated
+live-browser proof pass.
+
+- The default registry is now exactly fifteen: thirteen domain projections,
+  Triage, and the rebuildable non-authoritative `context_fabric` projection.
+- Context Fabric stores typed scoped IDs/edges and reason codes, not source
+  bodies. Authoritative traversal excludes `llm_proposed`, is private-member
+  exact, and is capped at depth four/500 nodes.
+- Triage v7 performs additive migration, deterministic 30-day/100-source matter
+  segmentation, exact duplicate retention, high-precision existing-object and
+  recurrence evidence linking, full inventory counts, stable cursor paging,
+  and matter-first child review.
+- Dismissal can atomically append typed feedback. Repeated patterns become
+  suggestions; previewed rules are member-approved, reversible, and shadow-
+  only. No CO-014 path creates provider effects or automatic truth.
+- `tests/acceptance/test_co014_context_fabric_stress.py` proves production HTTP
+  pagination, two-member isolation, feedback/rule reversal, and exact
+  Triage/Context Fabric replay. The fixed-seed 730-day low/base/high suite
+  models 116,800/310,980/613,200 normalized signals and keeps 100% high-
+  priority admission, zero missing pages/cross-scope links/provider effects,
+  zero base backlog at the end, and reviewed storage/query bounds. The retired
+  flat model ends with 3,571/13,184/28,722 rows of backlog respectively.
+- Final-head candidate evidence on 2026-08-10 is green: 49 strict acceptance
+  gates, 1,789 root/code/pack tests, 60 bridge tests, Ruff/format/mypy/Pyright,
+  dependency audits, architecture invariants, performance budgets, clean
+  install, tenant isolation, backup/restore, and the pinned OpenClaw contract,
+  17 plugin tests, build, package, and audit. Gate 7 produced 223 passing
+  assertions and 36 screenshots across desktop/narrow states with no console,
+  page, or request failures.
+- Remaining activation evidence: PR review/checks, merge, encrypted pre-switch
+  backup, staged observation deployment, additive live projection migration,
+  Doctor at 15/15, checkpoint/source settlement, and authenticated live-browser
+  verification.

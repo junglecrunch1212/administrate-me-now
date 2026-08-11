@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from adminme.calendar import compose_calendar_cockpit, preview_calendar_candidate
 from adminme.comms import compose_comms_cockpit
+from adminme.context_fabric import policy_scope_digest
 from adminme.people import PROVIDER_CONTRACTS as PEOPLE_PROVIDER_CONTRACTS
 from adminme.people import compose_people_cockpit
 from adminme.reminders import (
@@ -80,7 +81,15 @@ from adminme.projections.tasks.queries import (
     work_history_for_member,
 )
 from adminme.projections.triage.queries import pending_for_member as pending_triage
+from adminme.projections.triage.queries import (
+    pending_for_sources as pending_triage_for_sources,
+)
 from adminme.projections.triage.queries import recent_for_member as recent_triage
+from adminme.projections.triage.queries import triage_page_for_member
+from adminme.projections.context_fabric.queries import (
+    feedback_pattern_counts,
+    policy_rules_for_member,
+)
 from adminme.surface_contracts import surface_freshness, surface_link
 from adminme.settings_control import (
     compose_connections,
@@ -132,6 +141,62 @@ _PROVIDER_WRITE_CAPABILITIES: dict[str, frozenset[str]] = {
     "twilio_sms": frozenset({"reply", "send"}),
     "twilio_whatsapp": frozenset({"reply", "send"}),
 }
+
+
+def _json_string_list(value: Any) -> list[str]:
+    """Decode a projection JSON list without allowing malformed source data to break a surface."""
+
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if item]
+
+
+def _triage_shadow_rule_value(item: dict[str, Any], scope_kind: str) -> str | None:
+    """Return only an already-scoped candidate coordinate for shadow matching."""
+
+    candidate = item.get("candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    route = item.get("route")
+    route = route if isinstance(route, dict) else {}
+    values = {
+        "candidate_kind": item.get("target_kind"),
+        "context": item.get("context_id"),
+        "account": candidate.get("source_account_id")
+        or candidate.get("provider_account_id"),
+        "workspace": candidate.get("workspace") or route.get("workspace"),
+        "sender": candidate.get("sender_digest"),
+    }
+    value = values.get(scope_kind)
+    return str(value) if value else None
+
+
+def _annotate_triage_shadow_rules(
+    items: list[dict[str, Any]], rules: list[dict[str, Any]]
+) -> None:
+    """Annotate reversible rule matches without changing queue or truth state."""
+
+    active_rules = [rule for rule in rules if rule.get("status") == "active"]
+    for item in items:
+        matches: list[str] = []
+        dispositions: list[str] = []
+        for rule in active_rules:
+            scope_kind = str(rule.get("scope_kind") or "")
+            value = _triage_shadow_rule_value(item, scope_kind)
+            if value is None:
+                continue
+            if policy_scope_digest(scope_kind, value) != rule.get("scope_value_digest"):
+                continue
+            matches.append(str(rule["rule_id"]))
+            dispositions.append(str(rule["disposition"]))
+        item["policy_rule_ids"] = matches
+        item["policy_disposition"] = dispositions[0] if dispositions else "none"
+        item["policy_shadow_only"] = bool(matches)
 
 
 def people_accounts(runtime: Any, member_id: str) -> list[dict[str, Any]]:
@@ -696,6 +761,9 @@ def build_surface(
     *,
     calendar_anchor: date | None = None,
     calendar_view: str = "week",
+    triage_lens: str = "all_candidates",
+    triage_cursor: str | None = None,
+    triage_limit: int = 30,
 ) -> dict[str, Any]:
     authorize_surface(session, surface)
     if runtime.projections is None:
@@ -786,7 +854,10 @@ def build_surface(
             []
             if session.auth_role == "child"
             else pending_triage(
-                runtime.projections.connection("triage"), session, member_id=member
+                runtime.projections.connection("triage"),
+                session,
+                member_id=member,
+                limit=30,
             )
         )
         base["what_now"] = what_now
@@ -833,7 +904,20 @@ def build_surface(
         )
     elif surface == "triage":
         triage_conn = runtime.projections.connection("triage")
-        items = pending_triage(triage_conn, session, member_id=member)
+        try:
+            triage_page = triage_page_for_member(
+                triage_conn,
+                session,
+                member_id=member,
+                lens=triage_lens,
+                cursor=triage_cursor,
+                limit=triage_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        items = [
+            item for matter in triage_page["matters"] for item in matter["candidates"]
+        ]
         recent_items = recent_triage(triage_conn, session, member_id=member)
         for item in [*items, *recent_items]:
             item["review_state"] = _triage_review_state(item)
@@ -857,6 +941,79 @@ def build_surface(
                 }
         base["items"] = items
         base["recent_items"] = recent_items
+        base["triage"] = triage_page
+        feedback_patterns = feedback_pattern_counts(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=member,
+        )
+        policy_rules = policy_rules_for_member(
+            runtime.projections.connection("context_fabric"),
+            session,
+            member_id=member,
+        )
+        _annotate_triage_shadow_rules(items, policy_rules)
+        if triage_lens == "learned_rules":
+            matched_matters: list[dict[str, Any]] = []
+            matched_items: list[dict[str, Any]] = []
+            for matter in triage_page["matters"]:
+                candidates = [
+                    item
+                    for item in matter["candidates"]
+                    if item.get("policy_shadow_only")
+                ]
+                if not candidates:
+                    continue
+                matched_items.extend(candidates)
+                matched_matters.append(
+                    {
+                        **matter,
+                        "root_proposal_id": candidates[0]["proposal_id"],
+                        "candidate_count": len(candidates),
+                        "source_count": len(
+                            {str(item["source_event_id"]) for item in candidates}
+                        ),
+                        "candidates": candidates,
+                    }
+                )
+            items = matched_items
+            triage_page["matters"] = matched_matters
+            base["items"] = items
+        base["triage"]["feedback_suggestions"] = []
+        for pattern in feedback_patterns:
+            if int(pattern["occurrences"]) < 3:
+                continue
+            scope_kind = pattern.get("scope_kind")
+            scope_value = pattern.get("scope_value")
+            if not scope_value:
+                continue
+            scope_digest = policy_scope_digest(str(scope_kind), str(scope_value))
+            prior_rules = [
+                rule
+                for rule in policy_rules
+                if rule["scope_kind"] == scope_kind
+                and rule["scope_value_digest"] == scope_digest
+            ]
+            if any(
+                rule["status"] == "active"
+                or int(pattern["occurrences"]) <= int(rule["preview_affected_count"])
+                for rule in prior_rules
+            ):
+                continue
+            base["triage"]["feedback_suggestions"].append(
+                {
+                    **pattern,
+                    "scope_kind": scope_kind,
+                    "scope_value": scope_value,
+                    "suggested_disposition": "route_to_low_signal",
+                    "state": "suggestion_only",
+                    "explanation": (
+                        "This pattern can become a reversible shadow rule only "
+                        "after your approval."
+                    ),
+                }
+            )
+        base["triage"]["policy_rules"] = policy_rules
         base["contract"] = {
             "facts_are_not_queued": True,
             "human_gate_required": True,
@@ -1083,8 +1240,16 @@ def build_surface(
             member_id=member,
             limit=500,
         )
-        triage_items = pending_triage(
-            runtime.projections.connection("triage"), session, member_id=member
+        comms_source_ids = [
+            str(source_event_id)
+            for row in rows
+            for source_event_id in _json_string_list(row.get("raw_event_ids"))
+        ]
+        triage_items = pending_triage_for_sources(
+            runtime.projections.connection("triage"),
+            session,
+            member_id=member,
+            source_event_ids=comms_source_ids,
         )
         party_labels = {
             str(party["party_id"]): str(party.get("display_name") or "Contact")
@@ -1287,8 +1452,11 @@ def build_surface(
     elif surface == "notes":
         knowledge_conn = runtime.projections.connection("member_knowledge")
         notes = list_visible(knowledge_conn, session)
-        triage_items = pending_triage(
-            runtime.projections.connection("triage"), session, member_id=member
+        triage_items = pending_triage_for_sources(
+            runtime.projections.connection("triage"),
+            session,
+            member_id=member,
+            source_event_ids=[str(note.get("last_event_id") or "") for note in notes],
         )
         triage_by_source: dict[str, list[dict[str, Any]]] = {}
         for item in triage_items:

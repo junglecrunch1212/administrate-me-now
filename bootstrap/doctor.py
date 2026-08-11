@@ -484,12 +484,13 @@ class Doctor:
                 connection.close()
         checks.append(
             DoctorCheck(
-                "fourteen_projections_and_checkpoints",
-                len(projection_files) == 14
+                "fifteen_projections_and_checkpoints",
+                len(projection_files) == len(PROJECTION_NAMES)
                 and all(projection_files.values())
-                and checkpoint_count == 14
+                and checkpoint_count == len(PROJECTION_NAMES)
                 and degraded_count == 0,
-                f"{sum(projection_files.values())}/14 stores; {checkpoint_count}/14 healthy checkpoints",
+                f"{sum(projection_files.values())}/{len(PROJECTION_NAMES)} stores; "
+                f"{checkpoint_count}/{len(PROJECTION_NAMES)} healthy checkpoints",
                 "Run Doctor rebuild from a stopped instance before enabling writes.",
                 {
                     "projections": projection_files,
@@ -714,7 +715,7 @@ class Doctor:
                 "Reinstall the exact AdministrateMe package; configure chat only for opted-in members.",
                 {
                     "portal_health": "installed" if portal_ok else "degraded",
-                    "deterministic_domain_views": "covered_by_fourteen_projection_check",
+                    "deterministic_domain_views": "covered_by_fifteen_projection_check",
                     "openclaw_chat_transport": "configured"
                     if chat_transport_configured
                     else "optional_unconfigured",
