@@ -372,6 +372,139 @@ async def test_uncertain_authored_text_records_terminal_no_candidate() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("member_action", [None, "enriched", "dismissed"])
+async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
+    member_action: str | None,
+) -> None:
+    source = _messaging_sent_event(
+        body_text="I will authorize the old fixture transfer."
+    )
+    source.update(
+        {
+            "schema_version": 3,
+            "source_adapter": "messaging-gmail-api",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "legacy-sent-thread",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+        }
+    )
+    log = _ContextEventLog(source_events=[source])
+    proposal_id = "legacy-sent-prior-proposal"
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2026-08-08T12:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-prior-proposal-event",
+            payload={
+                "proposal_id": proposal_id,
+                "target_kind": "commitment",
+                "owner_member_id": "member-fixture",
+                "title": "Authorize the old fixture transfer",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": source["event_id"],
+                "candidate_key": "legacy-sent-candidate",
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "confidence": 0.9,
+                "reasons": ["legacy authored-text interpretation"],
+            },
+        ),
+        causation_id="legacy-sent-v20-assessment",
+    )
+    if member_action == "enriched":
+        await log.write(
+            EventEnvelope(
+                event_at_ms=1700000000002,
+                tenant_id="tenant-test",
+                type="triage.item.enriched",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:02Z",
+                source_adapter="member-triage",
+                source_account_id="member-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                idempotency_key="legacy-sent-member-enrichment",
+                payload={
+                    "proposal_id": proposal_id,
+                    "enriched_at": "2026-08-08T12:00:02Z",
+                    "enriched_by_member_id": "member-fixture",
+                    "candidate_updates": {"note": "Member reviewed this item."},
+                },
+            ),
+            causation_id=proposal_event_id,
+        )
+    elif member_action == "dismissed":
+        await log.write(
+            EventEnvelope(
+                event_at_ms=1700000000002,
+                tenant_id="tenant-test",
+                type="triage.item.dismissed",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:02Z",
+                source_adapter="member-triage",
+                source_account_id="member-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                idempotency_key="legacy-sent-member-dismissal",
+                payload={
+                    "proposal_id": proposal_id,
+                    "dismissed_at": "2026-08-08T12:00:02Z",
+                    "dismissed_by_member_id": "member-fixture",
+                    "reason": "Member already decided this item.",
+                },
+            ),
+            causation_id=proposal_event_id,
+        )
+
+    calls: list[Any] = []
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(source, _make_ctx(log, stub_run_skill))
+
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["reason_codes"] == [
+        "legacy_gmail_sent_quote_boundary_unavailable"
+    ]
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert bool(superseded) is (member_action is None)
+    if superseded:
+        assert superseded[0].payload == {
+            "proposal_id": proposal_id,
+            "superseded_at": "2026-08-08T12:00:00Z",
+            "replacement_source_event_id": source["event_id"],
+            "reason": "eligibility_rule_replaced",
+        }
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_skill_success_emits_classified() -> None:
     log = _FakeEventLog()
 

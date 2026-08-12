@@ -160,7 +160,7 @@ def _raw_gmail_message(
 
 async def _preload_gmail_replay_fixture(
     settings: RuntimeSettings,
-) -> tuple[str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str]:
     """Emit actual Gmail facts, then seed the reviewed v20 durable cursor."""
 
     event_log = EventLog(settings.instance, settings.encryption_key)
@@ -283,6 +283,76 @@ async def _preload_gmail_replay_fixture(
                 },
             )
         )
+        legacy_assessment_id = await events.write(
+            EventEnvelope(
+                event_at_ms=1_786_373_765_900,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.intent.features_extracted",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:05Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key=(f"triage:message-features:v20:{legacy_sent_id}"),
+                payload={
+                    "intent_id": f"source:{legacy_sent_id}",
+                    "source_event_id": legacy_sent_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": "legacy-contextual-nlp-v20",
+                    "language": None,
+                    "candidates": [
+                        {
+                            "candidate_key": "legacy-sent-false-commitment",
+                            "target_kind": "commitment",
+                            "title": "Authorize the old fixture transfer",
+                            "fields": {},
+                            "evidence_spans": [],
+                            "confidence": 0.9,
+                            "reasons": ["legacy authored-text interpretation"],
+                        }
+                    ],
+                    "extraction_state": "complete",
+                    "extracted_at": "2026-08-10T16:36:05Z",
+                    "assessment_outcome": "eligible_candidates",
+                    "reason_codes": ["legacy_language_candidate"],
+                },
+            ),
+            causation_id=legacy_sent_id,
+        )
+        legacy_proposal_id = "fixture-replay-legacy-sent-false-commitment"
+        await events.write(
+            EventEnvelope(
+                event_at_ms=1_786_373_766_000,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:06Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture-replay-legacy-sent-false-commitment",
+                payload={
+                    "proposal_id": legacy_proposal_id,
+                    "target_kind": "commitment",
+                    "owner_member_id": MEMBER,
+                    "title": "Authorize the old fixture transfer",
+                    "candidate": {},
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": legacy_sent_id,
+                    "confidence": 0.9,
+                    "reasons": ["legacy authored-text interpretation"],
+                    "parent_intent_id": None,
+                    "candidate_key": "legacy-sent-false-commitment",
+                    "extraction_event_id": legacy_assessment_id,
+                    "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                },
+            ),
+            causation_id=legacy_assessment_id,
+        )
         current_id = await adapter._emit_message_observation(
             ctx=ctx,
             message=_raw_gmail_message(
@@ -386,6 +456,7 @@ async def _preload_gmail_replay_fixture(
             weak_id,
             other_member_id,
             legacy_sent_id,
+            legacy_proposal_id,
             current_id,
             old_proposal_id,
         )
@@ -786,6 +857,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         weak_id,
         other_member_id,
         legacy_sent_id,
+        legacy_proposal_id,
         current_id,
         old_proposal_id,
     ) = asyncio.run(_preload_gmail_replay_fixture(settings))
@@ -806,8 +878,20 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         ]
         assert len(superseded) == 1
         assert superseded[0]["payload"]["replacement_source_event_id"] == current_id
+        legacy_superseded = [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.superseded")
+            if event["payload"]["proposal_id"] == legacy_proposal_id
+        ]
+        assert len(legacy_superseded) == 1
+        assert legacy_superseded[0]["payload"]["replacement_source_event_id"] == (
+            legacy_sent_id
+        )
+        assert legacy_superseded[0]["payload"]["reason"] == (
+            "eligibility_rule_replaced"
+        )
         client.portal.call(
-            runtime.wait_for_projection, "triage", superseded[0]["event_id"]
+            runtime.wait_for_projection, "triage", legacy_superseded[0]["event_id"]
         )
 
         proposals = [
@@ -830,24 +914,32 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             )
             if event.get("causation_id") == legacy_sent_id
         ]
-        assert len(legacy_assessments) == 1
-        assert legacy_assessments[0]["payload"]["assessment_outcome"] == (
-            "no_candidate"
+        assert len(legacy_assessments) == 2
+        assert {
+            event["payload"]["assessment_outcome"] for event in legacy_assessments
+        } == {"eligible_candidates", "no_candidate"}
+        current_legacy_assessment = next(
+            event
+            for event in legacy_assessments
+            if event["payload"]["assessment_outcome"] == "no_candidate"
         )
-        assert legacy_assessments[0]["payload"]["reason_codes"] == [
+        assert current_legacy_assessment["payload"]["reason_codes"] == [
             "legacy_gmail_sent_quote_boundary_unavailable"
         ]
-        assert [
+        legacy_proposals = [
             event
             for event in client.portal.call(_events, runtime, "triage.item.proposed")
             if event["payload"].get("source_event_id") == legacy_sent_id
-        ] == []
+        ]
+        assert len(legacy_proposals) == 1
+        assert legacy_proposals[0]["payload"]["proposal_id"] == legacy_proposal_id
 
         client.portal.call(runtime.wait_for_projection, "triage", proposal["event_id"])
         page = client.get("/api/member/v1/surfaces/triage", headers=AUTH)
         assert page.status_code == 200, page.text
         items = page.json()["items"]
         assert old_proposal_id not in {item["proposal_id"] for item in items}
+        assert legacy_proposal_id not in {item["proposal_id"] for item in items}
         valid = next(
             item
             for item in items

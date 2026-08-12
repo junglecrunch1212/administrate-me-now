@@ -580,6 +580,11 @@ class NoiseFilteringPipeline:
                     or ("authored_text_uncertain",)
                 ),
             )
+            await self._supersede_unreliable_source_proposals(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+            )
             return
         prepared = _extract_text_and_inputs(
             event_type,
@@ -1220,6 +1225,94 @@ class NoiseFilteringPipeline:
             if (candidate.target_kind, candidate.candidate_key) not in decided_keys
             and (candidate.target_kind, candidate.title) not in decided_titles
         ]
+
+    async def _supersede_unreliable_source_proposals(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        source_event_id: str,
+    ) -> None:
+        """Retire only untouched system proposals rooted in unreliable text.
+
+        A stricter authored-text contract may invalidate an interpretation made
+        by an older replay generation. The immutable proposal remains in the
+        log, but it must leave the pending queue. Member enrichment and every
+        terminal member/system disposition continue to dominate replay.
+        """
+
+        if not hasattr(ctx.event_log, "read_since"):
+            return
+        proposals: list[dict[str, Any]] = []
+        async for prior in ctx.event_log.read_since(
+            owner_scope=str(event.get("owner_scope") or ""),
+            types=["triage.item.proposed"],
+        ):
+            payload = prior.get("payload") or {}
+            if prior.get("tenant_id") != event.get("tenant_id"):
+                continue
+            if prior.get("source_adapter") not in {
+                "deterministic_candidate_eligibility",
+                "noise_filtering",
+                "legacy-message-extractor",
+            }:
+                continue
+            if str(payload.get("source_event_id") or "") != source_event_id:
+                continue
+            proposals.append(prior)
+
+        superseded_at = str(
+            event.get("recorded_at")
+            or event.get("occurred_at")
+            or EventEnvelope.now_utc_iso()
+        )
+        for proposal in proposals:
+            descendants = await ctx.event_log.get_by_causation(proposal["event_id"])
+            if any(
+                child.get("type")
+                in {
+                    "triage.item.enriched",
+                    "triage.item.confirmed",
+                    "triage.item.materialized",
+                    "triage.item.dismissed",
+                    "triage.item.superseded",
+                }
+                for child in descendants
+            ):
+                continue
+            proposal_id = str((proposal.get("payload") or {}).get("proposal_id") or "")
+            if not proposal_id:
+                continue
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=EventEnvelope(
+                    event_at_ms=event["event_at_ms"],
+                    tenant_id=event["tenant_id"],
+                    type="triage.item.superseded",
+                    schema_version=2,
+                    occurred_at=superseded_at,
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=event["owner_scope"],
+                    visibility_scope=event["visibility_scope"],
+                    sensitivity=event.get("sensitivity", "normal"),
+                    idempotency_key=(
+                        "triage:message-unreliable-source-replaced:"
+                        f"v{_REPLAY_GENERATION}:{proposal_id}:{source_event_id}"
+                    ),
+                    payload={
+                        "proposal_id": proposal_id,
+                        "superseded_at": superseded_at,
+                        "replacement_source_event_id": source_event_id,
+                        "reason": "eligibility_rule_replaced",
+                    },
+                ),
+                correlation_id=ctx.correlation_id,
+                causation_id=proposal["event_id"],
+                ignored_payload_fields=frozenset(
+                    {"superseded_at", "replacement_source_event_id"}
+                ),
+            )
 
     async def _supersede_retired_fallbacks(
         self,

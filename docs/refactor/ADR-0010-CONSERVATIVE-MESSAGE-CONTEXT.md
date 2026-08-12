@@ -48,7 +48,10 @@ authored prefix is usable, and disagreement is unreliable rather than evidence.
 Retained pre-v4 Gmail Sent facts lack that HTML provenance entirely. They
 remain immutable source facts, but their bodies are marked
 `legacy_gmail_sent_quote_boundary_unavailable` and excluded from authored
-evidence during v21 replay and later context assembly.
+evidence during v21 replay and later context assembly. Replay appends an
+eligibility-replacement receipt for each untouched system proposal previously
+rooted in that unreliable body; member-enriched or decided proposals remain
+permanent.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 

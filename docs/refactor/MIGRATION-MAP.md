@@ -20,8 +20,10 @@ historical Sent observations; older v1-v3 facts remain readable and immutable,
 but Gmail Sent bodies from those versions are not eligible as authored evidence
 because the missing HTML alternative makes quote-boundary recovery impossible.
 They receive a new content-free v21 assessment with reason
-`legacy_gmail_sent_quote_boundary_unavailable`; no source migration or provider
-refetch occurs. Model-window budget reservation, full-episode reconciliation
+`legacy_gmail_sent_quote_boundary_unavailable`; any untouched system proposal
+rooted in that now-unreliable body receives an append-only
+`eligibility_rule_replaced` supersession, while member enrichment and decisions
+remain permanent. No source migration or provider refetch occurs. Model-window budget reservation, full-episode reconciliation
 scope, and off-window relationship hydration are derived behavior and migrate
 no stored facts.
 

@@ -26,7 +26,9 @@ action was performed.
   closed before deterministic fallback or the language seam.
 - Retained Gmail Sent v1-v3 facts have no HTML quote-boundary provenance. Their
   immutable bodies are excluded from authored evidence with the explicit v21
-  assessment reason `legacy_gmail_sent_quote_boundary_unavailable`.
+  assessment reason `legacy_gmail_sent_quote_boundary_unavailable`. Replay
+  supersedes only untouched system proposals rooted in those bodies and
+  preserves member-enriched or decided proposals.
 - Triage displays Message date separately from Imported / recorded time and
   offers exact wrong-context relationship/text corrections only when the
   server declares sufficient relationship provenance or uniquely grounded
@@ -63,9 +65,10 @@ model window, exclude weak/cross-member sources, and retain one valid
 reviewable sibling. Production composition also maps quoted-only multipart
 Sent history through `messaging.sent@v4`, proves a terminal no-candidate result,
 replays a retained Gmail Sent v3 quoted-only body from a v20 checkpoint into an
-explicit no-candidate assessment, and hydrates a displayed related message's
-exact admitting edge from outside the display window. The tests create no
-canonical record or provider effect.
+explicit no-candidate assessment and append-only supersession of its seeded
+untouched v20 false commitment, and hydrates a displayed related message's exact
+admitting edge from outside the display window. The tests create no canonical
+record or provider effect.
 
 ## Validation record
 
@@ -73,7 +76,7 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,860 passed.
+- `PYTHONPATH=bridge poetry run pytest -q`: 1,863 passed.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 60
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
@@ -107,4 +110,13 @@ installation, audit, contract, typecheck, and tests still completed
 successfully. Pyright reported that a newer release is available, and Poetry
 reported its existing deprecated metadata-key warnings. Dependency audit
 skipped only the two local, non-PyPI project packages and found no known
-third-party vulnerabilities. No Phase B action is authorized by this evidence.
+third-party vulnerabilities.
+
+An internal exact-head advisory found that the first legacy-Sent safeguard
+emitted the correct v21 no-candidate assessment but returned before retiring an
+untouched v20 proposal already rooted in that source. The repair adds exact-
+source append-only supersession, preserves member-enriched/decided proposals,
+and extends the production v20-to-v21 fixture with the old false commitment
+itself. The complete aggregate was rerun from the beginning and passed with the
+counts above. This advisory is not the separate user-visible independent review
+required by ADR-0009. No Phase B action is authorized by this evidence.

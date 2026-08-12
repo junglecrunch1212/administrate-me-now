@@ -29,7 +29,8 @@ message time as `occurred_at` and append time as `recorded_at`; additive
 `messaging.sent@v4` retains the HTML MIME alternative needed to bound quoted
 Sent history. Immutable pre-v4 Gmail Sent facts remain readable but their
 bodies fail closed with an explicit provenance-unavailable assessment during
-v21 replay. Message context
+v21 replay; untouched system proposals previously rooted in those bodies are
+superseded while member-enriched or decided proposals remain permanent. Message context
 v2 splits reused provider threads into 30-day/100-source episodes and requires
 exact RFC continuity, exact attachment identity, or explicit member
 confirmation for a cross-thread source. Repeated participants, addresses,
@@ -58,8 +59,8 @@ opts into full replay and retires only untouched stale context interpretations;
 member decisions remain permanent. The new production-composition acceptance
 tests complete detach, relink, reinstate, and rebuild and exercise actual Gmail
 mapping through a v20-to-v21 full replay that supersedes the stale crossed-wire
-proposal while retaining a valid reviewable sibling, with no canonical or
-provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
+proposal and an untouched false legacy-Sent proposal while retaining a valid
+reviewable sibling, with no canonical or provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
 file. Independent exact-head review and the ordinary controlled-release path
 remain mandatory before any Phase B action.
 

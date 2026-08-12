@@ -49,7 +49,10 @@ source fact, sender identity, provider account, or household name is wrong.
   Retained Gmail `messaging.sent@v1-v3` bodies lack the HTML alternative and
   therefore fail closed with the explicit reason
   `legacy_gmail_sent_quote_boundary_unavailable`; replay neither migrates the
-  fact nor admits its body as authored evidence.
+  fact nor admits its body as authored evidence. Any untouched system proposal
+  previously rooted in that unreliable body receives an append-only
+  `eligibility_rule_replaced` supersession; member enrichment and decisions
+  remain permanent.
 - A wrong-context dismissal may atomically reject selected exact source pairs
   and/or mark one exact proposal/candidate evidence span as quoted/forwarded
   history. Other authored asks in the same source remain available.
@@ -109,6 +112,7 @@ AC-43 is implemented by `tests/acceptance/test_context_correctness_vertical_slic
 and the ordinary replay, privacy, governance, browser, package, and release
 gates. The process slice uses the actual Gmail adapter mapping, seeds a v20
 durable checkpoint, starts the production v21 runner, proves full replay,
-retires the untouched crossed-wire proposal, keeps a valid sibling reviewable,
-and creates no canonical or provider effect. Candidate evidence is recorded in
+retires both the untouched crossed-wire proposal and an untouched false legacy-
+Sent proposal, keeps a valid sibling reviewable, preserves member-decided
+history, and creates no canonical or provider effect. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.
