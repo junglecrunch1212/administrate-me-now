@@ -1,7 +1,7 @@
 # Change Order 017 — Terminal source-assessment recovery
 
-Status: recovery implementation merged; deployment stopped before activation;
-guarded-release drift hardening candidate locally green and awaiting review.
+Status: released and authenticated-live-verified in observation mode at merge
+`d181fad24ef488a71ce5568cc40fb81309cb3817`.
 
 Governing sources: event-sourced source authority; D19 and D26; C002, C034,
 C097, C106, C107, C109, and C113; AC-12, AC-18, AC-21, AC-24, AC-34,
@@ -170,11 +170,14 @@ becomes the exact predecessor for a separately bounded request.
 
 ## Acceptance evidence
 
-Candidate evidence is recorded in
+Candidate and live release evidence is recorded in
 `docs/refactor/evidence/co-017-source-assessment-recovery.md`. AC-42 requires
 production-composition proof of success, restart idempotency, bounded persistent
 failure, rejection paths, source-assurance replacement, updater exact-baseline
 validation, rollback behavior, privacy/isolation, observation mode, and zero
-provider effects. Phase A may prepare and review the candidate, but merge and
-deployment require the exact G-001 authorization naming the PR and its
-40-character reviewed head.
+provider effects. PR #336 exact head
+`fd13157648ae3ad02b4190a95feb817ad99fee46` passed independent review and all
+local/hosted gates, merged through GitHub, and entered production only through
+the attested guarded updater. The final live proof is fully settled, Doctor is
+healthy, authenticated Triage isolation passes, observation remains active,
+rollback remains available, and the provider-called terminal count is zero.

@@ -1,9 +1,9 @@
 # CO-017 source-assessment recovery evidence
 
-Status: PR #335 recovery implementation merged; release activation stopped
-before mutation; follow-up Phase A drift/status hardening is locally green
-after repairing the host-dependent fixture exposed by the fourth reviewed head
-and awaits a fifth exact-head review. No live recovery is claimed by this file.
+Status: released and authenticated-live-verified in observation mode. PR #336
+merge `d181fad24ef488a71ce5568cc40fb81309cb3817` is the active release; all four
+declared sources have newer successful v4 assessments while the older failures
+remain immutable.
 
 ## Reproduction and cause
 
@@ -245,7 +245,7 @@ With the Poetry Python 3.14 environment first, Node 24.19 next, and the Poetry
 executable directory present, the complete harness passed at the result above.
 The two pre-browser environment invocations are not counted as test results.
 
-## Required Phase B evidence
+## Required Phase B evidence (satisfied below)
 
 After exact G-001 authorization and only for the authorized reviewed head:
 
@@ -258,3 +258,107 @@ After exact G-001 authorization and only for the authorized reviewed head:
    authenticated Triage/privacy/isolation behavior, and zero provider-called
    terminal effects; and
 7. place those content-free receipts in a documentation-only follow-up PR.
+
+## Phase B release receipt
+
+### Authorization, merge, and fail-closed preflight
+
+- Fifth independent review accepted exact PR #336 head
+  `fd13157648ae3ad02b4190a95feb817ad99fee46` against exact base
+  `2a37aa08179a356fddfe0d4cd30ffd3e29f732a3` with no findings. Constitution
+  sync and the hosted macOS bootstrap contract both passed; GitHub reported no
+  review threads.
+- Exact G-001 authorization produced GitHub merge commit
+  `d181fad24ef488a71ce5568cc40fb81309cb3817`. Its parents are the exact base
+  and reviewed head, and it was verified as current `origin/main` before Phase
+  B.
+- The first post-merge preflight stopped before updater invocation because
+  Google Calendar exposed an unrelated retained transient network failure as
+  `backoff`. Active release
+  `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`, observation, services, and the
+  source log remained selected; no backup, recovery request, candidate release,
+  pointer change, or provider effect occurred.
+- Separate owner authority covered one predecessor restart only. An initial
+  direct call was rejected before service mutation with
+  `TypeError: ServiceManager.stop() got an unexpected keyword argument
+  'require_openclaw_live_before_stop'`; unchanged health was reverified. The
+  one authorized restart then used the predecessor's actual method signature.
+  Calendar returned to running observation-only health with no current error,
+  and Doctor's sole failure was again the declared source-assurance check.
+- Fresh exact-head G-001 authorization resumed the transaction only after the
+  baseline matched. The final pre-updater live snapshot was fully accounted,
+  observation-active, and contained only the same exact four source failures.
+
+### Guarded updater and backup
+
+- The controller attested immutable merged SHA
+  `d181fad24ef488a71ce5568cc40fb81309cb3817` and used only
+  `--approve-declared-source-assessment-repair`. Python, Node, OpenClaw
+  `2026.7.2`, plugin API, and pinned OpenClaw commit
+  `ce67ffb70e83e5ebb56ea02e814e577153f84f61` did not migrate.
+- At stopped watermark `ev_01KZV0VRC80003`, source assurance recorded
+  62,673 obligations and 62,673 accounted, zero pending/missing, exactly four
+  failed targets, content exposed false, eight pipelines, fifteen projections,
+  zero unhealthy durable consumers, and Gateway live at quiescence.
+- Encrypted backup `administrateme-20260812T125603Z.ambackup` was created at
+  `2026-08-12T12:56:09.349294+00:00` with mode 0600. Independent in-memory
+  authenticated decryption verified all 6,222 allowlisted file sizes and
+  hashes, fifteen projection names, zero unsafe archive members, matching
+  envelope/manifest identity
+  `8a5138d75cceabcfd73c70de5d4b7fc3b6a453b1e6d03844450a11079446dc04`,
+  and encrypted-envelope SHA-256
+  `cb2f7e8316c5a042af36c2beb0422e9f33922b0d6db1dac61feb1b5e87f39682`.
+- The updater returned `status=upgraded`, controller attested true, and rollback
+  available true. The active selector names the merged SHA and retains
+  predecessor `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`; both immutable releases and
+  runtimes are present, and the predecessor passes rollback compatibility for
+  the unchanged runtime/OpenClaw baseline. Rollback was not exercised because
+  activation passed.
+
+### Append-only recovery proof
+
+| Source | Retained failed assessment | Recovery request | New current v4 assessment | Result |
+|---|---|---|---|---|
+| `ev_01KZS9ZNGD0000` | `ev_01KZSA04HT0007` | `ev_01KZV0W4KW0000` | `ev_01KZV0YPGJ0001` | `no_candidate`; `language_assessment_completed` |
+| `ev_01KZSAANK30000` | `ev_01KZSAB07S0007` | `ev_01KZV0W4KW0001` | `ev_01KZV0YMF20001` | `no_candidate`; `language_assessment_completed` |
+| `ev_01KZSB7ZX20000` | `ev_01KZSB88V40003` | `ev_01KZV0W4KW0002` | `ev_01KZV0YTCV0003` | `no_candidate`; `language_assessment_completed` |
+| `ev_01KZSDH9CR0000` | `ev_01KZSDHZYR0008` | `ev_01KZV0W4KW0003` | `ev_01KZV0YWCP0008` | `no_candidate`; `language_assessment_completed` |
+
+For every row, the failed v3 assessment still exists with outcome `failed` and
+reason `language_seam_OpenClawUnreachable`; event order is strictly old
+assessment, request, replacement; the replacement names both exact predecessor
+and request; and the replacement is the latest valid assessment for that exact
+source. The four requests, sources, predecessors, and replacements are each
+distinct. No source content entered this receipt.
+
+### Settlement, Doctor, privacy, and effects
+
+- Final live readiness at watermark `ev_01KZV199ZX0000` is
+  observation-only and ready with no degraded capability: 62,674 obligations,
+  62,674 accounted, zero pending, zero missing, and zero failed. Normal inbound
+  growth after the stopped snapshot was fully settled.
+- Independent full Doctor passes 21/21 checks. Its canonical synthetic round
+  trip proves all fifteen projections, healthy durable checkpoints, member
+  portal and chat health, configured pinned model routing, and zero synthetic
+  external side effects.
+- Authenticated read-only Triage acceptance through Tailscale rendered the
+  private principal surface, observation indicator, no-operator boundary, ten
+  primary routes, and Add-for-review control. None of the exact recovered
+  source/request IDs appeared in the DOM, and the browser recorded zero warning
+  or error entries. No confirmation, dismissal, capture, chat send, or other
+  write control was used.
+- The authenticated self-view returned its scoped Triage inventory. The same
+  read under an exact nonexistent view target returned that target, zero items,
+  zero matters, no continuation, and no fallback to or leakage from the
+  authenticated member inventory.
+- From the stopped watermark through final verification, the encrypted log
+  contains exactly the four named recovery requests and four linked replacement
+  assessments. It contains no provider terminal event and no observation state
+  change; the provider-called terminal count is zero. Observation stayed
+  active, no member decision or provider action was authorized, and no external
+  write occurred.
+
+This receipt is restricted to governing documentation and content-free
+operational metadata. It changes no code, configuration, dependency, lock,
+test, installed release, runtime state, credential, permission, provider
+enrollment, or observation policy.

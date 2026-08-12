@@ -1,7 +1,7 @@
 # Migration map
 
-CO-017 update (2026-08-11): terminal source-assessment recovery is
-**HARDENED IN THE IMPLEMENTATION CANDIDATE**. Noise filtering advances from
+CO-017 update (2026-08-12): terminal source-assessment recovery is
+**HARDENED AND DEPLOYED**. Noise filtering advances from
 generation/version 19 to 20. Existing source events, v3 assessments, candidates,
 member decisions, canonical records, provider facts, and projection stores are
 not migrated or rewritten. An accepted recovery appends a content-free request
@@ -49,6 +49,21 @@ Tasks restores current running state on a successful poll, degraded readiness
 is not relabelled as observation-only, and the updater reads readiness during
 every settlement wait, rejecting hidden structural degradation or missing
 readiness after runtime liveness.
+
+PR #336 reviewed head `fd13157648ae3ad02b4190a95feb817ad99fee46`
+deployed as merge `d181fad24ef488a71ce5568cc40fb81309cb3817` after a
+second fail-closed preflight exposed an unrelated latched Google Calendar
+transient. A separately authorized single predecessor restart restored that
+adapter without configuration or provider writes; a fresh exact-head G-001
+transaction then attested the merged controller, verified an encrypted backup,
+bound final-live and stopped-log evidence at 62,673/62,673, proved eight
+pipelines and fifteen projections healthy, and appended four exact recovery
+requests. Four linked v4 replacements are now current while the older failures
+remain immutable. Final live accounting is 62,674/62,674 with zero
+pending/missing/failed; full Doctor, authenticated Triage isolation, rollback
+compatibility, observation mode, and zero provider-called terminal effects all
+pass. This is **PRESERVE** for append-only/provider/privacy authority and
+**HARDEN COMPLETE LIVE** for the CO-017 recovery and release boundary.
 
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
@@ -577,7 +592,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
-| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v20 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, and exact request-bound terminal-assessment recovery with at most two concurrent requests and three attempts each; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-017 RECOVERY MERGED, ACTIVATION-DRIFT HARDENING LOCALLY GREEN | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, recovery-reason validation, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
+| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v20 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, and exact request-bound terminal-assessment recovery with at most two concurrent requests and three attempts each; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-017 RECOVERY DEPLOYED AND LIVE-VERIFIED | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, recovery-reason validation, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
 | Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` 6.0.1 returns classification, bounded semantic features, and exact-quote typed candidates defensively while admitting every fixed-code context reason | HARDEN COMPLETE; CO-013 VOCABULARY REPAIR IN REVIEW | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
 | OpenClaw skill wrapper | `adminme/lib/skill_runner/` | exactly one pinned `llm-task` request uses a canonical member-isolated Gateway session, records actual returned provider/model provenance, and versions durable terminal identity by skill version | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |

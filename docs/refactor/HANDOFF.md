@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_015_DEPLOYED_LIVE_VERIFIED
-verified_local_date: 2026-08-11
-verified_github_date: 2026-08-11
+gate_result: CO_017_DEPLOYED_LIVE_VERIFIED
+verified_local_date: 2026-08-12
+verified_github_date: 2026-08-12
 branch: main
-candidate_commit_resolution: 2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/331
+candidate_commit_resolution: d181fad24ef488a71ce5568cc40fb81309cb3817
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/336
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -17,11 +17,63 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
-## 2026-08-11 CO-017 guarded-release drift hardening candidate
+## 2026-08-12 CO-017 deployed and live verified
 
-Status: the recovery implementation is merged but not deployed; a follow-up
-release-safety candidate is in progress. The front matter continues to
-describe the current CO-015 production release deliberately.
+Status: PR #336 is merged, deployed, and independently live verified in
+observation mode. Exact reviewed head
+`fd13157648ae3ad02b4190a95feb817ad99fee46` received a fifth independent
+review with no findings, both hosted checks passed, and GitHub created merge
+commit `d181fad24ef488a71ce5568cc40fb81309cb3817` with the authorized base and
+head as its two parents.
+
+The first post-merge preflight stopped before updater invocation because a
+transient Google Calendar connection reset was still latched as unrelated
+`backoff` health. No backup, recovery request, release copy, pointer switch, or
+provider effect occurred. Separate owner authority permitted one
+current-release restart only. An initial direct method call was rejected before
+service mutation because the predecessor does not support the candidate's
+new quiescence keyword; unchanged service state was reverified. The one
+authorized restart then used the predecessor's actual production method,
+returned Calendar to running observation-only health with no current error,
+and left the exact four-source degradation as Doctor's sole failure. Fresh
+exact-head G-001 authorization then resumed the release transaction.
+
+The attested guarded updater selected immutable merge
+`d181fad24ef488a71ce5568cc40fb81309cb3817` without a runtime or OpenClaw
+migration. At stopped watermark `ev_01KZV0VRC80003`, it recorded 62,673/62,673
+source obligations, zero pending/missing, the exact four retained failures,
+eight healthy pipelines, fifteen healthy projections, zero unhealthy durable
+consumers, and a live Gateway. It appended exactly four content-free recovery
+requests. Each produced one newer linked v4 `no_candidate` assessment under
+the pinned seam; all four prior failed assessment events remain immutable and
+each replacement is now the latest assessment for its exact source.
+
+Encrypted backup `administrateme-20260812T125603Z.ambackup` authenticated and
+hash-verified in memory: its envelope and manifest agree, all 6,222 allowlisted
+files match, all fifteen projections are represented, and no unsafe archive
+member exists. Rollback remains available to predecessor
+`2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`; both immutable release trees and
+their runtimes remain present, and the predecessor is compatibility-valid for
+the unchanged OpenClaw/runtime baseline.
+
+Final live evidence is healthy at 62,674/62,674 source obligations with zero
+pending, missing, or failed dispositions and no degraded capability. Full
+Doctor passes 21/21 checks, including fifteen projections, healthy durable
+checkpoints, the pinned model seam, member portal/chat health, and a canonical
+synthetic round trip with zero external side effects. Authenticated read-only
+Triage acceptance through Tailscale rendered the private principal surface,
+observation status, no-operator boundary, all ten member routes, and no
+recovery identifiers, warnings, or errors. A nonexistent exact view target
+returned an empty inventory with no fallback to the authenticated member's
+nonempty inventory. Observation emitted no state-change event, no member
+decision or provider action was performed, and the provider-called terminal
+count remained zero through final watermark `ev_01KZV199ZX0000`.
+
+## 2026-08-11 CO-017 candidate and review history
+
+Status at the time: the recovery implementation was merged but not deployed;
+a follow-up release-safety candidate was in progress. The deployment closure
+above supersedes this historical candidate status.
 
 The original source-assurance snapshot at current production commit
 `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe` accounted for 62,623 source
@@ -79,15 +131,16 @@ degraded readiness document as observation-only, and post-switch settlement
 reads readiness for every allowed transient and aborts immediately on a hidden
 structural degradation or unavailable readiness after runtime liveness.
 
-The follow-up drift/status hardening passes the focused policy/status and
+The follow-up drift/status hardening passed the focused policy/status and
 combined recovery/runtime/updater/Google Tasks process suites, 57 strict
 acceptance gates, 1,827 root/package tests, 60 bridge tests, the complete
 release candidate suite, and the separately required 1,660-test root run,
 Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 79
 tests with both plists valid. Node 24 Gate 7 passes 259/259 checks and 39
-screenshots with zero console, page, or request failures. Independent exact-
-head review, hosted checks, and fresh G-001 authorization remain required. The
-prior authorization cannot be reused.
+screenshots with zero console, page, or request failures. Fifth independent
+review accepted exact head `fd13157648ae3ad02b4190a95feb817ad99fee46`, both
+hosted checks passed, and the fresh G-001 authorizations described above closed
+the release. The prior authorization was not reused.
 
 PR #336's first independent review of head
 `7ccb555e2cb57d3b2157931ba66a0d568b9712c0` rejected two P1 gaps: the stopped
