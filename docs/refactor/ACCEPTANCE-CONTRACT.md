@@ -38,6 +38,20 @@ success unless its service status is explicitly healthy; failed or degraded
 readiness is retained as a restoration failure. Full healthy Doctor remains
 mandatory.
 
+AC-42 live closure (2026-08-12): PR #336 exact reviewed head
+`fd13157648ae3ad02b4190a95feb817ad99fee46` merged as
+`d181fad24ef488a71ce5568cc40fb81309cb3817` and passed the guarded live gate.
+The stopped receipt recorded 62,673/62,673 fully accounted obligations, zero
+pending/missing, eight healthy pipelines, fifteen healthy projections, a live
+Gateway, and exactly four requests. Four newer linked v4 assessments are now
+current while the four failed predecessors remain immutable. Final accounting
+is 62,674/62,674 with zero failed dispositions; full Doctor passes 21/21,
+authenticated read-only Triage and nonexistent-view isolation pass without
+fallback, observation and compatible rollback remain active, the encrypted
+backup authenticates with all 6,222 files hash-valid, and the provider-called
+terminal count is zero. The content-free receipts are in
+`docs/refactor/evidence/co-017-source-assessment-recovery.md`.
+
 CO-016 amendment (2026-08-11): AC-41 proves queue continuity after both
 confirmation and typed dismissal. The resolved exact focus is consumed before
 the surface reload, URL selection is cleared, the active working lens remains

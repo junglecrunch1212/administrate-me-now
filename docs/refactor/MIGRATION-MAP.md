@@ -1,7 +1,7 @@
 # Migration map
 
-CO-017 update (2026-08-11): terminal source-assessment recovery is
-**HARDENED IN THE IMPLEMENTATION CANDIDATE**. Noise filtering advances from
+CO-017 update (2026-08-12): terminal source-assessment recovery is
+**HARDENED AND DEPLOYED**. Noise filtering advances from
 generation/version 19 to 20. Existing source events, v3 assessments, candidates,
 member decisions, canonical records, provider facts, and projection stores are
 not migrated or rewritten. An accepted recovery appends a content-free request
@@ -49,6 +49,21 @@ Tasks restores current running state on a successful poll, degraded readiness
 is not relabelled as observation-only, and the updater reads readiness during
 every settlement wait, rejecting hidden structural degradation or missing
 readiness after runtime liveness.
+
+PR #336 reviewed head `fd13157648ae3ad02b4190a95feb817ad99fee46`
+deployed as merge `d181fad24ef488a71ce5568cc40fb81309cb3817` after a
+second fail-closed preflight exposed an unrelated latched Google Calendar
+transient. A separately authorized single predecessor restart restored that
+adapter without configuration or provider writes; a fresh exact-head G-001
+transaction then attested the merged controller, verified an encrypted backup,
+bound final-live and stopped-log evidence at 62,673/62,673, proved eight
+pipelines and fifteen projections healthy, and appended four exact recovery
+requests. Four linked v4 replacements are now current while the older failures
+remain immutable. Final live accounting is 62,674/62,674 with zero
+pending/missing/failed; full Doctor, authenticated Triage isolation, rollback
+compatibility, observation mode, and zero provider-called terminal effects all
+pass. This is **PRESERVE** for append-only/provider/privacy authority and
+**HARDEN COMPLETE LIVE** for the CO-017 recovery and release boundary.
 
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
