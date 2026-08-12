@@ -80,6 +80,12 @@ SKILL_NAME = "classify_message_nature"
 SKILL_VERSION = "7.0.0"
 DEFAULT_CLASSIFICATION = "personal"
 _REPLAY_GENERATION = 21
+_CURRENT_MESSAGE_FALLBACK_RULE_IDS = frozenset(
+    {
+        "inbound_explicit_directive_or_due_obligation_v1",
+        "outbound_first_person_promise_v1",
+    }
+)
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -1130,6 +1136,18 @@ class NoiseFilteringPipeline:
         ):
             return candidates
         thread_source_ids = set(context_pack.episode_source_event_ids)
+        current_same_source_fallbacks = {
+            (
+                candidate.target_kind,
+                candidate.candidate_key,
+                candidate.title,
+            )
+            for candidate in candidates
+            if str(candidate.candidate_key).startswith("message-fallback-")
+            and _CURRENT_MESSAGE_FALLBACK_RULE_IDS.intersection(
+                candidate.eligibility_rule_ids
+            )
+        }
         decided_keys: set[tuple[str, str]] = set()
         decided_titles: set[tuple[str, str]] = set()
         prior_proposals: list[dict[str, Any]] = []
@@ -1153,6 +1171,26 @@ class NoiseFilteringPipeline:
                 and interpretation.get("context_fingerprint")
                 == context_pack.fingerprint
             ):
+                continue
+            prior_rules = {
+                str(value) for value in payload.get("eligibility_rule_ids") or []
+            }
+            prior_fallback_identity = (
+                str(payload.get("target_kind") or ""),
+                str(payload.get("candidate_key") or ""),
+                str(payload.get("title") or ""),
+            )
+            if (
+                str(payload.get("source_event_id") or "") == source_event_id
+                and not isinstance(interpretation, dict)
+                and _CURRENT_MESSAGE_FALLBACK_RULE_IDS.intersection(prior_rules)
+                and prior_fallback_identity in current_same_source_fallbacks
+            ):
+                # A context-free deterministic fallback is not a stale
+                # interpretation merely because the replay generation changed.
+                # Keep the existing review item when the current rules derive
+                # the exact same source/kind/key/title identity; the later
+                # same-source dedupe then prevents a duplicate proposal.
                 continue
             prior_proposals.append(prior)
 

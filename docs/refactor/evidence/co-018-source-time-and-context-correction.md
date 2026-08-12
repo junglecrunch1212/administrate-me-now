@@ -2,9 +2,11 @@
 
 Date: 2026-08-12
 
-Status: complete supported local validation passed; not independently reviewed,
-merged, deployed, or run against a family Mac or live provider. No provider
-action was performed.
+Status: exact head `12c4a16` was independently reviewed and rejected. Both
+findings are repaired and fresh complete supported local validation passes.
+Independent review of the amended head remains pending. Nothing is merged,
+deployed, or run against a family Mac or live provider. No provider action was
+performed.
 
 ## Implemented proof surface
 
@@ -44,7 +46,11 @@ action was performed.
   other authored ask; the original source and member decision history remain
   immutable.
 - Full replay is enabled for the reviewed pipeline version; untouched stale
-  context proposals retire and member-decided proposals remain permanent.
+  context proposals retire and member-decided proposals remain permanent. An
+  unchanged context-free same-source deterministic fallback that remains
+  eligible under the current high-signal rule keeps its existing pending
+  proposal instead of being superseded and then suppressed as a historical
+  duplicate.
 
 ## Focused evidence
 
@@ -73,6 +79,10 @@ admitting edge from outside the display window. The tests create no canonical
 record or provider effect. A controlled handler interleaving appends member
 enrichment after descendant inspection but before supersession; the production
 projection process then proves the stale v3 receipt cannot dismiss that item.
+The same Gmail replay process also seeds an unchanged, still-eligible v20
+same-source deterministic fallback, records the v21 eligible assessment, and
+proves the original proposal remains pending with no supersession, duplicate,
+or queue disappearance.
 
 ## Validation record
 
@@ -81,8 +91,8 @@ The complete supported local command set passed on Python 3.14 and Node
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
 - `PYTHONPATH=.:bridge poetry run pytest tests packs -q --import-mode=importlib`:
-  1,867 passed. The ordinary configured root discovery
-  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,698 tests under
+  1,868 passed. The ordinary configured root discovery
+  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,699 tests under
   `pyproject.toml`'s `testpaths = ["tests"]` boundary.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 61
   passed.
@@ -135,3 +145,16 @@ pending. The complete aggregate was again rerun from the beginning and passed
 with the final counts above. These advisories are not the separate user-visible
 independent review required by ADR-0009. No Phase B action is authorized by this
 evidence.
+
+The separate user-visible review of exact head `12c4a16` then rejected the
+candidate for two findings: replay superseded a still-valid same-source v20
+fallback and suppressed its v21 replacement because the historical candidate
+key already existed, and rollback prose named `messaging.sent@v3` instead of
+the emitted `messaging.sent@v4`. The repair treats an exact unchanged
+context-free fallback as retained review work, adds handler and production
+composition regression proof, and corrects the schema reference. The amended
+worktree then passed the 185-test changed-path slice, the complete aggregate
+from the beginning, the separate 1,699-test configured root discovery, and the
+invariant scan; the counts above now describe that fresh run. The replacement
+commit still requires hosted checks and a fresh independent exact-head review.
+No Phase B action is authorized.

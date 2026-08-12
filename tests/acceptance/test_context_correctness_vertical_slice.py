@@ -160,7 +160,7 @@ def _raw_gmail_message(
 
 async def _preload_gmail_replay_fixture(
     settings: RuntimeSettings,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, str, str]:
     """Emit actual Gmail facts, then seed the reviewed v20 durable cursor."""
 
     event_log = EventLog(settings.instance, settings.encryption_key)
@@ -367,6 +367,94 @@ async def _preload_gmail_replay_fixture(
             ),
             fingerprint="4" * 64,
         )
+        stable_fallback_source_id = await adapter._emit_message_observation(
+            ctx=ctx,
+            message=_raw_gmail_message(
+                native_id="fixture-replay-stable-fallback",
+                thread_id="fixture-replay-stable-fallback-thread",
+                body="Please complete the fixture checklist",
+                internal_date_ms=1_706_706_060_000,
+                rfc_message_id="<fixture-replay-stable-fallback@example.invalid>",
+            ),
+            fingerprint="7" * 64,
+        )
+        stable_fallback_assessment_id = await events.write(
+            EventEnvelope(
+                event_at_ms=1_786_373_766_050,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.intent.features_extracted",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:05Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key=(
+                    f"triage:message-features:v20:{stable_fallback_source_id}"
+                ),
+                payload={
+                    "intent_id": f"source:{stable_fallback_source_id}",
+                    "source_event_id": stable_fallback_source_id,
+                    "skill_call_event_id": None,
+                    "extractor_id": "legacy-contextual-nlp-v20",
+                    "language": None,
+                    "candidates": [
+                        {
+                            "candidate_key": "message-fallback-2",
+                            "target_kind": "task",
+                            "title": "Please complete the fixture checklist",
+                            "fields": {},
+                            "evidence_spans": [],
+                            "confidence": None,
+                            "reasons": [
+                                "inbound_explicit_directive_or_due_obligation_v1"
+                            ],
+                        }
+                    ],
+                    "extraction_state": "complete",
+                    "extracted_at": "2026-08-10T16:36:05Z",
+                    "assessment_outcome": "eligible_candidates",
+                    "reason_codes": ["eligible_candidate_found"],
+                },
+            ),
+            causation_id=stable_fallback_source_id,
+        )
+        stable_fallback_proposal_id = "fixture-replay-stable-fallback-proposal"
+        await events.write(
+            EventEnvelope(
+                event_at_ms=1_786_373_766_075,
+                tenant_id=settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:05Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key=stable_fallback_proposal_id,
+                payload={
+                    "proposal_id": stable_fallback_proposal_id,
+                    "target_kind": "task",
+                    "owner_member_id": MEMBER,
+                    "title": "Please complete the fixture checklist",
+                    "candidate": {},
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": stable_fallback_source_id,
+                    "confidence": None,
+                    "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+                    "parent_intent_id": None,
+                    "candidate_key": "message-fallback-2",
+                    "extraction_event_id": stable_fallback_assessment_id,
+                    "eligibility_rule_ids": [
+                        "inbound_explicit_directive_or_due_obligation_v1",
+                        "candidate_fields_task_v1",
+                    ],
+                },
+            ),
+            causation_id=stable_fallback_assessment_id,
+        )
         old_proposal_id = "fixture-replay-old-crossed-wire"
         old_proposal_event_id = await events.write(
             EventEnvelope(
@@ -459,6 +547,8 @@ async def _preload_gmail_replay_fixture(
             legacy_proposal_id,
             current_id,
             old_proposal_id,
+            stable_fallback_source_id,
+            stable_fallback_proposal_id,
         )
     finally:
         await bus.stop()
@@ -999,6 +1089,8 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         legacy_proposal_id,
         current_id,
         old_proposal_id,
+        stable_fallback_source_id,
+        stable_fallback_proposal_id,
     ) = asyncio.run(_preload_gmail_replay_fixture(settings))
 
     app = create_application(settings)
@@ -1008,7 +1100,7 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         client.portal.call(
             runtime.wait_for_subscriber,
             "pipeline:pipeline:noise_filtering",
-            current_id,
+            stable_fallback_source_id,
         )
         superseded = [
             event
@@ -1072,6 +1164,54 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         ]
         assert len(legacy_proposals) == 1
         assert legacy_proposals[0]["payload"]["proposal_id"] == legacy_proposal_id
+
+        stable_fallback_supersessions = [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.superseded")
+            if event["payload"]["proposal_id"] == stable_fallback_proposal_id
+        ]
+        assert stable_fallback_supersessions == []
+        stable_fallback_proposals = [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.proposed")
+            if event["payload"].get("source_event_id") == stable_fallback_source_id
+        ]
+        assert len(stable_fallback_proposals) == 1
+        assert stable_fallback_proposals[0]["payload"]["proposal_id"] == (
+            stable_fallback_proposal_id
+        )
+        stable_fallback_assessments = [
+            event
+            for event in client.portal.call(
+                _events, runtime, "triage.intent.features_extracted"
+            )
+            if event.get("causation_id") == stable_fallback_source_id
+        ]
+        assert len(stable_fallback_assessments) == 2
+        assert {
+            event["payload"]["assessment_outcome"]
+            for event in stable_fallback_assessments
+        } == {"eligible_candidates"}
+        current_stable_assessment = max(
+            stable_fallback_assessments, key=lambda event: event["event_id"]
+        )
+        client.portal.call(
+            runtime.wait_for_projection,
+            "triage",
+            current_stable_assessment["event_id"],
+        )
+        stable_page = client.get(
+            f"/api/member/v1/surfaces/triage?triage_item={stable_fallback_proposal_id}",
+            headers=AUTH,
+        )
+        assert stable_page.status_code == 200, stable_page.text
+        stable_item = next(
+            item
+            for item in stable_page.json()["items"]
+            if item["proposal_id"] == stable_fallback_proposal_id
+        )
+        assert stable_item["state"] == "pending_review"
+        assert stable_item["review_state"]["human_gate_required"] is True
 
         client.portal.call(runtime.wait_for_projection, "triage", proposal["event_id"])
         page = client.get("/api/member/v1/surfaces/triage", headers=AUTH)

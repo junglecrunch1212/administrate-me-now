@@ -8,6 +8,11 @@ explicit full replay, and the pinned classification skill advances from v6 to
 v7. Replay appends new assessments/proposals and deterministic supersession
 receipts only for untouched stale interpretations. Source events, member
 feedback, decisions, canonical records, and provider facts are never rewritten.
+An unchanged context-free deterministic fallback that v21 derives from the
+same source under the same current high-signal rule retains its existing
+pending proposal. The new assessment is appended, but replay does not
+supersede the valid item or emit a duplicate merely because a v20 extraction
+already owns the candidate identity.
 The v21 replay stores exact relationship-edge provenance. Source-text
 corrections are proposal/candidate/digest/span scoped; replay no longer blanks
 unrelated authored asks. Invalid Gmail source timestamps quarantine instead of

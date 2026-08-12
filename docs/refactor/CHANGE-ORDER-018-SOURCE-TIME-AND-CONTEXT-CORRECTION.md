@@ -1,7 +1,8 @@
 # Change Order 018 — Source-time and conservative context correction
 
-Status: implemented and locally validated candidate; not reviewed, merged, or
-deployed.
+Status: implemented and locally validated amended candidate; exact head
+`12c4a16` was independently rejected, both findings are repaired, and the
+amended head is not yet independently reviewed, merged, or deployed.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,
@@ -78,6 +79,9 @@ source fact, sender identity, provider account, or household name is wrong.
   remains an explicit, previewed, reversible, shadow-only rule path.
 - Noise filtering generation 21 performs a full reviewed replay. It appends
   newer assessments/proposals and retires only untouched stale interpretations;
+  an unchanged context-free deterministic fallback that remains eligible under
+  the current high-signal rule retains its existing pending proposal instead
+  of being superseded and suppressed by its historical candidate key;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
 
@@ -91,7 +95,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Exact relationship/text correction and reversal events | MODERNIZE | Correction is append-only member evidence, not deletion or mutation of the source. |
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
-| Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. |
+| Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire, while an unchanged still-eligible same-source deterministic fallback remains reviewable. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider
@@ -100,7 +104,7 @@ write.
 ## Rollback and compatibility
 
 Rollback restores Gmail adapter v1.1.1, message-context v1, pipeline v20, and
-skill v6 behavior. It does not delete v4 received events, v3 sent events, v4
+skill v6 behavior. It does not delete v4 received events, v4 sent events, v4
 Triage proposals, correction/reversal events, feedback, or supersession
 receipts already appended. Older schema versions remain registered and
 readable. The older consumer ignores new correction events; a later v21 replay
@@ -116,7 +120,8 @@ and the ordinary replay, privacy, governance, browser, package, and release
 gates. The process slice uses the actual Gmail adapter mapping, seeds a v20
 durable checkpoint, starts the production v21 runner, proves full replay,
 retires both the untouched crossed-wire proposal and an untouched false legacy-
-Sent proposal, keeps a valid sibling reviewable, preserves member-decided
+Sent proposal, keeps both a newly derived valid sibling and an unchanged
+still-eligible v20 same-source fallback reviewable, preserves member-decided
 history, and creates no canonical or provider effect. A second process case
 appends member enrichment after system inspection but before its v3
 supersession and proves the item remains reviewable. Candidate evidence is recorded in

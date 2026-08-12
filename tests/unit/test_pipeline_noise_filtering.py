@@ -1587,6 +1587,129 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
 
 
 @pytest.mark.asyncio
+async def test_v21_replay_keeps_still_eligible_same_source_fallback() -> None:
+    source = _messaging_received_event(
+        body_text="Please complete the fixture checklist"
+    )
+    source.update(
+        {
+            "occurred_at": "2034-02-01T10:00:00Z",
+            "recorded_at": "2034-02-01T10:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "same-source-fallback-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T10:00:00Z",
+        }
+    )
+    log = _ContextEventLog(source_events=[source])
+    assessment_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.intent.features_extracted",
+            schema_version=3,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="triage:message-features:v20:trigger-eid-001",
+            payload={
+                "intent_id": "source:trigger-eid-001",
+                "source_event_id": "trigger-eid-001",
+                "skill_call_event_id": None,
+                "extractor_id": "legacy-contextual-nlp-v20",
+                "language": None,
+                "candidates": [
+                    {
+                        "candidate_key": "message-fallback-1",
+                        "target_kind": "task",
+                        "title": "Please complete the fixture checklist",
+                        "fields": {},
+                        "evidence_spans": [],
+                        "confidence": None,
+                        "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+                    }
+                ],
+                "extraction_state": "complete",
+                "extracted_at": "2034-02-01T10:00:01Z",
+                "assessment_outcome": "eligible_candidates",
+                "reason_codes": ["eligible_candidate_found"],
+            },
+        ),
+        causation_id="trigger-eid-001",
+    )
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="same-source-fallback-v20-proposal",
+            payload={
+                "proposal_id": "same-source-fallback-v20-proposal",
+                "target_kind": "task",
+                "owner_member_id": "member-fixture",
+                "title": "Please complete the fixture checklist",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": "trigger-eid-001",
+                "confidence": None,
+                "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+                "parent_intent_id": None,
+                "candidate_key": "message-fallback-1",
+                "extraction_event_id": assessment_event_id,
+                "eligibility_rule_ids": [
+                    "inbound_explicit_directive_or_due_obligation_v1",
+                    "candidate_fields_task_v1",
+                ],
+            },
+        ),
+        causation_id=assessment_event_id,
+    )
+
+    async def no_language_candidate(*_args: Any, **_kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(source, _make_ctx(log, no_language_candidate))
+
+    assert [
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+        and call.envelope.payload.get("proposal_id")
+        == "same-source-fallback-v20-proposal"
+    ] == []
+    same_source_proposals = [
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+        and call.envelope.payload.get("source_event_id") == "trigger-eid-001"
+    ]
+    assert [call.event_id for call in same_source_proposals] == [proposal_event_id]
+    current_assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.idempotency_key
+        == "triage:message-features:v21:trigger-eid-001"
+    )
+    assert current_assessment.payload["assessment_outcome"] == "eligible_candidates"
+
+
+@pytest.mark.asyncio
 async def test_latest_anchor_reconciles_proposals_outside_model_window() -> None:
     source_events: list[dict[str, Any]] = []
     for index in range(13):

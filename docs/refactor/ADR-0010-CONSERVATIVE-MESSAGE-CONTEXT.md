@@ -54,6 +54,11 @@ rooted in that unreliable body; member-enriched or decided proposals remain
 permanent. `triage.item.superseded@v3` binds that system receipt to the exact
 proposal `last_event_id` inspected by replay, and the deterministic Triage
 projection ignores it if a member revision won the append order.
+An untouched context-free deterministic fallback is not a stale
+interpretation merely because the replay generation changed. When v21 derives
+the exact same source, target kind, candidate key, title, and current
+high-signal fallback rule, it retains the existing pending proposal and records
+the new assessment without superseding or duplicating the review item.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 

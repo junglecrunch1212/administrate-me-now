@@ -19,9 +19,10 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 ## 2026-08-12 CO-018 local candidate
 
-Status: implemented and complete supported local validation passed; not
-independently reviewed, merged, deployed, or run against a family Mac or live
-provider.
+Status: amended after independent review rejected exact head `12c4a16`; the
+two findings are repaired and fresh complete local aggregate validation passes.
+The amended head has not yet completed independent review, merge, deployment,
+or any run against a family Mac or live provider.
 
 The candidate corrects a message-context false-association class without
 changing source facts or member authority. Gmail adapter v1.3.0 records provider
@@ -59,15 +60,22 @@ reinstatement endpoints reverse each decision. Context Fabric v2 rebuilds the
 state from immutable events, and wrong-context feedback cannot aggregate into a
 broad sender/account/workspace suppression suggestion. Noise filtering v21
 opts into full replay and retires only untouched stale context interpretations;
-member decisions remain permanent. The new production-composition acceptance
+an unchanged context-free same-source deterministic fallback that remains
+eligible under the current high-signal rule keeps its existing pending item
+instead of being superseded and hidden by the historical candidate identity.
+Member decisions remain permanent. The new production-composition acceptance
 tests complete detach, relink, reinstate, and rebuild and exercise actual Gmail
 mapping through a v20-to-v21 full replay that supersedes the stale crossed-wire
-proposal and an untouched false legacy-Sent proposal while retaining a valid
-reviewable sibling; a separate production process appends enrichment between
+proposal and an untouched false legacy-Sent proposal while retaining a newly
+derived valid sibling and an unchanged v20 deterministic fallback as reviewable;
+a separate production process appends enrichment between
 inspection and stale v3 supersession and keeps it pending, with no canonical or
 provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
-file. Independent exact-head review and the ordinary controlled-release path
-remain mandatory before any Phase B action.
+file. The rejected exact-head review also identified a rollback-documentation
+typo (`messaging.sent@v3` instead of the emitted `messaging.sent@v4`), which is
+corrected in the change order. Fresh complete gates, independent exact-head
+review, and the ordinary controlled-release path remain mandatory before any
+Phase B action.
 
 ## 2026-08-12 CO-017 deployed and live verified
 
