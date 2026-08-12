@@ -939,7 +939,9 @@ def test_start_stop_restart_crash_recovery_states_are_truthful(
     manager.mark_failed_for_test()
     assert manager.status().status == "failed"
     assert manager.start().status == "healthy"
-    assert manager.stop().status == "stopped"
+    assert manager.stop(require_openclaw_live_before_stop=True).status == "stopped"
+    with pytest.raises(RuntimeError, match="repair quiescence boundary"):
+        manager.stop(require_openclaw_live_before_stop=True)
 
 
 def test_live_services_start_openclaw_before_runtime_replay(
@@ -976,6 +978,49 @@ def test_live_services_start_openclaw_before_runtime_replay(
     assert kickstarts == [
         f"gui/{os.getuid()}/com.administrateme.openclaw",
         f"gui/{os.getuid()}/com.administrateme.runtime",
+    ]
+
+
+def test_repair_stop_checks_gateway_after_runtime_quiesces(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths)
+    commands: list[list[str]] = []
+    sequence: list[str] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        sequence.append("runtime-bootout")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def wait_until_unloaded(label: str) -> bool:
+        sequence.append(f"unloaded:{label}")
+        return True
+
+    def openclaw_liveness() -> bool:
+        sequence.append("openclaw-health")
+        return False
+
+    monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
+    monkeypatch.setattr(manager, "_wait_until_unloaded", wait_until_unloaded)
+    monkeypatch.setattr(manager, "_openclaw_liveness", openclaw_liveness)
+    monkeypatch.setattr("bootstrap.services.subprocess.run", run)
+
+    with pytest.raises(RuntimeError, match="repair quiescence boundary"):
+        manager.stop(require_openclaw_live_before_stop=True)
+
+    assert commands == [
+        [
+            "launchctl",
+            "bootout",
+            f"gui/{os.getuid()}/com.administrateme.runtime",
+        ]
+    ]
+    assert sequence == [
+        "runtime-bootout",
+        f"unloaded:{RUNTIME_LABEL}",
+        "openclaw-health",
     ]
 
 
@@ -1484,6 +1529,26 @@ def test_live_service_definition_must_match_the_candidate_release(
     assert manager._launchctl_definition_matches(RUNTIME_LABEL, path) is False
 
 
+def test_runtime_health_does_not_mislabel_degraded_readiness_as_observation_only(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths, test_mode=False)
+    monkeypatch.setattr(
+        manager,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "status": "degraded"},
+    )
+    assert manager._runtime_health() == "degraded"
+
+    monkeypatch.setattr(
+        manager,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "status": "observation_only"},
+    )
+    assert manager._runtime_health() == "observation_only"
+
+
 def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
     test_paths: DeploymentPaths,
 ) -> None:
@@ -1830,9 +1895,13 @@ def test_upgrade_waits_only_for_known_post_switch_transients(
 
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
     monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
-    result = UpgradeManager(
-        test_paths, root=REPO_ROOT, test_mode=False
-    )._post_switch_doctor(REPO_ROOT)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(
+        manager.services,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "capabilities": {}},
+    )
+    result = manager._post_switch_doctor(REPO_ROOT)
     assert result["status"] == "healthy"
     assert include_synthetic == [False, False, False, True]
 
@@ -1928,6 +1997,129 @@ def test_upgrade_aborts_source_wait_on_new_pipeline_degradation(
     assert include_synthetic == [False, False]
 
 
+def test_upgrade_aborts_any_transient_wait_on_hidden_adapter_degradation(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "adapter_capability_health", "ok": False}],
+    }
+    reports = iter((transient, structural))
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["capabilities"]["adapter:tasks-google-tasks"] = {
+        "name": "Google Tasks",
+        "kind": "adapter",
+        "state": "degraded",
+        "reason": "configured adapter is not running",
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+    assert include_synthetic == [False, False]
+
+
+def test_upgrade_aborts_any_transient_wait_on_hidden_blocked_capability(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [
+            {"name": "openclaw_compatibility_and_plugin_discovery", "ok": False}
+        ],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "adapter_capability_health", "ok": False}],
+    }
+    reports = iter((transient, structural))
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["capabilities"]["adapter:tasks-google-tasks"] = {
+        "name": "Google Tasks",
+        "kind": "adapter",
+        "state": "blocked",
+        "reason": "configured adapter is blocked",
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    diagnostic_calls = 0
+
+    def read_diagnostics():
+        nonlocal diagnostic_calls
+        diagnostic_calls += 1
+        return diagnostics
+
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", read_diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+    assert diagnostic_calls == 1
+
+
+def test_upgrade_aborts_transient_wait_when_readiness_is_not_ready(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "fifteen_projections_and_checkpoints", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    reports = iter((transient, structural))
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["ready"] = False
+    diagnostics["status"] = "blocked"
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+
+
 def test_upgrade_replay_settlement_window_covers_household_language_backlog() -> None:
     assert POST_SWITCH_REPLAY_SETTLEMENT_SECONDS == 60 * 60
 
@@ -1963,7 +2155,7 @@ def test_upgrade_does_not_treat_absent_readiness_as_advancing_replay(
     assert calls == 1
 
 
-def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
+def test_upgrade_fails_closed_on_missing_readiness_after_runtime_is_live(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1974,8 +2166,7 @@ def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
             {"name": "launchd_and_process_state", "ok": False},
         ],
     }
-    healthy = {"status": "healthy", "checks": []}
-    reports = iter((transient, healthy, healthy))
+    reports = iter((transient,))
     include_synthetic: list[bool] = []
 
     class FakeDoctor:
@@ -1986,18 +2177,13 @@ def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
             include_synthetic.append(include_synthetic_proof)
             return next(reports)
 
-    settled = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
-    diagnostics = iter((None, settled))
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
-    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
     manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
-    monkeypatch.setattr(
-        manager.services, "runtime_diagnostics", lambda: next(diagnostics)
-    )
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: None)
     monkeypatch.setattr(manager.services, "runtime_is_live", lambda: True)
 
-    assert manager._post_switch_doctor(REPO_ROOT) == healthy
-    assert include_synthetic == [False, False, True]
+    assert manager._post_switch_doctor(REPO_ROOT) == transient
+    assert include_synthetic == [False]
 
 
 def test_upgrade_does_not_retry_a_structural_doctor_failure(
@@ -2083,3 +2269,70 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
         "/opt/homebrew/bin"
     )
     assert "PYTHONPATH" not in environment
+
+
+def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    releases = test_paths.app_dir / "releases"
+    current_release = releases / ("c" * 40)
+    previous_release = releases / ("b" * 40)
+    current_release.mkdir(parents=True)
+    previous_release.mkdir()
+    previous = {
+        "path": str(previous_release),
+        "commit": "b" * 40,
+        "previous": None,
+    }
+    current = {
+        "path": str(current_release),
+        "commit": "c" * 40,
+        "previous": previous,
+    }
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps(current), encoding="utf-8")
+
+    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr("bootstrap.upgrade.install_launch_agents", lambda *_a, **_k: [])
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=True)
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: {
+            "status": "failed",
+            "checks": [{"name": "fixture_post_switch_failure", "ok": False}],
+        },
+    )
+    healthy = ServiceStatus("healthy", "observation_only", "running", True, "fixture")
+    failed = ServiceStatus("failed", "failed", "running", True, "fixture")
+    starts = iter((healthy, failed))
+    start_calls = 0
+
+    def start_services() -> ServiceStatus:
+        nonlocal start_calls
+        start_calls += 1
+        return next(starts)
+
+    monkeypatch.setattr(manager.services, "status", lambda: healthy)
+    monkeypatch.setattr(
+        manager.services,
+        "stop",
+        lambda: ServiceStatus("stopped", "stopped", "stopped", True, "fixture"),
+    )
+    monkeypatch.setattr(manager.services, "start", start_services)
+
+    with pytest.raises(
+        UpgradeError, match="current release restart did not become healthy"
+    ) as error:
+        manager.rollback()
+
+    assert "rolled-back release failed Doctor" in str(error.value)
+    assert "status=failed, runtime=failed, openclaw=running" in str(error.value)
+    assert start_calls == 2
+    assert json.loads(pointer.read_text("utf-8")) == current

@@ -17,18 +17,20 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
-## 2026-08-11 CO-017 candidate — terminal source-assessment recovery
+## 2026-08-11 CO-017 guarded-release drift hardening candidate
 
-Status: implementation candidate; not merged or deployed. The front matter
-continues to describe the current CO-015 production release deliberately.
+Status: the recovery implementation is merged but not deployed; a follow-up
+release-safety candidate is in progress. The front matter continues to
+describe the current CO-015 production release deliberately.
 
-The source-assurance baseline at current production commit
-`2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe` accounts for all 62,623 source
+The original source-assurance snapshot at current production commit
+`2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe` accounted for 62,623 source
 obligations with zero pending and zero missing, but four exact message sources
-remain terminally failed with `language_seam_OpenClawUnreachable`. Generation
-19 exhausted its base and two transient invocation identities. Ordinary replay
-then encountered the append-only log's correct idempotency conflict because the
-generation-19 assessment key already names a different failed payload.
+remained terminally failed with `language_seam_OpenClawUnreachable`.
+Generation 19 exhausted its base and two transient invocation identities.
+Ordinary replay then encountered the append-only log's correct idempotency
+conflict because the generation-19 assessment key already names a different
+failed payload.
 
 CO-017 adds typed, content-free recovery request/refusal events and a linked v4
 assessment. An authenticated adult operator may submit only exact supported,
@@ -48,25 +50,91 @@ Duplicate delivery and restart reuse durable
 identities, refusal is terminal for its exact command, and a persistent failure
 remains explicit.
 
-The updater's checked-in exception is restricted to the current production
-commit, exact 62,623/62,623 counts, the four declared source IDs, their exact
-reasons, and no unrelated degradation. It requires the explicit declared-repair
-flag, validates before and after encrypted backup, stops services, re-audits the
-encrypted log, and appends only the exact typed requests before selecting the
-candidate. Any mismatch uses ordinary fail-closed rollback. Successful switch
-still requires complete settlement and entirely healthy Doctor; the exception
-does not redefine health. Its request identity changes after a matching
-content-free refusal, permitting a later guarded attempt without making an
-unchanged pending command non-idempotent.
+PR #335 exact head `bedd3180ce57c4ba9f8d4c136b3f25411b40f17f`
+received independent review and complete local/hosted gates. G-001 authorization
+produced GitHub merge commit
+`2a37aa08179a356fddfe0d4cd30ffd3e29f732a3`. Phase B then stopped before
+backup or activation: ordinary live ingestion had advanced the fully accounted
+snapshot to 62,632/62,632, and a prior transient Google Tasks connection reset
+was still latched as current `backoff` health. No updater, recovery request,
+release pointer, or provider write was invoked. A documented current-release
+restart proved the provider healthy and returned Google Tasks to running,
+observation-only state; accounting then advanced normally to 62,633/62,633.
 
-Focused recovery, production-composition endpoint, updater-policy, existing
-noise-filtering/source-assurance/updater, and rollback-checkpoint tests pass.
-The complete release candidate suite, standalone required Python/Ruff/mypy/
-invariant/OpenClaw commands, disposable macOS rehearsal, and Node 24 Gate 7
-browser run also pass; Gate 7 recorded 259 checks with no console, page, or
-request failures. Independent review, hosted gates, PR identity, and exact-head
-evidence remain Phase A work. G-001 still forbids merge or deployment without a
-fresh instruction exactly naming the reviewed PR and 40-character head.
+The follow-up changes the checked-in exception to v2. It remains restricted to
+the exact active production commit, the original 62,623-obligation floor, the
+four declared source IDs and reasons, fresh accounting, observation mode, and
+no unrelated degradation. Growth above the floor is accepted only when every
+current obligation is accounted and pending/missing remain zero. The stopped
+encrypted-log audit requires equality with the final live watermark, records
+the exact activation watermark/current counts, verifies durable pipeline and
+projection health, and carries a Gateway-live-at-quiescence proof in the
+content-free receipt before appending the four requests. Any intervening event,
+consumer failure, new failure, missing/pending obligation, count regression,
+stale audit, source/reason change, or hidden degraded capability fails closed.
+Google Tasks
+now restores current health after a successful poll while retaining the
+transient error in immutable audit history. Runtime status no longer relabels a
+degraded readiness document as observation-only, and post-switch settlement
+reads readiness for every allowed transient and aborts immediately on a hidden
+structural degradation or unavailable readiness after runtime liveness.
+
+The follow-up drift/status hardening passes the focused policy/status and
+combined recovery/runtime/updater/Google Tasks process suites, 57 strict
+acceptance gates, 1,827 root/package tests, 60 bridge tests, the complete
+release candidate suite, and the separately required 1,660-test root run,
+Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 79
+tests with both plists valid. Node 24 Gate 7 passes 259/259 checks and 39
+screenshots with zero console, page, or request failures. Independent exact-
+head review, hosted checks, and fresh G-001 authorization remain required. The
+prior authorization cannot be reused.
+
+PR #336's first independent review of head
+`7ccb555e2cb57d3b2157931ba66a0d568b9712c0` rejected two P1 gaps: the stopped
+audit reused stale unrelated capability state, and only two transient Doctor
+classes queried readiness. The findings are addressed by the live/stopped
+watermark binding, stopped durable-consumer and Gateway-quiescence receipts,
+and all-transient readiness rule above. That head remains unapproved; complete
+gates and a fresh independent review of the amended immutable head are
+mandatory before requesting G-001 authorization.
+
+The second independent review rejected amended head
+`e601a4e14efc15f1127833cc5f4611f36aa02569` with one P1 rollback gap: when
+initial quiescence partly stopped the service pair, an unguarded second cleanup
+stop could fail and bypass selector/plugin restoration and the predecessor
+restart. Candidate activation and explicit rollback now collect that cleanup
+failure, continue through every restoration step, always attempt the required
+predecessor restart, and report the original plus all secondary errors. A
+process regression forces both stop attempts to fail after the runtime has
+stopped and proves exactly one predecessor restart, healthy final service
+status, and no candidate pointer. The focused updater/source-repair/macOS slice
+passes 85 tests. The rejected head has no release authority; complete gates
+and a third independent exact-head review remain mandatory.
+
+The third independent review rejected head
+`9cfd0da1b4cbdd14cb28940649552664c196de9d` with one P1 status gap.
+`ServiceManager.start()` can return failed readiness without raising, while
+both restoration branches checked only for exceptions. Candidate rollback and
+explicit rollback restoration now require the returned predecessor/current
+service status to be exactly healthy and retain failed/degraded status,
+runtime, and Gateway state in the terminal error. The activation process test
+now combines both stop failures with a non-raising failed restart, and a new
+explicit-rollback regression proves the same rule after rollback Doctor
+failure. The focused updater/source-repair/macOS slice passes 86 tests. The
+third rejected head has no release authority; complete gates and a fourth
+independent exact-head review remain mandatory.
+
+The fourth independent review accepted head
+`1175dc6e498d0a79226179095683f7fbe9b872bb` with no findings and confirmed all
+prior P1s closed. Its hosted macOS job nevertheless exposed one deterministic-
+test gap before the repository aggregate ran: the isolated OpenClaw-transient
+unit test did not provide a readiness document, so its result depended on
+whether the executing Mac happened to have an unrelated loopback runtime.
+Production correctly failed closed when the GitHub runner had none. The test
+now supplies explicit healthy readiness, preserving the production rule while
+removing host-state dependence. That otherwise accepted head has no release
+authority because its hosted gate failed; complete gates and a fifth
+independent exact-head review remain mandatory.
 
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 

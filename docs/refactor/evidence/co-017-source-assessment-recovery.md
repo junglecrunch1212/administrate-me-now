@@ -1,7 +1,9 @@
 # CO-017 source-assessment recovery evidence
 
-Status: Phase A candidate evidence. No merge, release activation, or live
-recovery is claimed by this file.
+Status: PR #335 recovery implementation merged; release activation stopped
+before mutation; follow-up Phase A drift/status hardening is locally green
+after repairing the host-dependent fixture exposed by the fourth reviewed head
+and awaits a fifth exact-head review. No live recovery is claimed by this file.
 
 ## Reproduction and cause
 
@@ -35,11 +37,119 @@ recovery is claimed by this file.
   causal failure once, while its own base/recovery-1/recovery-2 terminal
   identities remain non-repeating. A refusal is terminal for its exact command,
   and the guarded updater derives a new identity only after that refusal.
-- Release policy: the checked-in exception binds the prior live commit, exact
-  four source IDs/reasons, and exact 62,623/62,623 settled-count baseline. Every
-  changed or additional condition fails closed.
+- Release policy v2: the checked-in exception binds the prior live commit,
+  original 62,623-obligation floor, exact current full accounting at the
+  stopped-log watermark, exact four source IDs/reasons, fresh settlement,
+  observation mode, and zero unrelated degraded capabilities. New fully
+  accounted source facts may advance the snapshot; regression, pending,
+  missing, another failure, or changed identity/reason still fails closed.
 - Effect boundary: the control event itself creates no canonical object,
   provider command, provider effect, or domain approval.
+
+## First authorized transaction stop
+
+- G-001 authorization bound PR #335 to exact reviewed head
+  `bedd3180ce57c4ba9f8d4c136b3f25411b40f17f`; GitHub produced merge commit
+  `2a37aa08179a356fddfe0d4cd30ffd3e29f732a3`.
+- Read-only Phase B preflight observed 62,632/62,632 fully accounted
+  obligations instead of the checked-in 62,623 equality snapshot, with zero
+  pending/missing and the same exact four failures/reasons.
+- The same readiness document exposed Google Tasks in `backoff` after a prior
+  transient connection reset. The updater was not invoked; no backup, request,
+  release copy, pointer switch, service mutation, or provider action occurred.
+- A later explicitly requested operational fix used the current immutable
+  release's documented stop/start path. Google Tasks returned to running,
+  observation-only state with no current error, and the fresh source snapshot
+  advanced normally to 62,633/62,633.
+- The follow-up candidate makes that recovery state truthful after any later
+  successful poll, distinguishes degraded readiness from observation-only
+  readiness, permits only fully settled monotonic source growth, records the
+  exact stopped-log counts/watermark, binds it to the final live watermark,
+  verifies stopped consumer and Gateway-quiescence health, and rejects hidden
+  structural degradation during every post-switch wait.
+
+## PR #336 first independent review
+
+The separate reviewer rejected exact head
+`7ccb555e2cb57d3b2157931ba66a0d568b9712c0` with two P1 findings:
+
+- unrelated capability state in the stopped audit came from the last live
+  readiness document, leaving a validation-to-stop race; and
+- readiness was queried only for launchd/source-assurance transients, leaving
+  projection/OpenClaw/cron/port-only waits unable to detect hidden degradation.
+
+The amended candidate requires the final live source watermark to equal the
+stopped encrypted-log watermark, reads stopped durable consumer failure state,
+proves Gateway liveness after runtime quiescence, checks readiness on every
+allowed post-switch transient, and fails closed when readiness is unavailable
+after runtime liveness. Focused reviewer-finding regressions and the surrounding
+updater/source-repair/macOS operations slice pass (84 tests). Complete final-head
+gates pass at the counts below; fresh independent review remains pending. The
+rejected head has no release authority.
+
+## PR #336 second independent review
+
+The separate reviewer confirmed both first-review findings closed, then
+rejected exact amended head `e601a4e14efc15f1127833cc5f4611f36aa02569`
+with one P1 finding. If guarded quiescence partly stopped the service pair and
+raised, candidate cleanup called `stop()` again without guarding that cleanup
+call. A second stop failure could therefore bypass current-selector and plugin
+restoration and the predecessor restart.
+
+Candidate activation now records cleanup-stop failure, continues through every
+selector, launchd, plugin, and predecessor-runtime restoration step, and
+reports the candidate error plus every secondary restoration error. The
+explicit rollback path uses the same continue-and-report discipline. A process
+regression makes the initial stop unload the runtime and raise, makes cleanup
+stop raise again, and proves two stop attempts, exactly one predecessor
+restart, healthy final service status, and no candidate pointer. The focused
+source-repair, updater, and macOS operations slice passes 85 tests. The second
+rejected head has no release authority; complete exact-head gates and a third
+independent review remain pending.
+
+## PR #336 third independent review
+
+The separate reviewer rejected exact amended head
+`9cfd0da1b4cbdd14cb28940649552664c196de9d` with one P1 finding. Both
+restoration branches attempted `ServiceManager.start()` and caught exceptions,
+but ignored its returned `ServiceStatus`. Because startup can return
+`status="failed"` for blocked readiness without raising, the updater could hide
+a failed predecessor/current-release restart and report only the earlier
+candidate failure. Isolated activation and explicit-rollback probes reproduced
+the missing failure evidence. The reviewer confirmed the first two review
+rounds' findings remain closed and found no additional security, privacy,
+observation, exact-target, immutable-history, or provider-effect regression.
+
+Both restoration branches now require the returned status to be exactly
+healthy and retain non-healthy status, runtime, and Gateway state as a
+secondary terminal error. The activation process regression combines partial
+quiescence, two stop failures, and a non-raising failed restart. A separate
+explicit-rollback regression forces rollback Doctor failure followed by a
+failed current-release restoration return. The focused source-repair, updater,
+and macOS operations slice passes 86 tests. The third rejected head has no
+release authority; complete exact-head gates and a fourth independent review
+remain pending.
+
+## PR #336 fourth independent review and hosted fixture repair
+
+The separate reviewer accepted exact head
+`1175dc6e498d0a79226179095683f7fbe9b872bb` against exact base
+`2a37aa08179a356fddfe0d4cd30ffd3e29f732a3` with no findings. The review
+confirmed all prior findings closed, all security/privacy/observation/provider
+boundaries preserved, the non-raising failed-restart probes effective, and the
+constitutional/evidence history accurate.
+
+The exact-head Constitution check passed. The hosted macOS rehearsal then
+failed at `test_upgrade_waits_only_for_known_post_switch_transients` after clean
+install and the exact OpenClaw source build had passed. The test supplied a
+transient Doctor sequence but no runtime-readiness fixture. On the local family
+Mac it accidentally read an unrelated live loopback readiness endpoint and
+passed; on the isolated runner readiness was absent, so production code
+correctly returned the transient failure immediately. The test now provides an
+explicit healthy, content-free readiness document. This changes no production
+behavior: missing readiness after runtime liveness and every non-cold-start
+transient still fail closed. The accepted-but-hosted-red head has no release
+authority; complete gates and a fifth exact-head review remain pending.
 
 ## Focused checks completed
 
@@ -52,7 +162,7 @@ recovery is claimed by this file.
 | Targeted Ruff checks for changed Python modules | Passed |
 | Targeted mypy checks for recovery, assurance, runtime, and updater modules | Passed |
 
-## Final-head local release gates
+## PR #335 final-head local release gates
 
 | Gate | Result |
 |---|---|
@@ -103,6 +213,37 @@ result was not counted. The harness was reinstalled and rerun with Homebrew
 
 These results prove candidate mechanics and local release readiness only. Live
 evidence must be recorded only after separately authorized guarded deployment.
+
+## Guarded-release drift/status candidate gates
+
+| Command or slice | Result |
+|---|---|
+| Focused policy, service-health, updater, and Google Tasks unit tests | PASS, including blocked-capability fail-closed coverage |
+| Combined source-recovery, runtime, updater/rollback, Google Tasks, and macOS operations slice | PASS |
+| Candidate v2 policy against the current content-free live readiness/active-release Doctor snapshot | PASS at 62,634/62,634 accounted, zero pending/missing, the exact four declared failures, and watermark `ev_01KZSQZT4M0007`; no source content exposed |
+| Final-live versus durable consumer inventory read-only proof | 23 expected and 23 persisted pipeline/projection consumers; no missing/extra IDs and zero unhealthy rows |
+| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the repaired worktree after the third independent review: 57 strict acceptance, 1,827 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,660 passed |
+| Required Ruff, mypy, and invariant commands | Passed; 219 mypy source files |
+| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 79 tests; runtime and OpenClaw plists valid |
+| Node 24.19.0 Gate 7 rendered browser harness with temporary evidence directory | 259/259 passed; 39 screenshots; zero console errors, page errors, request failures, or repository evidence writes |
+
+The first aggregate attempt reached the format gate only after its 55 strict
+acceptance, 1,819 root/package, and 60 bridge tests passed. Ruff identified one
+formatting-only change in `bootstrap/source_assessment_repair.py`; the formatter
+was applied, the focused policy tests passed, and the complete aggregate was
+rerun from the beginning to PASS. After the last fail-closed blocked-capability
+assertion was added, the complete aggregate and macOS rehearsal were rerun
+again to the final counts above. That interrupted attempt is not counted as the
+final aggregate result.
+
+Two final Gate 7 invocations with a manually restricted `PATH` stopped before
+browser startup with `Error: Gate 7 fixture server did not become ready at
+http://127.0.0.1:3347`; the restriction omitted
+`/opt/homebrew/bin/poetry`, so the harness could not spawn its fixture process.
+With the Poetry Python 3.14 environment first, Node 24.19 next, and the Poetry
+executable directory present, the complete harness passed at the result above.
+The two pre-browser environment invocations are not counted as test results.
 
 ## Required Phase B evidence
 

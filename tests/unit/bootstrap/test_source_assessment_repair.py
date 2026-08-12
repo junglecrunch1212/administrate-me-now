@@ -18,6 +18,7 @@ from bootstrap.source_assessment_repair import (
     BaselineTarget,
     SourceAssessmentRepairError,
     SourceAssessmentRepairPolicy,
+    load_repair_policy,
     offline_validate_repair_baseline,
     validate_declared_baseline,
 )
@@ -31,11 +32,11 @@ TENANT = "tenant-release-repair"
 
 def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
     return SourceAssessmentRepairPolicy(
-        contract="source-assessment-degraded-baseline-v1",
+        contract="source-assessment-degraded-baseline-v2",
         required_active_commit=ACTIVE_COMMIT,
         observation_mode_required=True,
         expected_counts=BaselineCounts(
-            obligations=1, accounted=1, pending=0, missing=0, failed=1
+            minimum_obligations=1, pending=0, missing=0, failed=1
         ),
         targets=[
             BaselineTarget(
@@ -54,11 +55,18 @@ def _doctor() -> dict[str, object]:
     }
 
 
-def _diagnostics(source_id: str) -> dict[str, object]:
+def _diagnostics(
+    source_id: str, *, watermark_event_id: str | None = None
+) -> dict[str, object]:
     return {
         "observation_active": True,
+        "ready": True,
         "capabilities": {
             "pipeline:pipeline:noise_filtering": {
+                "state": "healthy",
+                "details": {"checkpoint_event_id": source_id},
+            },
+            "projection:triage": {
                 "state": "healthy",
                 "details": {"checkpoint_event_id": source_id},
             },
@@ -80,12 +88,58 @@ def _diagnostics(source_id: str) -> dict[str, object]:
                         }
                     ],
                     "content_exposed": False,
+                    "watermark_event_id": watermark_event_id or source_id,
+                    "freshness": {
+                        "state": "fresh",
+                        "revision_current": True,
+                        "pending_recheck_required": False,
+                        "settled_revision": True,
+                        "refresh_error_type": None,
+                    },
                 },
             },
             "product:member": {"state": "degraded"},
             "surface:triage-processing": {"state": "degraded"},
         },
     }
+
+
+def _seed_healthy_consumer_health(paths: DeploymentPaths) -> None:
+    checkpoint_db = paths.instance_dir / "events" / "bus_checkpoints.db"
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "CREATE TABLE bus_consumer_offsets ("
+            "subscriber_id TEXT PRIMARY KEY, checkpoint_event_id TEXT, "
+            "last_success_at_ms INTEGER, last_failure_at_ms INTEGER, "
+            "consecutive_failures INTEGER NOT NULL DEFAULT 0, "
+            "degraded INTEGER NOT NULL DEFAULT 0, poison_event_id TEXT, "
+            "consumer_version TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO bus_consumer_offsets "
+            "(subscriber_id, checkpoint_event_id) VALUES (?, ?)",
+            (
+                ("pipeline:pipeline:noise_filtering", None),
+                ("projection:triage", None),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _latest_event_id(paths: DeploymentPaths, event_key: bytes) -> str:
+    async def read() -> str:
+        log = EventLog(paths.instance_dir / "events" / "events.db", event_key)
+        try:
+            event_id = await log.latest_event_id()
+            assert event_id is not None
+            return event_id
+        finally:
+            await log.close()
+
+    return asyncio.run(read())
 
 
 def _source() -> EventEnvelope:
@@ -118,6 +172,17 @@ def _source() -> EventEnvelope:
             "attachments": [],
         },
     )
+
+
+def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
+    policy = load_repair_policy(REPO_ROOT)
+
+    assert policy.contract == "source-assessment-degraded-baseline-v2"
+    assert policy.expected_counts.minimum_obligations == 62_623
+    assert policy.expected_counts.pending == 0
+    assert policy.expected_counts.missing == 0
+    assert policy.expected_counts.failed == 4
+    assert len(policy.targets) == 4
 
 
 async def _seed(log: EventLog) -> tuple[str, str]:
@@ -175,6 +240,16 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
         )
 
     changed = json.loads(json.dumps(diagnostics))
+    changed["ready"] = False
+    with pytest.raises(SourceAssessmentRepairError, match="ready live runtime"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
     changed["capabilities"]["policy:source-assurance"]["details"]["failed"][0][
         "reason"
     ] = "language_seam_OpenClawTimeout"
@@ -184,6 +259,189 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
             active_commit=ACTIVE_COMMIT,
             doctor=_doctor(),
             diagnostics=changed,
+        )
+
+
+def test_declared_baseline_accepts_only_new_fully_settled_obligations() -> None:
+    source_id = "ev_fixture_source"
+    policy = _policy(source_id)
+    diagnostics = _diagnostics(source_id)
+    counts = diagnostics["capabilities"]["policy:source-assurance"]["details"]["counts"]
+    counts["obligations"] = 10
+    counts["accounted"] = 10
+
+    snapshot = validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=_doctor(),
+        diagnostics=diagnostics,
+    )
+
+    assert snapshot == {
+        "minimum_obligations": 1,
+        "counts": {
+            "obligations": 10,
+            "accounted": 10,
+            "pending": 0,
+            "missing": 0,
+            "failed": 1,
+        },
+        "failed_target_count": 1,
+        "watermark_event_id": source_id,
+        "content_exposed": False,
+    }
+
+    counts["accounted"] = 9
+    with pytest.raises(SourceAssessmentRepairError, match="counts differ"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=diagnostics,
+        )
+
+    counts["accounted"] = 10
+    diagnostics["capabilities"]["policy:source-assurance"]["details"]["freshness"][
+        "revision_current"
+    ] = False
+    with pytest.raises(SourceAssessmentRepairError, match="fresh settled"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=diagnostics,
+        )
+
+    diagnostics = _diagnostics(source_id)
+    del diagnostics["capabilities"]["policy:source-assurance"]["details"][
+        "watermark_event_id"
+    ]
+    with pytest.raises(SourceAssessmentRepairError, match="exact event watermark"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=diagnostics,
+        )
+
+
+def test_stopped_activation_rejects_post_validation_event_or_consumer_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment", production=False)
+    config = paths.instance_dir / "config"
+    events = paths.instance_dir / "events"
+    config.mkdir(parents=True)
+    events.mkdir(parents=True)
+    event_key = b"e" * 32
+    reference = secret_store(paths, test_mode=True).put("event-log", event_key)
+    (config / "secret-references.json").write_text(
+        json.dumps({"references": {"event_log": reference}}), encoding="utf-8"
+    )
+
+    async def seed_and_append_error() -> tuple[str, str]:
+        log = EventLog(events / "events.db", event_key)
+        try:
+            source_id, failed_id = await _seed(log)
+            await log.append(
+                EventEnvelope(
+                    event_at_ms=1_786_420_000_002,
+                    tenant_id=TENANT,
+                    type="adapter.error",
+                    schema_version=1,
+                    occurred_at="2026-08-11T16:00:02Z",
+                    source_adapter="adapter_supervisor",
+                    source_account_id="google-tasks",
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    sensitivity="normal",
+                    idempotency_key="fixture:post-validation-adapter-error",
+                    payload={
+                        "adapter_name": "Google Tasks",
+                        "adapter_family": "tasks",
+                        "severity": "transient",
+                        "error_kind": "network",
+                        "error_message": "fixture post-validation failure",
+                        "retry_after_s": 1,
+                        "occurred_at": "2026-08-11T16:00:02Z",
+                    },
+                )
+            )
+            return source_id, failed_id
+        finally:
+            await log.close()
+
+    source_id, live_watermark = asyncio.run(seed_and_append_error())
+    _seed_healthy_consumer_health(paths)
+    with pytest.raises(SourceAssessmentRepairError, match="Gateway was not live"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=_policy(source_id),
+            diagnostics=_diagnostics(source_id, watermark_event_id=live_watermark),
+            gateway_live_at_quiescence=False,
+            append_requests=True,
+            test_mode=True,
+        )
+    with pytest.raises(SourceAssessmentRepairError, match="event log advanced"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=_policy(source_id),
+            diagnostics=_diagnostics(source_id, watermark_event_id=live_watermark),
+            gateway_live_at_quiescence=True,
+            append_requests=True,
+            test_mode=True,
+        )
+
+    current_watermark = _latest_event_id(paths, event_key)
+    checkpoint_db = events / "bus_checkpoints.db"
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "UPDATE bus_consumer_offsets SET degraded=1, "
+            "consecutive_failures=1 WHERE subscriber_id LIKE 'pipeline:%'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(SourceAssessmentRepairError, match="degraded or poisoned"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=_policy(source_id),
+            diagnostics=_diagnostics(source_id, watermark_event_id=current_watermark),
+            gateway_live_at_quiescence=True,
+            append_requests=True,
+            test_mode=True,
+        )
+
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "UPDATE bus_consumer_offsets SET degraded=0, consecutive_failures=0 "
+            "WHERE subscriber_id LIKE 'pipeline:%'"
+        )
+        connection.execute(
+            "DELETE FROM bus_consumer_offsets WHERE subscriber_id LIKE 'projection:%'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(SourceAssessmentRepairError, match="final live readiness"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=_policy(source_id),
+            diagnostics=_diagnostics(source_id, watermark_event_id=current_watermark),
+            gateway_live_at_quiescence=True,
+            append_requests=True,
+            test_mode=True,
         )
 
 
@@ -211,17 +469,35 @@ def test_offline_activation_appends_only_exact_content_free_requests(
             await log.close()
 
     source_id, failed_id = asyncio.run(seed())
+    _seed_healthy_consumer_health(paths)
     evidence = offline_validate_repair_baseline(
         paths,
         repository_root=REPO_ROOT,
         candidate_commit=CANDIDATE_COMMIT,
         policy=_policy(source_id),
-        diagnostics=_diagnostics(source_id),
+        diagnostics=_diagnostics(source_id, watermark_event_id=failed_id),
+        gateway_live_at_quiescence=True,
         append_requests=True,
         test_mode=True,
     )
     assert evidence["requested"] == 1
     assert evidence["content_exposed"] is False
+    assert evidence["stopped_log_snapshot"]["minimum_obligations"] == 1
+    assert evidence["stopped_log_snapshot"]["counts"] == {
+        "obligations": 1,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 0,
+        "failed": 1,
+    }
+    assert evidence["stopped_log_snapshot"]["watermark_event_id"] == failed_id
+    assert evidence["stopped_log_snapshot"]["consumer_health"] == {
+        "pipeline_count": 1,
+        "projection_count": 1,
+        "unhealthy_count": 0,
+        "content_exposed": False,
+    }
+    assert evidence["stopped_log_snapshot"]["gateway_live_at_quiescence"] is True
     assert "Content must never" not in str(evidence)
 
     async def inspect() -> None:
@@ -244,7 +520,7 @@ def test_offline_activation_appends_only_exact_content_free_requests(
     changed_policy = _policy(source_id).model_copy(
         update={
             "expected_counts": BaselineCounts(
-                obligations=2, accounted=2, pending=0, missing=0, failed=1
+                minimum_obligations=2, pending=0, missing=0, failed=1
             )
         }
     )
@@ -254,8 +530,93 @@ def test_offline_activation_appends_only_exact_content_free_requests(
             repository_root=REPO_ROOT,
             candidate_commit=CANDIDATE_COMMIT,
             policy=changed_policy,
-            diagnostics=_diagnostics(source_id),
+            diagnostics=_diagnostics(
+                source_id,
+                watermark_event_id=_latest_event_id(paths, event_key),
+            ),
+            gateway_live_at_quiescence=True,
             append_requests=False,
+            test_mode=True,
+        )
+
+
+def test_stopped_audit_uses_persisted_checkpoint_not_stale_live_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment", production=False)
+    config = paths.instance_dir / "config"
+    events = paths.instance_dir / "events"
+    config.mkdir(parents=True)
+    events.mkdir(parents=True)
+    event_key = b"e" * 32
+    reference = secret_store(paths, test_mode=True).put("event-log", event_key)
+    (config / "secret-references.json").write_text(
+        json.dumps({"references": {"event_log": reference}}), encoding="utf-8"
+    )
+
+    async def seed() -> tuple[str, str]:
+        log = EventLog(events / "events.db", event_key)
+        try:
+            source_id, _failed_id = await _seed(log)
+            list_event_id = await log.append(
+                EventEnvelope(
+                    event_at_ms=1_786_420_000_002,
+                    tenant_id=TENANT,
+                    type="list.created",
+                    schema_version=1,
+                    occurred_at="2026-08-11T16:00:02Z",
+                    source_adapter="google_tasks",
+                    source_account_id="fixture-account",
+                    owner_scope="private:member-release",
+                    visibility_scope="private:member-release",
+                    sensitivity="normal",
+                    idempotency_key="fixture:stale-live-list-checkpoint",
+                    payload={
+                        "member_id": "member-release",
+                        "provider": "google_tasks",
+                        "provider_account_id": "fixture-account",
+                        "list_external_id": "fixture-list",
+                        "list_name": "Fixture list",
+                        "is_default": False,
+                        "changed_at": "2026-08-11T16:00:02Z",
+                    },
+                )
+            )
+            return source_id, list_event_id
+        finally:
+            await log.close()
+
+    source_id, list_event_id = asyncio.run(seed())
+    _seed_healthy_consumer_health(paths)
+    checkpoint_db = events / "bus_checkpoints.db"
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "INSERT INTO bus_consumer_offsets "
+            "(subscriber_id, checkpoint_event_id) VALUES (?, ?)",
+            ("projection:lists", None),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    diagnostics = _diagnostics(source_id, watermark_event_id=list_event_id)
+    diagnostics["capabilities"]["projection:lists"] = {
+        "state": "healthy",
+        # The last live document claimed this projection had passed the event,
+        # but its stopped durable row above proves otherwise.
+        "details": {"checkpoint_event_id": list_event_id},
+    }
+    with pytest.raises(SourceAssessmentRepairError, match="counts differ"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=_policy(source_id),
+            diagnostics=diagnostics,
+            gateway_live_at_quiescence=True,
+            append_requests=True,
             test_mode=True,
         )
 
@@ -285,14 +646,16 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
         finally:
             await log.close()
 
-    source_id, _failed_id = asyncio.run(seed())
+    source_id, failed_id = asyncio.run(seed())
+    _seed_healthy_consumer_health(paths)
     policy = _policy(source_id)
     first = offline_validate_repair_baseline(
         paths,
         repository_root=REPO_ROOT,
         candidate_commit=CANDIDATE_COMMIT,
         policy=policy,
-        diagnostics=_diagnostics(source_id),
+        diagnostics=_diagnostics(source_id, watermark_event_id=failed_id),
+        gateway_live_at_quiescence=True,
         append_requests=True,
         test_mode=True,
     )
@@ -301,7 +664,10 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
         repository_root=REPO_ROOT,
         candidate_commit=CANDIDATE_COMMIT,
         policy=policy,
-        diagnostics=_diagnostics(source_id),
+        diagnostics=_diagnostics(
+            source_id, watermark_event_id=_latest_event_id(paths, event_key)
+        ),
+        gateway_live_at_quiescence=True,
         append_requests=True,
         test_mode=True,
     )
@@ -311,12 +677,9 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
     connection = sqlite3.connect(checkpoint_db)
     try:
         connection.execute(
-            "CREATE TABLE bus_consumer_offsets ("
-            "subscriber_id TEXT PRIMARY KEY, checkpoint_event_id TEXT)"
-        )
-        connection.execute(
-            "INSERT INTO bus_consumer_offsets VALUES (?, ?)",
-            ("pipeline:pipeline:noise_filtering", "ev_after_skipped_request"),
+            "UPDATE bus_consumer_offsets SET checkpoint_event_id=? "
+            "WHERE subscriber_id=?",
+            ("ev_after_skipped_request", "pipeline:pipeline:noise_filtering"),
         )
         connection.commit()
     finally:
@@ -327,7 +690,10 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
         repository_root=REPO_ROOT,
         candidate_commit=CANDIDATE_COMMIT,
         policy=policy,
-        diagnostics=_diagnostics(source_id),
+        diagnostics=_diagnostics(
+            source_id, watermark_event_id=_latest_event_id(paths, event_key)
+        ),
+        gateway_live_at_quiescence=True,
         append_requests=True,
         test_mode=True,
     )
@@ -371,7 +737,10 @@ def test_offline_activation_moves_request_beyond_an_advanced_rollback_checkpoint
         repository_root=REPO_ROOT,
         candidate_commit=CANDIDATE_COMMIT,
         policy=policy,
-        diagnostics=_diagnostics(source_id),
+        diagnostics=_diagnostics(
+            source_id, watermark_event_id=_latest_event_id(paths, event_key)
+        ),
+        gateway_live_at_quiescence=True,
         append_requests=True,
         test_mode=True,
     )

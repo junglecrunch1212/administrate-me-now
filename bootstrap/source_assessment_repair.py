@@ -38,8 +38,7 @@ _SOURCE_DERIVED_CAPABILITIES = frozenset(
 class BaselineCounts(BaseModel):
     model_config = {"extra": "forbid"}
 
-    obligations: int = Field(ge=1)
-    accounted: int = Field(ge=1)
+    minimum_obligations: int = Field(ge=1)
     pending: Literal[0]
     missing: Literal[0]
     failed: int = Field(ge=1, le=20)
@@ -58,7 +57,7 @@ class BaselineTarget(BaseModel):
 class SourceAssessmentRepairPolicy(BaseModel):
     model_config = {"extra": "forbid"}
 
-    contract: Literal["source-assessment-degraded-baseline-v1"]
+    contract: Literal["source-assessment-degraded-baseline-v2"]
     required_active_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     observation_mode_required: Literal[True]
     expected_counts: BaselineCounts
@@ -161,10 +160,6 @@ def load_repair_policy(candidate: Path) -> SourceAssessmentRepairPolicy:
         raise SourceAssessmentRepairError(
             "repair policy failed count does not equal its exact target set"
         )
-    if policy.expected_counts.accounted != policy.expected_counts.obligations:
-        raise SourceAssessmentRepairError(
-            "repair policy requires complete source accounting before recovery"
-        )
     return policy
 
 
@@ -188,7 +183,7 @@ def validate_declared_baseline(
     active_commit: str,
     doctor: dict[str, Any],
     diagnostics: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     """Fail unless the active machine differs from healthy in exactly one way."""
 
     if active_commit != policy.required_active_commit:
@@ -197,6 +192,8 @@ def validate_declared_baseline(
         )
     if diagnostics.get("observation_active") is not True:
         raise SourceAssessmentRepairError("repair requires active observation mode")
+    if diagnostics.get("ready") is not True:
+        raise SourceAssessmentRepairError("repair requires a ready live runtime")
     if _failed_doctor_checks(doctor) != {"source_assurance_terminal_dispositions"}:
         raise SourceAssessmentRepairError(
             "active Doctor differs from the declared source-only degradation"
@@ -215,15 +212,54 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "unexpected capability degradation is present: " + ", ".join(unexpected)
         )
+    source_capability = capabilities.get("policy:source-assurance") or {}
     details = _assurance_details(diagnostics)
+    if (
+        source_capability.get("state") != "degraded"
+        or details.get("state") != "degraded"
+    ):
+        raise SourceAssessmentRepairError(
+            "source-assurance state does not match the declared degradation"
+        )
     counts = details.get("counts") or {}
-    expected = policy.expected_counts.model_dump(mode="json")
-    if any(int(counts.get(name, -1)) != value for name, value in expected.items()):
+    try:
+        actual_counts = {
+            name: int(counts.get(name, -1))
+            for name in ("obligations", "accounted", "pending", "missing", "failed")
+        }
+    except (TypeError, ValueError) as exc:
+        raise SourceAssessmentRepairError(
+            "source-assurance counts are unavailable"
+        ) from exc
+    expected = policy.expected_counts
+    if (
+        actual_counts["obligations"] < expected.minimum_obligations
+        or actual_counts["accounted"] != actual_counts["obligations"]
+        or actual_counts["pending"] != expected.pending
+        or actual_counts["missing"] != expected.missing
+        or actual_counts["failed"] != expected.failed
+    ):
         raise SourceAssessmentRepairError(
             "source-assurance counts differ from the declared repair baseline"
         )
     if details.get("content_exposed") is not False:
         raise SourceAssessmentRepairError("source diagnostics exposed content")
+    watermark_event_id = details.get("watermark_event_id")
+    if not isinstance(watermark_event_id, str) or not watermark_event_id:
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence has no exact event watermark"
+        )
+    freshness = details.get("freshness") or {}
+    if not (
+        freshness.get("state") == "fresh"
+        and freshness.get("revision_current") is True
+        and freshness.get("pending_recheck_required") is False
+        and freshness.get("settled_revision") is True
+        and freshness.get("refresh_error_type") is None
+    ):
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence is not a fresh settled revision"
+        )
     actual_failures = {
         (str(item.get("event_id") or ""), str(item.get("reason") or ""))
         for item in details.get("failed") or []
@@ -237,6 +273,13 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "failed source ids or reasons differ from the declared repair baseline"
         )
+    return {
+        "minimum_obligations": expected.minimum_obligations,
+        "counts": actual_counts,
+        "failed_target_count": len(actual_failures),
+        "watermark_event_id": watermark_event_id,
+        "content_exposed": False,
+    }
 
 
 def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
@@ -248,6 +291,73 @@ def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stopped_consumer_health(
+    paths: DeploymentPaths, diagnostics: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prove stopped projection/pipeline workers persisted no hidden failure."""
+
+    checkpoint_db = paths.instance_dir / "events" / "bus_checkpoints.db"
+    if not checkpoint_db.is_file():
+        raise SourceAssessmentRepairError(
+            "stopped consumer health database is unavailable"
+        )
+    try:
+        connection = sqlite3.connect(f"file:{checkpoint_db}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = list(
+                connection.execute(
+                    "SELECT subscriber_id, checkpoint_event_id, "
+                    "consecutive_failures, degraded, poison_event_id "
+                    "FROM bus_consumer_offsets "
+                    "WHERE subscriber_id LIKE 'pipeline:%' "
+                    "OR subscriber_id LIKE 'projection:%'"
+                )
+            )
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health database is unreadable"
+        ) from exc
+    expected_ids = set(_capability_snapshot(diagnostics))
+    actual_ids = {str(row["subscriber_id"]) for row in rows}
+    if not expected_ids or actual_ids != expected_ids:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health inventory differs from final live readiness"
+        )
+    pipeline_count = sum(value.startswith("pipeline:") for value in actual_ids)
+    projection_count = sum(value.startswith("projection:") for value in actual_ids)
+    if pipeline_count == 0 or projection_count == 0:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health inventory is incomplete"
+        )
+    unhealthy_count = sum(
+        bool(row["degraded"])
+        or int(row["consecutive_failures"] or 0) > 0
+        or row["poison_event_id"] is not None
+        for row in rows
+    )
+    if unhealthy_count:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health contains a degraded or poisoned worker"
+        )
+    evidence = {
+        "pipeline_count": pipeline_count,
+        "projection_count": projection_count,
+        "unhealthy_count": 0,
+        "content_exposed": False,
+    }
+    capabilities = {
+        str(row["subscriber_id"]): {
+            "state": "healthy",
+            "details": {"checkpoint_event_id": row["checkpoint_event_id"]},
+        }
+        for row in rows
+    }
+    return evidence, capabilities
+
+
 async def _offline_validate_and_append(
     paths: DeploymentPaths,
     *,
@@ -255,6 +365,7 @@ async def _offline_validate_and_append(
     candidate_commit: str,
     policy: SourceAssessmentRepairPolicy,
     diagnostics: dict[str, Any],
+    gateway_live_at_quiescence: bool,
     append_requests: bool,
     test_mode: bool,
 ) -> dict[str, Any]:
@@ -264,22 +375,51 @@ async def _offline_validate_and_append(
     event_key = secret_store(paths, test_mode=test_mode).get(references["event_log"])
     event_log = EventLog(paths.instance_dir / "events" / "events.db", event_key)
     try:
+        if gateway_live_at_quiescence is not True:
+            raise SourceAssessmentRepairError(
+                "OpenClaw Gateway was not live at the repair quiescence boundary"
+            )
+        live_watermark = _assurance_details(diagnostics).get("watermark_event_id")
+        if not isinstance(live_watermark, str) or not live_watermark:
+            raise SourceAssessmentRepairError(
+                "final live health receipt has no exact event watermark"
+            )
+        consumer_health, stopped_capabilities = _stopped_consumer_health(
+            paths, diagnostics
+        )
         audit = await audit_source_assurance(
             event_log,
             repository_root=repository_root,
-            capabilities=_capability_snapshot(diagnostics),
+            capabilities=stopped_capabilities,
         )
+        if audit.get("watermark_event_id") != live_watermark:
+            raise SourceAssessmentRepairError(
+                "event log advanced after final live health validation"
+            )
         synthetic_diagnostics = {
             "observation_active": True,
+            "ready": True,
             "capabilities": {
                 **(diagnostics.get("capabilities") or {}),
                 "policy:source-assurance": {
                     "state": audit["state"],
-                    "details": audit,
+                    "details": {
+                        **audit,
+                        # A stopped-log audit closes over the exact latest
+                        # event watermark and is therefore the authoritative
+                        # fresh revision for activation.
+                        "freshness": {
+                            "state": "fresh",
+                            "revision_current": True,
+                            "pending_recheck_required": False,
+                            "settled_revision": True,
+                            "refresh_error_type": None,
+                        },
+                    },
                 },
             },
         }
-        validate_declared_baseline(
+        stopped_snapshot = validate_declared_baseline(
             policy,
             active_commit=policy.required_active_commit,
             doctor={
@@ -312,6 +452,11 @@ async def _offline_validate_and_append(
             return {
                 "contract": policy.contract,
                 "validated_targets": len(targets),
+                "stopped_log_snapshot": {
+                    **stopped_snapshot,
+                    "consumer_health": consumer_health,
+                    "gateway_live_at_quiescence": True,
+                },
                 "content_exposed": False,
             }
         target_digest = hashlib.sha256(
@@ -356,6 +501,11 @@ async def _offline_validate_and_append(
             "contract": policy.contract,
             "request_event_ids": event_ids,
             "requested": len(event_ids),
+            "stopped_log_snapshot": {
+                **stopped_snapshot,
+                "consumer_health": consumer_health,
+                "gateway_live_at_quiescence": True,
+            },
             "content_exposed": False,
             "expires_after_activation": True,
         }
@@ -370,6 +520,7 @@ def offline_validate_repair_baseline(
     candidate_commit: str,
     policy: SourceAssessmentRepairPolicy,
     diagnostics: dict[str, Any],
+    gateway_live_at_quiescence: bool,
     append_requests: bool,
     test_mode: bool,
 ) -> dict[str, Any]:
@@ -380,6 +531,7 @@ def offline_validate_repair_baseline(
             candidate_commit=candidate_commit,
             policy=policy,
             diagnostics=diagnostics,
+            gateway_live_at_quiescence=gateway_live_at_quiescence,
             append_requests=append_requests,
             test_mode=test_mode,
         )
