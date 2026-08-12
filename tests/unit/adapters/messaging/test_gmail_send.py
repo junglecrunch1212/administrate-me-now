@@ -40,7 +40,11 @@ import pytest
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.registry import registry
-from adminme.events.schemas.ingest import MessagingSentV1, MessagingSentV2, MessagingSentV3
+from adminme.events.schemas.ingest import (
+    MessagingSentV1,
+    MessagingSentV2,
+    MessagingSentV3,
+)
 from adminme.lib.adapters import OutboundMessage, SendResult
 from adminme.lib.observation import OutboundResult
 

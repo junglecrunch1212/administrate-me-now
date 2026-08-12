@@ -229,12 +229,14 @@ def test_exact_context_correction_round_trip_through_production_composition(
         )
         assert dismissed.status_code == 200, dismissed.text
         assert len(dismissed.json()["context_correction_event_ids"]) == 2
-        assert len(
-            client.portal.call(_events, runtime, "context.relationship.rejected")
-        ) == 1
-        assert len(
-            client.portal.call(_events, runtime, "context.source_text.corrected")
-        ) == 1
+        assert (
+            len(client.portal.call(_events, runtime, "context.relationship.rejected"))
+            == 1
+        )
+        assert (
+            len(client.portal.call(_events, runtime, "context.source_text.corrected"))
+            == 1
+        )
 
         corrected_pack = client.portal.call(
             build_message_context_pack, source, runtime.event_log
@@ -280,9 +282,12 @@ def test_exact_context_correction_round_trip_through_production_composition(
                 "SELECT algorithm, state FROM context_relationship_decisions"
             ).fetchone()
         ) == ("message-context-pack-v2", "confirmed")
-        assert context.execute(
-            "SELECT state FROM context_source_text_corrections"
-        ).fetchone()[0] == "reinstated"
+        assert (
+            context.execute(
+                "SELECT state FROM context_source_text_corrections"
+            ).fetchone()[0]
+            == "reinstated"
+        )
         client.portal.call(runtime.projections.rebuild, "context_fabric")
         rebuilt = runtime.projections.connection("context_fabric")
         assert tuple(
@@ -290,11 +295,13 @@ def test_exact_context_correction_round_trip_through_production_composition(
                 "SELECT algorithm, state FROM context_relationship_decisions"
             ).fetchone()
         ) == ("message-context-pack-v2", "confirmed")
-        assert rebuilt.execute(
-            "SELECT state FROM context_source_text_corrections"
-        ).fetchone()[0] == "reinstated"
+        assert (
+            rebuilt.execute(
+                "SELECT state FROM context_source_text_corrections"
+            ).fetchone()[0]
+            == "reinstated"
+        )
         assert client.portal.call(_events, runtime, "task.created") == []
         assert (
-            client.portal.call(_events, runtime, "external_sync.write_requested")
-            == []
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
         )

@@ -385,10 +385,9 @@ def _eligible_event(candidate: Mapping[str, Any], current: Mapping[str, Any]) ->
         and candidate_member != current_member
     ):
         return False
-    return (
-        _provider(candidate, payload) == _provider(current, current_payload)
-        and _coordinate(candidate, payload) == _coordinate(current, current_payload)
-    )
+    return _provider(candidate, payload) == _provider(
+        current, current_payload
+    ) and _coordinate(candidate, payload) == _coordinate(current, current_payload)
 
 
 def _related_reasons(
@@ -415,8 +414,7 @@ def _related_reasons(
         str(reference).strip()
         for primary in primary_payloads
         for reference in (
-            list(primary.get("references") or [])
-            + [primary.get("in_reply_to")]
+            list(primary.get("references") or []) + [primary.get("in_reply_to")]
         )
         if isinstance(reference, str) and reference.strip()
     }
@@ -507,9 +505,7 @@ def _relationship_pair(first: str, second: str) -> tuple[str, str]:
     return tuple(sorted((first, second)))  # type: ignore[return-value]
 
 
-def _correction_applies(
-    event: Mapping[str, Any], current: Mapping[str, Any]
-) -> bool:
+def _correction_applies(event: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
     if any(
         event.get(field) != current.get(field)
         for field in ("tenant_id", "owner_scope", "visibility_scope", "sensitivity")
@@ -743,9 +739,9 @@ async def build_message_context_pack(
     episode_first = full_episode[0] if full_episode else current
     # Provider time keeps exact duplicate observations in one identity while
     # splitting a provider thread id that is reused in a later episode.
-    episode_identity = _message_time(
-        episode_first, episode_first.get("payload") or {}
-    ) or "isolated"
+    episode_identity = (
+        _message_time(episode_first, episode_first.get("payload") or {}) or "isolated"
+    )
     episode_thread_key = hashlib.sha256(
         f"{provider_thread_key}|episode|{episode_identity}".encode("utf-8")
     ).hexdigest()[:24]

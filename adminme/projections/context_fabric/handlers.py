@@ -915,9 +915,15 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _record_membership_decision(envelope, conn)
     elif event_type in {"context.merged", "context.split"}:
         _record_merge_or_split(envelope, conn)
-    elif event_type in {"context.relationship.rejected", "context.relationship.confirmed"}:
+    elif event_type in {
+        "context.relationship.rejected",
+        "context.relationship.confirmed",
+    }:
         _record_relationship_decision(envelope, conn)
-    elif event_type in {"context.source_text.corrected", "context.source_text.reinstated"}:
+    elif event_type in {
+        "context.source_text.corrected",
+        "context.source_text.reinstated",
+    }:
         _record_source_text_decision(envelope, conn)
     elif event_type == "triage.feedback.recorded":
         _record_feedback(envelope, conn)

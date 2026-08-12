@@ -204,7 +204,9 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
 
 
 @pytest.mark.asyncio
-async def test_weak_participant_and_authored_name_overlap_do_not_relate_threads() -> None:
+async def test_weak_participant_and_authored_name_overlap_do_not_relate_threads() -> (
+    None
+):
     """Shared mailboxes, addresses, subjects, and recurring names stay weak."""
     anchor = _message(
         "source-anchor",
@@ -499,11 +501,7 @@ def test_reply_or_forward_boundary_at_offset_zero_fails_closed() -> None:
         {"body_text": "On Tuesday, Counsel wrote:\r\n> Please wire funds."}
     )
     html_only = authored_message_text(
-        {
-            "body_html": (
-                '<div class="gmail_quote"><div>Please wire funds.</div></div>'
-            )
-        }
+        {"body_html": ('<div class="gmail_quote"><div>Please wire funds.</div></div>')}
     )
     mobile_forward = authored_message_text(
         {"body_text": "Begin forwarded message:\nPlease wire fixture funds."}
@@ -562,9 +560,7 @@ async def test_reused_provider_thread_is_segmented_into_bounded_episodes() -> No
 
     pack = await build_message_context_pack(current, _Log([old, current]))
 
-    assert [message.source_event_id for message in pack.messages] == [
-        "source-current"
-    ]
+    assert [message.source_event_id for message in pack.messages] == ["source-current"]
     assert "source-old" not in pack.thread_key
 
 
@@ -616,7 +612,9 @@ def _context_decision(
 
 
 @pytest.mark.asyncio
-async def test_exact_relationship_correction_detaches_and_confirmation_relinks() -> None:
+async def test_exact_relationship_correction_detaches_and_confirmation_relinks() -> (
+    None
+):
     anchor = _message("source-anchor", "Please review the authorization.")
     related = _message(
         "source-related",
@@ -651,9 +649,7 @@ async def test_exact_relationship_correction_detaches_and_confirmation_relinks()
         "source-anchor",
         "source-related",
     ]
-    assert relinked.messages[-1].relation_reason_codes == (
-        "member_confirmed_context",
-    )
+    assert relinked.messages[-1].relation_reason_codes == ("member_confirmed_context",)
 
 
 @pytest.mark.asyncio
@@ -666,9 +662,7 @@ async def test_source_text_correction_suppresses_and_reinstatement_restores() ->
         "correction-2", "context.source_text.reinstated", "source-anchor"
     )
 
-    suppressed = await build_message_context_pack(
-        anchor, _Log([anchor, corrected])
-    )
+    suppressed = await build_message_context_pack(anchor, _Log([anchor, corrected]))
     restored = await build_message_context_pack(
         anchor, _Log([anchor, corrected, reinstated])
     )

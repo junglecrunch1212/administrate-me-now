@@ -817,7 +817,9 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
 
 
 @pytest.mark.asyncio
-async def test_terminal_failure_requires_explicit_recovery_before_later_replay() -> None:
+async def test_terminal_failure_requires_explicit_recovery_before_later_replay() -> (
+    None
+):
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -1304,15 +1306,12 @@ async def test_wholly_quoted_reply_cannot_become_a_candidate() -> None:
 
     event = _messaging_received_event(
         body_text=(
-            "On Tuesday, Fixture Sender wrote:\r\n"
-            "> Please wire the fixture funds."
+            "On Tuesday, Fixture Sender wrote:\r\n> Please wire the fixture funds."
         )
     )
     await NoiseFilteringPipeline().handle(event, _make_ctx(log, quoted_candidate))
 
-    assert not any(
-        call.envelope.type == "triage.item.proposed" for call in log.calls
-    )
+    assert not any(call.envelope.type == "triage.item.proposed" for call in log.calls)
     assessment = next(
         call.envelope
         for call in log.calls

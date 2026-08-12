@@ -56,9 +56,7 @@ def _source_text(payload: Mapping[str, Any]) -> str:
 def _source_occurred_at(
     event: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> str | None:
-    return _first(payload, "received_at", "sent_at") or _first(
-        event, "occurred_at"
-    )
+    return _first(payload, "received_at", "sent_at") or _first(event, "occurred_at")
 
 
 def _exact_quote(item: Mapping[str, Any], payload: Mapping[str, Any]) -> str | None:
@@ -213,9 +211,7 @@ def compose_triage_source_context(
                         "from_number",
                     ),
                     "subject": _first(context_payload, "subject"),
-                    "occurred_at": _source_occurred_at(
-                        context_event, context_payload
-                    ),
+                    "occurred_at": _source_occurred_at(context_event, context_payload),
                     "recorded_at": context_event.get("recorded_at"),
                 }
             )

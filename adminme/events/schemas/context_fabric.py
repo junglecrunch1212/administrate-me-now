@@ -136,9 +136,7 @@ class ContextSourceTextCorrectedV1(BaseModel):
     corrected_by_member_id: str = Field(min_length=1, max_length=240)
     corrected_at: datetime
     reason: Literal["quoted_or_forwarded_history"]
-    evidence_quote_digest: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    evidence_quote_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class ContextSourceTextReinstatedV1(BaseModel):

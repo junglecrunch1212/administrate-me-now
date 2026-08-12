@@ -567,9 +567,7 @@ class TriageContextCorrectionRequest(BaseModel):
     """Exact, reversible context corrections selected by the member."""
 
     model_config = {"extra": "forbid"}
-    unrelated_source_event_ids: list[str] = Field(
-        default_factory=list, max_length=10
-    )
+    unrelated_source_event_ids: list[str] = Field(default_factory=list, max_length=10)
     quoted_or_forwarded_history: bool = False
 
 
@@ -1112,9 +1110,7 @@ def _require_same_context_coordinate(
 ) -> tuple[str, str, Literal["personal", "work"]]:
     source_payload = source.get("payload") or {}
     related_payload = related.get("payload") or {}
-    provider = str(
-        source_payload.get("provider") or source.get("source_adapter") or ""
-    )
+    provider = str(source_payload.get("provider") or source.get("source_adapter") or "")
     related_provider = str(
         related_payload.get("provider") or related.get("source_adapter") or ""
     )
@@ -3366,9 +3362,7 @@ async def confirm_context_relationship(
     if body.source_event_id == body.related_source_event_id:
         raise HTTPException(422, "context relationship sources must be distinct")
     runtime = _runtime(request)
-    request_fingerprint = _triage_request_fingerprint(
-        body.source_event_id, body
-    )
+    request_fingerprint = _triage_request_fingerprint(body.source_event_id, body)
     prior = await _prior_triage_command(
         runtime,
         session,
@@ -3432,9 +3426,7 @@ async def reinstate_context_source_text(
 
     _require_context_correction_principal(session)
     runtime = _runtime(request)
-    request_fingerprint = _triage_request_fingerprint(
-        body.source_event_id, body
-    )
+    request_fingerprint = _triage_request_fingerprint(body.source_event_id, body)
     prior = await _prior_triage_command(
         runtime,
         session,
@@ -3503,13 +3495,14 @@ async def _dismiss_triage_item_locked(
     if correction is not None and body.feedback_reason != "wrong_context":
         raise HTTPException(422, "context correction requires wrong-context feedback")
     if correction is not None and not (
-        correction.unrelated_source_event_ids
-        or correction.quoted_or_forwarded_history
+        correction.unrelated_source_event_ids or correction.quoted_or_forwarded_history
     ):
         raise HTTPException(422, "context correction must select an exact source")
     if item["source_kind"] == "commitment_proposal":
         if correction is not None:
-            raise HTTPException(422, "context correction is unavailable for commitments")
+            raise HTTPException(
+                422, "context correction is unavailable for commitments"
+            )
         result = await comms.dismiss_commitment(
             proposal_id,
             comms.DismissRequest(
@@ -3588,8 +3581,8 @@ async def _dismiss_triage_item_locked(
             related = await _owned_message_source(
                 runtime, session, related_source_event_id
             )
-            provider, provider_account_id, workspace = (
-                _require_same_context_coordinate(source, related)
+            provider, provider_account_id, workspace = _require_same_context_coordinate(
+                source, related
             )
             correction_payload = {
                 "relationship_id": _context_relationship_id(
@@ -3621,9 +3614,7 @@ async def _dismiss_triage_item_locked(
                     request_id=f"{body.request_id}:context:{index}",
                     request_fingerprint=request_fingerprint,
                     causation_id=item["last_event_id"],
-                    sensitivity=cast(
-                        Sensitivity, item.get("sensitivity") or "normal"
-                    ),
+                    sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
                 )
             )
         if correction.quoted_or_forwarded_history:
@@ -3667,9 +3658,7 @@ async def _dismiss_triage_item_locked(
                     request_id=f"{body.request_id}:context:text",
                     request_fingerprint=request_fingerprint,
                     causation_id=item["last_event_id"],
-                    sensitivity=cast(
-                        Sensitivity, item.get("sensitivity") or "normal"
-                    ),
+                    sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
                 )
             )
     if body.feedback_reason is not None:
