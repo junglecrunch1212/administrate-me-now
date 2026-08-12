@@ -24,6 +24,9 @@ action was performed.
   quote signals terminate as no-candidate. For multipart Gmail, an explicit
   HTML quote boundary constrains the plain alternative and mismatch fails
   closed before deterministic fallback or the language seam.
+- Retained Gmail Sent v1-v3 facts have no HTML quote-boundary provenance. Their
+  immutable bodies are excluded from authored evidence with the explicit v21
+  assessment reason `legacy_gmail_sent_quote_boundary_unavailable`.
 - Triage displays Message date separately from Imported / recorded time and
   offers exact wrong-context relationship/text corrections only when the
   server declares sufficient relationship provenance or uniquely grounded
@@ -59,8 +62,10 @@ untouched crossed-wire proposal even when its source is outside the 12-message
 model window, exclude weak/cross-member sources, and retain one valid
 reviewable sibling. Production composition also maps quoted-only multipart
 Sent history through `messaging.sent@v4`, proves a terminal no-candidate result,
-and hydrates a displayed related message's exact admitting edge from outside
-the display window. The tests create no canonical record or provider effect.
+replays a retained Gmail Sent v3 quoted-only body from a v20 checkpoint into an
+explicit no-candidate assessment, and hydrates a displayed related message's
+exact admitting edge from outside the display window. The tests create no
+canonical record or provider effect.
 
 ## Validation record
 
@@ -68,7 +73,7 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,859 passed.
+- `PYTHONPATH=bridge poetry run pytest -q`: 1,860 passed.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 60
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
@@ -91,7 +96,11 @@ stopped in the unrelated Comms snooze acceptance gate because its immediate
 read observed `focus` instead of `snoozed` after a successful command. That
 exact test passed on an immediate isolated rerun; the next complete aggregate
 passed, and the final candidate's expanded complete aggregate passed from the
-beginning with the counts above. Pytest emitted the existing Starlette/httpx
+beginning. The first legacy-Sent safeguard aggregate then correctly rejected a
+current synthetic Gmail Sent fixture that still declared schema v2; the fixture
+was advanced to the current v4 contract, its targeted process passed, and the
+complete aggregate passed from the beginning with the counts above. Pytest
+emitted the existing Starlette/httpx
 deprecation warning. `npm ci` reported that the existing
 `esbuild` and `fsevents` install scripts are not yet listed in `allowScripts`;
 installation, audit, contract, typecheck, and tests still completed

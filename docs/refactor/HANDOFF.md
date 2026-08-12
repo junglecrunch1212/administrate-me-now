@@ -27,7 +27,9 @@ The candidate corrects a message-context false-association class without
 changing source facts or member authority. Gmail adapter v1.3.0 records provider
 message time as `occurred_at` and append time as `recorded_at`; additive
 `messaging.sent@v4` retains the HTML MIME alternative needed to bound quoted
-Sent history. Message context
+Sent history. Immutable pre-v4 Gmail Sent facts remain readable but their
+bodies fail closed with an explicit provenance-unavailable assessment during
+v21 replay. Message context
 v2 splits reused provider threads into 30-day/100-source episodes and requires
 exact RFC continuity, exact attachment identity, or explicit member
 confirmation for a cross-thread source. Repeated participants, addresses,

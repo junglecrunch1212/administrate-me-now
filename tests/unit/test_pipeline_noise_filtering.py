@@ -249,6 +249,7 @@ def _messaging_sent_event(*, body_text: str) -> dict[str, Any]:
     return {
         "event_id": "trigger-eid-sent-001",
         "type": "messaging.sent",
+        "schema_version": 4,
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
         "owner_scope": "private:member-fixture",
@@ -257,6 +258,7 @@ def _messaging_sent_event(*, body_text: str) -> dict[str, Any]:
         "payload": {
             "member_id": "member-fixture",
             "source_channel": "gmail",
+            "provider": "gmail",
             "to_identifier": "recipient@example.invalid",
             "body_text": body_text,
             "sent_at": "2026-08-08T12:00:00Z",

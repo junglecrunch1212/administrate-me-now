@@ -16,9 +16,14 @@ non-admitting until a stable identity or content digest exists.
 Multipart authored-text agreement and server-declared correction capabilities
 are derived read/pipeline behavior only; they add no event, projection, or
 provider migration. `messaging.sent@v4` additively retains `body_html` for
-historical Sent observations; older v1-v3 facts remain readable. Model-window
-budget reservation, full-episode reconciliation scope, and off-window
-relationship hydration are derived behavior and migrate no stored facts.
+historical Sent observations; older v1-v3 facts remain readable and immutable,
+but Gmail Sent bodies from those versions are not eligible as authored evidence
+because the missing HTML alternative makes quote-boundary recovery impossible.
+They receive a new content-free v21 assessment with reason
+`legacy_gmail_sent_quote_boundary_unavailable`; no source migration or provider
+refetch occurs. Model-window budget reservation, full-episode reconciliation
+scope, and off-window relationship hydration are derived behavior and migrate
+no stored facts.
 
 Context Fabric advances from projection v1 to v2 with additive exact
 relationship-decision and source-text-correction tables. Rebuild derives both

@@ -46,6 +46,10 @@ source fact, sender identity, provider account, or household name is wrong.
   explicit HTML quote boundary constrains the plain alternative; mismatched
   alternatives fail closed. An unrecognized quote signal is terminally
   classified as uncertain and never sent to the language seam.
+  Retained Gmail `messaging.sent@v1-v3` bodies lack the HTML alternative and
+  therefore fail closed with the explicit reason
+  `legacy_gmail_sent_quote_boundary_unavailable`; replay neither migrates the
+  fact nor admits its body as authored evidence.
 - A wrong-context dismissal may atomically reject selected exact source pairs
   and/or mark one exact proposal/candidate evidence span as quoted/forwarded
   history. Other authored asks in the same source remain available.

@@ -107,6 +107,7 @@ class ContextMessage:
     subject: str | None
     body_text: str
     authored_text_reliable: bool
+    authored_text_reason_codes: tuple[str, ...]
     attachment_names: tuple[str, ...]
 
     def skill_payload(self) -> dict[str, Any]:
@@ -408,6 +409,40 @@ def _direction(event: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
 
 def _body(event: Mapping[str, Any], payload: Mapping[str, Any]) -> str:
     return authored_message_text(payload).text
+
+
+def _legacy_gmail_sent_without_quote_provenance(
+    event: Mapping[str, Any], payload: Mapping[str, Any]
+) -> bool:
+    try:
+        schema_version = int(event.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        schema_version = 0
+    return bool(
+        event.get("type") == "messaging.sent"
+        and schema_version < 4
+        and "gmail" in _provider(event, payload).casefold()
+    )
+
+
+def _event_authored_message_text(
+    event: Mapping[str, Any], payload: Mapping[str, Any]
+) -> AuthoredMessageText:
+    """Apply source-version provenance before treating a body as authored."""
+
+    authored = authored_message_text(payload)
+    if _legacy_gmail_sent_without_quote_provenance(event, payload):
+        # Historical Gmail SENT observations retained only the plain MIME
+        # alternative. It is impossible to prove whether that text was newly
+        # authored or copied from an HTML quote container, so v21 replay must
+        # retain the fact while excluding its body from authored evidence.
+        return AuthoredMessageText(
+            "",
+            False,
+            False,
+            canonical_source_text=authored.canonical_source_text,
+        )
+    return authored
 
 
 def _eligible_event(candidate: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
@@ -852,7 +887,8 @@ async def build_message_context_pack(
             == selected_event_id
         )
         authored_by_event_id[selected_event_id] = _corrected_authored_text(
-            authored_message_text(selected_payload), selected_corrections
+            _event_authored_message_text(selected_event, selected_payload),
+            selected_corrections,
         )
     protected_reserves = {
         event_id: len(authored_by_event_id[event_id].text[:MAX_MESSAGE_CHARS])
@@ -908,6 +944,11 @@ async def build_message_context_pack(
                 subject=str(payload.get("subject") or "").strip()[:1000] or None,
                 body_text=body,
                 authored_text_reliable=authored.reliable,
+                authored_text_reason_codes=(
+                    ("legacy_gmail_sent_quote_boundary_unavailable",)
+                    if _legacy_gmail_sent_without_quote_provenance(event, payload)
+                    else (() if authored.reliable else ("authored_text_uncertain",))
+                ),
                 attachment_names=_attachment_names(payload),
             )
         )

@@ -721,6 +721,51 @@ async def test_context_budget_reserves_non_anchor_source_under_assessment() -> N
     assert sum(len(message.body_text) for message in pack.messages) <= 24_000
 
 
+@pytest.mark.asyncio
+async def test_legacy_gmail_sent_body_without_html_provenance_is_uncertain() -> None:
+    legacy_sent = _message(
+        "source-legacy-sent",
+        "I will authorize the old fixture transfer.",
+    )
+    legacy_sent.update(
+        {
+            "type": "messaging.sent",
+            "schema_version": 3,
+            "source_adapter": "messaging-gmail-api",
+        }
+    )
+    legacy_sent["payload"].update(
+        {
+            "provider": "gmail",
+            "sent_at": legacy_sent["occurred_at"],
+        }
+    )
+
+    pack = await build_message_context_pack(legacy_sent, _Log([legacy_sent]))
+
+    assert len(pack.messages) == 1
+    assert pack.messages[0].body_text == ""
+    assert pack.messages[0].authored_text_reliable is False
+    assert pack.messages[0].authored_text_reason_codes == (
+        "legacy_gmail_sent_quote_boundary_unavailable",
+    )
+    assert (
+        extract_grounded_context_candidates(
+            pack,
+            [
+                {
+                    "target_kind": "commitment",
+                    "evidence_source_id": "m01",
+                    "evidence_quote": "I will authorize the old fixture transfer.",
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                }
+            ],
+        )
+        == []
+    )
+
+
 def _context_decision(
     event_id: str,
     event_type: str,

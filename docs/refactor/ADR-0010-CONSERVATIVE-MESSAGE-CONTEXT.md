@@ -45,6 +45,10 @@ An HTML-only body is canonicalized before the pipeline checks for empty text.
 When a provider supplies both plain and HTML MIME alternatives, an explicit
 HTML reply/forward boundary constrains the plain alternative; only an agreeing
 authored prefix is usable, and disagreement is unreliable rather than evidence.
+Retained pre-v4 Gmail Sent facts lack that HTML provenance entirely. They
+remain immutable source facts, but their bodies are marked
+`legacy_gmail_sent_quote_boundary_unavailable` and excluded from authored
+evidence during v21 replay and later context assembly.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 

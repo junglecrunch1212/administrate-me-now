@@ -575,7 +575,10 @@ class NoiseFilteringPipeline:
                 source_event_id=source_event_id,
                 candidates=[],
                 outcome="no_candidate",
-                reason_codes=["authored_text_uncertain"],
+                reason_codes=list(
+                    current_context_message.authored_text_reason_codes
+                    or ("authored_text_uncertain",)
+                ),
             )
             return
         prepared = _extract_text_and_inputs(

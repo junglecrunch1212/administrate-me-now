@@ -160,7 +160,7 @@ def _raw_gmail_message(
 
 async def _preload_gmail_replay_fixture(
     settings: RuntimeSettings,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     """Emit actual Gmail facts, then seed the reviewed v20 durable cursor."""
 
     event_log = EventLog(settings.instance, settings.encryption_key)
@@ -244,6 +244,45 @@ async def _preload_gmail_replay_fixture(
                 ),
                 fingerprint=f"{index + 10:064x}",
             )
+        legacy_sent_id = await events.write(
+            EventEnvelope(
+                event_at_ms=1_706_705_900_000,
+                tenant_id=settings.instance.tenant_id,
+                type="messaging.sent",
+                schema_version=3,
+                occurred_at="2024-01-31T15:58:20Z",
+                source_adapter="messaging-gmail-api",
+                source_account_id="fixture-context-account",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture-replay-legacy-sent-v3",
+                raw_ref=(
+                    "gmail://messages/fixture-replay-legacy-sent-v3#sha256="
+                    + ("6" * 64)
+                ),
+                payload={
+                    "source_channel": "gmail",
+                    "to_identifier": "fixture-counterparty@example.invalid",
+                    "thread_id": "fixture-replay-legacy-sent-thread",
+                    "subject": "Historical fixture reply",
+                    "body_text": "I will authorize the old fixture transfer.",
+                    "sent_at": "2024-01-31T15:58:20Z",
+                    "delivery_status": "sent",
+                    "member_id": MEMBER,
+                    "provider": "gmail",
+                    "provider_account_id": "fixture-context-account",
+                    "workspace": "personal",
+                    "native_message_id": "fixture-replay-legacy-sent-v3",
+                    "in_reply_to_interaction_id": None,
+                    "rfc_message_id": (
+                        "<fixture-replay-legacy-sent-v3@example.invalid>"
+                    ),
+                    "references": [],
+                    "in_reply_to": None,
+                },
+            )
+        )
         current_id = await adapter._emit_message_observation(
             ctx=ctx,
             message=_raw_gmail_message(
@@ -342,7 +381,14 @@ async def _preload_gmail_replay_fixture(
         await bus.set_checkpoint(
             "pipeline:pipeline:noise_filtering", old_proposal_event_id
         )
-        return first_id, weak_id, other_member_id, current_id, old_proposal_id
+        return (
+            first_id,
+            weak_id,
+            other_member_id,
+            legacy_sent_id,
+            current_id,
+            old_proposal_id,
+        )
     finally:
         await bus.stop()
         await event_log.close()
@@ -735,9 +781,14 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         deterministic_openclaw_fixture=True,
         fixture_member_id=MEMBER,
     )
-    first_id, weak_id, other_member_id, current_id, old_proposal_id = asyncio.run(
-        _preload_gmail_replay_fixture(settings)
-    )
+    (
+        first_id,
+        weak_id,
+        other_member_id,
+        legacy_sent_id,
+        current_id,
+        old_proposal_id,
+    ) = asyncio.run(_preload_gmail_replay_fixture(settings))
 
     app = create_application(settings)
     with TestClient(app) as client:
@@ -771,6 +822,26 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert current_id in interpretation["context_source_event_ids"]
         assert weak_id not in interpretation["context_source_event_ids"]
         assert other_member_id not in interpretation["context_source_event_ids"]
+
+        legacy_assessments = [
+            event
+            for event in client.portal.call(
+                _events, runtime, "triage.intent.features_extracted"
+            )
+            if event.get("causation_id") == legacy_sent_id
+        ]
+        assert len(legacy_assessments) == 1
+        assert legacy_assessments[0]["payload"]["assessment_outcome"] == (
+            "no_candidate"
+        )
+        assert legacy_assessments[0]["payload"]["reason_codes"] == [
+            "legacy_gmail_sent_quote_boundary_unavailable"
+        ]
+        assert [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.proposed")
+            if event["payload"].get("source_event_id") == legacy_sent_id
+        ] == []
 
         client.portal.call(runtime.wait_for_projection, "triage", proposal["event_id"])
         page = client.get("/api/member/v1/surfaces/triage", headers=AUTH)

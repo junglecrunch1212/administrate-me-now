@@ -341,7 +341,11 @@ def extract_grounded_context_candidates(
             continue
         alias = str(raw.get("evidence_source_id") or "")
         source = aliases.get(alias)
-        if source is None or source.relation != "thread":
+        if (
+            source is None
+            or source.relation != "thread"
+            or not source.authored_text_reliable
+        ):
             continue
         if raw.get("target_kind") == "commitment" and source.direction != "outbound":
             continue
