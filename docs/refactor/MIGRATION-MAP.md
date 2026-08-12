@@ -23,8 +23,11 @@ IDs/reasons, and exact current full accounting at a fresh stopped-log
 watermark. Only newer fully settled obligations may advance the snapshot;
 regression, pending, missing, another failure, or stale evidence fails closed.
 With the dedicated approval flag, the updater validates the baseline twice
-while services are live, stops services, revalidates the encrypted log, records
-the content-free exact counts/watermark, and appends only exact recovery
+while services are live, stops the runtime, proves the still-running Gateway is
+live, then stops the Gateway. The stopped audit requires the final live event
+watermark to equal the encrypted-log watermark and every durable pipeline and
+projection row to remain non-degraded/non-poisoned. Only then does it record the
+content-free exact counts/watermark/health receipt and append exact recovery
 requests before candidate selection. A request
 identity binds both the exact failed-assessment set and the stopped consumer
 checkpoint, so restart reuses it while a v19 rollback that advances beyond it
@@ -43,8 +46,9 @@ advanced the original equality snapshot and Google Tasks retained a stale
 `backoff` health state after a recovered connection reset. The follow-up
 **HARDENS** the boundary rather than deleting or freezing new facts: Google
 Tasks restores current running state on a successful poll, degraded readiness
-is not relabelled as observation-only, and the updater rejects hidden
-structural degradation during every settlement wait.
+is not relabelled as observation-only, and the updater reads readiness during
+every settlement wait, rejecting hidden structural degradation or missing
+readiness after runtime liveness.
 
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner

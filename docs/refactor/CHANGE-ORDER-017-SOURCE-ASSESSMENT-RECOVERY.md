@@ -114,10 +114,17 @@ no unrelated capability is degraded. It requires the explicit
 `--approve-declared-source-assessment-repair` flag, validates live Doctor and
 readiness before and after encrypted backup, stops services, re-audits the exact
 encrypted-log watermark, records that exact content-free snapshot, and appends
-only the four typed recovery requests before selecting the candidate. Any
-mismatch follows the ordinary fail-closed rollback path. The exception expires
-after successful candidate activation; post-switch acceptance still requires
-complete settlement and an entirely healthy Doctor.
+only the four typed recovery requests before selecting the candidate. The final
+live watermark must equal that stopped watermark, the stopped consumer database
+must show no degraded/failed/poisoned pipeline or projection, and OpenClaw must
+remain live after the runtime quiesces and before the Gateway stops. Source
+accounting uses the stopped durable checkpoints, not their prior live snapshot.
+Any event,
+consumer failure, unavailable proof, or mismatch in that interval follows the
+ordinary fail-closed rollback path. The exception expires after successful
+candidate activation; every allowed post-switch wait reads current readiness,
+and post-switch acceptance still requires complete settlement and an entirely
+healthy Doctor.
 
 ## Security and privacy
 

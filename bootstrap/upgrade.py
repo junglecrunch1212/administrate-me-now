@@ -251,6 +251,8 @@ class UpgradeManager:
     def _has_new_structural_degradation(diagnostics: dict[str, Any]) -> bool:
         """Reject a runtime capability failure that emerges during replay."""
 
+        if diagnostics.get("ready") is not True:
+            return True
         capabilities = diagnostics.get("capabilities")
         if not isinstance(capabilities, dict):
             return True
@@ -288,30 +290,31 @@ class UpgradeManager:
             if self.test_mode:
                 return last
 
-            diagnostics = (
-                self.services.runtime_diagnostics()
-                if failed
-                & {
-                    "launchd_and_process_state",
-                    "source_assurance_terminal_dispositions",
-                }
-                else None
-            )
-            if diagnostics is not None and self._has_new_structural_degradation(
-                diagnostics
-            ):
+            diagnostics = self.services.runtime_diagnostics()
+            if diagnostics is None:
+                # Readiness is the only cheap proof that an otherwise hidden
+                # capability has not degraded during an allowed wait.  Before
+                # the runtime is live, launch/port failures may still be a
+                # genuine cold-start transient.  Once it is live—or for every
+                # other transient class—missing readiness fails closed.
+                cold_start_only = failed.issubset(
+                    {"launchd_and_process_state", "ports_and_loopback_binding"}
+                )
+                if (
+                    cold_start_only
+                    and not self.services.runtime_is_live()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(POST_SWITCH_POLL_SECONDS)
+                    last = self._run_release_doctor(
+                        release, include_synthetic_proof=False
+                    )
+                    continue
+                return last
+            if self._has_new_structural_degradation(diagnostics):
                 return self._run_release_doctor(release, include_synthetic_proof=False)
 
             if "source_assurance_terminal_dispositions" in failed:
-                if diagnostics is None:
-                    # A first source audit or saturated language-bound replay
-                    # may briefly outlive one diagnostics request. Keep waiting
-                    # only while the intentionally cheap liveness proof remains
-                    # true; loss of liveness is structural and returns at once.
-                    if self.services.runtime_is_live() and time.monotonic() < deadline:
-                        time.sleep(POST_SWITCH_POLL_SECONDS)
-                        continue
-                    return last
                 settled, _evidence = source_assurance_terminal_evidence(diagnostics)
                 if not settled and time.monotonic() < deadline:
                     time.sleep(POST_SWITCH_POLL_SECONDS)
@@ -486,11 +489,6 @@ class UpgradeManager:
             root=self.root,
             test_mode=self.test_mode,
         ).create()
-        if repair_policy is not None:
-            # Backup quiescing restarts the active release. Revalidate the
-            # exact baseline after that restart before any release selector or
-            # OpenClaw executable can change.
-            repair_diagnostics = self._validate_source_repair_online(repair_policy)
         pointer = self.paths.app_dir / "current-release.json"
         previous = json.loads(pointer.read_text("utf-8")) if pointer.exists() else None
         previous_release = (
@@ -499,14 +497,22 @@ class UpgradeManager:
             else None
         )
         was_running = self.services.status().status != "stopped"
+        if repair_policy is not None and not was_running:
+            raise UpgradeError(
+                "declared source-assessment repair requires running services "
+                "at the quiescence boundary"
+            )
         pointer_switched = False
         openclaw_switched = False
         plugin_registration_attempted = False
         source_repair_evidence: dict[str, Any] | None = None
         try:
             if repair_policy is not None:
-                if was_running:
-                    self.services.stop()
+                # Backup quiescing restarts the active release. Take the final
+                # live receipt immediately before shutdown, then bind it to the
+                # stopped event watermark and durable consumer state below.
+                repair_diagnostics = self._validate_source_repair_online(repair_policy)
+                self.services.stop(require_openclaw_live_before_stop=True)
                 assert repair_diagnostics is not None
                 source_repair_evidence = offline_validate_repair_baseline(
                     self.paths,
@@ -514,6 +520,7 @@ class UpgradeManager:
                     candidate_commit=commit,
                     policy=repair_policy,
                     diagnostics=repair_diagnostics,
+                    gateway_live_at_quiescence=True,
                     append_requests=True,
                     test_mode=self.test_mode,
                 )

@@ -244,6 +244,11 @@ def validate_declared_baseline(
         )
     if details.get("content_exposed") is not False:
         raise SourceAssessmentRepairError("source diagnostics exposed content")
+    watermark_event_id = details.get("watermark_event_id")
+    if not isinstance(watermark_event_id, str) or not watermark_event_id:
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence has no exact event watermark"
+        )
     freshness = details.get("freshness") or {}
     if not (
         freshness.get("state") == "fresh"
@@ -272,6 +277,7 @@ def validate_declared_baseline(
         "minimum_obligations": expected.minimum_obligations,
         "counts": actual_counts,
         "failed_target_count": len(actual_failures),
+        "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }
 
@@ -285,6 +291,73 @@ def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stopped_consumer_health(
+    paths: DeploymentPaths, diagnostics: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prove stopped projection/pipeline workers persisted no hidden failure."""
+
+    checkpoint_db = paths.instance_dir / "events" / "bus_checkpoints.db"
+    if not checkpoint_db.is_file():
+        raise SourceAssessmentRepairError(
+            "stopped consumer health database is unavailable"
+        )
+    try:
+        connection = sqlite3.connect(f"file:{checkpoint_db}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = list(
+                connection.execute(
+                    "SELECT subscriber_id, checkpoint_event_id, "
+                    "consecutive_failures, degraded, poison_event_id "
+                    "FROM bus_consumer_offsets "
+                    "WHERE subscriber_id LIKE 'pipeline:%' "
+                    "OR subscriber_id LIKE 'projection:%'"
+                )
+            )
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health database is unreadable"
+        ) from exc
+    expected_ids = set(_capability_snapshot(diagnostics))
+    actual_ids = {str(row["subscriber_id"]) for row in rows}
+    if not expected_ids or actual_ids != expected_ids:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health inventory differs from final live readiness"
+        )
+    pipeline_count = sum(value.startswith("pipeline:") for value in actual_ids)
+    projection_count = sum(value.startswith("projection:") for value in actual_ids)
+    if pipeline_count == 0 or projection_count == 0:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health inventory is incomplete"
+        )
+    unhealthy_count = sum(
+        bool(row["degraded"])
+        or int(row["consecutive_failures"] or 0) > 0
+        or row["poison_event_id"] is not None
+        for row in rows
+    )
+    if unhealthy_count:
+        raise SourceAssessmentRepairError(
+            "stopped consumer health contains a degraded or poisoned worker"
+        )
+    evidence = {
+        "pipeline_count": pipeline_count,
+        "projection_count": projection_count,
+        "unhealthy_count": 0,
+        "content_exposed": False,
+    }
+    capabilities = {
+        str(row["subscriber_id"]): {
+            "state": "healthy",
+            "details": {"checkpoint_event_id": row["checkpoint_event_id"]},
+        }
+        for row in rows
+    }
+    return evidence, capabilities
+
+
 async def _offline_validate_and_append(
     paths: DeploymentPaths,
     *,
@@ -292,6 +365,7 @@ async def _offline_validate_and_append(
     candidate_commit: str,
     policy: SourceAssessmentRepairPolicy,
     diagnostics: dict[str, Any],
+    gateway_live_at_quiescence: bool,
     append_requests: bool,
     test_mode: bool,
 ) -> dict[str, Any]:
@@ -301,11 +375,27 @@ async def _offline_validate_and_append(
     event_key = secret_store(paths, test_mode=test_mode).get(references["event_log"])
     event_log = EventLog(paths.instance_dir / "events" / "events.db", event_key)
     try:
+        if gateway_live_at_quiescence is not True:
+            raise SourceAssessmentRepairError(
+                "OpenClaw Gateway was not live at the repair quiescence boundary"
+            )
+        live_watermark = _assurance_details(diagnostics).get("watermark_event_id")
+        if not isinstance(live_watermark, str) or not live_watermark:
+            raise SourceAssessmentRepairError(
+                "final live health receipt has no exact event watermark"
+            )
+        consumer_health, stopped_capabilities = _stopped_consumer_health(
+            paths, diagnostics
+        )
         audit = await audit_source_assurance(
             event_log,
             repository_root=repository_root,
-            capabilities=_capability_snapshot(diagnostics),
+            capabilities=stopped_capabilities,
         )
+        if audit.get("watermark_event_id") != live_watermark:
+            raise SourceAssessmentRepairError(
+                "event log advanced after final live health validation"
+            )
         synthetic_diagnostics = {
             "observation_active": True,
             "ready": True,
@@ -364,7 +454,8 @@ async def _offline_validate_and_append(
                 "validated_targets": len(targets),
                 "stopped_log_snapshot": {
                     **stopped_snapshot,
-                    "watermark_event_id": audit.get("watermark_event_id"),
+                    "consumer_health": consumer_health,
+                    "gateway_live_at_quiescence": True,
                 },
                 "content_exposed": False,
             }
@@ -412,7 +503,8 @@ async def _offline_validate_and_append(
             "requested": len(event_ids),
             "stopped_log_snapshot": {
                 **stopped_snapshot,
-                "watermark_event_id": audit.get("watermark_event_id"),
+                "consumer_health": consumer_health,
+                "gateway_live_at_quiescence": True,
             },
             "content_exposed": False,
             "expires_after_activation": True,
@@ -428,6 +520,7 @@ def offline_validate_repair_baseline(
     candidate_commit: str,
     policy: SourceAssessmentRepairPolicy,
     diagnostics: dict[str, Any],
+    gateway_live_at_quiescence: bool,
     append_requests: bool,
     test_mode: bool,
 ) -> dict[str, Any]:
@@ -438,6 +531,7 @@ def offline_validate_repair_baseline(
             candidate_commit=candidate_commit,
             policy=policy,
             diagnostics=diagnostics,
+            gateway_live_at_quiescence=gateway_live_at_quiescence,
             append_requests=append_requests,
             test_mode=test_mode,
         )

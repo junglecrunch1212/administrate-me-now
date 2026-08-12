@@ -66,24 +66,37 @@ the exact active production commit, the original 62,623-obligation floor, the
 four declared source IDs and reasons, fresh accounting, observation mode, and
 no unrelated degradation. Growth above the floor is accepted only when every
 current obligation is accounted and pending/missing remain zero. The stopped
-encrypted-log audit records the exact activation watermark and exact current
-counts in the content-free receipt before appending the four requests. Any new
-failure, missing/pending obligation, count regression, stale audit, source or
-reason change, or hidden degraded capability still fails closed. Google Tasks
+encrypted-log audit requires equality with the final live watermark, records
+the exact activation watermark/current counts, verifies durable pipeline and
+projection health, and carries a Gateway-live-at-quiescence proof in the
+content-free receipt before appending the four requests. Any intervening event,
+consumer failure, new failure, missing/pending obligation, count regression,
+stale audit, source/reason change, or hidden degraded capability fails closed.
+Google Tasks
 now restores current health after a successful poll while retaining the
 transient error in immutable audit history. Runtime status no longer relabels a
 degraded readiness document as observation-only, and post-switch settlement
-aborts immediately on a hidden structural degradation.
+reads readiness for every allowed transient and aborts immediately on a hidden
+structural degradation or unavailable readiness after runtime liveness.
 
 The follow-up drift/status hardening passes the focused policy/status and
-combined recovery/runtime/updater/Google Tasks process suites, 55 strict
-acceptance gates, 1,820 root/package tests, 60 bridge tests, the complete
-release candidate suite, and the separately required 1,653-test root run,
-Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 74
+combined recovery/runtime/updater/Google Tasks process suites, 56 strict
+acceptance gates, 1,825 root/package tests, 60 bridge tests, the complete
+release candidate suite, and the separately required 1,658-test root run,
+Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 77
 tests with both plists valid. Node 24 Gate 7 passes 259/259 checks and 39
 screenshots with zero console, page, or request failures. Independent exact-
 head review, hosted checks, and fresh G-001 authorization remain required. The
 prior authorization cannot be reused.
+
+PR #336's first independent review of head
+`7ccb555e2cb57d3b2157931ba66a0d568b9712c0` rejected two P1 gaps: the stopped
+audit reused stale unrelated capability state, and only two transient Doctor
+classes queried readiness. The findings are addressed by the live/stopped
+watermark binding, stopped durable-consumer and Gateway-quiescence receipts,
+and all-transient readiness rule above. That head remains unapproved; complete
+gates and a fresh independent review of the amended immutable head are
+mandatory before requesting G-001 authorization.
 
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 

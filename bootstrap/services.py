@@ -317,8 +317,15 @@ class ServiceManager:
             runtime_live = self._runtime_liveness()
         return runtime_live
 
-    def stop(self) -> ServiceStatus:
+    def stop(self, *, require_openclaw_live_before_stop: bool = False) -> ServiceStatus:
         if self.test_mode:
+            if (
+                require_openclaw_live_before_stop
+                and self._read_test_state().get(OPENCLAW_LABEL) != "running"
+            ):
+                raise RuntimeError(
+                    "OpenClaw Gateway was not live at the repair quiescence boundary"
+                )
             self._write_test_state(
                 {OPENCLAW_LABEL: "stopped", RUNTIME_LABEL: "stopped"}
             )
@@ -326,6 +333,14 @@ class ServiceManager:
         uid = int(getattr(os, "getuid", lambda: 0)())
         domain = f"gui/{uid}"
         for label in (RUNTIME_LABEL, OPENCLAW_LABEL):
+            if (
+                label == OPENCLAW_LABEL
+                and require_openclaw_live_before_stop
+                and not self._openclaw_liveness()
+            ):
+                raise RuntimeError(
+                    "OpenClaw Gateway was not live at the repair quiescence boundary"
+                )
             if self._launchctl_loaded(label):
                 completed = subprocess.run(
                     ["launchctl", "bootout", f"{domain}/{label}"],
@@ -337,6 +352,8 @@ class ServiceManager:
                     raise RuntimeError(
                         f"launchd could not stop {label}: {completed.stderr.strip()}"
                     )
+                if not self._wait_until_unloaded(label):
+                    raise RuntimeError(f"launchd retained the stopped {label} job")
         return self.status()
 
     def mark_failed_for_test(self, label: str = RUNTIME_LABEL) -> None:

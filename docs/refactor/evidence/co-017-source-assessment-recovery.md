@@ -64,8 +64,28 @@ file.
 - The follow-up candidate makes that recovery state truthful after any later
   successful poll, distinguishes degraded readiness from observation-only
   readiness, permits only fully settled monotonic source growth, records the
-  exact stopped-log counts/watermark, and rejects hidden structural degradation
-  during every post-switch wait.
+  exact stopped-log counts/watermark, binds it to the final live watermark,
+  verifies stopped consumer and Gateway-quiescence health, and rejects hidden
+  structural degradation during every post-switch wait.
+
+## PR #336 first independent review
+
+The separate reviewer rejected exact head
+`7ccb555e2cb57d3b2157931ba66a0d568b9712c0` with two P1 findings:
+
+- unrelated capability state in the stopped audit came from the last live
+  readiness document, leaving a validation-to-stop race; and
+- readiness was queried only for launchd/source-assurance transients, leaving
+  projection/OpenClaw/cron/port-only waits unable to detect hidden degradation.
+
+The amended candidate requires the final live source watermark to equal the
+stopped encrypted-log watermark, reads stopped durable consumer failure state,
+proves Gateway liveness after runtime quiescence, checks readiness on every
+allowed post-switch transient, and fails closed when readiness is unavailable
+after runtime liveness. Focused reviewer-finding regressions and the surrounding
+updater/source-repair/macOS operations slice pass (84 tests). Complete final-head
+gates pass at the counts below; fresh independent review remains pending. The
+rejected head has no release authority.
 
 ## Focused checks completed
 
@@ -136,11 +156,12 @@ evidence must be recorded only after separately authorized guarded deployment.
 |---|---|
 | Focused policy, service-health, updater, and Google Tasks unit tests | PASS, including blocked-capability fail-closed coverage |
 | Combined source-recovery, runtime, updater/rollback, Google Tasks, and macOS operations slice | PASS |
-| Candidate v2 policy against the current content-free live readiness/Doctor snapshot | PASS at 62,633/62,633 accounted, zero pending/missing, and the exact four declared failures; no source content exposed |
-| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the final worktree: 55 strict acceptance, 1,820 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
-| `PYTHONPATH=bridge poetry run pytest -q` | 1,653 passed |
+| Candidate v2 policy against the current content-free live readiness/active-release Doctor snapshot | PASS at 62,634/62,634 accounted, zero pending/missing, the exact four declared failures, and watermark `ev_01KZSQZT4M0007`; no source content exposed |
+| Final-live versus durable consumer inventory read-only proof | 23 expected and 23 persisted pipeline/projection consumers; no missing/extra IDs and zero unhealthy rows |
+| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the amended worktree after the first independent review: 56 strict acceptance, 1,825 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,658 passed |
 | Required Ruff, mypy, and invariant commands | Passed; 219 mypy source files |
-| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 74 tests; runtime and OpenClaw plists valid |
+| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 77 tests; runtime and OpenClaw plists valid |
 | Node 24.19.0 Gate 7 rendered browser harness with temporary evidence directory | 259/259 passed; 39 screenshots; zero console errors, page errors, request failures, or repository evidence writes |
 
 The first aggregate attempt reached the format gate only after its 55 strict

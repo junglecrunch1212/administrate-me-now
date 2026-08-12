@@ -202,6 +202,7 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
     def activate_repair(selected_paths, **kwargs):
         assert selected_paths == paths
         assert kwargs["policy"] is policy
+        assert kwargs["gateway_live_at_quiescence"] is True
         assert kwargs["append_requests"] is True
         offline_states.append(ServiceManager(paths, test_mode=True).status().status)
         return {
@@ -220,6 +221,13 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
                 "failed_target_count": 1,
                 "content_exposed": False,
                 "watermark_event_id": "ev_stopped_watermark",
+                "consumer_health": {
+                    "pipeline_count": 10,
+                    "projection_count": 15,
+                    "unhealthy_count": 0,
+                    "content_exposed": False,
+                },
+                "gateway_live_at_quiescence": True,
             },
             "content_exposed": False,
             "expires_after_activation": True,
@@ -233,15 +241,27 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
         lambda *_args, **_kwargs: {"ok": True},
     )
 
-    result = UpgradeManager(
+    manager = UpgradeManager(
         paths,
         root=REPO_ROOT,
         test_mode=True,
         approve_source_assessment_repair=True,
-    ).activate(REPO_ROOT)
+    )
+    quiescence_requirements: list[bool] = []
+    original_stop = manager.services.stop
+
+    def stop_services(*, require_openclaw_live_before_stop: bool = False):
+        quiescence_requirements.append(require_openclaw_live_before_stop)
+        return original_stop(
+            require_openclaw_live_before_stop=require_openclaw_live_before_stop
+        )
+
+    monkeypatch.setattr(manager.services, "stop", stop_services)
+    result = manager.activate(REPO_ROOT)
 
     assert len(online_validations) == 2
     assert offline_states == ["stopped"]
+    assert quiescence_requirements == [True]
     assert result["source_assessment_repair"] == {
         "contract": "source-assessment-degraded-baseline-v2",
         "request_event_ids": ["ev_recovery_request"],
@@ -258,6 +278,13 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
             "failed_target_count": 1,
             "content_exposed": False,
             "watermark_event_id": "ev_stopped_watermark",
+            "consumer_health": {
+                "pipeline_count": 10,
+                "projection_count": 15,
+                "unhealthy_count": 0,
+                "content_exposed": False,
+            },
+            "gateway_live_at_quiescence": True,
         },
         "content_exposed": False,
         "expires_after_activation": True,
@@ -339,6 +366,76 @@ def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
 
     restored = json.loads((paths.app_dir / "current-release.json").read_text("utf-8"))
     assert restored == previous
+    assert ServiceManager(paths, test_mode=True).status().status == "healthy"
+
+
+def test_declared_source_repair_stops_before_selection_on_stopped_receipt_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-repair-stopped-drift")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    policy = object()
+    monkeypatch.setattr(
+        "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
+    )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_validate_source_repair_online",
+        lambda _self, _policy: {
+            "capabilities": {},
+            "observation_active": True,
+        },
+    )
+    stopped_states: list[str] = []
+
+    def reject_stopped_receipt(selected_paths, **kwargs):
+        assert selected_paths == paths
+        assert kwargs["gateway_live_at_quiescence"] is True
+        stopped_states.append(ServiceManager(paths, test_mode=True).status().status)
+        raise UpgradeError("event log advanced after final live health validation")
+
+    monkeypatch.setattr(
+        "bootstrap.upgrade.offline_validate_repair_baseline",
+        reject_stopped_receipt,
+    )
+    reconciled: list[Path] = []
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda _paths, release, **_kwargs: reconciled.append(release),
+    )
+
+    with pytest.raises(UpgradeError, match="event log advanced"):
+        UpgradeManager(
+            paths,
+            root=REPO_ROOT,
+            test_mode=True,
+            approve_source_assessment_repair=True,
+        ).activate(REPO_ROOT)
+
+    assert stopped_states == ["stopped"]
+    assert reconciled == []
+    assert not (paths.app_dir / "current-release.json").exists()
     assert ServiceManager(paths, test_mode=True).status().status == "healthy"
 
 

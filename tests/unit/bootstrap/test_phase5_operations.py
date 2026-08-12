@@ -939,7 +939,9 @@ def test_start_stop_restart_crash_recovery_states_are_truthful(
     manager.mark_failed_for_test()
     assert manager.status().status == "failed"
     assert manager.start().status == "healthy"
-    assert manager.stop().status == "stopped"
+    assert manager.stop(require_openclaw_live_before_stop=True).status == "stopped"
+    with pytest.raises(RuntimeError, match="repair quiescence boundary"):
+        manager.stop(require_openclaw_live_before_stop=True)
 
 
 def test_live_services_start_openclaw_before_runtime_replay(
@@ -976,6 +978,49 @@ def test_live_services_start_openclaw_before_runtime_replay(
     assert kickstarts == [
         f"gui/{os.getuid()}/com.administrateme.openclaw",
         f"gui/{os.getuid()}/com.administrateme.runtime",
+    ]
+
+
+def test_repair_stop_checks_gateway_after_runtime_quiesces(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths)
+    commands: list[list[str]] = []
+    sequence: list[str] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        sequence.append("runtime-bootout")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def wait_until_unloaded(label: str) -> bool:
+        sequence.append(f"unloaded:{label}")
+        return True
+
+    def openclaw_liveness() -> bool:
+        sequence.append("openclaw-health")
+        return False
+
+    monkeypatch.setattr(manager, "_launchctl_loaded", lambda _label: True)
+    monkeypatch.setattr(manager, "_wait_until_unloaded", wait_until_unloaded)
+    monkeypatch.setattr(manager, "_openclaw_liveness", openclaw_liveness)
+    monkeypatch.setattr("bootstrap.services.subprocess.run", run)
+
+    with pytest.raises(RuntimeError, match="repair quiescence boundary"):
+        manager.stop(require_openclaw_live_before_stop=True)
+
+    assert commands == [
+        [
+            "launchctl",
+            "bootout",
+            f"gui/{os.getuid()}/com.administrateme.runtime",
+        ]
+    ]
+    assert sequence == [
+        "runtime-bootout",
+        f"unloaded:{RUNTIME_LABEL}",
+        "openclaw-health",
     ]
 
 
@@ -1995,7 +2040,9 @@ def test_upgrade_aborts_any_transient_wait_on_hidden_blocked_capability(
 ) -> None:
     transient = {
         "status": "failed",
-        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+        "checks": [
+            {"name": "openclaw_compatibility_and_plugin_discovery", "ok": False}
+        ],
     }
     structural = {
         "status": "failed",
@@ -2019,6 +2066,48 @@ def test_upgrade_aborts_any_transient_wait_on_hidden_blocked_capability(
         "state": "blocked",
         "reason": "configured adapter is blocked",
     }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    diagnostic_calls = 0
+
+    def read_diagnostics():
+        nonlocal diagnostic_calls
+        diagnostic_calls += 1
+        return diagnostics
+
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", read_diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+    assert diagnostic_calls == 1
+
+
+def test_upgrade_aborts_transient_wait_when_readiness_is_not_ready(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "fifteen_projections_and_checkpoints", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    reports = iter((transient, structural))
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["ready"] = False
+    diagnostics["status"] = "blocked"
 
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
     manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
@@ -2062,7 +2151,7 @@ def test_upgrade_does_not_treat_absent_readiness_as_advancing_replay(
     assert calls == 1
 
 
-def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
+def test_upgrade_fails_closed_on_missing_readiness_after_runtime_is_live(
     test_paths: DeploymentPaths,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2073,8 +2162,7 @@ def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
             {"name": "launchd_and_process_state", "ok": False},
         ],
     }
-    healthy = {"status": "healthy", "checks": []}
-    reports = iter((transient, healthy, healthy))
+    reports = iter((transient,))
     include_synthetic: list[bool] = []
 
     class FakeDoctor:
@@ -2085,18 +2173,13 @@ def test_upgrade_tolerates_one_slow_readiness_document_while_runtime_is_live(
             include_synthetic.append(include_synthetic_proof)
             return next(reports)
 
-    settled = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
-    diagnostics = iter((None, settled))
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
-    monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
     manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
-    monkeypatch.setattr(
-        manager.services, "runtime_diagnostics", lambda: next(diagnostics)
-    )
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: None)
     monkeypatch.setattr(manager.services, "runtime_is_live", lambda: True)
 
-    assert manager._post_switch_doctor(REPO_ROOT) == healthy
-    assert include_synthetic == [False, False, True]
+    assert manager._post_switch_doctor(REPO_ROOT) == transient
+    assert include_synthetic == [False]
 
 
 def test_upgrade_does_not_retry_a_structural_doctor_failure(
