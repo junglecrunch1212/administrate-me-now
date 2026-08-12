@@ -23,7 +23,10 @@ The relationship action follows the displayed source back to the exact
 admitting edge rather than assuming the newest thread message supplied it. A
 quoted-history action suppresses only the candidate's exact cited span; it does
 not hide separate authored asks in the same message. Uncertain authored text
-does not produce a review candidate.
+does not produce a review candidate. The browser renders either correction
+control only when the server reports the exact provenance/evidence needed to
+apply it; deterministic fallback items without that evidence do not present an
+action that would fail at submission.
 
 CO-017 amendment (2026-08-11): terminal source-assessment recovery is an
 authenticated operator/release control, not a member Triage action. It adds no

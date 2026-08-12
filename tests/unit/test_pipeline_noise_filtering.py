@@ -1372,6 +1372,42 @@ async def test_wholly_quoted_reply_cannot_become_a_candidate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_multipart_html_quote_boundary_blocks_plain_text_candidate() -> None:
+    log = _FakeEventLog()
+    calls: list[Any] = []
+
+    async def quoted_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "title": "Wire fixture funds",
+                    "evidence_quote": "Please wire the fixture funds.",
+                    "candidate": {},
+                    "confidence": 0.99,
+                }
+            ]
+        )
+
+    event = _messaging_received_event(body_text="Please wire the fixture funds.")
+    event["payload"]["body_html"] = (
+        '<div class="gmail_quote">Please wire the fixture funds.</div>'
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, quoted_candidate))
+
+    assert calls == []
+    assert not any(call.envelope.type == "triage.item.proposed" for call in log.calls)
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+
+
+@pytest.mark.asyncio
 async def test_replay_supersedes_untouched_weak_cross_thread_candidate() -> None:
     current = _messaging_received_event(
         body_text="A normal fixture update with no new ask."

@@ -13,6 +13,9 @@ corrections are proposal/candidate/digest/span scoped; replay no longer blanks
 unrelated authored asks. Invalid Gmail source timestamps quarantine instead of
 creating false source chronology. Gmail message-local attachment IDs remain
 non-admitting until a stable identity or content digest exists.
+Multipart authored-text agreement and server-declared correction capabilities
+are derived read/pipeline behavior only; they add no event, projection, or
+provider migration.
 
 Context Fabric advances from projection v1 to v2 with additive exact
 relationship-decision and source-text-correction tables. Rebuild derives both

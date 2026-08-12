@@ -42,6 +42,10 @@ def test_message_context_exposes_decision_cues_and_only_exact_quote() -> None:
         "quote": "Please pay the water bill Friday.",
         "exactly_grounded": True,
     }
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": [],
+        "quoted_or_forwarded_history": False,
+    }
     assert context["meaning"]["extracted_fields"] == [
         {"field": "due", "label": "Due", "value": "2026-08-14"}
     ]
@@ -67,3 +71,56 @@ def test_nonliteral_candidate_text_is_never_presented_as_source_evidence() -> No
         },
     )
     assert context["evidence"] == {"quote": None, "exactly_grounded": False}
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": [],
+        "quoted_or_forwarded_history": False,
+    }
+
+
+def test_context_corrections_are_exposed_only_when_server_can_apply_them() -> None:
+    source = {
+        "event_id": "message-current",
+        "type": "messaging.received",
+        "payload": {"body_text": "Please review the exact fixture transfer."},
+    }
+    related = {
+        "event_id": "message-related",
+        "type": "messaging.received",
+        "payload": {"body_text": "A related fixture update."},
+    }
+    item = {
+        "title": "Review the fixture transfer",
+        "target_kind": "task",
+        "interpretation": {
+            "evidence_refs": [
+                {
+                    "source_event_id": "message-current",
+                    "quote": "Please review the exact fixture transfer.",
+                }
+            ],
+            "context_source_event_ids": ["message-current", "message-related"],
+            "context_sources": [
+                {
+                    "source_event_id": "message-current",
+                    "relation": "thread",
+                    "relationship_source_event_ids": [],
+                },
+                {
+                    "source_event_id": "message-related",
+                    "relation": "related",
+                    "relationship_source_event_ids": ["message-current"],
+                },
+            ],
+        },
+    }
+
+    context = compose_triage_source_context(
+        item,
+        source,
+        {"message-current": source, "message-related": related},
+    )
+
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": ["message-related"],
+        "quoted_or_forwarded_history": True,
+    }

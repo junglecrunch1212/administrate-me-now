@@ -558,6 +558,45 @@ def test_authored_text_normalizes_crlf_once_for_grounding_and_display() -> None:
     assert result.authored_span == (0, len(result.text))
 
 
+def test_explicit_html_quote_boundary_constrains_multipart_plain_text() -> None:
+    quoted_only = authored_message_text(
+        {
+            "body_text": "Please authorize the old fixture transfer.",
+            "body_html": (
+                '<div class="gmail_quote">'
+                "Please authorize the old fixture transfer.</div>"
+            ),
+        }
+    )
+    authored_then_quoted = authored_message_text(
+        {
+            "body_text": "New fixture update.\nOld fixture request.",
+            "body_html": (
+                "<div>New fixture update.</div>"
+                '<div class="gmail_quote">Old fixture request.</div>'
+            ),
+        }
+    )
+    disagreeing_alternatives = authored_message_text(
+        {
+            "body_text": "A different apparent fixture request.",
+            "body_html": (
+                "<div>New fixture update.</div>"
+                '<div class="gmail_quote">Old fixture request.</div>'
+            ),
+        }
+    )
+
+    assert quoted_only.text == ""
+    assert quoted_only.reliable is True
+    assert quoted_only.quoted_history_removed is True
+    assert authored_then_quoted.text == "New fixture update."
+    assert authored_then_quoted.reliable is True
+    assert authored_then_quoted.quoted_history_removed is True
+    assert disagreeing_alternatives.text == ""
+    assert disagreeing_alternatives.reliable is False
+
+
 def test_unrecognized_plain_quote_headers_fail_closed_as_uncertain() -> None:
     result = authored_message_text(
         {

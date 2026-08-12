@@ -42,6 +42,9 @@ recognized plain-text or HTML reply/forward containers including a boundary at
 offset zero, and supplies fallback extraction, pinned-skill input, exact-quote
 validation, and displayed evidence.
 An HTML-only body is canonicalized before the pipeline checks for empty text.
+When a provider supplies both plain and HTML MIME alternatives, an explicit
+HTML reply/forward boundary constrains the plain alternative; only an agreeing
+authored prefix is usable, and disagreement is unreliable rather than evidence.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 
@@ -51,6 +54,9 @@ text digest, exact evidence digest, and immutable character span; it removes
 only that evidence span, not every other valid ask in the source. Explicit
 relationship-confirmed and source-text-reinstated events reverse the exact
 decision. The immutable provider facts remain unchanged.
+Triage exposes a correction control only when the read-side server declares
+that the exact relationship provenance or uniquely grounded authored-text
+evidence required by the command is present.
 
 Missing, invalid, non-positive, or out-of-range Gmail `internalDate` values are
 terminally quarantined. They never fall back to ingestion wall-clock time.

@@ -162,6 +162,7 @@ def compose_triage_source_context(
     context_events = context_events or {}
     evidence_refs: list[dict[str, Any]] = []
     source_chain: list[dict[str, Any]] = []
+    correctable_related_source_ids: list[str] = []
     if interpretation is not None:
         for ref in interpretation.get("evidence_refs") or []:
             if not isinstance(ref, Mapping):
@@ -193,6 +194,16 @@ def compose_triage_source_context(
             )
             context_type = str(context_event.get("type") or "")
             source_contract = source_contracts.get(event_id, {})
+            relationship_source_event_ids = [
+                str(value)
+                for value in source_contract.get("relationship_source_event_ids", [])
+                if value and str(value) in context_events
+            ]
+            if (
+                source_contract.get("relation") == "related"
+                and relationship_source_event_ids
+            ):
+                correctable_related_source_ids.append(event_id)
             context_direction = (
                 "outbound" if context_type == "messaging.sent" else "inbound"
             )
@@ -221,6 +232,20 @@ def compose_triage_source_context(
     }
     if interpretation is not None:
         evidence["quotes"] = evidence_refs
+    source_evidence_quote = next(
+        (
+            str(ref["quote"])
+            for ref in evidence_refs
+            if ref["source_event_id"] == str(source_event.get("event_id") or "")
+        ),
+        "",
+    )
+    authored = authored_message_text(payload)
+    quoted_history_correction_available = bool(
+        authored.reliable
+        and source_evidence_quote
+        and authored.text.count(source_evidence_quote) == 1
+    )
     return {
         "contract": "triage-source-context-v2",
         "source_event_id": source_event.get("event_id"),
@@ -246,6 +271,10 @@ def compose_triage_source_context(
             "extracted_fields": extracted_fields,
         },
         "evidence": evidence,
+        "correction_capabilities": {
+            "unrelated_source_event_ids": correctable_related_source_ids,
+            "quoted_or_forwarded_history": quoted_history_correction_available,
+        },
         "interpretation": (
             {
                 "label": "Context summary",

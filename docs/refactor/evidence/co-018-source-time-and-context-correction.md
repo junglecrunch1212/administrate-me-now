@@ -20,9 +20,13 @@ action was performed.
   pair. Gmail message-local attachment IDs remain non-admitting.
 - Missing/invalid Gmail provider time quarantines without ingestion-time
   substitution. HTML-only authored text reaches the pinned seam; uncertain
-  quote signals terminate as no-candidate.
+  quote signals terminate as no-candidate. For multipart Gmail, an explicit
+  HTML quote boundary constrains the plain alternative and mismatch fails
+  closed before deterministic fallback or the language seam.
 - Triage displays Message date separately from Imported / recorded time and
-  offers exact wrong-context relationship/text corrections.
+  offers exact wrong-context relationship/text corrections only when the
+  server declares sufficient relationship provenance or uniquely grounded
+  authored evidence.
 - Four append-only correction/reversal events rebuild into Context Fabric v2.
   Text correction is proposal/candidate/digest/span scoped and preserves any
   other authored ask; the original source and member decision history remain
@@ -56,7 +60,7 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,849 passed.
+- `PYTHONPATH=bridge poetry run pytest -q`: 1,852 passed.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 59
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
@@ -74,8 +78,12 @@ The complete supported local command set passed on Python 3.14 and Node
   isolation, backup/restore, Python and bridge builds, and the aggregate
   release-candidate script passed.
 
-There were no test skips or failures. Pytest emitted the existing
-Starlette/httpx deprecation warning. `npm ci` reported that the existing
+There were no test skips. The first aggregate attempt stopped in the unrelated
+Comms snooze acceptance gate because its immediate read observed `focus`
+instead of `snoozed` after a successful command. That exact test passed on an
+immediate isolated rerun, and the complete aggregate suite then passed from the
+beginning with the counts above. Pytest emitted the existing Starlette/httpx
+deprecation warning. `npm ci` reported that the existing
 `esbuild` and `fsevents` install scripts are not yet listed in `allowScripts`;
 installation, audit, contract, typecheck, and tests still completed
 successfully. Pyright reported that a newer release is available, and Poetry

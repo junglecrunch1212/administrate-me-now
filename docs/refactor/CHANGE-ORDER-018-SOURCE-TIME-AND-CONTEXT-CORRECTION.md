@@ -42,14 +42,19 @@ source fact, sender identity, provider account, or household name is wrong.
   model input, deterministic fallback, exact-quote admission, and read-time
   evidence. Recognized reply/forward boundaries at offset zero produce empty
   authored content and therefore no candidate. HTML-only content is
-  canonicalized before the empty-body check; an unrecognized quote signal is
-  terminally classified as uncertain and never sent to the language seam.
+  canonicalized before the empty-body check. For multipart messages, an
+  explicit HTML quote boundary constrains the plain alternative; mismatched
+  alternatives fail closed. An unrecognized quote signal is terminally
+  classified as uncertain and never sent to the language seam.
 - A wrong-context dismissal may atomically reject selected exact source pairs
   and/or mark one exact proposal/candidate evidence span as quoted/forwarded
   history. Other authored asks in the same source remain available.
   Corrections are private, member-owned, provider/account/workspace checked,
   guarded, audited, replayable, stamped with their context algorithm, and
   reversible through explicit confirmation or reinstatement events.
+  Triage offers each correction control only when the server declares that its
+  exact relationship provenance or uniquely grounded authored evidence is
+  sufficient for the corresponding command.
 - A subject displayed beside `Provider Thread Id` is only a readable source
   label; it is not the opaque provider thread identifier or relationship
   authority.

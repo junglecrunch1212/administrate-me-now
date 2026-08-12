@@ -837,8 +837,11 @@ function triageDetail(item, data, readOnly = false) {
   }
   form.append(grid);
   let contextCorrection = null;
-  const relatedContextSources = (item.source_context?.interpretation?.source_chain || []).filter((source) => source.relation === "related" && source.source_event_id);
-  if (item.source_context?.state === "available") {
+  const correctionCapabilities = item.source_context?.correction_capabilities || {};
+  const correctableRelatedSourceIds = new Set(Array.isArray(correctionCapabilities.unrelated_source_event_ids) ? correctionCapabilities.unrelated_source_event_ids : []);
+  const relatedContextSources = (item.source_context?.interpretation?.source_chain || []).filter((source) => source.relation === "related" && source.source_event_id && correctableRelatedSourceIds.has(source.source_event_id));
+  const canCorrectQuotedHistory = correctionCapabilities.quoted_or_forwarded_history === true;
+  if (item.source_context?.state === "available" && (relatedContextSources.length || canCorrectQuotedHistory)) {
     contextCorrection = document.createElement("fieldset"); contextCorrection.className = "triage-context-correction"; contextCorrection.hidden = true;
     contextCorrection.append(text("legend", "Correct this exact context"), text("p", "These corrections affect only the selected source relationship or quoted text. They do not create a sender-, account-, or keyword-wide rule.", "state-note"));
     for (const source of relatedContextSources) {
@@ -846,8 +849,10 @@ function triageDetail(item, data, readOnly = false) {
       const sourceLabel = [source.subject || source.sender || "Related message", source.occurred_at ? new Date(source.occurred_at).toLocaleString() : null].filter(Boolean).join(" · ");
       const wrapper = document.createElement("label"); wrapper.className = "check-control"; wrapper.append(control, document.createTextNode(` This message is unrelated: ${sourceLabel}`)); contextCorrection.append(wrapper);
     }
-    const quoted = document.createElement("input"); quoted.type = "checkbox"; quoted.dataset.quotedOrForwardedHistory = "true";
-    const quotedWrapper = document.createElement("label"); quotedWrapper.className = "check-control"; quotedWrapper.append(quoted, document.createTextNode(" The displayed ask came only from quoted or forwarded history, not newly authored text")); contextCorrection.append(quotedWrapper);
+    if (canCorrectQuotedHistory) {
+      const quoted = document.createElement("input"); quoted.type = "checkbox"; quoted.dataset.quotedOrForwardedHistory = "true";
+      const quotedWrapper = document.createElement("label"); quotedWrapper.className = "check-control"; quotedWrapper.append(quoted, document.createTextNode(" The displayed ask came only from quoted or forwarded history, not newly authored text")); contextCorrection.append(quotedWrapper);
+    }
     form.append(contextCorrection);
   }
   if (item.calendar_preview) {

@@ -434,6 +434,13 @@ def test_exact_context_correction_round_trip_through_production_composition(
         )
         assert item["source_context"]["occurred_at"] == "2024-01-31T15:00:00Z"
         assert item["source_context"]["recorded_at"] != "2024-01-31T15:00:00Z"
+        assert item["source_context"]["correction_capabilities"] == {
+            "unrelated_source_event_ids": [related_id],
+            "quoted_or_forwarded_history": True,
+        }
+        browser_code = client.get("/member-assets/member.js").text
+        assert "canCorrectQuotedHistory" in browser_code
+        assert "correctableRelatedSourceIds.has" in browser_code
 
         dismissed = client.post(
             f"/api/member/v1/triage/{proposal_id}/dismiss",

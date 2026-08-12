@@ -175,6 +175,38 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
     quoted_history_removed = False
     if isinstance(raw_text, str):
         text = raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if isinstance(raw_html, str):
+            html_value = raw_html
+            html_boundary = _HTML_QUOTE_BOUNDARY.search(html_value)
+            if html_boundary is not None:
+                html_value = html_value[: html_boundary.start()]
+                html_text = html.unescape(
+                    _HTML_TAG.sub("", _HTML_BREAK.sub("\n", html_value))
+                )
+                html_text = html_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+                html_plain_boundary = _QUOTE_BOUNDARY.search(html_text)
+                if html_plain_boundary is not None:
+                    html_text = html_text[: html_plain_boundary.start()].rstrip()
+                elif len(_PLAIN_QUOTE_HEADER_HINT.findall(html_text)) >= 2:
+                    return AuthoredMessageText(
+                        "", False, False, canonical_source_text=text
+                    )
+                if not html_text:
+                    return AuthoredMessageText(
+                        "", True, True, canonical_source_text=text
+                    )
+                if text == html_text or text.startswith(f"{html_text}\n"):
+                    bounded_html_text = html_text[:MAX_MESSAGE_CHARS]
+                    return AuthoredMessageText(
+                        text=bounded_html_text,
+                        reliable=True,
+                        quoted_history_removed=True,
+                        canonical_source_text=text,
+                        authored_span=(0, len(bounded_html_text)),
+                    )
+                return AuthoredMessageText("", False, False, canonical_source_text=text)
+            if _HTML_QUOTE_HINT.search(raw_html):
+                return AuthoredMessageText("", False, False, canonical_source_text=text)
     elif isinstance(raw_html, str):
         html_value = raw_html
         html_boundary = _HTML_QUOTE_BOUNDARY.search(html_value)
