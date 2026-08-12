@@ -30,7 +30,11 @@ fully settled obligations may advance the snapshot. A successful adapter poll
 restores current health after a retained transient error; degraded readiness is
 never relabelled as ordinary observation-only health. Every allowed post-switch
 transient wait reads readiness and fails closed when readiness is unavailable
-after runtime liveness. Full healthy Doctor remains mandatory.
+after runtime liveness. A quiescence or cleanup-stop failure may leave only one
+service stopped; candidate activation and explicit rollback must therefore
+continue through selector, launchd, plugin, and predecessor-runtime restoration
+even when a second cleanup stop also fails. Full healthy Doctor remains
+mandatory.
 
 CO-016 amendment (2026-08-11): AC-41 proves queue continuity after both
 confirmation and typed dismissal. The resolved exact focus is consumed before

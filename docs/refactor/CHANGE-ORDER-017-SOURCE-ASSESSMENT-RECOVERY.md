@@ -126,6 +126,13 @@ candidate activation; every allowed post-switch wait reads current readiness,
 and post-switch acceptance still requires complete settlement and an entirely
 healthy Doctor.
 
+Quiescence is itself failure-sensitive: a stop attempt may unload the runtime
+and then fail before the Gateway is stopped. Candidate activation and explicit
+rollback therefore treat a second cleanup-stop failure as reported secondary
+evidence, not as permission to skip current-selector, launchd, plugin, or
+predecessor-runtime restoration. Every restoration step is attempted and all
+secondary errors are retained in the terminal updater failure.
+
 ## Security and privacy
 
 - Trusted-ingress authentication, principal identity, view scope, private

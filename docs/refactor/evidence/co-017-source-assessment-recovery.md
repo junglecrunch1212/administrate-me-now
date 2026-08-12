@@ -1,9 +1,9 @@
 # CO-017 source-assessment recovery evidence
 
 Status: PR #335 recovery implementation merged; release activation stopped
-before mutation; follow-up Phase A drift/status hardening is locally green and
-awaiting independent exact-head review. No live recovery is claimed by this
-file.
+before mutation; follow-up Phase A drift/status hardening is locally green
+after a second independent-review repair and awaits a third exact-head review.
+No live recovery is claimed by this file.
 
 ## Reproduction and cause
 
@@ -87,6 +87,26 @@ updater/source-repair/macOS operations slice pass (84 tests). Complete final-hea
 gates pass at the counts below; fresh independent review remains pending. The
 rejected head has no release authority.
 
+## PR #336 second independent review
+
+The separate reviewer confirmed both first-review findings closed, then
+rejected exact amended head `e601a4e14efc15f1127833cc5f4611f36aa02569`
+with one P1 finding. If guarded quiescence partly stopped the service pair and
+raised, candidate cleanup called `stop()` again without guarding that cleanup
+call. A second stop failure could therefore bypass current-selector and plugin
+restoration and the predecessor restart.
+
+Candidate activation now records cleanup-stop failure, continues through every
+selector, launchd, plugin, and predecessor-runtime restoration step, and
+reports the candidate error plus every secondary restoration error. The
+explicit rollback path uses the same continue-and-report discipline. A process
+regression makes the initial stop unload the runtime and raise, makes cleanup
+stop raise again, and proves two stop attempts, exactly one predecessor
+restart, healthy final service status, and no candidate pointer. The focused
+source-repair, updater, and macOS operations slice passes 85 tests. The second
+rejected head has no release authority; complete exact-head gates and a third
+independent review remain pending.
+
 ## Focused checks completed
 
 | Command or slice | Result |
@@ -158,10 +178,10 @@ evidence must be recorded only after separately authorized guarded deployment.
 | Combined source-recovery, runtime, updater/rollback, Google Tasks, and macOS operations slice | PASS |
 | Candidate v2 policy against the current content-free live readiness/active-release Doctor snapshot | PASS at 62,634/62,634 accounted, zero pending/missing, the exact four declared failures, and watermark `ev_01KZSQZT4M0007`; no source content exposed |
 | Final-live versus durable consumer inventory read-only proof | 23 expected and 23 persisted pipeline/projection consumers; no missing/extra IDs and zero unhealthy rows |
-| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the amended worktree after the first independent review: 56 strict acceptance, 1,825 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
-| `PYTHONPATH=bridge poetry run pytest -q` | 1,658 passed |
+| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the repaired worktree after the second independent review: 57 strict acceptance, 1,826 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,659 passed |
 | Required Ruff, mypy, and invariant commands | Passed; 219 mypy source files |
-| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 77 tests; runtime and OpenClaw plists valid |
+| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 78 tests; runtime and OpenClaw plists valid |
 | Node 24.19.0 Gate 7 rendered browser harness with temporary evidence directory | 259/259 passed; 39 screenshots; zero console errors, page errors, request failures, or repository evidence writes |
 
 The first aggregate attempt reached the format gate only after its 55 strict

@@ -80,10 +80,10 @@ reads readiness for every allowed transient and aborts immediately on a hidden
 structural degradation or unavailable readiness after runtime liveness.
 
 The follow-up drift/status hardening passes the focused policy/status and
-combined recovery/runtime/updater/Google Tasks process suites, 56 strict
-acceptance gates, 1,825 root/package tests, 60 bridge tests, the complete
-release candidate suite, and the separately required 1,658-test root run,
-Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 77
+combined recovery/runtime/updater/Google Tasks process suites, 57 strict
+acceptance gates, 1,826 root/package tests, 60 bridge tests, the complete
+release candidate suite, and the separately required 1,659-test root run,
+Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 78
 tests with both plists valid. Node 24 Gate 7 passes 259/259 checks and 39
 screenshots with zero console, page, or request failures. Independent exact-
 head review, hosted checks, and fresh G-001 authorization remain required. The
@@ -97,6 +97,19 @@ watermark binding, stopped durable-consumer and Gateway-quiescence receipts,
 and all-transient readiness rule above. That head remains unapproved; complete
 gates and a fresh independent review of the amended immutable head are
 mandatory before requesting G-001 authorization.
+
+The second independent review rejected amended head
+`e601a4e14efc15f1127833cc5f4611f36aa02569` with one P1 rollback gap: when
+initial quiescence partly stopped the service pair, an unguarded second cleanup
+stop could fail and bypass selector/plugin restoration and the predecessor
+restart. Candidate activation and explicit rollback now collect that cleanup
+failure, continue through every restoration step, always attempt the required
+predecessor restart, and report the original plus all secondary errors. A
+process regression forces both stop attempts to fail after the runtime has
+stopped and proves exactly one predecessor restart, healthy final service
+status, and no candidate pointer. The focused updater/source-repair/macOS slice
+passes 85 tests. The rejected head has no release authority; complete gates
+and a third independent exact-head review remain mandatory.
 
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 

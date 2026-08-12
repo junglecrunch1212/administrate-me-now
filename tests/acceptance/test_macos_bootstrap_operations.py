@@ -439,6 +439,83 @@ def test_declared_source_repair_stops_before_selection_on_stopped_receipt_drift(
     assert ServiceManager(paths, test_mode=True).status().status == "healthy"
 
 
+def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-repair-stop-failure")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    ServiceManager(paths, test_mode=True).start()
+    commit = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("ADMINME_UPGRADE_CONTROLLER_COMMIT", commit)
+    policy = object()
+    monkeypatch.setattr(
+        "bootstrap.upgrade.load_repair_policy", lambda _candidate: policy
+    )
+    monkeypatch.setattr(
+        UpgradeManager,
+        "_validate_source_repair_online",
+        lambda _self, _policy: {
+            "capabilities": {},
+            "observation_active": True,
+        },
+    )
+    manager = UpgradeManager(
+        paths,
+        root=REPO_ROOT,
+        test_mode=True,
+        approve_source_assessment_repair=True,
+    )
+    original_stop = manager.services.stop
+    original_start = manager.services.start
+    stop_attempts = 0
+    restart_attempts = 0
+
+    def fail_stop(*, require_openclaw_live_before_stop: bool = False):
+        nonlocal stop_attempts
+        stop_attempts += 1
+        if stop_attempts == 1:
+            original_stop(
+                require_openclaw_live_before_stop=require_openclaw_live_before_stop
+            )
+            raise RuntimeError("fixture quiescence failed after runtime stopped")
+        raise RuntimeError("fixture cleanup stop also failed")
+
+    def restart_predecessor():
+        nonlocal restart_attempts
+        restart_attempts += 1
+        return original_start()
+
+    monkeypatch.setattr(manager.services, "stop", fail_stop)
+    monkeypatch.setattr(manager.services, "start", restart_predecessor)
+
+    with pytest.raises(UpgradeError, match="cleanup stop also failed") as error:
+        manager.activate(REPO_ROOT)
+
+    assert "quiescence failed after runtime stopped" in str(error.value)
+    assert stop_attempts == 2
+    assert restart_attempts == 1
+    assert ServiceManager(paths, test_mode=True).status().status == "healthy"
+    assert not (paths.app_dir / "current-release.json").exists()
+
+
 def test_doctor_fails_when_required_triage_pipeline_is_poisoned(
     tmp_path: Path, monkeypatch
 ) -> None:

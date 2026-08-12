@@ -554,42 +554,63 @@ class UpgradeManager:
             if not was_running:
                 self.services.stop()
         except Exception as candidate_error:
-            self.services.stop()
+            rollback_errors: list[Exception] = []
+            try:
+                self.services.stop()
+            except Exception as exc:
+                # A quiescence failure can leave only one of the two services
+                # stopped.  Cleanup is best-effort; never let its own failure
+                # bypass selector restoration or the previous-release restart.
+                rollback_errors.append(exc)
             if previous and pointer_switched:
                 assert previous_release is not None
-                atomic_write(
-                    pointer,
-                    json.dumps(previous, indent=2).encode("utf-8"),
-                )
-                install_launch_agents(
-                    self.paths,
-                    previous_release,
-                    test_mode=self.test_mode,
-                )
+                try:
+                    atomic_write(
+                        pointer,
+                        json.dumps(previous, indent=2).encode("utf-8"),
+                    )
+                except Exception as exc:
+                    rollback_errors.append(exc)
+                try:
+                    install_launch_agents(
+                        self.paths,
+                        previous_release,
+                        test_mode=self.test_mode,
+                    )
+                except Exception as exc:
+                    rollback_errors.append(exc)
             elif pointer_switched:
-                pointer.unlink(missing_ok=True)
-            rollback_error: Exception | None = None
+                try:
+                    pointer.unlink(missing_ok=True)
+                except Exception as exc:
+                    rollback_errors.append(exc)
             if openclaw_switched and previous_release is not None:
                 try:
                     self._install_reviewed_openclaw(previous_release)
-                    if plugin_registration_attempted:
+                except Exception as exc:
+                    rollback_errors.append(exc)
+                if plugin_registration_attempted:
+                    try:
                         reconcile_administrateme_plugin(
                             self.paths,
                             previous_release,
                             test_mode=self.test_mode,
                         )
-                except Exception as exc:
-                    rollback_error = exc
+                    except Exception as exc:
+                        rollback_errors.append(exc)
             if was_running:
                 try:
                     self.services.start()
                 except Exception as exc:  # preserve the candidate failure as primary
-                    rollback_error = rollback_error or exc
-            if rollback_error is not None:
+                    rollback_errors.append(exc)
+            if rollback_errors:
+                rollback_detail = "; ".join(
+                    f"{type(error).__name__}: {error}" for error in rollback_errors
+                )
                 raise UpgradeError(
                     f"candidate failed ({candidate_error}); the previous release "
-                    "pointer and launchd definitions were restored, but its restart "
-                    f"also reported: {rollback_error}"
+                    "rollback continued through cleanup and restart, but also "
+                    f"reported: {rollback_detail}"
                 ) from candidate_error
             raise
         return {
@@ -640,22 +661,50 @@ class UpgradeManager:
                 )
             if stopped:
                 self.services.stop()
-        except Exception:
-            self.services.stop()
-            atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
-            self._install_reviewed_openclaw(current_release)
-            reconcile_administrateme_plugin(
-                self.paths,
-                current_release,
-                test_mode=self.test_mode,
-            )
-            install_launch_agents(
-                self.paths,
-                ensure_within(Path(current["path"]), self.paths.app_dir / "releases"),
-                test_mode=self.test_mode,
-            )
+        except Exception as rollback_candidate_error:
+            restoration_errors: list[Exception] = []
+            try:
+                self.services.stop()
+            except Exception as exc:
+                restoration_errors.append(exc)
+            try:
+                atomic_write(pointer, json.dumps(current, indent=2).encode("utf-8"))
+            except Exception as exc:
+                restoration_errors.append(exc)
+            try:
+                self._install_reviewed_openclaw(current_release)
+            except Exception as exc:
+                restoration_errors.append(exc)
+            try:
+                reconcile_administrateme_plugin(
+                    self.paths,
+                    current_release,
+                    test_mode=self.test_mode,
+                )
+            except Exception as exc:
+                restoration_errors.append(exc)
+            try:
+                install_launch_agents(
+                    self.paths,
+                    current_release,
+                    test_mode=self.test_mode,
+                )
+            except Exception as exc:
+                restoration_errors.append(exc)
             if not stopped:
-                self.services.start()
+                try:
+                    self.services.start()
+                except Exception as exc:
+                    restoration_errors.append(exc)
+            if restoration_errors:
+                restoration_detail = "; ".join(
+                    f"{type(error).__name__}: {error}" for error in restoration_errors
+                )
+                raise UpgradeError(
+                    f"rollback failed ({rollback_candidate_error}); restoration "
+                    f"continued through every step but also reported: "
+                    f"{restoration_detail}"
+                ) from rollback_candidate_error
             raise
         return {"status": "rolled_back", "commit": previous["commit"]}
 
