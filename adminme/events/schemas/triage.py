@@ -406,6 +406,13 @@ class TriageItemSupersededV2(BaseModel):
     ]
 
 
+class TriageItemSupersededV3(TriageItemSupersededV2):
+    """Compare-and-apply supersession preserving a newer member revision."""
+
+    model_config = {"extra": "forbid"}
+    expected_last_event_id: str = Field(min_length=1, max_length=240)
+
+
 registry.register("triage.item.proposed", 1, TriageItemProposedV1)
 registry.register("triage.item.proposed", 2, TriageItemProposedV2)
 registry.register("triage.item.proposed", 3, TriageItemProposedV3)
@@ -430,6 +437,7 @@ registry.register("triage.item.materialized", 1, TriageItemMaterializedV1)
 registry.register("triage.item.dismissed", 1, TriageItemDismissedV1)
 registry.register("triage.item.superseded", 1, TriageItemSupersededV1)
 registry.register("triage.item.superseded", 2, TriageItemSupersededV2)
+registry.register("triage.item.superseded", 3, TriageItemSupersededV3)
 
 
 __all__ = [
@@ -444,6 +452,7 @@ __all__ = [
     "TriageItemProposedV4",
     "TriageItemSupersededV1",
     "TriageItemSupersededV2",
+    "TriageItemSupersededV3",
     "TriageRouteV1",
     "TriageTargetKind",
     "TriageSourceSurface",

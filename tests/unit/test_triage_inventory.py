@@ -276,6 +276,82 @@ def test_enrichment_reconciles_duplicate_state_and_pending_intent_can_dismiss() 
     )
 
 
+def test_v3_supersession_cannot_overwrite_a_newer_member_enrichment() -> None:
+    projection, conn = _projection()
+    proposal = _event(1, title="Legacy fixture interpretation")
+    projection.apply(proposal, conn)
+    enriched = {
+        **_event(2),
+        "event_id": "event-9000",
+        "type": "triage.item.enriched",
+        "schema_version": 1,
+        "payload": {
+            "proposal_id": "proposal-0001",
+            "enriched_at": "2030-01-02T00:00:00Z",
+            "enriched_by_member_id": MEMBER,
+            "title": "Member-corrected legitimate commitment",
+            "candidate_updates": {"note": "Reviewed by the member."},
+        },
+    }
+    projection.apply(enriched, conn)
+    stale_supersession = {
+        **_event(3),
+        "event_id": "event-9001",
+        "type": "triage.item.superseded",
+        "schema_version": 3,
+        "payload": {
+            "proposal_id": "proposal-0001",
+            "superseded_at": "2030-01-02T00:00:01Z",
+            "replacement_source_event_id": "source-1",
+            "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": "event-0001",
+        },
+    }
+    projection.apply(stale_supersession, conn)
+
+    row = conn.execute(
+        "SELECT state, title, resolved_by, resolution_reason, last_event_id "
+        "FROM triage_items WHERE proposal_id='proposal-0001'"
+    ).fetchone()
+    assert tuple(row) == (
+        "pending_review",
+        "Member-corrected legitimate commitment",
+        None,
+        None,
+        "event-9000",
+    )
+
+
+def test_v3_supersession_applies_to_the_exact_unchanged_revision() -> None:
+    projection, conn = _projection()
+    projection.apply(_event(1, title="Untouched legacy interpretation"), conn)
+    supersession = {
+        **_event(2),
+        "event_id": "event-9000",
+        "type": "triage.item.superseded",
+        "schema_version": 3,
+        "payload": {
+            "proposal_id": "proposal-0001",
+            "superseded_at": "2030-01-02T00:00:00Z",
+            "replacement_source_event_id": "source-1",
+            "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": "event-0001",
+        },
+    }
+    projection.apply(supersession, conn)
+
+    row = conn.execute(
+        "SELECT state, resolved_by, resolution_reason, last_event_id "
+        "FROM triage_items WHERE proposal_id='proposal-0001'"
+    ).fetchone()
+    assert tuple(row) == (
+        "dismissed",
+        "system:source_changed",
+        "eligibility_rule_replaced",
+        "event-9000",
+    )
+
+
 def test_pending_provider_action_is_an_action_specific_triage_receipt() -> None:
     projection, conn = _projection()
     projection.apply(_event(1), conn)

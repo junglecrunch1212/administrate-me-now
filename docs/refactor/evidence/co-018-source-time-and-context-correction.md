@@ -28,7 +28,9 @@ action was performed.
   immutable bodies are excluded from authored evidence with the explicit v21
   assessment reason `legacy_gmail_sent_quote_boundary_unavailable`. Replay
   supersedes only untouched system proposals rooted in those bodies and
-  preserves member-enriched or decided proposals.
+  preserves member-enriched or decided proposals. Supersession v3 binds the
+  proposal revision inspected by replay; deterministic projection
+  compare-and-apply ignores the receipt if member action won append order.
 - Triage displays Message date separately from Imported / recorded time and
   offers exact wrong-context relationship/text corrections only when the
   server declares sufficient relationship provenance or uniquely grounded
@@ -68,7 +70,9 @@ replays a retained Gmail Sent v3 quoted-only body from a v20 checkpoint into an
 explicit no-candidate assessment and append-only supersession of its seeded
 untouched v20 false commitment, and hydrates a displayed related message's exact
 admitting edge from outside the display window. The tests create no canonical
-record or provider effect.
+record or provider effect. A controlled handler interleaving appends member
+enrichment after descendant inspection but before supersession; the production
+projection process then proves the stale v3 receipt cannot dismiss that item.
 
 ## Validation record
 
@@ -76,8 +80,8 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,863 passed.
-- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 60
+- `PYTHONPATH=bridge poetry run pytest -q`: 1,867 passed.
+- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 61
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
 - `poetry run ruff check adminme bridge/adminme_bridge` and the additional
@@ -118,5 +122,13 @@ untouched v20 proposal already rooted in that source. The repair adds exact-
 source append-only supersession, preserves member-enriched/decided proposals,
 and extends the production v20-to-v21 fixture with the old false commitment
 itself. The complete aggregate was rerun from the beginning and passed with the
-counts above. This advisory is not the separate user-visible independent review
-required by ADR-0009. No Phase B action is authorized by this evidence.
+then-current counts. A second internal exact-head advisory exposed an
+inspection-to-append race in that repair: a member enrichment committed after
+the descendant read could still be followed by a system supersession.
+`triage.item.superseded@v3` now carries the inspected proposal revision, the
+projection performs deterministic compare-and-apply, and controlled unit plus
+production-composition interleavings prove a newer member revision remains
+pending. The complete aggregate was again rerun from the beginning and passed
+with the final counts above. These advisories are not the separate user-visible
+independent review required by ADR-0009. No Phase B action is authorized by this
+evidence.

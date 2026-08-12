@@ -601,6 +601,7 @@ def _resolve(
     materialized_event_ids: list[str] | None = None,
     resolution_reason: str | None = None,
     allow_pending_interpretation: bool = False,
+    expected_last_event_id: str | None = None,
 ) -> None:
     conn.execute(
         """UPDATE triage_items
@@ -608,6 +609,7 @@ def _resolve(
                   materialized_event_ids_json=?, resolution_reason=?, last_event_id=?
             WHERE tenant_id=? AND proposal_id=?
               AND (state='pending_review' OR (?=1 AND state='pending_interpretation'))
+              AND (? IS NULL OR last_event_id=?)
               AND last_event_id < ?""",
         (
             state,
@@ -619,6 +621,8 @@ def _resolve(
             envelope["tenant_id"],
             proposal_id,
             int(allow_pending_interpretation),
+            expected_last_event_id,
+            expected_last_event_id,
             envelope["event_id"],
         ),
     )
@@ -938,6 +942,11 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolved_by="system:source_changed",
             resolution_reason=payload["reason"],
             allow_pending_interpretation=True,
+            expected_last_event_id=(
+                str(payload["expected_last_event_id"])
+                if int(envelope.get("schema_version") or 1) >= 3
+                else None
+            ),
         )
     elif event_type == "commitment.dismissed":
         _resolve(

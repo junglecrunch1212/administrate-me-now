@@ -23,7 +23,11 @@ They receive a new content-free v21 assessment with reason
 `legacy_gmail_sent_quote_boundary_unavailable`; any untouched system proposal
 rooted in that now-unreliable body receives an append-only
 `eligibility_rule_replaced` supersession, while member enrichment and decisions
-remain permanent. No source migration or provider refetch occurs. Model-window budget reservation, full-episode reconciliation
+remain permanent. Additive `triage.item.superseded@v3` binds current pipeline
+supersessions to the exact inspected proposal revision; deterministic
+projection compare-and-apply ignores a stale receipt when a newer member event
+won append order. Prior v1/v2 supersession events remain readable with their
+historical semantics. No source migration or provider refetch occurs. Model-window budget reservation, full-episode reconciliation
 scope, and off-window relationship hydration are derived behavior and migrate
 no stored facts.
 

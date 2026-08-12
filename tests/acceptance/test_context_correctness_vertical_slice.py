@@ -836,6 +836,145 @@ def test_exact_context_correction_round_trip_through_production_composition(
         )
 
 
+def test_stale_system_supersession_cannot_override_member_enrichment(
+    tmp_path: Path,
+) -> None:
+    """Production projection applies v3 supersession only to its exact revision."""
+
+    instance = tmp_path / "supersession-race-instance"
+    instance.mkdir()
+    settings = RuntimeSettings.credential_free(
+        instance,
+        encryption_key=b"c" * 32,
+        repository_root=REPO_ROOT,
+        member_identities={"context-correctness.ts.net": MEMBER},
+        member_roles={MEMBER: "principal"},
+        openclaw_enabled=False,
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        runtime = app.state.runtime
+        source_id = client.portal.call(
+            runtime.events.write,
+            _message(
+                runtime,
+                native_id="fixture-supersession-race-source",
+                thread_id="fixture-supersession-race-thread",
+                body="A fixture item that the member will correct.",
+                occurred_at="2024-01-31T15:00:00Z",
+                rfc_message_id="<fixture-supersession-race@example.invalid>",
+            ),
+        )
+        proposal_id = "fixture-supersession-race-proposal"
+        proposal_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_373_766_100,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:06Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture-supersession-race-proposal",
+                payload={
+                    "proposal_id": proposal_id,
+                    "target_kind": "commitment",
+                    "owner_member_id": MEMBER,
+                    "title": "Legacy fixture interpretation",
+                    "candidate": {},
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": source_id,
+                    "confidence": 0.9,
+                    "reasons": ["legacy authored-text interpretation"],
+                    "parent_intent_id": None,
+                    "candidate_key": "fixture-supersession-race",
+                    "extraction_event_id": None,
+                    "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", proposal_event_id)
+        enrichment_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_373_766_200,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.enriched",
+                schema_version=1,
+                occurred_at="2026-08-10T16:36:07Z",
+                source_adapter="member-triage",
+                source_account_id=MEMBER,
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture-supersession-race-enrichment",
+                payload={
+                    "proposal_id": proposal_id,
+                    "enriched_at": "2026-08-10T16:36:07Z",
+                    "enriched_by_member_id": MEMBER,
+                    "title": "Member-corrected legitimate commitment",
+                    "candidate_updates": {
+                        "note": "The member reviewed this interpretation."
+                    },
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", enrichment_event_id)
+        stale_supersession_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_373_766_300,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.superseded",
+                schema_version=3,
+                occurred_at="2026-08-10T16:36:08Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key="fixture-supersession-race-stale",
+                payload={
+                    "proposal_id": proposal_id,
+                    "superseded_at": "2026-08-10T16:36:08Z",
+                    "replacement_source_event_id": source_id,
+                    "reason": "eligibility_rule_replaced",
+                    "expected_last_event_id": proposal_event_id,
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", stale_supersession_id)
+
+        page = client.get(
+            f"/api/member/v1/surfaces/triage?triage_item={proposal_id}",
+            headers=AUTH,
+        )
+        assert page.status_code == 200, page.text
+        item = next(
+            value
+            for value in page.json()["items"]
+            if value["proposal_id"] == proposal_id
+        )
+        assert item["state"] == "pending_review"
+        assert item["title"] == "Member-corrected legitimate commitment"
+        assert item["last_event_id"] == enrichment_event_id
+        assert (
+            client.portal.call(_events, runtime, "triage.item.superseded")[-1][
+                "event_id"
+            ]
+            == stale_supersession_id
+        )
+        assert client.portal.call(_events, runtime, "task.created") == []
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
+
+
 def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
     tmp_path: Path,
 ) -> None:

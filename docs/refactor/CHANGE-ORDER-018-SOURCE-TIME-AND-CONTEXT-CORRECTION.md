@@ -52,7 +52,9 @@ source fact, sender identity, provider account, or household name is wrong.
   fact nor admits its body as authored evidence. Any untouched system proposal
   previously rooted in that unreliable body receives an append-only
   `eligibility_rule_replaced` supersession; member enrichment and decisions
-  remain permanent.
+  remain permanent. Additive `triage.item.superseded@v3` carries the exact
+  proposal revision inspected by replay, and the Triage projection applies it
+  only when that revision is still current.
 - A wrong-context dismissal may atomically reject selected exact source pairs
   and/or mark one exact proposal/candidate evidence span as quoted/forwarded
   history. Other authored asks in the same source remain available.
@@ -87,6 +89,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | `message-context-pack-v2` strong-edge admission and episode identity | SUPERSEDE | Privacy coordinates and provider sources remain code-owned; the model cannot widen them. |
 | Canonical authored-text v2 | SUPERSEDE | Exact provider text remains the source; derived evidence uses one normalized view. |
 | Exact relationship/text correction and reversal events | MODERNIZE | Correction is append-only member evidence, not deletion or mutation of the source. |
+| Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
 | Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. |
 
@@ -114,5 +117,7 @@ gates. The process slice uses the actual Gmail adapter mapping, seeds a v20
 durable checkpoint, starts the production v21 runner, proves full replay,
 retires both the untouched crossed-wire proposal and an untouched false legacy-
 Sent proposal, keeps a valid sibling reviewable, preserves member-decided
-history, and creates no canonical or provider effect. Candidate evidence is recorded in
+history, and creates no canonical or provider effect. A second process case
+appends member enrichment after system inspection but before its v3
+supersession and proves the item remains reviewable. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.

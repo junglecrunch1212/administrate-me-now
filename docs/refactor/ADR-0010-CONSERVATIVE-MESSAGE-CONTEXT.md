@@ -51,7 +51,9 @@ remain immutable source facts, but their bodies are marked
 evidence during v21 replay and later context assembly. Replay appends an
 eligibility-replacement receipt for each untouched system proposal previously
 rooted in that unreliable body; member-enriched or decided proposals remain
-permanent.
+permanent. `triage.item.superseded@v3` binds that system receipt to the exact
+proposal `last_event_id` inspected by replay, and the deterministic Triage
+projection ignores it if a member revision won the append order.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 

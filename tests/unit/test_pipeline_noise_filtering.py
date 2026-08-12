@@ -183,6 +183,22 @@ class _ContextEventLog(_FakeEventLog):
             yield value
 
 
+@dataclass
+class _RacingSupersessionEventLog(_ContextEventLog):
+    gated_proposal_event_id: str = ""
+    descendants_inspected: asyncio.Event = field(default_factory=asyncio.Event)
+    resume_supersession: asyncio.Event = field(default_factory=asyncio.Event)
+    gate_used: bool = False
+
+    async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
+        descendants = await super().get_by_causation(causation_id)
+        if causation_id == self.gated_proposal_event_id and not self.gate_used:
+            self.gate_used = True
+            self.descendants_inspected.set()
+            await self.resume_supersession.wait()
+        return descendants
+
+
 def _make_ctx(
     event_log: Any,
     run_skill_fn: Any,
@@ -500,8 +516,104 @@ async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
             "superseded_at": "2026-08-08T12:00:00Z",
             "replacement_source_event_id": source["event_id"],
             "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": proposal_event_id,
         }
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_sent_supersession_carries_stale_revision_through_race() -> None:
+    source = _messaging_sent_event(
+        body_text="I will authorize the old fixture transfer."
+    )
+    source.update(
+        {
+            "schema_version": 3,
+            "source_adapter": "messaging-gmail-api",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "legacy-sent-race-thread",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+        }
+    )
+    log = _RacingSupersessionEventLog(source_events=[source])
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2026-08-08T12:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-race-proposal-event",
+            payload={
+                "proposal_id": "legacy-sent-race-proposal",
+                "target_kind": "commitment",
+                "owner_member_id": "member-fixture",
+                "title": "Authorize the old fixture transfer",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": source["event_id"],
+                "candidate_key": "legacy-sent-race-candidate",
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "confidence": 0.9,
+                "reasons": ["legacy authored-text interpretation"],
+            },
+        )
+    )
+    log.gated_proposal_event_id = proposal_event_id
+
+    async def should_not_run(*_args: Any, **_kwargs: Any) -> SkillResult:
+        raise AssertionError("unreliable legacy text reached the language seam")
+
+    replay = asyncio.create_task(
+        NoiseFilteringPipeline().handle(source, _make_ctx(log, should_not_run))
+    )
+    await asyncio.wait_for(log.descendants_inspected.wait(), timeout=1)
+    enrichment_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000002,
+            tenant_id="tenant-test",
+            type="triage.item.enriched",
+            schema_version=1,
+            occurred_at="2026-08-08T12:00:02Z",
+            source_adapter="member-triage",
+            source_account_id="member-fixture",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-race-member-enrichment",
+            payload={
+                "proposal_id": "legacy-sent-race-proposal",
+                "enriched_at": "2026-08-08T12:00:02Z",
+                "enriched_by_member_id": "member-fixture",
+                "title": "Member-corrected legitimate commitment",
+                "candidate_updates": {"note": "Reviewed by the member."},
+            },
+        ),
+        causation_id=proposal_event_id,
+    )
+    log.resume_supersession.set()
+    await asyncio.wait_for(replay, timeout=1)
+
+    supersession_call = next(
+        call for call in log.calls if call.envelope.type == "triage.item.superseded"
+    )
+    assert log.calls.index(
+        next(call for call in log.calls if call.event_id == enrichment_event_id)
+    ) < log.calls.index(supersession_call)
+    assert supersession_call.envelope.schema_version == 3
+    assert supersession_call.envelope.payload["expected_last_event_id"] == (
+        proposal_event_id
+    )
 
 
 @pytest.mark.asyncio
@@ -1344,12 +1456,13 @@ async def test_v9_retires_only_untouched_generic_action_verb_proposals(
     ]
     assert bool(superseded) is not member_decided
     if superseded:
-        assert superseded[0].schema_version == 2
+        assert superseded[0].schema_version == 3
         assert superseded[0].payload == {
             "proposal_id": proposal_id,
             "superseded_at": "2026-08-08T12:00:00Z",
             "replacement_source_event_id": source_event_id,
             "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": proposal_event_id,
         }
 
 
