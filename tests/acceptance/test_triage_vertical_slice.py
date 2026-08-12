@@ -336,7 +336,7 @@ def test_multi_message_legal_context_yields_distinct_explainable_candidates(
             "commitment",
             "task",
         ]
-        assert all(value["schema_version"] == 3 for value in proposals)
+        assert all(value["schema_version"] == 4 for value in proposals)
         assert all(value["payload"]["interpretation"] for value in proposals)
         client.portal.call(
             runtime.wait_for_projection,

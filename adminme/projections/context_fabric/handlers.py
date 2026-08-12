@@ -58,7 +58,7 @@ def _matter_context_id(
     tenant = str(envelope["tenant_id"])
     owner = str(payload["owner_member_id"])
     source_id = str(payload["source_event_id"])
-    proposed_at = str(envelope["occurred_at"])
+    proposed_at = str(payload.get("source_occurred_at") or envelope["occurred_at"])
     latest = conn.execute(
         """SELECT * FROM context_matter_sessions
             WHERE tenant_id=? AND owner_member_id=? AND thread_key=?
@@ -771,6 +771,103 @@ def _record_policy(envelope: Mapping[str, Any], conn: sqlcipher3.Connection) -> 
         )
 
 
+def _record_relationship_decision(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("member_id")):
+        return
+    confirmed = envelope["type"] == "context.relationship.confirmed"
+    decided_at = payload["confirmed_at"] if confirmed else payload["rejected_at"]
+    decided_by = (
+        payload["confirmed_by_member_id"]
+        if confirmed
+        else payload["rejected_by_member_id"]
+    )
+    conn.execute(
+        """INSERT INTO context_relationship_decisions (
+               tenant_id, relationship_id, source_event_id,
+               related_source_event_id, member_id, provider,
+               provider_account_id, workspace, algorithm, state, reason, decided_at,
+               decided_by_member_id, owner_scope, visibility_scope,
+               sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, relationship_id) DO UPDATE SET
+               algorithm=excluded.algorithm, state=excluded.state,
+               reason=excluded.reason,
+               decided_at=excluded.decided_at,
+               decided_by_member_id=excluded.decided_by_member_id,
+               last_event_id=excluded.last_event_id
+           WHERE context_relationship_decisions.last_event_id < excluded.last_event_id""",
+        (
+            envelope["tenant_id"],
+            payload["relationship_id"],
+            payload["source_event_id"],
+            payload["related_source_event_id"],
+            payload["member_id"],
+            payload["provider"],
+            payload["provider_account_id"],
+            payload["workspace"],
+            payload["algorithm"],
+            "confirmed" if confirmed else "rejected",
+            payload["reason"],
+            decided_at,
+            decided_by,
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def _record_source_text_decision(
+    envelope: Mapping[str, Any], conn: sqlcipher3.Connection
+) -> None:
+    payload = envelope["payload"]
+    if not _is_private_member_envelope(envelope, payload.get("member_id")):
+        return
+    reinstated = envelope["type"] == "context.source_text.reinstated"
+    decided_at = payload["reinstated_at"] if reinstated else payload["corrected_at"]
+    decided_by = (
+        payload["reinstated_by_member_id"]
+        if reinstated
+        else payload["corrected_by_member_id"]
+    )
+    conn.execute(
+        """INSERT INTO context_source_text_corrections (
+               tenant_id, correction_id, source_event_id, member_id, state,
+               reason, evidence_quote_digest, decided_at, decided_by_member_id,
+               owner_scope, visibility_scope, sensitivity, last_event_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(tenant_id, correction_id) DO UPDATE SET
+               state=excluded.state, reason=excluded.reason,
+               evidence_quote_digest=COALESCE(
+                   excluded.evidence_quote_digest,
+                   context_source_text_corrections.evidence_quote_digest
+               ),
+               decided_at=excluded.decided_at,
+               decided_by_member_id=excluded.decided_by_member_id,
+               last_event_id=excluded.last_event_id
+           WHERE context_source_text_corrections.last_event_id < excluded.last_event_id""",
+        (
+            envelope["tenant_id"],
+            payload["correction_id"],
+            payload["source_event_id"],
+            payload["member_id"],
+            "reinstated" if reinstated else "corrected",
+            payload["reason"],
+            payload.get("evidence_quote_digest"),
+            decided_at,
+            decided_by,
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
+            envelope["event_id"],
+        ),
+    )
+
+
 def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
     """Index one envelope without reading another projection or the network."""
 
@@ -818,6 +915,10 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         _record_membership_decision(envelope, conn)
     elif event_type in {"context.merged", "context.split"}:
         _record_merge_or_split(envelope, conn)
+    elif event_type in {"context.relationship.rejected", "context.relationship.confirmed"}:
+        _record_relationship_decision(envelope, conn)
+    elif event_type in {"context.source_text.corrected", "context.source_text.reinstated"}:
+        _record_source_text_decision(envelope, conn)
     elif event_type == "triage.feedback.recorded":
         _record_feedback(envelope, conn)
     elif event_type in {"triage.policy_rule.approved", "triage.policy_rule.revoked"}:

@@ -1,5 +1,25 @@
 # Migration map
 
+CO-018 update (2026-08-12): source-time and message-context correctness is a
+**MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.2.0 and emits
+additive `messaging.received@v4` / `messaging.sent@v3`; prior versions remain
+registered and readable. Noise filtering advances from v20 to v21 with an
+explicit full replay, and the pinned classification skill advances from v6 to
+v7. Replay appends new assessments/proposals and deterministic supersession
+receipts only for untouched stale interpretations. Source events, member
+feedback, decisions, canonical records, and provider facts are never rewritten.
+
+Context Fabric advances from projection v1 to v2 with additive exact
+relationship-decision and source-text-correction tables. Rebuild derives both
+from immutable reject/confirm/correct/reinstate events. Existing projection
+databases receive the `CREATE TABLE IF NOT EXISTS` additions through the normal
+schema initialization before replay. `triage.item.proposed@v4` carries provider
+source time and interpretation v2 while v1–v3 remain compatible. Rollback can
+read the retained older facts and ignores new correction events, but it cannot
+delete them and can temporarily restore the superseded weak context behavior.
+No credential, provider enrollment, permission, Python/Node runtime, OpenClaw
+pin, canonical model, or external object migrates.
+
 CO-017 update (2026-08-12): terminal source-assessment recovery is
 **HARDENED AND DEPLOYED**. Noise filtering advances from
 generation/version 19 to 20. Existing source events, v3 assessments, candidates,

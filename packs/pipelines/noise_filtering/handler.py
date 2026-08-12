@@ -57,6 +57,8 @@ from adminme.source_assessment_recovery import (
     RECOVERY_POLICY,
     RecoveryRefusalReason,
     SourceAssessmentRecoveryRefused,
+    assessment_outcome,
+    latest_source_assessment,
     target_from_request_event,
     validate_recovery_target,
 )
@@ -75,9 +77,9 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "6.0.1"
+SKILL_VERSION = "7.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 20
+_REPLAY_GENERATION = 21
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -255,7 +257,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "20.0.0"
+    version: str = "21.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -471,6 +473,20 @@ class NoiseFilteringPipeline:
             return
         source_event_id = str(event.get("event_id") or "")
         recovery = event.get("_assessment_recovery")
+        if not isinstance(recovery, dict) and hasattr(
+            ctx.event_log, "get_by_causation"
+        ):
+            prior_assessment = await latest_source_assessment(
+                ctx.event_log, source_event_id
+            )
+            # CO-017 failures require the exact, bounded recovery command.
+            # A later full consumer replay must not silently consume that
+            # authority or make the selected failed assessment stale.
+            if (
+                prior_assessment is not None
+                and assessment_outcome(prior_assessment) == "failed"
+            ):
+                return
         if event.get("sensitivity") == "privileged":
             await self._emit_triage_assessment(
                 event=event,
@@ -535,6 +551,19 @@ class NoiseFilteringPipeline:
             return
         source_text, inputs = prepared
         context_pack = await build_message_context_pack(event, ctx.event_log)
+        current_context_message = next(
+            (
+                message
+                for message in context_pack.messages
+                if message.source_event_id == source_event_id
+            ),
+            None,
+        )
+        if current_context_message is not None:
+            # Candidate fallback, model input, admission, and read-time evidence
+            # all use the same authored-text v2 representation.
+            source_text = current_context_message.source_text()
+            inputs["body_text"] = current_context_message.body_text
         inputs["candidate_mode"] = policy["mode"]
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
         inputs["candidate_language_enabled"] = bool(policy["language_enabled"])
@@ -997,7 +1026,7 @@ class NoiseFilteringPipeline:
                 event_at_ms=event["event_at_ms"],
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
-                schema_version=3,
+                schema_version=4,
                 occurred_at=extracted_at,
                 source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
@@ -1020,6 +1049,11 @@ class NoiseFilteringPipeline:
                     "confidence": candidate.confidence,
                     "reasons": candidate.reasons,
                     "interpretation": candidate.interpretation,
+                    "source_occurred_at": (
+                        (event.get("payload") or {}).get("received_at")
+                        or (event.get("payload") or {}).get("sent_at")
+                        or event.get("occurred_at")
+                    ),
                 },
             )
             await _write_first_equivalent_event(
@@ -1127,7 +1161,7 @@ class NoiseFilteringPipeline:
                     visibility_scope=event["visibility_scope"],
                     sensitivity=event.get("sensitivity", "normal"),
                     idempotency_key=(
-                        "triage:message-thread-replaced:v12:"
+                        f"triage:message-thread-replaced:v{_REPLAY_GENERATION}:"
                         f"{proposal_id}:{source_event_id}"
                     ),
                     payload={

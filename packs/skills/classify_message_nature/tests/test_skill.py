@@ -58,7 +58,7 @@ def test_input_schema_accepts_exact_participant_reference_context_edge() -> None
         "source_channel": "gmail",
         "from_identifier": "service@example.invalid",
         "context_pack": {
-            "contract": "message-context-pack-v1",
+            "contract": "message-context-pack-v2",
             "thread_key": "a" * 64,
             "context_fingerprint": "b" * 64,
             "current_source_id": "m01",

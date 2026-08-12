@@ -3150,8 +3150,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 225,
-    "technical_event_types": 193,
+    "technical_event_schemas": 232,
+    "technical_event_types": 197,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -6593,6 +6593,178 @@
     },
     {
       "additional_properties": false,
+      "event_type": "context.relationship.confirmed",
+      "family": "context",
+      "properties": {
+        "algorithm": {
+          "const": "message-context-pack-v2",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "confirmed_at": {
+          "format": "date-time",
+          "title": "Confirmed At",
+          "type": "string"
+        },
+        "confirmed_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Confirmed By Member Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "member_reinstated",
+          "title": "Reason",
+          "type": "string"
+        },
+        "related_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Related Source Event Id",
+          "type": "string"
+        },
+        "relationship_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "source_event_id",
+        "related_source_event_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "algorithm",
+        "confirmed_by_member_id",
+        "confirmed_at",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.relationship.rejected",
+      "family": "context",
+      "properties": {
+        "algorithm": {
+          "const": "message-context-pack-v2",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "provider": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "unrelated_sources",
+          "title": "Reason",
+          "type": "string"
+        },
+        "rejected_at": {
+          "format": "date-time",
+          "title": "Rejected At",
+          "type": "string"
+        },
+        "rejected_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Rejected By Member Id",
+          "type": "string"
+        },
+        "related_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Related Source Event Id",
+          "type": "string"
+        },
+        "relationship_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Relationship Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relationship_id",
+        "source_event_id",
+        "related_source_event_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "algorithm",
+        "rejected_by_member_id",
+        "rejected_at",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "context.signal.observed",
       "family": "context",
       "properties": {
@@ -6746,6 +6918,119 @@
         "kind",
         "state",
         "observed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.source_text.corrected",
+      "family": "context",
+      "properties": {
+        "corrected_at": {
+          "format": "date-time",
+          "title": "Corrected At",
+          "type": "string"
+        },
+        "corrected_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Corrected By Member Id",
+          "type": "string"
+        },
+        "correction_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Correction Id",
+          "type": "string"
+        },
+        "evidence_quote_digest": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Quote Digest"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "quoted_or_forwarded_history",
+          "title": "Reason",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "correction_id",
+        "source_event_id",
+        "member_id",
+        "corrected_by_member_id",
+        "corrected_at",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "context.source_text.reinstated",
+      "family": "context",
+      "properties": {
+        "correction_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Correction Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "reason": {
+          "const": "member_reinstated",
+          "title": "Reason",
+          "type": "string"
+        },
+        "reinstated_at": {
+          "format": "date-time",
+          "title": "Reinstated At",
+          "type": "string"
+        },
+        "reinstated_by_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Reinstated By Member Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "correction_id",
+        "source_event_id",
+        "member_id",
+        "reinstated_by_member_id",
+        "reinstated_at",
+        "reason"
       ],
       "schema_version": 1
     },
@@ -14819,6 +15104,239 @@
     },
     {
       "additional_properties": false,
+      "event_type": "messaging.received",
+      "family": "communication",
+      "properties": {
+        "archived": {
+          "default": false,
+          "title": "Archived",
+          "type": "boolean"
+        },
+        "attachments": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Attachments",
+          "type": "array"
+        },
+        "bcc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Bcc Identifiers",
+          "type": "array"
+        },
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "cc_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Cc Identifiers",
+          "type": "array"
+        },
+        "from_identifier": {
+          "minLength": 1,
+          "title": "From Identifier",
+          "type": "string"
+        },
+        "important": {
+          "default": false,
+          "title": "Important",
+          "type": "boolean"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "native_message_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Native Message Id",
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_labels": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Provider Labels",
+          "type": "array"
+        },
+        "received_at": {
+          "minLength": 1,
+          "title": "Received At",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "reply_to_identifier": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reply To Identifier"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "starred": {
+          "default": false,
+          "title": "Starred",
+          "type": "boolean"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "to_identifiers": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "To Identifiers",
+          "type": "array"
+        },
+        "unread": {
+          "default": true,
+          "title": "Unread",
+          "type": "boolean"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "from_identifier",
+        "to_identifier",
+        "received_at",
+        "native_message_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace"
+      ],
+      "schema_version": 4
+    },
+    {
+      "additional_properties": false,
       "event_type": "messaging.semantic_features_extracted",
       "family": "communication",
       "properties": {
@@ -15112,6 +15630,177 @@
         "workspace"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "messaging.sent",
+      "family": "communication",
+      "properties": {
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "delivery_status": {
+          "enum": [
+            "queued",
+            "sent",
+            "failed"
+          ],
+          "title": "Delivery Status",
+          "type": "string"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "in_reply_to_interaction_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To Interaction Id"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "native_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Message Id"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "sent_at": {
+          "minLength": 1,
+          "title": "Sent At",
+          "type": "string"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "to_identifier",
+        "sent_at",
+        "delivery_status",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace"
+      ],
+      "schema_version": 3
     },
     {
       "additional_properties": false,
@@ -21910,6 +22599,176 @@
         "eligibility_rule_ids"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "triage.item.proposed",
+      "family": "triage",
+      "properties": {
+        "candidate": {
+          "additionalProperties": true,
+          "title": "Candidate",
+          "type": "object"
+        },
+        "candidate_key": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Key"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confidence"
+        },
+        "eligibility_rule_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Eligibility Rule Ids",
+          "type": "array"
+        },
+        "extraction_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extraction Event Id"
+        },
+        "interpretation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TriageContextInterpretationV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "parent_intent_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Intent Id"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TriageRouteV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_occurred_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Occurred At"
+        },
+        "target_kind": {
+          "enum": [
+            "task",
+            "commitment",
+            "calendar_event",
+            "reminder",
+            "list",
+            "list_item",
+            "recurrence",
+            "party_identifier",
+            "party_candidate",
+            "party_relationship",
+            "relationship_fact"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "target_kind",
+        "owner_member_id",
+        "title",
+        "source_event_id",
+        "eligibility_rule_ids"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,

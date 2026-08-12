@@ -17,6 +17,34 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-12 CO-018 local candidate
+
+Status: implemented and complete supported local validation passed; not
+independently reviewed, merged, deployed, or run against a family Mac or live
+provider.
+
+The candidate corrects a message-context false-association class without
+changing source facts or member authority. Gmail adapter v1.2.0 records provider
+message time as `occurred_at` and append time as `recorded_at`. Message context
+v2 splits reused provider threads into 30-day/100-source episodes and requires
+exact RFC continuity, exact attachment identity, or explicit member
+confirmation for a cross-thread source. Repeated participants, addresses,
+names, subjects, and filenames are corroboration only. Authored-text v2 is
+shared by language input, deterministic fallback, exact grounding, and source
+display, including fail-closed offset-zero quoted/forwarded history.
+
+Triage wrong-context dismissal now supports an atomic exact relationship
+rejection and exact quoted-history correction. Member-owned confirmation and
+reinstatement endpoints reverse each decision. Context Fabric v2 rebuilds the
+state from immutable events, and wrong-context feedback cannot aggregate into a
+broad sender/account/workspace suppression suggestion. Noise filtering v21
+opts into full replay and retires only untouched stale context interpretations;
+member decisions remain permanent. The new production-composition acceptance
+test completes detach, relink, reinstate, and rebuild with no canonical or
+provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
+file. Independent exact-head review and the ordinary controlled-release path
+remain mandatory before any Phase B action.
+
 ## 2026-08-12 CO-017 deployed and live verified
 
 Status: PR #336 is merged, deployed, and independently live verified in

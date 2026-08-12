@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 
-from adminme.message_context import build_message_context_pack, strip_quoted_history
+from adminme.message_context import (
+    authored_message_text,
+    build_message_context_pack,
+    strip_quoted_history,
+)
 from adminme.triage_intent import extract_grounded_context_candidates
 
 
@@ -33,6 +38,10 @@ def _message(
     owner_scope: str | None = None,
     sensitivity: str = "normal",
     attachments: list[dict[str, Any]] | None = None,
+    rfc_message_id: str | None = None,
+    references: list[str] | None = None,
+    in_reply_to: str | None = None,
+    provider: str = "fixture",
 ) -> dict[str, Any]:
     scope = owner_scope or f"private:{member}"
     return {
@@ -46,11 +55,14 @@ def _message(
         "occurred_at": occurred_at,
         "payload": {
             "member_id": member,
-            "provider": "fixture",
+            "provider": provider,
             "provider_account_id": "fixture-account",
             "workspace": workspace,
             "source_channel": "gmail",
             "thread_id": thread_id,
+            "rfc_message_id": rfc_message_id or f"<{event_id}@example.invalid>",
+            "references": references or [],
+            "in_reply_to": in_reply_to,
             "from_identifier": sender,
             "to_identifier": recipient,
             "to_identifiers": [recipient],
@@ -106,6 +118,7 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
         sender="signing-service@example.invalid",
         subject="Sign legal authorization package",
         occurred_at="2034-02-01T15:30:00Z",
+        references=["<source-06@example.invalid>"],
     )
     unrelated = _message(
         "source-unrelated",
@@ -191,16 +204,14 @@ async def test_context_pack_is_thread_complete_related_and_scope_closed() -> Non
 
 
 @pytest.mark.asyncio
-async def test_exact_authored_participant_reference_relates_service_message() -> None:
-    """A service notice in another provider thread can join a matter when it
-    shares the member mailbox and its newly authored body exactly references a
-    primary participant. Near-text and a reference in another scope stay out.
-    """
+async def test_weak_participant_and_authored_name_overlap_do_not_relate_threads() -> None:
+    """Shared mailboxes, addresses, subjects, and recurring names stay weak."""
     anchor = _message(
         "source-anchor",
         "Please send the authorization package when it is ready.",
         sender="counsel@example.invalid",
         recipient="member@example.invalid",
+        attachments=[{"filename": "shared-fixture-form.pdf"}],
     )
     service_notice = _message(
         "source-service",
@@ -227,20 +238,110 @@ async def test_exact_authored_participant_reference_relates_service_message() ->
         subject="Secure delivery notice",
         workspace="work",
     )
+    recurring_family_name = _message(
+        "source-family-name",
+        "The Fixture Holdings records are ready for the unrelated account.",
+        thread_id="thread-unrelated-account",
+        sender="delivery@example.invalid",
+        recipient="member@example.invalid",
+        subject="Fixture Holdings account records",
+    )
+    same_subject_and_filename = _message(
+        "source-subject-filename",
+        "This is a separate fixture matter.",
+        thread_id="thread-repeated-metadata",
+        attachments=[{"filename": "shared-fixture-form.pdf"}],
+    )
+    wrong_provider = _message(
+        "source-wrong-provider",
+        "A provider-crossing message must stay out.",
+        thread_id="thread-wrong-provider",
+        provider="other-fixture-provider",
+        references=["<source-anchor@example.invalid>"],
+    )
 
     pack = await build_message_context_pack(
         anchor,
-        _Log([anchor, service_notice, near_text, wrong_scope]),
+        _Log(
+            [
+                anchor,
+                service_notice,
+                near_text,
+                wrong_scope,
+                recurring_family_name,
+                same_subject_and_filename,
+                wrong_provider,
+            ]
+        ),
     )
+
+    assert [message.source_event_id for message in pack.messages] == ["source-anchor"]
+
+
+@pytest.mark.asyncio
+async def test_resolved_party_aliases_do_not_establish_matter_identity() -> None:
+    anchor = _message(
+        "source-anchor",
+        "A fixture note for one matter.",
+        sender="alias-one@example.invalid",
+    )
+    unrelated = _message(
+        "source-unrelated",
+        "A fixture note for another matter.",
+        thread_id="thread-unrelated",
+        sender="alias-two@example.invalid",
+    )
+    resolutions = [
+        {
+            "event_id": f"resolution-{index}",
+            "type": "interaction.participant_resolved",
+            "tenant_id": "tenant-fixture",
+            "owner_scope": "private:member-fixture",
+            "visibility_scope": "private:member-fixture",
+            "sensitivity": "normal",
+            "payload": {
+                "source_event_id": source_event_id,
+                "party_id": "party-fixture-shared",
+                "identifier_normalized": identifier,
+            },
+        }
+        for index, (source_event_id, identifier) in enumerate(
+            [
+                ("source-anchor", "alias-one@example.invalid"),
+                ("source-unrelated", "alias-two@example.invalid"),
+            ]
+        )
+    ]
+
+    pack = await build_message_context_pack(
+        anchor, _Log([anchor, unrelated, *resolutions])
+    )
+
+    assert [message.source_event_id for message in pack.messages] == ["source-anchor"]
+
+
+@pytest.mark.asyncio
+async def test_exact_attachment_digest_can_admit_a_cross_thread_source() -> None:
+    digest = "c" * 64
+    anchor = _message(
+        "source-anchor",
+        "Please review the attached fixture form.",
+        attachments=[{"filename": "form.pdf", "sha256": digest}],
+    )
+    related = _message(
+        "source-related",
+        "The attached fixture form is ready.",
+        thread_id="thread-attachment-service",
+        attachments=[{"filename": "renamed.pdf", "content_sha256": digest}],
+    )
+
+    pack = await build_message_context_pack(anchor, _Log([anchor, related]))
 
     assert [message.source_event_id for message in pack.messages] == [
         "source-anchor",
-        "source-service",
+        "source-related",
     ]
-    assert pack.messages[-1].relation_reason_codes == (
-        "participant_overlap",
-        "participant_reference_overlap",
-    )
+    assert "attachment_identity" in pack.messages[-1].relation_reason_codes
 
 
 @pytest.mark.asyncio
@@ -287,6 +388,7 @@ async def test_context_extraction_preserves_distinct_open_asks_and_provenance() 
         sender="signing-service@example.invalid",
         subject="Sign legal authorization package",
         occurred_at="2034-02-01T15:30:00Z",
+        references=["<source-06@example.invalid>"],
     )
     pack = await build_message_context_pack(messages[-1], _Log([*messages, related]))
     aliases = {value.source_event_id: value.alias for value in pack.messages}
@@ -390,3 +492,186 @@ def test_quoted_history_is_not_repeated_as_new_authored_content() -> None:
         )
         == "Please confirm the pickup time."
     )
+
+
+def test_reply_or_forward_boundary_at_offset_zero_fails_closed() -> None:
+    plain = authored_message_text(
+        {"body_text": "On Tuesday, Counsel wrote:\r\n> Please wire funds."}
+    )
+    html_only = authored_message_text(
+        {
+            "body_html": (
+                '<div class="gmail_quote"><div>Please wire funds.</div></div>'
+            )
+        }
+    )
+    mobile_forward = authored_message_text(
+        {"body_text": "Begin forwarded message:\nPlease wire fixture funds."}
+    )
+    spanish_reply = authored_message_text(
+        {"body_text": "El martes, Remitente escribió:\n> Envíe los documentos."}
+    )
+    outlook_html = authored_message_text(
+        {
+            "body_html": (
+                '<div id="divRplyFwdMsg"><b>From:</b> sender@example.invalid'
+                "<br>Please wire fixture funds.</div>"
+            )
+        }
+    )
+    apple_quote = authored_message_text(
+        {"body_html": '<blockquote type="cite">Old fixture ask.</blockquote>'}
+    )
+
+    for result in (
+        plain,
+        html_only,
+        mobile_forward,
+        spanish_reply,
+        outlook_html,
+        apple_quote,
+    ):
+        assert result.text == ""
+        assert result.quoted_history_removed is True
+        assert result.authored_span is None
+
+
+def test_authored_text_normalizes_crlf_once_for_grounding_and_display() -> None:
+    result = authored_message_text(
+        {"body_text": "Please review line one.\r\nThen confirm line two."}
+    )
+
+    assert result.text == "Please review line one.\nThen confirm line two."
+    assert result.reliable is True
+    assert result.canonical_source_text == result.text
+    assert result.authored_span == (0, len(result.text))
+
+
+@pytest.mark.asyncio
+async def test_reused_provider_thread_is_segmented_into_bounded_episodes() -> None:
+    old = _message(
+        "source-old",
+        "Please review the old matter.",
+        occurred_at="2034-01-01T10:00:00Z",
+    )
+    current = _message(
+        "source-current",
+        "Please review the current matter.",
+        occurred_at="2034-03-15T10:00:00Z",
+    )
+
+    pack = await build_message_context_pack(current, _Log([old, current]))
+
+    assert [message.source_event_id for message in pack.messages] == [
+        "source-current"
+    ]
+    assert "source-old" not in pack.thread_key
+
+
+@pytest.mark.asyncio
+async def test_provider_thread_episode_closes_at_one_hundred_sources() -> None:
+    start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
+    messages = [
+        _message(
+            f"source-{index:03d}",
+            f"Fixture message {index}.",
+            occurred_at=(start + timedelta(minutes=index)).isoformat(),
+        )
+        for index in range(101)
+    ]
+
+    pack = await build_message_context_pack(messages[-1], _Log(messages))
+
+    assert [message.source_event_id for message in pack.messages] == ["source-100"]
+    assert "source-000" not in pack.thread_key
+
+
+def _context_decision(
+    event_id: str,
+    event_type: str,
+    source_event_id: str,
+    related_source_event_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "member_id": "member-fixture",
+        "provider": "fixture",
+        "provider_account_id": "fixture-account",
+        "workspace": "personal",
+        "source_event_id": source_event_id,
+    }
+    if related_source_event_id is not None:
+        payload["related_source_event_id"] = related_source_event_id
+        payload["algorithm"] = "message-context-pack-v2"
+    return {
+        "event_id": event_id,
+        "type": event_type,
+        "tenant_id": "tenant-fixture",
+        "owner_scope": "private:member-fixture",
+        "visibility_scope": "private:member-fixture",
+        "sensitivity": "normal",
+        "source_account_id": "member-fixture",
+        "occurred_at": "2034-02-01T16:00:00Z",
+        "payload": payload,
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_relationship_correction_detaches_and_confirmation_relinks() -> None:
+    anchor = _message("source-anchor", "Please review the authorization.")
+    related = _message(
+        "source-related",
+        "The authorization is ready.",
+        thread_id="thread-service",
+        references=["<source-anchor@example.invalid>"],
+    )
+    rejected = _context_decision(
+        "correction-1",
+        "context.relationship.rejected",
+        "source-anchor",
+        "source-related",
+    )
+    confirmed = _context_decision(
+        "correction-2",
+        "context.relationship.confirmed",
+        "source-anchor",
+        "source-related",
+    )
+
+    detached = await build_message_context_pack(
+        anchor, _Log([anchor, related, rejected])
+    )
+    relinked = await build_message_context_pack(
+        anchor, _Log([anchor, related, rejected, confirmed])
+    )
+
+    assert [message.source_event_id for message in detached.messages] == [
+        "source-anchor"
+    ]
+    assert [message.source_event_id for message in relinked.messages] == [
+        "source-anchor",
+        "source-related",
+    ]
+    assert relinked.messages[-1].relation_reason_codes == (
+        "member_confirmed_context",
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_text_correction_suppresses_and_reinstatement_restores() -> None:
+    anchor = _message("source-anchor", "Please wire the fixture funds.")
+    corrected = _context_decision(
+        "correction-1", "context.source_text.corrected", "source-anchor"
+    )
+    reinstated = _context_decision(
+        "correction-2", "context.source_text.reinstated", "source-anchor"
+    )
+
+    suppressed = await build_message_context_pack(
+        anchor, _Log([anchor, corrected])
+    )
+    restored = await build_message_context_pack(
+        anchor, _Log([anchor, corrected, reinstated])
+    )
+
+    assert suppressed.messages[0].body_text == ""
+    assert restored.messages[0].body_text == "Please wire the fixture funds."

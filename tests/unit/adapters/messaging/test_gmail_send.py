@@ -40,7 +40,7 @@ import pytest
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.registry import registry
-from adminme.events.schemas.ingest import MessagingSentV1, MessagingSentV2
+from adminme.events.schemas.ingest import MessagingSentV1, MessagingSentV2, MessagingSentV3
 from adminme.lib.adapters import OutboundMessage, SendResult
 from adminme.lib.observation import OutboundResult
 
@@ -361,7 +361,7 @@ async def test_send_happy_path_with_seams_populated(
     # messaging.sent@v1 emitted exactly once with the full field set.
     sent = [c for c in event_log.calls if c["type"] == "messaging.sent"]
     assert len(sent) == 1
-    assert sent[0]["schema_version"] == 2
+    assert sent[0]["schema_version"] == 3
     payload = sent[0]["payload"]
     assert payload["source_channel"] == "gmail"
     assert payload["to_identifier"] == "bob@example.test"
@@ -499,7 +499,7 @@ async def test_send_emits_only_existing_messaging_sent_fields() -> None:
     payload = sent[0]["payload"]
     # Round-trips strict-validation; if any extra field crept in, this
     # call would raise pydantic.ValidationError.
-    MessagingSentV2.model_validate(payload)
+    MessagingSentV3.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -654,3 +654,4 @@ def test_messaging_sent_v1_registry_lookup_returns_existing_model() -> None:
     cycle #17 c1 collision is the precedent."""
     assert registry.get("messaging.sent", 1) is MessagingSentV1
     assert registry.get("messaging.sent", 2) is MessagingSentV2
+    assert registry.get("messaging.sent", 3) is MessagingSentV3

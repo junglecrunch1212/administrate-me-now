@@ -16,6 +16,7 @@ from typing import Any
 
 from adminme.candidate_policy import source_id_for_event
 from adminme.lib.scope import allowed_read
+from adminme.message_context import authored_message_text
 
 
 _FIELD_LABELS = {
@@ -44,10 +45,20 @@ def _first(payload: Mapping[str, Any], *names: str) -> str | None:
 
 def _source_text(payload: Mapping[str, Any]) -> str:
     subject = _first(payload, "subject", "title")
-    body = _first(payload, "body_text", "body", "description", "notes", "text")
+    body = authored_message_text(payload).text or _first(
+        payload, "description", "notes", "text"
+    )
     if subject and body:
         return f"Subject: {subject}\n\n{body}"
     return subject or body or ""
+
+
+def _source_occurred_at(
+    event: Mapping[str, Any], payload: Mapping[str, Any]
+) -> str | None:
+    return _first(payload, "received_at", "sent_at") or _first(
+        event, "occurred_at"
+    )
 
 
 def _exact_quote(item: Mapping[str, Any], payload: Mapping[str, Any]) -> str | None:
@@ -202,7 +213,10 @@ def compose_triage_source_context(
                         "from_number",
                     ),
                     "subject": _first(context_payload, "subject"),
-                    "occurred_at": context_event.get("occurred_at"),
+                    "occurred_at": _source_occurred_at(
+                        context_event, context_payload
+                    ),
+                    "recorded_at": context_event.get("recorded_at"),
                 }
             )
     evidence = {
@@ -224,7 +238,8 @@ def compose_triage_source_context(
         else None,
         "sender": sender,
         "subject": subject,
-        "occurred_at": source_event.get("occurred_at"),
+        "occurred_at": _source_occurred_at(source_event, payload),
+        "recorded_at": source_event.get("recorded_at"),
         "meaning": {
             "target_kind": item.get("target_kind"),
             "summary": (

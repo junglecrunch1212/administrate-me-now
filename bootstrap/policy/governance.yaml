@@ -7,6 +7,10 @@ action_gates:
   communication.*: allow
   task.*: allow
   triage.*: allow
+  context.relationship.rejected: allow
+  context.relationship.confirmed: allow
+  context.source_text.corrected: allow
+  context.source_text.reinstated: allow
   calendar.*: allow
   member_knowledge.*: allow
   recurrence.*: allow

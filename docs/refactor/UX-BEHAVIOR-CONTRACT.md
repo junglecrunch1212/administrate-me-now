@@ -1,5 +1,25 @@
 # UX behavior contract
 
+CO-018 amendment (2026-08-12): Triage labels a provider message's source time
+as **Message date** and, when different, its append time as **Imported /
+recorded**. A generated Context summary remains a review aid; exact authored
+source words remain evidence. Related context discloses deterministic reason
+codes, and repeated people, addresses, household/business names, subjects, or
+filenames alone never justify a cross-thread relationship.
+The subject displayed beside **Provider Thread Id** is a human-readable source
+label only; it is never the opaque provider thread identifier or relationship
+authority.
+
+Choosing **Wrong context** progressively reveals exact correction controls.
+The member may mark one displayed related message as unrelated and/or state
+that the displayed ask exists only in quoted or forwarded history. Dismissal,
+feedback, and selected corrections are one atomic operation. Copy states that
+the correction affects only that exact relationship/source and is reversible;
+it never implies a sender-, account-, workspace-, or keyword-wide rule. No
+correction creates household truth or a provider write. Explicit member relink
+and source-text reinstatement remain audited management actions even when their
+initial UI is API-only.
+
 CO-017 amendment (2026-08-11): terminal source-assessment recovery is an
 authenticated operator/release control, not a member Triage action. It adds no
 confirm, dismiss, ranking, or provider-write affordance. Existing Triage and

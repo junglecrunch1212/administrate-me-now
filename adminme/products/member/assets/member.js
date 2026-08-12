@@ -397,7 +397,7 @@ async function reconcileTriageDecision(item, action, requestId, token, error, ba
   }
 }
 
-async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null } = {}) {
+async function decideTriage(item, action, buttons, feedbackReason = null, { operationToken = null, contextCorrection = null } = {}) {
   const token = operationToken ?? beginTriageOperation();
   if (token == null || !triageOperationIsCurrent(token)) return;
   const banner = $("#state-banner"); banner.hidden = false;
@@ -408,7 +408,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
   const decisionRequestId = crypto.randomUUID();
   const decisionRequest = {
     method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
-    body: JSON.stringify({ request_id: decisionRequestId, expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null }),
+    body: JSON.stringify({ request_id: decisionRequestId, expected_last_event_id: item.last_event_id, reason: action === "dismiss" ? "Dismissed from Triage" : null, feedback_reason: action === "dismiss" ? feedbackReason : null, context_correction: action === "dismiss" ? contextCorrection : null }),
   };
   try {
     const decisionPath = `/api/member/v1/triage/${encodeURIComponent(item.proposal_id)}/${action}`;
@@ -457,7 +457,7 @@ async function decideTriage(item, action, buttons, feedbackReason = null, { oper
         const link = text("a", `Open ${result.destination.label || titleCase(result.destination.surface)}`, "link-button"); link.href = result.destination.href; banner.append(link);
       } else banner.textContent = `Confirmed through the household gate. ${continuation}`;
     } else {
-      banner.textContent = feedbackReason ? `Dismissed. No household record was created. Your reversible feedback was recorded. ${continuation}` : `Dismissed. No household record or provider write was created. ${continuation}`;
+      banner.textContent = contextCorrection ? `Dismissed. The exact context correction was recorded and can be reversed. ${continuation}` : feedbackReason ? `Dismissed. No household record was created. Your reversible feedback was recorded. ${continuation}` : `Dismissed. No household record or provider write was created. ${continuation}`;
     }
   } catch (error) {
     if (decisionRecorded) {
@@ -685,7 +685,7 @@ function triageSourceContext(item) {
   heading.append(text("span", context.adapter ? `${context.adapter}${context.account ? ` · ${context.account}` : ""}` : "Immutable source event", "meta"));
   section.append(heading);
   const facts = document.createElement("dl"); facts.className = "triage-source-facts";
-  for (const [label, value] of [[context.direction === "outbound" ? "Counterparty" : "Sender", context.sender], ["Subject / source title", context.subject], ["Observed", context.occurred_at ? new Date(context.occurred_at).toLocaleString() : null]]) {
+  for (const [label, value] of [[context.direction === "outbound" ? "Counterparty" : "Sender", context.sender], ["Subject / source title", context.subject], ["Message date", context.occurred_at ? new Date(context.occurred_at).toLocaleString() : null], ["Imported / recorded", context.recorded_at && context.recorded_at !== context.occurred_at ? new Date(context.recorded_at).toLocaleString() : null]]) {
     if (value) facts.append(text("dt", label), text("dd", value));
   }
   section.append(facts);
@@ -836,6 +836,20 @@ function triageDetail(item, data, readOnly = false) {
     grid.append(field("Provider", provider), field("Account", account), field(item.target_kind === "calendar_event" ? "Calendar" : "List", container));
   }
   form.append(grid);
+  let contextCorrection = null;
+  const relatedContextSources = (item.source_context?.interpretation?.source_chain || []).filter((source) => source.relation === "related" && source.source_event_id);
+  if (item.source_context?.state === "available") {
+    contextCorrection = document.createElement("fieldset"); contextCorrection.className = "triage-context-correction"; contextCorrection.hidden = true;
+    contextCorrection.append(text("legend", "Correct this exact context"), text("p", "These corrections affect only the selected source relationship or quoted text. They do not create a sender-, account-, or keyword-wide rule.", "state-note"));
+    for (const source of relatedContextSources) {
+      const control = document.createElement("input"); control.type = "checkbox"; control.dataset.unrelatedSourceEventId = source.source_event_id;
+      const sourceLabel = [source.subject || source.sender || "Related message", source.occurred_at ? new Date(source.occurred_at).toLocaleString() : null].filter(Boolean).join(" · ");
+      const wrapper = document.createElement("label"); wrapper.className = "check-control"; wrapper.append(control, document.createTextNode(` This message is unrelated: ${sourceLabel}`)); contextCorrection.append(wrapper);
+    }
+    const quoted = document.createElement("input"); quoted.type = "checkbox"; quoted.dataset.quotedOrForwardedHistory = "true";
+    const quotedWrapper = document.createElement("label"); quotedWrapper.className = "check-control"; quotedWrapper.append(quoted, document.createTextNode(" The displayed ask came only from quoted or forwarded history, not newly authored text")); contextCorrection.append(quotedWrapper);
+    form.append(contextCorrection);
+  }
   if (item.calendar_preview) {
     const preview = item.calendar_preview;
     const box = document.createElement("section"); box.className = "state-card";
@@ -876,7 +890,7 @@ function triageDetail(item, data, readOnly = false) {
   const evidence = text("button", "View source evidence", "link-button"); evidence.type = "button";
   const buttons = [save, approve, dismiss];
   form.addEventListener("submit", (event) => { event.preventDefault(); saveTriageForm(item, form); });
-  const markDirty = () => { if (triageInteractionLocked()) return; form.dataset.dirty = "true"; approve.textContent = form.dataset.structuralChanged ? "Save destination" : "Save & confirm"; };
+  const markDirty = (event) => { if (triageInteractionLocked() || event?.target?.closest?.(".triage-context-correction")) return; form.dataset.dirty = "true"; approve.textContent = form.dataset.structuralChanged ? "Save destination" : "Save & confirm"; };
   target.addEventListener("change", () => { if (triageInteractionLocked()) return; form.dataset.structuralChanged = "true"; markDirty(); });
   member.addEventListener("change", () => { if (triageInteractionLocked()) return; form.dataset.structuralChanged = "true"; markDirty(); });
   form.addEventListener("input", markDirty);
@@ -914,8 +928,13 @@ function triageDetail(item, data, readOnly = false) {
     }
     await decideTriage(item, "approve", buttons);
   });
-  feedback.addEventListener("change", () => { if (triageInteractionLocked()) return; dismiss.disabled = !feedback.value; });
-  dismiss.addEventListener("click", () => decideTriage(item, "dismiss", buttons, feedback.value));
+  feedback.addEventListener("change", () => { if (triageInteractionLocked()) return; dismiss.disabled = !feedback.value; if (contextCorrection) contextCorrection.hidden = feedback.value !== "wrong_context"; });
+  dismiss.addEventListener("click", () => {
+    const unrelatedSourceEventIds = contextCorrection ? [...contextCorrection.querySelectorAll("[data-unrelated-source-event-id]:checked")].map((control) => control.dataset.unrelatedSourceEventId) : [];
+    const quotedOrForwardedHistory = Boolean(contextCorrection?.querySelector("[data-quoted-or-forwarded-history]:checked"));
+    const correction = feedback.value === "wrong_context" && (unrelatedSourceEventIds.length || quotedOrForwardedHistory) ? { unrelated_source_event_ids: unrelatedSourceEventIds, quoted_or_forwarded_history: quotedOrForwardedHistory } : null;
+    decideTriage(item, "dismiss", buttons, feedback.value, { contextCorrection: correction });
+  });
   evidence.addEventListener("click", () => showEvidence(item.source_event_id));
   row.append(save, approve, feedback, dismiss, evidence); form.append(row); section.append(form);
   return section;

@@ -151,7 +151,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.1.1"
+    version: ClassVar[str] = "1.2.0"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -1031,7 +1031,8 @@ class GmailAdapter(CommunicationAdapter):
             raise
 
         # D28 retains the delivery fields and adds the account-bound
-        # ``messaging.sent@v2`` coordinates required by Comms.
+        # ``messaging.sent@v3`` coordinates and RFC continuity required by
+        # Comms and conservative context assembly.
         if ctx is not None:
             now_dt = ctx.now_factory()
         else:
@@ -1059,13 +1060,17 @@ class GmailAdapter(CommunicationAdapter):
             "workspace": str(self._config.get("workspace") or "personal"),
             "native_message_id": None if suppressed else response.get("id"),
             "in_reply_to_interaction_id": message.metadata.get("interaction_id"),
+            "rfc_message_id": message.metadata.get("rfc_message_id"),
+            "references": list(message.metadata.get("references") or []),
+            "in_reply_to": message.metadata.get("in_reply_to"),
         }
         if ctx is not None:
             await self._append(
                 ctx=ctx,
                 event_type="messaging.sent",
                 payload=sent_payload,
-                schema_version=2,
+                schema_version=3,
+                occurred_at_override=sent_at_iso,
             )
 
         external_id_value: str | None = None if suppressed else response.get("id")
@@ -1355,7 +1360,7 @@ class GmailAdapter(CommunicationAdapter):
         fingerprint: str | None = None,
     ) -> str:
         """Translate a Gmail ``users.messages.get`` response into a
-        ``messaging.received`` v3 event. The pack's ``user_email`` is the
+        ``messaging.received`` v4 event. The pack's ``user_email`` is the
         ``to_identifier``; ``from_identifier`` comes from the From header.
         """
         payload_dict = message.get("payload") or {}
@@ -1396,6 +1401,7 @@ class GmailAdapter(CommunicationAdapter):
             "reply_to_identifier": headers.get("reply-to") or headers.get("from"),
             "rfc_message_id": headers.get("message-id"),
             "references": (headers.get("references") or "").split(),
+            "in_reply_to": headers.get("in-reply-to"),
             "provider_labels": labels,
             "unread": "UNREAD" in labels,
             "archived": "INBOX" not in labels,
@@ -1408,11 +1414,12 @@ class GmailAdapter(CommunicationAdapter):
             ctx=ctx,
             event_type="messaging.received",
             payload=event_payload,
-            schema_version=3,
+            schema_version=4,
             idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
             raw_ref=(
                 f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
             ),
+            occurred_at_override=received_iso,
         )
 
     async def _emit_message_observation(
@@ -1437,7 +1444,7 @@ class GmailAdapter(CommunicationAdapter):
         return await self._append(
             ctx=ctx,
             event_type="messaging.sent",
-            schema_version=2,
+            schema_version=3,
             idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
             raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
             payload={
@@ -1454,7 +1461,11 @@ class GmailAdapter(CommunicationAdapter):
                 "workspace": str(self._config.get("workspace") or "personal"),
                 "native_message_id": native_message_id,
                 "in_reply_to_interaction_id": None,
+                "rfc_message_id": headers.get("message-id"),
+                "references": (headers.get("references") or "").split(),
+                "in_reply_to": headers.get("in-reply-to"),
             },
+            occurred_at_override=self._epoch_ms_to_iso(message.get("internalDate")),
         )
 
     @staticmethod
@@ -1567,6 +1578,7 @@ class GmailAdapter(CommunicationAdapter):
         schema_version: int = 1,
         idempotency_key: str | None = None,
         raw_ref: str | None = None,
+        occurred_at_override: str | None = None,
     ) -> str:
         """Append a typed event via the supervisor-provided event log.
 
@@ -1583,6 +1595,7 @@ class GmailAdapter(CommunicationAdapter):
             schema_version=schema_version,
             idempotency_key=idempotency_key,
             raw_ref=raw_ref,
+            occurred_at_override=occurred_at_override,
         )
 
     # ------------------------------------------------------------------

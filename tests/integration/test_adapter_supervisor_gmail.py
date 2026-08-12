@@ -383,8 +383,10 @@ async def test_supervisor_round_trip_emits_auth_received_and_cursor(
         threads = sorted(r["payload"]["thread_id"] for r in received)
         assert threads == ["thr-alice", "thr-bob"]
         for r in received:
+            assert r["schema_version"] == 4
             assert r["payload"]["source_channel"] == "gmail"
             assert r["payload"]["to_identifier"] == "sandbox@example.test"
+            assert r["occurred_at"] == r["payload"]["received_at"]
 
         # adapter.cursor_advanced emits exactly once at the milestone.
         advances = event_log.by_type("adapter.cursor_advanced")

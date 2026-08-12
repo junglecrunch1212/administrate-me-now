@@ -9,7 +9,10 @@ import sqlcipher3
 
 from adminme.lib.session import build_internal_session
 from adminme.projections.context_fabric import ContextFabricProjection
-from adminme.projections.context_fabric.queries import bounded_traversal
+from adminme.projections.context_fabric.queries import (
+    bounded_traversal,
+    feedback_pattern_counts,
+)
 
 
 MEMBER = "fixture-context-member"  # fixture:tenant_data:ok
@@ -273,3 +276,185 @@ def test_context_split_moves_membership_and_scope_mismatch_is_ignored() -> None:
     )
     projection.apply(forged, conn)
     assert conn.execute("SELECT COUNT(*) FROM triage_feedback").fetchone()[0] == 0
+
+
+def test_matter_episode_uses_provider_source_time_not_ingestion_time() -> None:
+    projection = ContextFabricProjection()
+    conn = _conn(projection)
+    base_payload = {
+        "target_kind": "task",
+        "owner_member_id": MEMBER,
+        "title": "Review the fixture message",
+        "candidate": {},
+        "reasons": ["exact fixture span"],
+        "interpretation": {
+            "thread_key": "reused-provider-thread",
+            "compact_summary": "Fixture review",
+            "related_source_event_ids": [],
+        },
+    }
+    first = _event(
+        "proposal-time-1",
+        "triage.item.proposed",
+        {
+            **base_payload,
+            "proposal_id": "proposal-time-1",
+            "source_event_id": "source-time-1",
+            "source_occurred_at": "2024-01-31T15:00:00Z",
+        },
+        causation_id="source-time-1",
+    )
+    second = _event(
+        "proposal-time-2",
+        "triage.item.proposed",
+        {
+            **base_payload,
+            "proposal_id": "proposal-time-2",
+            "source_event_id": "source-time-2",
+            "source_occurred_at": "2026-08-10T16:36:06Z",
+        },
+        causation_id="source-time-2",
+    )
+
+    projection.apply(first, conn)
+    projection.apply(second, conn)
+
+    sessions = conn.execute(
+        """SELECT sequence, first_proposed_at, source_count
+             FROM context_matter_sessions ORDER BY sequence"""
+    ).fetchall()
+    assert [tuple(row) for row in sessions] == [
+        (0, "2024-01-31T15:00:00Z", 1),
+        (1, "2026-08-10T16:36:06Z", 1),
+    ]
+
+
+def test_exact_context_corrections_are_replayable_and_reversible() -> None:
+    projection = ContextFabricProjection()
+    first = _conn(projection)
+    rebuilt = _conn(projection)
+    rejected = _event(
+        "correction-1",
+        "context.relationship.rejected",
+        {
+            "relationship_id": "relationship-fixture",
+            "source_event_id": "source-one",
+            "related_source_event_id": "source-two",
+            "member_id": MEMBER,
+            "provider": "gmail",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "algorithm": "message-context-pack-v2",
+            "rejected_by_member_id": MEMBER,
+            "rejected_at": "2030-01-01T00:00:00Z",
+            "reason": "unrelated_sources",
+        },
+    )
+    confirmed = _event(
+        "correction-2",
+        "context.relationship.confirmed",
+        {
+            "relationship_id": "relationship-fixture",
+            "source_event_id": "source-one",
+            "related_source_event_id": "source-two",
+            "member_id": MEMBER,
+            "provider": "gmail",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "algorithm": "message-context-pack-v2",
+            "confirmed_by_member_id": MEMBER,
+            "confirmed_at": "2030-01-02T00:00:00Z",
+            "reason": "member_reinstated",
+        },
+    )
+    corrected = _event(
+        "correction-3",
+        "context.source_text.corrected",
+        {
+            "correction_id": "text-fixture",
+            "source_event_id": "source-one",
+            "member_id": MEMBER,
+            "corrected_by_member_id": MEMBER,
+            "corrected_at": "2030-01-03T00:00:00Z",
+            "reason": "quoted_or_forwarded_history",
+            "evidence_quote_digest": "a" * 64,
+        },
+    )
+    reinstated = _event(
+        "correction-4",
+        "context.source_text.reinstated",
+        {
+            "correction_id": "text-fixture",
+            "source_event_id": "source-one",
+            "member_id": MEMBER,
+            "reinstated_by_member_id": MEMBER,
+            "reinstated_at": "2030-01-04T00:00:00Z",
+            "reason": "member_reinstated",
+        },
+    )
+    events = [rejected, confirmed, corrected, reinstated]
+    for event in events:
+        projection.apply(event, first)
+    for event in events:
+        projection.apply(event, rebuilt)
+    for event in events:
+        projection.apply(event, first)
+
+    relationship = first.execute(
+        "SELECT algorithm, state, last_event_id FROM context_relationship_decisions"
+    ).fetchone()
+    source_text = first.execute(
+        """SELECT state, evidence_quote_digest, last_event_id
+             FROM context_source_text_corrections"""
+    ).fetchone()
+    assert tuple(relationship) == (
+        "message-context-pack-v2",
+        "confirmed",
+        "correction-2",
+    )
+    assert tuple(source_text) == ("reinstated", "a" * 64, "correction-4")
+    for table in (
+        "context_relationship_decisions",
+        "context_source_text_corrections",
+    ):
+        assert [tuple(row) for row in first.execute(f"SELECT * FROM {table}")] == [
+            tuple(row) for row in rebuilt.execute(f"SELECT * FROM {table}")
+        ]
+
+
+def test_wrong_context_feedback_never_becomes_broad_sender_or_account_pattern() -> None:
+    projection = ContextFabricProjection()
+    conn = _conn(projection)
+    for index in range(3):
+        projection.apply(
+            _event(
+                f"feedback-{index}",
+                "triage.feedback.recorded",
+                {
+                    "feedback_id": f"feedback-{index}",
+                    "proposal_id": f"proposal-{index}",
+                    "member_id": MEMBER,
+                    "reason": "wrong_context",
+                    "context_id": "context-exact-fixture",
+                    "target_kind": "task",
+                    "source_adapter": "gmail",
+                    "provider_account_id": "fixture-account",
+                    "workspace": "personal",
+                    "sender_digest": "b" * 64,
+                    "recorded_at": "2030-01-03T00:00:00Z",
+                },
+            ),
+            conn,
+        )
+    session = build_internal_session(MEMBER, "principal", "fixture-context-tenant")
+
+    patterns = feedback_pattern_counts(conn, session, member_id=MEMBER)
+
+    assert patterns == [
+        {
+            "scope_kind": "context",
+            "scope_value": "context-exact-fixture",
+            "reason": "wrong_context",
+            "occurrences": 3,
+        }
+    ]

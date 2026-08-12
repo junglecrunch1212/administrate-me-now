@@ -72,6 +72,13 @@ class MessagingReceivedV3(MessagingReceivedV2):
     important: bool = False
 
 
+class MessagingReceivedV4(MessagingReceivedV3):
+    """Exact RFC reply continuity for conservative cross-thread context."""
+
+    model_config = {"extra": "forbid"}
+    in_reply_to: str | None = Field(default=None, max_length=1000)
+
+
 class InteractionParticipantResolvedV1(BaseModel):
     """Identity pipeline result linking an interaction role to a Party."""
 
@@ -112,6 +119,15 @@ class MessagingSentV2(MessagingSentV1):
     workspace: Literal["personal", "work"]
     native_message_id: str | None = Field(default=None, max_length=240)
     in_reply_to_interaction_id: str | None = Field(default=None, max_length=240)
+
+
+class MessagingSentV3(MessagingSentV2):
+    """Outbound observation with exact RFC continuity metadata."""
+
+    model_config = {"extra": "forbid"}
+    rfc_message_id: str | None = Field(default=None, max_length=1000)
+    references: list[str] = Field(default_factory=list, max_length=100)
+    in_reply_to: str | None = Field(default=None, max_length=1000)
 
 
 class CommunicationStateChangedV1(BaseModel):
@@ -344,11 +360,13 @@ class MessagingSemanticFeaturesExtractedV1(BaseModel):
 registry.register("messaging.received", 1, MessagingReceivedV1)
 registry.register("messaging.received", 2, MessagingReceivedV2)
 registry.register("messaging.received", 3, MessagingReceivedV3)
+registry.register("messaging.received", 4, MessagingReceivedV4)
 registry.register(
     "interaction.participant_resolved", 1, InteractionParticipantResolvedV1
 )
 registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("messaging.sent", 2, MessagingSentV2)
+registry.register("messaging.sent", 3, MessagingSentV3)
 registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)

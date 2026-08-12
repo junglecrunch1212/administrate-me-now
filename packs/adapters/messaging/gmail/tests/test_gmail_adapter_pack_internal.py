@@ -79,7 +79,7 @@ def test_pack_manifest_loads_cleanly() -> None:
 
     assert manifest["pack"]["id"] == "adapter:messaging-gmail-api"
     assert manifest["pack"]["kind"] == "adapter"
-    assert manifest["pack"]["version"] == "1.1.1"
+    assert manifest["pack"]["version"] == "1.2.0"
     assert manifest["runtime"]["entrypoint"] == "adapter.py"
     assert manifest["runtime"]["class"] == "GmailAdapter"
     assert manifest["family"] == "messaging"
@@ -112,7 +112,7 @@ def test_gmail_adapter_satisfies_protocol() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "messaging-gmail-api"
     assert adapter.family == "messaging"
-    assert adapter.version == "1.1.1"
+    assert adapter.version == "1.2.0"
     assert adapter.sensitivity_floor == "normal"
 
 
@@ -819,7 +819,7 @@ async def test_history_sync_preserves_sent_direction() -> None:
 
     assert emitted == 1
     [sent] = [call for call in event_log.calls if call["type"] == "messaging.sent"]
-    assert sent["schema_version"] == 2
+    assert sent["schema_version"] == 3
     assert sent["payload"]["to_identifier"] == "recipient@example.test"
     assert sent["payload"]["body_text"] == "Hi sandbox"
     assert sent["payload"]["native_message_id"] == "msg-sent"

@@ -563,6 +563,16 @@ class TriageEnrichmentRequest(BaseModel):
     route: TriageRouteV1 | None = None
 
 
+class TriageContextCorrectionRequest(BaseModel):
+    """Exact, reversible context corrections selected by the member."""
+
+    model_config = {"extra": "forbid"}
+    unrelated_source_event_ids: list[str] = Field(
+        default_factory=list, max_length=10
+    )
+    quoted_or_forwarded_history: bool = False
+
+
 class TriageDecisionRequest(BaseModel):
     model_config = {"extra": "forbid"}
     request_id: str = Field(min_length=8, max_length=120)
@@ -585,6 +595,20 @@ class TriageDecisionRequest(BaseModel):
         ]
         | None
     ) = None
+    context_correction: TriageContextCorrectionRequest | None = None
+
+
+class ContextRelationshipConfirmRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    related_source_event_id: str = Field(min_length=1, max_length=240)
+
+
+class ContextSourceTextReinstateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    source_event_id: str = Field(min_length=1, max_length=240)
 
 
 class TriagePolicyPreviewRequest(BaseModel):
@@ -1036,6 +1060,86 @@ async def _guard_triage_write(
             409 if decision.layer_failed == "governance" else 403,
             {"reason": decision.reason, "correlation_id": decision.correlation_id},
         )
+
+
+def _context_relationship_id(
+    tenant_id: str, member_id: str, first_event_id: str, second_event_id: str
+) -> str:
+    first, second = sorted((first_event_id, second_event_id))
+    digest = hashlib.sha256(
+        f"{tenant_id}|{member_id}|{first}|{second}".encode()
+    ).hexdigest()[:32]
+    return f"context_relationship_{digest}"
+
+
+def _context_source_correction_id(
+    tenant_id: str, member_id: str, source_event_id: str
+) -> str:
+    digest = hashlib.sha256(
+        f"{tenant_id}|{member_id}|{source_event_id}".encode()
+    ).hexdigest()[:32]
+    return f"context_source_text_{digest}"
+
+
+async def _owned_message_source(
+    runtime: Any, session: Session, source_event_id: str
+) -> dict[str, Any]:
+    """Resolve one exact member-owned message without widening its scope."""
+
+    if runtime.event_log is None:
+        raise HTTPException(503, "event log unavailable")
+    source = await runtime.event_log.get(source_event_id)
+    expected_scope = f"private:{session.auth_member_id}"
+    if (
+        not isinstance(source, dict)
+        or source.get("tenant_id") != session.tenant_id
+        or source.get("type")
+        not in {"messaging.received", "messaging.sent", "telephony.sms_received"}
+        or source.get("owner_scope") != expected_scope
+        or source.get("visibility_scope") != expected_scope
+        or not allowed_read(
+            session,
+            str(source.get("sensitivity") or "normal"),
+            str(source.get("visibility_scope") or ""),
+        )
+    ):
+        raise HTTPException(404, "context source not found")
+    return source
+
+
+def _require_same_context_coordinate(
+    source: dict[str, Any], related: dict[str, Any]
+) -> tuple[str, str, Literal["personal", "work"]]:
+    source_payload = source.get("payload") or {}
+    related_payload = related.get("payload") or {}
+    provider = str(
+        source_payload.get("provider") or source.get("source_adapter") or ""
+    )
+    related_provider = str(
+        related_payload.get("provider") or related.get("source_adapter") or ""
+    )
+    provider_account_id = str(
+        source_payload.get("provider_account_id")
+        or source.get("source_account_id")
+        or ""
+    )
+    related_account_id = str(
+        related_payload.get("provider_account_id")
+        or related.get("source_account_id")
+        or ""
+    )
+    workspace = source_payload.get("workspace")
+    related_workspace = related_payload.get("workspace")
+    if (
+        not provider
+        or provider != related_provider
+        or not provider_account_id
+        or provider_account_id != related_account_id
+        or workspace not in {"personal", "work"}
+        or workspace != related_workspace
+    ):
+        raise HTTPException(422, "context sources must share one provider coordinate")
+    return provider, provider_account_id, cast(Literal["personal", "work"], workspace)
 
 
 def _target_member(runtime: Any, item: dict[str, Any]) -> str:
@@ -3231,6 +3335,145 @@ async def _approve_triage_item_locked(
     }
 
 
+def _require_context_correction_principal(session: Session) -> None:
+    require_principal(session)
+    if session.auth_member_id != session.view_member_id:
+        raise HTTPException(
+            403, "Context corrections are unavailable while viewing another member"
+        )
+
+
+def _combined_sensitivity(*sources: dict[str, Any]) -> Sensitivity:
+    rank = {"normal": 0, "sensitive": 1, "privileged": 2}
+    return cast(
+        Sensitivity,
+        max(
+            (str(source.get("sensitivity") or "normal") for source in sources),
+            key=lambda value: rank.get(value, 0),
+        ),
+    )
+
+
+@router.post("/api/member/v1/context-relationships/confirm")
+async def confirm_context_relationship(
+    body: ContextRelationshipConfirmRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Explicitly reverse/relink one exact member-owned source pair."""
+
+    _require_context_correction_principal(session)
+    if body.source_event_id == body.related_source_event_id:
+        raise HTTPException(422, "context relationship sources must be distinct")
+    runtime = _runtime(request)
+    request_fingerprint = _triage_request_fingerprint(
+        body.source_event_id, body
+    )
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="context.relationship.confirmed",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("context_fabric", prior["event_id"])
+        return {"event_id": prior["event_id"], "state": "confirmed", "duplicate": True}
+    source = await _owned_message_source(runtime, session, body.source_event_id)
+    related = await _owned_message_source(
+        runtime, session, body.related_source_event_id
+    )
+    provider, provider_account_id, workspace = _require_same_context_coordinate(
+        source, related
+    )
+    confirmed_at = EventEnvelope.now_utc_iso()
+    payload = {
+        "relationship_id": _context_relationship_id(
+            session.tenant_id,
+            session.auth_member_id,
+            body.source_event_id,
+            body.related_source_event_id,
+        ),
+        "source_event_id": body.source_event_id,
+        "related_source_event_id": body.related_source_event_id,
+        "member_id": session.auth_member_id,
+        "provider": provider,
+        "provider_account_id": provider_account_id,
+        "workspace": workspace,
+        "algorithm": "message-context-pack-v2",
+        "confirmed_by_member_id": session.auth_member_id,
+        "confirmed_at": confirmed_at,
+        "reason": "member_reinstated",
+    }
+    await _guard_triage_write(
+        runtime, session, "context.relationship.confirmed", payload
+    )
+    envelope = _triage_event(
+        session,
+        event_type="context.relationship.confirmed",
+        payload=payload,
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+        causation_id=body.source_event_id,
+        sensitivity=_combined_sensitivity(source, related),
+    )
+    event_id = await runtime.events.write(envelope)
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {"event_id": event_id, "state": "confirmed"}
+
+
+@router.post("/api/member/v1/context-source-text/reinstate")
+async def reinstate_context_source_text(
+    body: ContextSourceTextReinstateRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Reverse a quoted-history correction for one exact source."""
+
+    _require_context_correction_principal(session)
+    runtime = _runtime(request)
+    request_fingerprint = _triage_request_fingerprint(
+        body.source_event_id, body
+    )
+    prior = await _prior_triage_command(
+        runtime,
+        session,
+        event_type="context.source_text.reinstated",
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+    )
+    if prior is not None:
+        await runtime.wait_for_projection("context_fabric", prior["event_id"])
+        return {"event_id": prior["event_id"], "state": "reinstated", "duplicate": True}
+    source = await _owned_message_source(runtime, session, body.source_event_id)
+    reinstated_at = EventEnvelope.now_utc_iso()
+    payload = {
+        "correction_id": _context_source_correction_id(
+            session.tenant_id, session.auth_member_id, body.source_event_id
+        ),
+        "source_event_id": body.source_event_id,
+        "member_id": session.auth_member_id,
+        "reinstated_by_member_id": session.auth_member_id,
+        "reinstated_at": reinstated_at,
+        "reason": "member_reinstated",
+    }
+    await _guard_triage_write(
+        runtime, session, "context.source_text.reinstated", payload
+    )
+    envelope = _triage_event(
+        session,
+        event_type="context.source_text.reinstated",
+        payload=payload,
+        request_id=body.request_id,
+        request_fingerprint=request_fingerprint,
+        causation_id=body.source_event_id,
+        sensitivity=cast(Sensitivity, source.get("sensitivity") or "normal"),
+    )
+    event_id = await runtime.events.write(envelope)
+    await runtime.wait_for_projection("context_fabric", event_id)
+    return {"event_id": event_id, "state": "reinstated"}
+
+
 @router.post("/api/member/v1/triage/{proposal_id}/dismiss")
 async def dismiss_triage_item(
     proposal_id: str,
@@ -3256,7 +3499,17 @@ async def _dismiss_triage_item_locked(
     session: Session,
 ) -> dict[str, Any]:
     item = _owned_triage_item(runtime, session, proposal_id)
+    correction = body.context_correction
+    if correction is not None and body.feedback_reason != "wrong_context":
+        raise HTTPException(422, "context correction requires wrong-context feedback")
+    if correction is not None and not (
+        correction.unrelated_source_event_ids
+        or correction.quoted_or_forwarded_history
+    ):
+        raise HTTPException(422, "context correction must select an exact source")
     if item["source_kind"] == "commitment_proposal":
+        if correction is not None:
+            raise HTTPException(422, "context correction is unavailable for commitments")
         result = await comms.dismiss_commitment(
             proposal_id,
             comms.DismissRequest(
@@ -3302,13 +3555,134 @@ async def _dismiss_triage_item_locked(
         sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
     )
     envelopes = [envelope]
+    correction_envelope_indexes: list[int] = []
+    if correction is not None:
+        interpretation = item.get("interpretation") or {}
+        allowed_related_source_ids = {
+            str(value)
+            for value in interpretation.get("related_source_event_ids") or []
+            if value
+        }
+        allowed_related_source_ids.update(
+            str(value.get("source_event_id"))
+            for value in interpretation.get("context_sources") or []
+            if isinstance(value, dict)
+            and value.get("relation") == "related"
+            and value.get("source_event_id")
+        )
+        requested_related_source_ids = list(
+            dict.fromkeys(correction.unrelated_source_event_ids)
+        )
+        if any(
+            event_id not in allowed_related_source_ids
+            for event_id in requested_related_source_ids
+        ):
+            raise HTTPException(
+                422, "an unrelated-source correction must select displayed context"
+            )
+        source = await _owned_message_source(
+            runtime, session, str(item["source_event_id"])
+        )
+        corrected_at = EventEnvelope.now_utc_iso()
+        for index, related_source_event_id in enumerate(requested_related_source_ids):
+            related = await _owned_message_source(
+                runtime, session, related_source_event_id
+            )
+            provider, provider_account_id, workspace = (
+                _require_same_context_coordinate(source, related)
+            )
+            correction_payload = {
+                "relationship_id": _context_relationship_id(
+                    session.tenant_id,
+                    session.auth_member_id,
+                    str(item["source_event_id"]),
+                    related_source_event_id,
+                ),
+                "source_event_id": str(item["source_event_id"]),
+                "related_source_event_id": related_source_event_id,
+                "member_id": session.auth_member_id,
+                "provider": provider,
+                "provider_account_id": provider_account_id,
+                "workspace": workspace,
+                "algorithm": "message-context-pack-v2",
+                "rejected_by_member_id": session.auth_member_id,
+                "rejected_at": corrected_at,
+                "reason": "unrelated_sources",
+            }
+            await _guard_triage_write(
+                runtime, session, "context.relationship.rejected", correction_payload
+            )
+            correction_envelope_indexes.append(len(envelopes))
+            envelopes.append(
+                _triage_event(
+                    session,
+                    event_type="context.relationship.rejected",
+                    payload=correction_payload,
+                    request_id=f"{body.request_id}:context:{index}",
+                    request_fingerprint=request_fingerprint,
+                    causation_id=item["last_event_id"],
+                    sensitivity=cast(
+                        Sensitivity, item.get("sensitivity") or "normal"
+                    ),
+                )
+            )
+        if correction.quoted_or_forwarded_history:
+            evidence_quote = next(
+                (
+                    str(ref.get("quote") or "")
+                    for ref in interpretation.get("evidence_refs") or []
+                    if isinstance(ref, dict)
+                    and str(ref.get("source_event_id") or "")
+                    == str(item["source_event_id"])
+                    and ref.get("quote")
+                ),
+                "",
+            )
+            text_payload = {
+                "correction_id": _context_source_correction_id(
+                    session.tenant_id,
+                    session.auth_member_id,
+                    str(item["source_event_id"]),
+                ),
+                "source_event_id": str(item["source_event_id"]),
+                "member_id": session.auth_member_id,
+                "corrected_by_member_id": session.auth_member_id,
+                "corrected_at": corrected_at,
+                "reason": "quoted_or_forwarded_history",
+                "evidence_quote_digest": (
+                    hashlib.sha256(evidence_quote.encode()).hexdigest()
+                    if evidence_quote
+                    else None
+                ),
+            }
+            await _guard_triage_write(
+                runtime, session, "context.source_text.corrected", text_payload
+            )
+            correction_envelope_indexes.append(len(envelopes))
+            envelopes.append(
+                _triage_event(
+                    session,
+                    event_type="context.source_text.corrected",
+                    payload=text_payload,
+                    request_id=f"{body.request_id}:context:text",
+                    request_fingerprint=request_fingerprint,
+                    causation_id=item["last_event_id"],
+                    sensitivity=cast(
+                        Sensitivity, item.get("sensitivity") or "normal"
+                    ),
+                )
+            )
     if body.feedback_reason is not None:
-        source = (
+        feedback_source = (
             await runtime.event_log.get(str(item["source_event_id"]))
             if runtime.event_log is not None
             else None
         )
-        source_payload = source.get("payload") or {} if isinstance(source, dict) else {}
+        source_payload = (
+            feedback_source.get("payload") or {}
+            if isinstance(feedback_source, dict)
+            else {}
+        )
         sender = str(
             source_payload.get("from_identifier")
             or source_payload.get("from_number")
@@ -3336,14 +3710,16 @@ async def _dismiss_triage_item_locked(
                     "context_id": item.get("context_id") or None,
                     "target_kind": item.get("target_kind"),
                     "source_adapter": (
-                        str(source.get("source_adapter")) if source else None
+                        str(feedback_source.get("source_adapter"))
+                        if feedback_source
+                        else None
                     ),
                     "provider_account_id": (
                         str(
                             source_payload.get("provider_account_id")
-                            or source.get("source_account_id")
+                            or feedback_source.get("source_account_id")
                         )
-                        if source
+                        if feedback_source
                         else None
                     ),
                     "workspace": (
@@ -3370,8 +3746,20 @@ async def _dismiss_triage_item_locked(
     if len(event_ids) > 1:
         await runtime.wait_for_projection("context_fabric", event_ids[-1])
     result = {"event_id": event_id, "state": "dismissed"}
-    if len(event_ids) > 1:
-        result["feedback_event_id"] = event_ids[-1]
+    feedback_event_index = next(
+        (
+            index
+            for index, value in enumerate(envelopes)
+            if value.type == "triage.feedback.recorded"
+        ),
+        None,
+    )
+    if feedback_event_index is not None:
+        result["feedback_event_id"] = event_ids[feedback_event_index]
+    if correction_envelope_indexes:
+        result["context_correction_event_ids"] = [
+            event_ids[index] for index in correction_envelope_indexes
+        ]
     return result
 
 

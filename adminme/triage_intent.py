@@ -21,7 +21,7 @@ from adminme.message_context import MessageContextPack
 EXTRACTOR_ID = "deterministic-intent-features-v1"
 GROUNDED_NLP_EXTRACTOR_ID = "grounded-nlp-intent-features-v1"
 MESSAGE_FALLBACK_EXTRACTOR_ID = "message-high-signal-intent-features-v1"
-CONTEXTUAL_NLP_EXTRACTOR_ID = "privacy-scoped-message-context-v1"
+CONTEXTUAL_NLP_EXTRACTOR_ID = "privacy-scoped-message-context-v2"
 
 CANDIDATE_FIELD_ALLOWLISTS: dict[str, frozenset[str]] = {
     "task": frozenset({"description", "due", "energy", "effort_min"}),
@@ -321,7 +321,7 @@ def extract_grounded_context_candidates(
     context_pack: MessageContextPack,
     raw_candidates: Any,
     *,
-    source_rule_id: str = "private_member_message_context_v1",
+    source_rule_id: str = "private_member_message_context_v2",
 ) -> list[IntentCandidate]:
     """Admit conversation-aware model interpretations under fixed controls.
 
@@ -377,7 +377,7 @@ def extract_grounded_context_candidates(
             if (value := _bounded_text(raw_value, 240)) is not None
         ]
         interpretation = {
-            "contract": "triage-context-interpretation-v1",
+            "contract": "triage-context-interpretation-v2",
             "context_fingerprint": context_pack.fingerprint,
             "thread_key": context_pack.thread_key,
             "anchor_event_id": context_pack.anchor_event_id,
@@ -423,7 +423,7 @@ def extract_grounded_context_candidates(
         }
         rules = [
             *base.eligibility_rule_ids,
-            "conversation_context_pack_v1",
+            "conversation_context_pack_v2",
             f"context_owner_{owner}_v1",
             f"context_lifecycle_{lifecycle}_v1",
         ]
