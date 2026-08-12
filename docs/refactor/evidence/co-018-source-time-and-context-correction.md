@@ -80,7 +80,10 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,867 passed.
+- `PYTHONPATH=.:bridge poetry run pytest tests packs -q --import-mode=importlib`:
+  1,867 passed. The ordinary configured root discovery
+  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,698 tests under
+  `pyproject.toml`'s `testpaths = ["tests"]` boundary.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 61
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
