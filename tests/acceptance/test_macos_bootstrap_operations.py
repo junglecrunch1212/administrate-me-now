@@ -20,7 +20,7 @@ from bootstrap.bridge_enrollment import (
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.doctor import Doctor
 from bootstrap.secrets import secret_store
-from bootstrap.services import ServiceManager
+from bootstrap.services import ServiceManager, ServiceStatus
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from bootstrap.wizard import BootstrapWizard
 
@@ -501,7 +501,14 @@ def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fai
     def restart_predecessor():
         nonlocal restart_attempts
         restart_attempts += 1
-        return original_start()
+        original_start()
+        return ServiceStatus(
+            "failed",
+            "failed",
+            "running",
+            True,
+            "fixture blocked readiness",
+        )
 
     monkeypatch.setattr(manager.services, "stop", fail_stop)
     monkeypatch.setattr(manager.services, "start", restart_predecessor)
@@ -510,6 +517,8 @@ def test_declared_source_repair_restarts_predecessor_when_both_stop_attempts_fai
         manager.activate(REPO_ROOT)
 
     assert "quiescence failed after runtime stopped" in str(error.value)
+    assert "previous release restart did not become healthy" in str(error.value)
+    assert "status=failed, runtime=failed, openclaw=running" in str(error.value)
     assert stop_attempts == 2
     assert restart_attempts == 1
     assert ServiceManager(paths, test_mode=True).status().status == "healthy"

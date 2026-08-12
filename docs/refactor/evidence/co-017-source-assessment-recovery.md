@@ -2,7 +2,7 @@
 
 Status: PR #335 recovery implementation merged; release activation stopped
 before mutation; follow-up Phase A drift/status hardening is locally green
-after a second independent-review repair and awaits a third exact-head review.
+after a third independent-review repair and awaits a fourth exact-head review.
 No live recovery is claimed by this file.
 
 ## Reproduction and cause
@@ -107,6 +107,29 @@ source-repair, updater, and macOS operations slice passes 85 tests. The second
 rejected head has no release authority; complete exact-head gates and a third
 independent review remain pending.
 
+## PR #336 third independent review
+
+The separate reviewer rejected exact amended head
+`9cfd0da1b4cbdd14cb28940649552664c196de9d` with one P1 finding. Both
+restoration branches attempted `ServiceManager.start()` and caught exceptions,
+but ignored its returned `ServiceStatus`. Because startup can return
+`status="failed"` for blocked readiness without raising, the updater could hide
+a failed predecessor/current-release restart and report only the earlier
+candidate failure. Isolated activation and explicit-rollback probes reproduced
+the missing failure evidence. The reviewer confirmed the first two review
+rounds' findings remain closed and found no additional security, privacy,
+observation, exact-target, immutable-history, or provider-effect regression.
+
+Both restoration branches now require the returned status to be exactly
+healthy and retain non-healthy status, runtime, and Gateway state as a
+secondary terminal error. The activation process regression combines partial
+quiescence, two stop failures, and a non-raising failed restart. A separate
+explicit-rollback regression forces rollback Doctor failure followed by a
+failed current-release restoration return. The focused source-repair, updater,
+and macOS operations slice passes 86 tests. The third rejected head has no
+release authority; complete exact-head gates and a fourth independent review
+remain pending.
+
 ## Focused checks completed
 
 | Command or slice | Result |
@@ -178,10 +201,10 @@ evidence must be recorded only after separately authorized guarded deployment.
 | Combined source-recovery, runtime, updater/rollback, Google Tasks, and macOS operations slice | PASS |
 | Candidate v2 policy against the current content-free live readiness/active-release Doctor snapshot | PASS at 62,634/62,634 accounted, zero pending/missing, the exact four declared failures, and watermark `ev_01KZSQZT4M0007`; no source content exposed |
 | Final-live versus durable consumer inventory read-only proof | 23 expected and 23 persisted pipeline/projection consumers; no missing/extra IDs and zero unhealthy rows |
-| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the repaired worktree after the second independent review: 57 strict acceptance, 1,826 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
-| `PYTHONPATH=bridge poetry run pytest -q` | 1,659 passed |
+| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the repaired worktree after the third independent review: 57 strict acceptance, 1,827 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,660 passed |
 | Required Ruff, mypy, and invariant commands | Passed; 219 mypy source files |
-| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 78 tests; runtime and OpenClaw plists valid |
+| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 79 tests; runtime and OpenClaw plists valid |
 | Node 24.19.0 Gate 7 rendered browser harness with temporary evidence directory | 259/259 passed; 39 screenshots; zero console errors, page errors, request failures, or repository evidence writes |
 
 The first aggregate attempt reached the format gate only after its 55 strict

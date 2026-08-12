@@ -600,7 +600,13 @@ class UpgradeManager:
                         rollback_errors.append(exc)
             if was_running:
                 try:
-                    self.services.start()
+                    restored = self.services.start()
+                    if restored.status != "healthy":
+                        raise UpgradeError(
+                            "previous release restart did not become healthy: "
+                            f"status={restored.status}, runtime={restored.runtime}, "
+                            f"openclaw={restored.openclaw}"
+                        )
                 except Exception as exc:  # preserve the candidate failure as primary
                     rollback_errors.append(exc)
             if rollback_errors:
@@ -693,7 +699,13 @@ class UpgradeManager:
                 restoration_errors.append(exc)
             if not stopped:
                 try:
-                    self.services.start()
+                    restored = self.services.start()
+                    if restored.status != "healthy":
+                        raise UpgradeError(
+                            "current release restart did not become healthy: "
+                            f"status={restored.status}, runtime={restored.runtime}, "
+                            f"openclaw={restored.openclaw}"
+                        )
                 except Exception as exc:
                     restoration_errors.append(exc)
             if restoration_errors:

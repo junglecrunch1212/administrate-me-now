@@ -131,7 +131,10 @@ and then fail before the Gateway is stopped. Candidate activation and explicit
 rollback therefore treat a second cleanup-stop failure as reported secondary
 evidence, not as permission to skip current-selector, launchd, plugin, or
 predecessor-runtime restoration. Every restoration step is attempted and all
-secondary errors are retained in the terminal updater failure.
+secondary errors are retained in the terminal updater failure. Because service
+startup reports terminal readiness as a value as well as through exceptions,
+restoration accepts only an explicitly healthy returned status; a failed or
+degraded predecessor/current-release restart remains a visible rollback error.
 
 ## Security and privacy
 

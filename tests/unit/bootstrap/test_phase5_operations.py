@@ -2265,3 +2265,70 @@ def test_upgrade_runs_post_switch_doctor_with_candidate_interpreter(
         "/opt/homebrew/bin"
     )
     assert "PYTHONPATH" not in environment
+
+
+def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    releases = test_paths.app_dir / "releases"
+    current_release = releases / ("c" * 40)
+    previous_release = releases / ("b" * 40)
+    current_release.mkdir(parents=True)
+    previous_release.mkdir()
+    previous = {
+        "path": str(previous_release),
+        "commit": "b" * 40,
+        "previous": None,
+    }
+    current = {
+        "path": str(current_release),
+        "commit": "c" * 40,
+        "previous": previous,
+    }
+    pointer = test_paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps(current), encoding="utf-8")
+
+    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr("bootstrap.upgrade.install_launch_agents", lambda *_a, **_k: [])
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=True)
+    monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda _release: {
+            "status": "failed",
+            "checks": [{"name": "fixture_post_switch_failure", "ok": False}],
+        },
+    )
+    healthy = ServiceStatus("healthy", "observation_only", "running", True, "fixture")
+    failed = ServiceStatus("failed", "failed", "running", True, "fixture")
+    starts = iter((healthy, failed))
+    start_calls = 0
+
+    def start_services() -> ServiceStatus:
+        nonlocal start_calls
+        start_calls += 1
+        return next(starts)
+
+    monkeypatch.setattr(manager.services, "status", lambda: healthy)
+    monkeypatch.setattr(
+        manager.services,
+        "stop",
+        lambda: ServiceStatus("stopped", "stopped", "stopped", True, "fixture"),
+    )
+    monkeypatch.setattr(manager.services, "start", start_services)
+
+    with pytest.raises(
+        UpgradeError, match="current release restart did not become healthy"
+    ) as error:
+        manager.rollback()
+
+    assert "rolled-back release failed Doctor" in str(error.value)
+    assert "status=failed, runtime=failed, openclaw=running" in str(error.value)
+    assert start_calls == 2
+    assert json.loads(pointer.read_text("utf-8")) == current

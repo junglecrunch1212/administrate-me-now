@@ -81,9 +81,9 @@ structural degradation or unavailable readiness after runtime liveness.
 
 The follow-up drift/status hardening passes the focused policy/status and
 combined recovery/runtime/updater/Google Tasks process suites, 57 strict
-acceptance gates, 1,826 root/package tests, 60 bridge tests, the complete
-release candidate suite, and the separately required 1,659-test root run,
-Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 78
+acceptance gates, 1,827 root/package tests, 60 bridge tests, the complete
+release candidate suite, and the separately required 1,660-test root run,
+Ruff, mypy, and invariants. The disposable arm64 macOS rehearsal passes 79
 tests with both plists valid. Node 24 Gate 7 passes 259/259 checks and 39
 screenshots with zero console, page, or request failures. Independent exact-
 head review, hosted checks, and fresh G-001 authorization remain required. The
@@ -110,6 +110,19 @@ stopped and proves exactly one predecessor restart, healthy final service
 status, and no candidate pointer. The focused updater/source-repair/macOS slice
 passes 85 tests. The rejected head has no release authority; complete gates
 and a third independent exact-head review remain mandatory.
+
+The third independent review rejected head
+`9cfd0da1b4cbdd14cb28940649552664c196de9d` with one P1 status gap.
+`ServiceManager.start()` can return failed readiness without raising, while
+both restoration branches checked only for exceptions. Candidate rollback and
+explicit rollback restoration now require the returned predecessor/current
+service status to be exactly healthy and retain failed/degraded status,
+runtime, and Gateway state in the terminal error. The activation process test
+now combines both stop failures with a non-raising failed restart, and a new
+explicit-rollback regression proves the same rule after rollback Doctor
+failure. The focused updater/source-repair/macOS slice passes 86 tests. The
+third rejected head has no release authority; complete gates and a fourth
+independent exact-head review remain mandatory.
 
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 

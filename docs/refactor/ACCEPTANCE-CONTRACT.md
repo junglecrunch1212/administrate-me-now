@@ -33,7 +33,9 @@ transient wait reads readiness and fails closed when readiness is unavailable
 after runtime liveness. A quiescence or cleanup-stop failure may leave only one
 service stopped; candidate activation and explicit rollback must therefore
 continue through selector, launchd, plugin, and predecessor-runtime restoration
-even when a second cleanup stop also fails. Full healthy Doctor remains
+even when a second cleanup stop also fails. A non-raising restart return is not
+success unless its service status is explicitly healthy; failed or degraded
+readiness is retained as a restoration failure. Full healthy Doctor remains
 mandatory.
 
 CO-016 amendment (2026-08-11): AC-41 proves queue continuity after both
