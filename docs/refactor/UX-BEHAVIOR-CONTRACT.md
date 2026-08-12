@@ -27,6 +27,9 @@ does not produce a review candidate. The browser renders either correction
 control only when the server reports the exact provenance/evidence needed to
 apply it; deterministic fallback items without that evidence do not present an
 action that would fail at submission.
+An exact admitting edge may be older than the displayed language window; the
+server still hydrates that edge under the same privacy checks before declaring
+the related-message correction available.
 
 CO-017 amendment (2026-08-11): terminal source-assessment recovery is an
 authenticated operator/release control, not a member Triage action. It adds no

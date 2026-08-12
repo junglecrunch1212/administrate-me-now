@@ -138,6 +138,7 @@ class MessageContextPack:
     thread_key: str
     fingerprint: str
     messages: tuple[ContextMessage, ...]
+    episode_source_event_ids: tuple[str, ...]
     current_is_thread_anchor: bool
 
     def skill_payload(self) -> dict[str, Any]:
@@ -717,6 +718,21 @@ async def build_message_context_pack(
         [dict(current)],
     )
     same_thread = full_episode[-MAX_THREAD_MESSAGES:]
+    if current_event_id not in {
+        str(value.get("event_id") or "") for value in same_thread
+    }:
+        retained_ids = {
+            current_event_id,
+            *(
+                str(value.get("event_id") or "")
+                for value in same_thread[-(MAX_THREAD_MESSAGES - 1) :]
+            ),
+        }
+        same_thread = [
+            value
+            for value in full_episode
+            if str(value.get("event_id") or "") in retained_ids
+        ]
 
     primary_participants = frozenset(
         value
@@ -819,6 +835,31 @@ async def build_message_context_pack(
     )
     messages: list[ContextMessage] = []
     consumed = 0
+    anchor_event_id = str(
+        (full_episode[-1] if full_episode else current).get("event_id")
+        or current.get("event_id")
+        or ""
+    )
+    authored_by_event_id: dict[str, AuthoredMessageText] = {}
+    for selected_event, *_rest in selected:
+        selected_event_id = str(selected_event.get("event_id") or "")
+        selected_payload = selected_event.get("payload") or {}
+        selected_corrections = tuple(
+            correction_payload
+            for active, correction_payload in source_text_state.values()
+            if active
+            and str(correction_payload.get("source_event_id") or "")
+            == selected_event_id
+        )
+        authored_by_event_id[selected_event_id] = _corrected_authored_text(
+            authored_message_text(selected_payload), selected_corrections
+        )
+    protected_reserves = {
+        event_id: len(authored_by_event_id[event_id].text[:MAX_MESSAGE_CHARS])
+        for event_id in {current_event_id, anchor_event_id}
+        if event_id in authored_by_event_id
+    }
+    pending_protected_reserve = sum(protected_reserves.values())
     for index, (
         event,
         relation,
@@ -827,19 +868,17 @@ async def build_message_context_pack(
     ) in enumerate(selected, start=1):
         payload = event.get("payload") or {}
         event_id = str(event.get("event_id") or "")
-        active_text_corrections = tuple(
-            correction_payload
-            for active, correction_payload in source_text_state.values()
-            if active
-            and str(correction_payload.get("source_event_id") or "") == event_id
-        )
-        authored = _corrected_authored_text(
-            authored_message_text(payload), active_text_corrections
-        )
+        authored = authored_by_event_id[event_id]
         body = authored.text
-        remaining = max(MAX_CONTEXT_CHARS - consumed, 0)
-        if remaining == 0:
-            break
+        is_protected = event_id in protected_reserves
+        protected_reserve = protected_reserves.pop(event_id, 0)
+        pending_protected_reserve -= protected_reserve
+        remaining = max(
+            MAX_CONTEXT_CHARS - consumed - pending_protected_reserve,
+            0,
+        )
+        if remaining == 0 and not is_protected:
+            continue
         body = body[:remaining]
         consumed += len(body)
         recipient_values: list[str] = []
@@ -872,8 +911,6 @@ async def build_message_context_pack(
                 attachment_names=_attachment_names(payload),
             )
         )
-    latest = full_episode[-1] if full_episode else current
-    anchor_event_id = str(latest.get("event_id") or current.get("event_id") or "")
     stable = [
         {
             "relation": message.relation,
@@ -919,6 +956,11 @@ async def build_message_context_pack(
         thread_key=episode_thread_key,
         fingerprint=fingerprint,
         messages=tuple(messages),
+        episode_source_event_ids=tuple(
+            str(value.get("event_id") or "")
+            for value in full_episode
+            if value.get("event_id")
+        ),
         current_is_thread_anchor=str(current.get("event_id") or "") == anchor_event_id,
     )
 

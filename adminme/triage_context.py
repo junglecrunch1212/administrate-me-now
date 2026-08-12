@@ -320,6 +320,13 @@ async def add_triage_source_context(
                 str(value)
                 for value in interpretation.get("context_source_event_ids") or []
             )
+            for context_source in interpretation.get("context_sources") or []:
+                if not isinstance(context_source, Mapping):
+                    continue
+                requested_ids.update(
+                    str(value)
+                    for value in context_source.get("relationship_source_event_ids", [])
+                )
     for event_id in requested_ids:
         if event_id:
             cache[event_id] = await runtime.event_log.get(event_id)
@@ -343,7 +350,18 @@ async def add_triage_source_context(
         authorized_context: dict[str, Mapping[str, Any]] = {}
         interpretation = item.get("interpretation")
         if isinstance(interpretation, Mapping):
-            for context_id in interpretation.get("context_source_event_ids") or []:
+            authorized_context_ids = {
+                str(value)
+                for value in interpretation.get("context_source_event_ids") or []
+            }
+            for context_source in interpretation.get("context_sources") or []:
+                if not isinstance(context_source, Mapping):
+                    continue
+                authorized_context_ids.update(
+                    str(value)
+                    for value in context_source.get("relationship_source_event_ids", [])
+                )
+            for context_id in authorized_context_ids:
                 context_id = str(context_id)
                 context_source = cache.get(context_id)
                 if context_source is None:

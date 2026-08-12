@@ -93,27 +93,68 @@ def _raw_gmail_message(
     internal_date_ms: int,
     rfc_message_id: str,
     references: list[str] | None = None,
+    body_html: str | None = None,
+    sent: bool = False,
 ) -> dict[str, Any]:
     headers = [
-        {"name": "From", "value": "fixture-counterparty@example.invalid"},
-        {"name": "To", "value": "fixture-member@example.invalid"},
+        {
+            "name": "From",
+            "value": (
+                "fixture-member@example.invalid"
+                if sent
+                else "fixture-counterparty@example.invalid"
+            ),
+        },
+        {
+            "name": "To",
+            "value": (
+                "fixture-counterparty@example.invalid"
+                if sent
+                else "fixture-member@example.invalid"
+            ),
+        },
         {"name": "Subject", "value": "Fixture account authorization"},
         {"name": "Message-ID", "value": rfc_message_id},
     ]
     if references:
         headers.append({"name": "References", "value": " ".join(references)})
+    payload: dict[str, Any] = {
+        "mimeType": "text/plain",
+        "headers": headers,
+        "body": {
+            "data": base64.urlsafe_b64encode(body.encode("utf-8")).decode("ascii")
+        },
+    }
+    if body_html is not None:
+        payload = {
+            "mimeType": "multipart/alternative",
+            "headers": headers,
+            "body": {"size": 0},
+            "parts": [
+                {
+                    "mimeType": "text/plain",
+                    "body": {
+                        "data": base64.urlsafe_b64encode(body.encode("utf-8")).decode(
+                            "ascii"
+                        )
+                    },
+                },
+                {
+                    "mimeType": "text/html",
+                    "body": {
+                        "data": base64.urlsafe_b64encode(
+                            body_html.encode("utf-8")
+                        ).decode("ascii")
+                    },
+                },
+            ],
+        }
     return {
         "id": native_id,
         "threadId": thread_id,
         "internalDate": str(internal_date_ms),
-        "labelIds": ["INBOX", "UNREAD"],
-        "payload": {
-            "mimeType": "text/plain",
-            "headers": headers,
-            "body": {
-                "data": base64.urlsafe_b64encode(body.encode("utf-8")).decode("ascii")
-            },
-        },
+        "labelIds": ["SENT"] if sent else ["INBOX", "UNREAD"],
+        "payload": payload,
     }
 
 
@@ -189,6 +230,20 @@ async def _preload_gmail_replay_fixture(
             ),
             fingerprint="3" * 64,
         )
+        for index in range(11):
+            await adapter._emit_message_observation(
+                ctx=ctx,
+                message=_raw_gmail_message(
+                    native_id=f"fixture-replay-intermediate-{index:02d}",
+                    thread_id="fixture-replay-primary",
+                    body=f"Routine fixture context update {index}.",
+                    internal_date_ms=1_706_702_460_000 + (index * 60_000),
+                    rfc_message_id=(
+                        f"<fixture-replay-intermediate-{index:02d}@example.invalid>"
+                    ),
+                ),
+                fingerprint=f"{index + 10:064x}",
+            )
         current_id = await adapter._emit_message_observation(
             ctx=ctx,
             message=_raw_gmail_message(
@@ -293,6 +348,97 @@ async def _preload_gmail_replay_fixture(
         await event_log.close()
 
 
+async def _preload_gmail_sent_quote_fixture(settings: RuntimeSettings) -> str:
+    event_log = EventLog(settings.instance, settings.encryption_key)
+    bus = EventBus(event_log, settings.instance.bus_checkpoint_path)
+    events = EventWriter(event_log, bus)
+    [adapter] = load_builtin_adapters(
+        {
+            "adapters": [
+                {
+                    "kind": "messaging-gmail-api",
+                    "config": {
+                        "service_account_key_ref": "op://fixture-vault/item/field",
+                        "user_email": "fixture-member@example.invalid",
+                        "member_id": MEMBER,
+                        "workspace": "personal",
+                    },
+                }
+            ]
+        },
+        repository_root=REPO_ROOT,
+    )
+    ctx = AdapterContext(
+        event_sink=events,
+        config={},
+        correlation_id_factory=lambda: "fixture-context-sent-quote",
+        now_factory=lambda: datetime(2026, 8, 12, 12, tzinfo=timezone.utc),
+    )
+    quote = "I will authorize the old fixture transfer."
+    try:
+        return await adapter._emit_message_observation(
+            ctx=ctx,
+            message=_raw_gmail_message(
+                native_id="fixture-sent-quoted-only",
+                thread_id="fixture-sent-quoted-only-thread",
+                body=quote,
+                body_html=f'<div class="gmail_quote">{quote}</div>',
+                sent=True,
+                internal_date_ms=1_706_706_000_000,
+                rfc_message_id="<fixture-sent-quoted-only@example.invalid>",
+            ),
+            fingerprint="5" * 64,
+        )
+    finally:
+        await bus.stop()
+        await event_log.close()
+
+
+def test_gmail_sent_multipart_quote_boundary_survives_production_mapping(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "sent-quote-instance"
+    instance.mkdir()
+    settings = RuntimeSettings.credential_free(
+        instance,
+        encryption_key=b"s" * 32,
+        repository_root=REPO_ROOT,
+        member_identities={"context-correctness.ts.net": MEMBER},
+        member_roles={MEMBER: "principal"},
+        deterministic_openclaw_fixture=True,
+        fixture_member_id=MEMBER,
+    )
+    source_id = asyncio.run(_preload_gmail_sent_quote_fixture(settings))
+
+    app = create_application(settings)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        runtime = app.state.runtime
+        client.portal.call(
+            runtime.wait_for_subscriber,
+            "pipeline:pipeline:noise_filtering",
+            source_id,
+        )
+        source = client.portal.call(runtime.event_log.get, source_id)
+        assert source["type"] == "messaging.sent"
+        assert source["schema_version"] == 4
+        assert "gmail_quote" in source["payload"]["body_html"]
+        assessments = [
+            event
+            for event in client.portal.call(
+                _events, runtime, "triage.intent.features_extracted"
+            )
+            if event.get("causation_id") == source_id
+        ]
+        assert len(assessments) == 1
+        assert assessments[0]["payload"]["assessment_outcome"] == "no_candidate"
+        assert [
+            event
+            for event in client.portal.call(_events, runtime, "triage.item.proposed")
+            if event["payload"].get("source_event_id") == source_id
+        ] == []
+
+
 def test_exact_context_correction_round_trip_through_production_composition(
     tmp_path: Path,
 ) -> None:
@@ -310,6 +456,31 @@ def test_exact_context_correction_round_trip_through_production_composition(
     with TestClient(app) as client:
         assert client.portal is not None
         runtime = app.state.runtime
+        old_edge_id = client.portal.call(
+            runtime.events.write,
+            _message(
+                runtime,
+                native_id="fixture-old-edge",
+                thread_id="fixture-primary-thread",
+                body="An older exact fixture edge.",
+                occurred_at="2024-01-31T14:00:00Z",
+                rfc_message_id="<fixture-old-edge@example.invalid>",
+            ),
+        )
+        for index in range(11):
+            client.portal.call(
+                runtime.events.write,
+                _message(
+                    runtime,
+                    native_id=f"fixture-intermediate-{index:02d}",
+                    thread_id="fixture-primary-thread",
+                    body=f"Routine fixture update {index}.",
+                    occurred_at=f"2024-01-31T14:{index + 1:02d}:00Z",
+                    rfc_message_id=(
+                        f"<fixture-intermediate-{index:02d}@example.invalid>"
+                    ),
+                ),
+            )
         source_id = client.portal.call(
             runtime.events.write,
             _message(
@@ -333,7 +504,7 @@ def test_exact_context_correction_round_trip_through_production_composition(
                 body="The fixture transfer review is ready.",
                 occurred_at="2024-01-31T16:00:00Z",
                 rfc_message_id="<fixture-related@example.invalid>",
-                references=["<fixture-current@example.invalid>"],
+                references=["<fixture-old-edge@example.invalid>"],
             ),
         )
         proposal_id = "fixture-context-correction-proposal"
@@ -398,7 +569,7 @@ def test_exact_context_correction_round_trip_through_production_composition(
                                 "source_event_id": related_id,
                                 "relation": "related",
                                 "reason_codes": ["rfc_reference"],
-                                "relationship_source_event_ids": [source_id],
+                                "relationship_source_event_ids": [old_edge_id],
                             },
                         ],
                         "related_source_event_ids": [related_id],
@@ -417,10 +588,11 @@ def test_exact_context_correction_round_trip_through_production_composition(
         initial_pack = client.portal.call(
             build_message_context_pack, source, runtime.event_log
         )
-        assert [message.source_event_id for message in initial_pack.messages] == [
-            source_id,
-            related_id,
-        ]
+        assert old_edge_id not in {
+            message.source_event_id for message in initial_pack.messages
+        }
+        assert initial_pack.messages[-1].source_event_id == related_id
+        assert initial_pack.messages[-1].relationship_source_event_ids == (old_edge_id,)
 
         page = client.get(
             f"/api/member/v1/surfaces/triage?triage_item={proposal_id}",
@@ -473,19 +645,22 @@ def test_exact_context_correction_round_trip_through_production_composition(
         corrected_pack = client.portal.call(
             build_message_context_pack, source, runtime.event_log
         )
-        assert [message.source_event_id for message in corrected_pack.messages] == [
-            source_id
-        ]
-        assert corrected_pack.messages[0].body_text == (
-            "Also archive the fixture receipt."
+        assert related_id not in {
+            message.source_event_id for message in corrected_pack.messages
+        }
+        corrected_source = next(
+            message
+            for message in corrected_pack.messages
+            if message.source_event_id == source_id
         )
+        assert corrected_source.body_text == ("Also archive the fixture receipt.")
 
         relinked = client.post(
             "/api/member/v1/context-relationships/confirm",
             headers=AUTH,
             json={
                 "request_id": "fixture-context-relink-0001",
-                "source_event_id": source_id,
+                "source_event_id": old_edge_id,
                 "related_source_event_id": related_id,
             },
         )
@@ -503,11 +678,13 @@ def test_exact_context_correction_round_trip_through_production_composition(
         restored_pack = client.portal.call(
             build_message_context_pack, source, runtime.event_log
         )
-        assert [message.source_event_id for message in restored_pack.messages] == [
-            source_id,
-            related_id,
-        ]
-        assert restored_pack.messages[0].body_text == (
+        assert restored_pack.messages[-1].source_event_id == related_id
+        restored_source = next(
+            message
+            for message in restored_pack.messages
+            if message.source_event_id == source_id
+        )
+        assert restored_source.body_text == (
             "Please review the fixture transfer. Also archive the fixture receipt."
         )
 
@@ -590,7 +767,8 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         assert len(proposals) == 1
         proposal = proposals[0]
         interpretation = proposal["payload"]["interpretation"]
-        assert interpretation["context_source_event_ids"] == [first_id, current_id]
+        assert first_id not in interpretation["context_source_event_ids"]
+        assert current_id in interpretation["context_source_event_ids"]
         assert weak_id not in interpretation["context_source_event_ids"]
         assert other_member_id not in interpretation["context_source_event_ids"]
 

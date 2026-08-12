@@ -56,7 +56,14 @@ relationship-confirmed and source-text-reinstated events reverse the exact
 decision. The immutable provider facts remain unchanged.
 Triage exposes a correction control only when the read-side server declares
 that the exact relationship provenance or uniquely grounded authored-text
-evidence required by the command is present.
+evidence required by the command is present. Relationship-edge sources are
+authorized and hydrated even when they fall outside the displayed model window.
+
+The bounded model payload always retains both the source currently being
+assessed and the latest episode anchor, reserving character budget for the
+anchor before older bodies. Candidate reconciliation uses the complete bounded
+episode identity (up to 100 sources), not only the 12 messages sent to the
+language seam.
 
 Missing, invalid, non-positive, or out-of-range Gmail `internalDate` values are
 terminally quarantined. They never fall back to ingestion wall-clock time.

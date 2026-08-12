@@ -24,8 +24,10 @@ independently reviewed, merged, deployed, or run against a family Mac or live
 provider.
 
 The candidate corrects a message-context false-association class without
-changing source facts or member authority. Gmail adapter v1.2.0 records provider
-message time as `occurred_at` and append time as `recorded_at`. Message context
+changing source facts or member authority. Gmail adapter v1.3.0 records provider
+message time as `occurred_at` and append time as `recorded_at`; additive
+`messaging.sent@v4` retains the HTML MIME alternative needed to bound quoted
+Sent history. Message context
 v2 splits reused provider threads into 30-day/100-source episodes and requires
 exact RFC continuity, exact attachment identity, or explicit member
 confirmation for a cross-thread source. Repeated participants, addresses,
@@ -36,12 +38,17 @@ history. Explicit HTML quote boundaries constrain multipart plain-text
 alternatives, with disagreement failing closed. Gmail message-local attachment
 IDs are explicitly non-admitting, and invalid/missing provider timestamps are
 quarantined rather than rewritten as ingestion time.
+The language payload reserves its bounded character budget for the latest
+anchor while retaining the source under assessment. Replay reconciliation uses
+the full bounded episode rather than the 12-message model window.
 
 Triage wrong-context dismissal now supports an atomic rejection of the actual
 admitting source edge and an evidence-span-scoped quoted-history correction;
 other asks in the message remain intact. Its browser controls are emitted only
 for server-declared exact correction capabilities, so a deterministic fallback
-without uniquely applicable evidence cannot offer a dead-end action. Member-owned confirmation and
+without uniquely applicable evidence cannot offer a dead-end action. Exact
+admitting sources outside the display window are separately authorized and
+hydrated before that capability is declared. Member-owned confirmation and
 reinstatement endpoints reverse each decision. Context Fabric v2 rebuilds the
 state from immutable events, and wrong-context feedback cannot aggregate into a
 broad sender/account/workspace suppression suggestion. Noise filtering v21

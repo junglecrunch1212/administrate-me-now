@@ -1,8 +1,8 @@
 # Migration map
 
 CO-018 update (2026-08-12): source-time and message-context correctness is a
-**MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.2.0 and emits
-additive `messaging.received@v4` / `messaging.sent@v3`; prior versions remain
+**MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.3.0 and emits
+additive `messaging.received@v4` / `messaging.sent@v4`; prior versions remain
 registered and readable. Noise filtering advances from v20 to v21 with an
 explicit full replay, and the pinned classification skill advances from v6 to
 v7. Replay appends new assessments/proposals and deterministic supersession
@@ -15,7 +15,10 @@ creating false source chronology. Gmail message-local attachment IDs remain
 non-admitting until a stable identity or content digest exists.
 Multipart authored-text agreement and server-declared correction capabilities
 are derived read/pipeline behavior only; they add no event, projection, or
-provider migration.
+provider migration. `messaging.sent@v4` additively retains `body_html` for
+historical Sent observations; older v1-v3 facts remain readable. Model-window
+budget reservation, full-episode reconciliation scope, and off-window
+relationship hydration are derived behavior and migrate no stored facts.
 
 Context Fabric advances from projection v1 to v2 with additive exact
 relationship-decision and source-text-correction tables. Rebuild derives both

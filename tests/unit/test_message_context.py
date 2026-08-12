@@ -650,6 +650,77 @@ async def test_provider_thread_episode_closes_at_one_hundred_sources() -> None:
     assert "source-000" not in pack.thread_key
 
 
+@pytest.mark.asyncio
+async def test_context_budget_reserves_current_anchor_and_tracks_full_episode() -> None:
+    start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
+    messages = [
+        _message(
+            f"source-{index:02d}",
+            "x" * 2400,
+            occurred_at=(start + timedelta(minutes=index)).isoformat(),
+        )
+        for index in range(12)
+    ]
+    messages.append(
+        _message(
+            "source-current",
+            "Please review the current fixture request.",
+            occurred_at=(start + timedelta(minutes=12)).isoformat(),
+        )
+    )
+
+    pack = await build_message_context_pack(messages[-1], _Log(messages))
+
+    assert pack.episode_source_event_ids == tuple(
+        [*(f"source-{index:02d}" for index in range(12)), "source-current"]
+    )
+    assert pack.messages[-1].source_event_id == "source-current"
+    assert pack.messages[-1].body_text == "Please review the current fixture request."
+    assert sum(len(message.body_text) for message in pack.messages) <= 24_000
+
+
+@pytest.mark.asyncio
+async def test_replay_pack_keeps_old_current_source_beside_latest_anchor() -> None:
+    start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
+    messages = [
+        _message(
+            f"source-{index:02d}",
+            f"Fixture update {index}.",
+            occurred_at=(start + timedelta(minutes=index)).isoformat(),
+        )
+        for index in range(13)
+    ]
+
+    pack = await build_message_context_pack(messages[0], _Log(messages))
+    source_ids = [message.source_event_id for message in pack.messages]
+
+    assert len(source_ids) == 12
+    assert "source-00" in source_ids
+    assert "source-12" in source_ids
+    assert pack.anchor_event_id == "source-12"
+    assert pack.current_is_thread_anchor is False
+
+
+@pytest.mark.asyncio
+async def test_context_budget_reserves_non_anchor_source_under_assessment() -> None:
+    start = datetime(2034, 2, 1, 10, tzinfo=timezone.utc)
+    messages = [
+        _message(
+            f"source-{index:02d}",
+            str(index % 10) * 2400,
+            occurred_at=(start + timedelta(minutes=index)).isoformat(),
+        )
+        for index in range(13)
+    ]
+
+    pack = await build_message_context_pack(messages[10], _Log(messages))
+    by_source = {message.source_event_id: message for message in pack.messages}
+
+    assert by_source["source-10"].body_text == "0" * 2400
+    assert by_source["source-12"].body_text == "2" * 2400
+    assert sum(len(message.body_text) for message in pack.messages) <= 24_000
+
+
 def _context_decision(
     event_id: str,
     event_type: str,

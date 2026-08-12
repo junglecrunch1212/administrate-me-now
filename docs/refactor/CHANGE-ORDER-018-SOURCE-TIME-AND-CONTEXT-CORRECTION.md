@@ -54,7 +54,13 @@ source fact, sender identity, provider account, or household name is wrong.
   reversible through explicit confirmation or reinstatement events.
   Triage offers each correction control only when the server declares that its
   exact relationship provenance or uniquely grounded authored evidence is
-  sufficient for the corresponding command.
+  sufficient for the corresponding command. Exact admitting sources outside
+  the displayed model window are still independently authorized and hydrated.
+- The 12-message / 24,000-character language payload reserves space for the
+  latest anchor and retains the source currently being assessed. Full-replay
+  proposal reconciliation uses every source in the bounded 30-day/100-source
+  episode, so an old untouched proposal cannot survive merely because it fell
+  outside the model window.
 - A subject displayed beside `Provider Thread Id` is only a readable source
   label; it is not the opaque provider thread identifier or relationship
   authority.

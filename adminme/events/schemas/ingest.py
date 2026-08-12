@@ -130,6 +130,13 @@ class MessagingSentV3(MessagingSentV2):
     in_reply_to: str | None = Field(default=None, max_length=1000)
 
 
+class MessagingSentV4(MessagingSentV3):
+    """Outbound observation retaining the provider's HTML MIME alternative."""
+
+    model_config = {"extra": "forbid"}
+    body_html: str | None = None
+
+
 class CommunicationStateChangedV1(BaseModel):
     """Deterministic member-owned focus state, independent of provider state."""
 
@@ -367,6 +374,7 @@ registry.register(
 registry.register("messaging.sent", 1, MessagingSentV1)
 registry.register("messaging.sent", 2, MessagingSentV2)
 registry.register("messaging.sent", 3, MessagingSentV3)
+registry.register("messaging.sent", 4, MessagingSentV4)
 registry.register("communication.state_changed", 1, CommunicationStateChangedV1)
 registry.register("telephony.sms_received", 1, TelephonySmsReceivedV1)
 registry.register("calendar.event_added", 1, CalendarEventAddedV1)

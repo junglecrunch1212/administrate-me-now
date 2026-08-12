@@ -1121,11 +1121,7 @@ class NoiseFilteringPipeline:
             ctx.event_log, "read_since"
         ):
             return candidates
-        thread_source_ids = {
-            message.source_event_id
-            for message in context_pack.messages
-            if message.relation == "thread"
-        }
+        thread_source_ids = set(context_pack.episode_source_event_ids)
         decided_keys: set[tuple[str, str]] = set()
         decided_titles: set[tuple[str, str]] = set()
         prior_proposals: list[dict[str, Any]] = []

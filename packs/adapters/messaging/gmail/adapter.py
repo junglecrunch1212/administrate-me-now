@@ -7,9 +7,10 @@ retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
 :meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
 directly when the observation seam slots are unpopulated (Phase A),
 and routes through :func:`adminme.lib.observation.outbound` when the
-slots are populated by the supervisor (Phase B). D28 emits the additive
-``messaging.sent@v2`` schema with exact member/account/workspace coordinates;
-the existing v1 registration remains immutable for historical producers.
+slots are populated by the supervisor (Phase B). D28 now emits the additive
+``messaging.sent@v4`` schema with exact member/account/workspace coordinates,
+RFC continuity, and an optional HTML alternative; v1-v3 remain registered for
+historical producers.
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
@@ -155,7 +156,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.2.0"
+    version: ClassVar[str] = "1.3.0"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -943,7 +944,7 @@ class GmailAdapter(CommunicationAdapter):
         the Gmail service directly (Phase A — memo 08 §3.4
         Phase-A-conditional, mirroring 11r-c's
         :meth:`_apply_write_impl`). On success, emits one
-        ``messaging.sent@v2`` event with field-mapping from Gmail
+        ``messaging.sent@v4`` event with field-mapping from Gmail
         semantics plus the exact Comms account coordinates; on
         observation-suppress, the same event is emitted with
         ``delivery_status="queued"`` and ``thread_id=None``. The immutable
@@ -953,7 +954,7 @@ class GmailAdapter(CommunicationAdapter):
         ``AdapterErrorV1`` taxonomy (4xx auth → fatal ``auth_failed``,
         5xx → transient ``network``, 429 → transient ``rate_limited``),
         emit one ``adapter.error@v1`` event, and re-raise so the
-        supervisor's backoff handles retry. ``messaging.sent@v2`` is
+        supervisor's backoff handles retry. ``messaging.sent@v4`` is
         NOT emitted on the error path — the action did not, in fact,
         send.
         """
@@ -1036,8 +1037,8 @@ class GmailAdapter(CommunicationAdapter):
             raise
 
         # D28 retains the delivery fields and adds the account-bound
-        # ``messaging.sent@v3`` coordinates and RFC continuity required by
-        # Comms and conservative context assembly.
+        # ``messaging.sent@v4`` coordinates, RFC continuity, and the optional
+        # HTML MIME alternative required by conservative context assembly.
         if ctx is not None:
             now_dt = ctx.now_factory()
         else:
@@ -1074,7 +1075,7 @@ class GmailAdapter(CommunicationAdapter):
                 ctx=ctx,
                 event_type="messaging.sent",
                 payload=sent_payload,
-                schema_version=3,
+                schema_version=4,
                 occurred_at_override=sent_at_iso,
             )
 
@@ -1449,14 +1450,14 @@ class GmailAdapter(CommunicationAdapter):
             )
         payload_dict = message.get("payload") or {}
         headers = self._headers_to_map(payload_dict.get("headers"))
-        body_text, _body_html = self._extract_bodies(payload_dict)
+        body_text, body_html = self._extract_bodies(payload_dict)
         native_message_id = str(message.get("id") or "unknown")
         configured_account = str(self._config.get("user_email") or "gmail")
         sent_iso = self._epoch_ms_to_iso(message.get("internalDate"))
         return await self._append(
             ctx=ctx,
             event_type="messaging.sent",
-            schema_version=3,
+            schema_version=4,
             idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
             raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
             payload={
@@ -1465,6 +1466,7 @@ class GmailAdapter(CommunicationAdapter):
                 "thread_id": message.get("threadId"),
                 "subject": headers.get("subject"),
                 "body_text": body_text,
+                "body_html": body_html,
                 "sent_at": sent_iso,
                 "delivery_status": "sent",
                 "member_id": str(self._config.get("member_id") or "unbound"),

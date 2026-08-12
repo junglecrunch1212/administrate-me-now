@@ -3150,7 +3150,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 23,
     "source_candidate_cells": 121,
-    "technical_event_schemas": 232,
+    "technical_event_schemas": 233,
     "technical_event_types": 197,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -6926,6 +6926,22 @@
       "event_type": "context.source_text.corrected",
       "family": "context",
       "properties": {
+        "algorithm": {
+          "const": "authored-message-text-v2",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "authored_text_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authored Text Digest",
+          "type": "string"
+        },
+        "candidate_key": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Candidate Key",
+          "type": "string"
+        },
         "corrected_at": {
           "format": "date-time",
           "title": "Corrected At",
@@ -6943,23 +6959,31 @@
           "title": "Correction Id",
           "type": "string"
         },
+        "evidence_end": {
+          "exclusiveMinimum": 0,
+          "title": "Evidence End",
+          "type": "integer"
+        },
         "evidence_quote_digest": {
-          "anyOf": [
-            {
-              "pattern": "^[0-9a-f]{64}$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Evidence Quote Digest"
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Quote Digest",
+          "type": "string"
+        },
+        "evidence_start": {
+          "minimum": 0,
+          "title": "Evidence Start",
+          "type": "integer"
         },
         "member_id": {
           "maxLength": 240,
           "minLength": 1,
           "title": "Member Id",
+          "type": "string"
+        },
+        "proposal_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Proposal Id",
           "type": "string"
         },
         "reason": {
@@ -6977,10 +7001,17 @@
       "required": [
         "correction_id",
         "source_event_id",
+        "proposal_id",
+        "candidate_key",
         "member_id",
+        "algorithm",
+        "authored_text_digest",
+        "evidence_start",
+        "evidence_end",
         "corrected_by_member_id",
         "corrected_at",
-        "reason"
+        "reason",
+        "evidence_quote_digest"
       ],
       "schema_version": 1
     },
@@ -15801,6 +15832,189 @@
         "workspace"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "messaging.sent",
+      "family": "communication",
+      "properties": {
+        "body_html": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Html"
+        },
+        "body_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Body Text"
+        },
+        "delivery_status": {
+          "enum": [
+            "queued",
+            "sent",
+            "failed"
+          ],
+          "title": "Delivery Status",
+          "type": "string"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "in_reply_to_interaction_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To Interaction Id"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "native_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Native Message Id"
+        },
+        "provider": {
+          "enum": [
+            "gmail",
+            "microsoft_graph",
+            "bluebubbles",
+            "twilio_sms",
+            "twilio_whatsapp",
+            "openclaw_channel",
+            "fixture"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "References",
+          "type": "array"
+        },
+        "rfc_message_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rfc Message Id"
+        },
+        "sent_at": {
+          "minLength": 1,
+          "title": "Sent At",
+          "type": "string"
+        },
+        "source_channel": {
+          "minLength": 1,
+          "title": "Source Channel",
+          "type": "string"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        },
+        "to_identifier": {
+          "minLength": 1,
+          "title": "To Identifier",
+          "type": "string"
+        },
+        "workspace": {
+          "enum": [
+            "personal",
+            "work"
+          ],
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_channel",
+        "to_identifier",
+        "sent_at",
+        "delivery_status",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "workspace"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,

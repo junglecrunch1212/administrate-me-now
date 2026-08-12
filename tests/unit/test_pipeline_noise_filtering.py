@@ -1339,6 +1339,108 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
 
 
 @pytest.mark.asyncio
+async def test_latest_anchor_reconciles_proposals_outside_model_window() -> None:
+    source_events: list[dict[str, Any]] = []
+    for index in range(13):
+        source = _messaging_received_event(body_text=f"Routine fixture update {index}.")
+        source.update(
+            {
+                "event_id": f"long-thread-source-{index:02d}",
+                "occurred_at": f"2034-02-01T10:{index:02d}:00Z",
+                "recorded_at": f"2034-02-01T10:{index:02d}:01Z",
+                "source_account_id": "fixture-account",
+            }
+        )
+        source["payload"].update(
+            {
+                "thread_id": "long-thread-context-fixture",
+                "provider": "fixture",
+                "provider_account_id": "fixture-account",
+                "workspace": "personal",
+                "received_at": f"2034-02-01T10:{index:02d}:00Z",
+            }
+        )
+        source_events.append(source)
+    log = _ContextEventLog(source_events=source_events)
+    await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=4,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="noise_filtering",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="long-thread-prior-proposal",
+            payload={
+                "proposal_id": "long-thread-prior-proposal",
+                "target_kind": "task",
+                "owner_member_id": "member-fixture",
+                "title": "Old exact fixture ask",
+                "candidate": {"description": "Old exact fixture ask"},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": "long-thread-source-00",
+                "confidence": 0.8,
+                "reasons": ["grounded_language_exact_quote_v1"],
+                "parent_intent_id": None,
+                "candidate_key": "long-thread-old-candidate",
+                "extraction_event_id": None,
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "source_occurred_at": "2034-02-01T10:00:00Z",
+                "interpretation": {
+                    "contract": "triage-context-interpretation-v2",
+                    "context_fingerprint": "b" * 64,
+                    "thread_key": "old-long-thread",
+                    "anchor_event_id": "long-thread-source-00",
+                    "compact_summary": "Old exact fixture ask",
+                    "case_summary": "Old context.",
+                    "why_member": "Old context.",
+                    "next_step": "Review.",
+                    "thread_state": "unclear",
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "unresolved_questions": [],
+                    "evidence_refs": [
+                        {
+                            "source_event_id": "long-thread-source-00",
+                            "quote": "Routine fixture update 0.",
+                        }
+                    ],
+                    "context_source_event_ids": ["long-thread-source-00"],
+                    "context_sources": [
+                        {
+                            "source_event_id": "long-thread-source-00",
+                            "relation": "thread",
+                            "reason_codes": ["provider_thread_id"],
+                            "relationship_source_event_ids": [],
+                        }
+                    ],
+                    "related_source_event_ids": [],
+                },
+            },
+        )
+    )
+
+    async def no_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(
+        source_events[-1], _make_ctx(log, no_candidate)
+    )
+
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert len(superseded) == 1
+    assert superseded[0].payload["proposal_id"] == "long-thread-prior-proposal"
+
+
+@pytest.mark.asyncio
 async def test_wholly_quoted_reply_cannot_become_a_candidate() -> None:
     log = _FakeEventLog()
 

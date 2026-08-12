@@ -8,9 +8,10 @@ action was performed.
 
 ## Implemented proof surface
 
-- Gmail adapter v1.2.0 emits `messaging.received@v4` and
-  `messaging.sent@v3`, preserving provider message time in envelope
-  `occurred_at` and RFC continuity metadata.
+- Gmail adapter v1.3.0 emits `messaging.received@v4` and
+  `messaging.sent@v4`, preserving provider message time in envelope
+  `occurred_at`, RFC continuity metadata, and the HTML MIME alternative for
+  historical Sent observations.
 - Noise filtering v21 and `classify_message_nature` v7 use
   `message-context-pack-v2` and `triage-context-interpretation-v2`.
 - Context assembly enforces 30-day/100-source provider-thread episodes and
@@ -26,7 +27,11 @@ action was performed.
 - Triage displays Message date separately from Imported / recorded time and
   offers exact wrong-context relationship/text corrections only when the
   server declares sufficient relationship provenance or uniquely grounded
-  authored evidence.
+  authored evidence. Exact admitting edge sources outside the model display
+  window are separately privacy-authorized and hydrated.
+- The 24,000-character model payload reserves the latest anchor and retains the
+  source under assessment, while replay reconciliation covers the complete
+  bounded episode rather than only the 12 displayed messages.
 - Four append-only correction/reversal events rebuild into Context Fabric v2.
   Text correction is proposal/candidate/digest/span scoped and preserves any
   other authored ask; the original source and member decision history remain
@@ -50,9 +55,12 @@ strong-edge admission, the member dismissal/correction batch, exact detach,
 explicit relink and text reinstatement, projection state, and rebuild equality.
 They also map actual Gmail adapter facts, seed a v20 durable consumer
 checkpoint, start the production v21 runner, prove full replay, supersede the
-untouched crossed-wire proposal, exclude weak/cross-member sources, and retain
-one valid reviewable sibling. They create no canonical record or provider
-effect.
+untouched crossed-wire proposal even when its source is outside the 12-message
+model window, exclude weak/cross-member sources, and retain one valid
+reviewable sibling. Production composition also maps quoted-only multipart
+Sent history through `messaging.sent@v4`, proves a terminal no-candidate result,
+and hydrates a displayed related message's exact admitting edge from outside
+the display window. The tests create no canonical record or provider effect.
 
 ## Validation record
 
@@ -60,8 +68,8 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- `PYTHONPATH=bridge poetry run pytest -q`: 1,852 passed.
-- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 59
+- `PYTHONPATH=bridge poetry run pytest -q`: 1,859 passed.
+- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 60
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
 - `poetry run ruff check adminme bridge/adminme_bridge` and the additional
@@ -78,10 +86,11 @@ The complete supported local command set passed on Python 3.14 and Node
   isolation, backup/restore, Python and bridge builds, and the aggregate
   release-candidate script passed.
 
-There were no test skips. The first aggregate attempt stopped in the unrelated
-Comms snooze acceptance gate because its immediate read observed `focus`
-instead of `snoozed` after a successful command. That exact test passed on an
-immediate isolated rerun, and the complete aggregate suite then passed from the
+There were no test skips. An earlier pre-final candidate aggregate attempt
+stopped in the unrelated Comms snooze acceptance gate because its immediate
+read observed `focus` instead of `snoozed` after a successful command. That
+exact test passed on an immediate isolated rerun; the next complete aggregate
+passed, and the final candidate's expanded complete aggregate passed from the
 beginning with the counts above. Pytest emitted the existing Starlette/httpx
 deprecation warning. `npm ci` reported that the existing
 `esbuild` and `fsevents` install scripts are not yet listed in `allowScripts`;
