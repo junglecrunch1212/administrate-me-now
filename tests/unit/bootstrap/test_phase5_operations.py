@@ -1484,6 +1484,26 @@ def test_live_service_definition_must_match_the_candidate_release(
     assert manager._launchctl_definition_matches(RUNTIME_LABEL, path) is False
 
 
+def test_runtime_health_does_not_mislabel_degraded_readiness_as_observation_only(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ServiceManager(test_paths, test_mode=False)
+    monkeypatch.setattr(
+        manager,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "status": "degraded"},
+    )
+    assert manager._runtime_health() == "degraded"
+
+    monkeypatch.setattr(
+        manager,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "status": "observation_only"},
+    )
+    assert manager._runtime_health() == "observation_only"
+
+
 def test_doctor_export_is_machine_readable_and_contains_no_secret_values(
     test_paths: DeploymentPaths,
 ) -> None:
@@ -1926,6 +1946,85 @@ def test_upgrade_aborts_source_wait_on_new_pipeline_degradation(
 
     assert manager._post_switch_doctor(REPO_ROOT) == structural
     assert include_synthetic == [False, False]
+
+
+def test_upgrade_aborts_any_transient_wait_on_hidden_adapter_degradation(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "adapter_capability_health", "ok": False}],
+    }
+    reports = iter((transient, structural))
+    include_synthetic: list[bool] = []
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            include_synthetic.append(include_synthetic_proof)
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["capabilities"]["adapter:tasks-google-tasks"] = {
+        "name": "Google Tasks",
+        "kind": "adapter",
+        "state": "degraded",
+        "reason": "configured adapter is not running",
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
+    assert include_synthetic == [False, False]
+
+
+def test_upgrade_aborts_any_transient_wait_on_hidden_blocked_capability(
+    test_paths: DeploymentPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = {
+        "status": "failed",
+        "checks": [{"name": "launchd_and_process_state", "ok": False}],
+    }
+    structural = {
+        "status": "failed",
+        "checks": [{"name": "adapter_capability_health", "ok": False}],
+    }
+    reports = iter((transient, structural))
+
+    class FakeDoctor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def run(self, *, include_synthetic_proof: bool = True):
+            return next(reports)
+
+    diagnostics = ServiceManager(test_paths, test_mode=True).runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = copy.deepcopy(diagnostics)
+    diagnostics["capabilities"]["adapter:tasks-google-tasks"] = {
+        "name": "Google Tasks",
+        "kind": "adapter",
+        "state": "blocked",
+        "reason": "configured adapter is blocked",
+    }
+
+    monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(manager.services, "runtime_diagnostics", lambda: diagnostics)
+
+    assert manager._post_switch_doctor(REPO_ROOT) == structural
 
 
 def test_upgrade_replay_settlement_window_covers_household_language_backlog() -> None:

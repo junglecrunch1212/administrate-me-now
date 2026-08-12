@@ -18,6 +18,7 @@ from bootstrap.source_assessment_repair import (
     BaselineTarget,
     SourceAssessmentRepairError,
     SourceAssessmentRepairPolicy,
+    load_repair_policy,
     offline_validate_repair_baseline,
     validate_declared_baseline,
 )
@@ -31,11 +32,11 @@ TENANT = "tenant-release-repair"
 
 def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
     return SourceAssessmentRepairPolicy(
-        contract="source-assessment-degraded-baseline-v1",
+        contract="source-assessment-degraded-baseline-v2",
         required_active_commit=ACTIVE_COMMIT,
         observation_mode_required=True,
         expected_counts=BaselineCounts(
-            obligations=1, accounted=1, pending=0, missing=0, failed=1
+            minimum_obligations=1, pending=0, missing=0, failed=1
         ),
         targets=[
             BaselineTarget(
@@ -57,6 +58,7 @@ def _doctor() -> dict[str, object]:
 def _diagnostics(source_id: str) -> dict[str, object]:
     return {
         "observation_active": True,
+        "ready": True,
         "capabilities": {
             "pipeline:pipeline:noise_filtering": {
                 "state": "healthy",
@@ -80,6 +82,13 @@ def _diagnostics(source_id: str) -> dict[str, object]:
                         }
                     ],
                     "content_exposed": False,
+                    "freshness": {
+                        "state": "fresh",
+                        "revision_current": True,
+                        "pending_recheck_required": False,
+                        "settled_revision": True,
+                        "refresh_error_type": None,
+                    },
                 },
             },
             "product:member": {"state": "degraded"},
@@ -118,6 +127,17 @@ def _source() -> EventEnvelope:
             "attachments": [],
         },
     )
+
+
+def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
+    policy = load_repair_policy(REPO_ROOT)
+
+    assert policy.contract == "source-assessment-degraded-baseline-v2"
+    assert policy.expected_counts.minimum_obligations == 62_623
+    assert policy.expected_counts.pending == 0
+    assert policy.expected_counts.missing == 0
+    assert policy.expected_counts.failed == 4
+    assert len(policy.targets) == 4
 
 
 async def _seed(log: EventLog) -> tuple[str, str]:
@@ -175,6 +195,16 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
         )
 
     changed = json.loads(json.dumps(diagnostics))
+    changed["ready"] = False
+    with pytest.raises(SourceAssessmentRepairError, match="ready live runtime"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
     changed["capabilities"]["policy:source-assurance"]["details"]["failed"][0][
         "reason"
     ] = "language_seam_OpenClawTimeout"
@@ -184,6 +214,56 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
             active_commit=ACTIVE_COMMIT,
             doctor=_doctor(),
             diagnostics=changed,
+        )
+
+
+def test_declared_baseline_accepts_only_new_fully_settled_obligations() -> None:
+    source_id = "ev_fixture_source"
+    policy = _policy(source_id)
+    diagnostics = _diagnostics(source_id)
+    counts = diagnostics["capabilities"]["policy:source-assurance"]["details"]["counts"]
+    counts["obligations"] = 10
+    counts["accounted"] = 10
+
+    snapshot = validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=_doctor(),
+        diagnostics=diagnostics,
+    )
+
+    assert snapshot == {
+        "minimum_obligations": 1,
+        "counts": {
+            "obligations": 10,
+            "accounted": 10,
+            "pending": 0,
+            "missing": 0,
+            "failed": 1,
+        },
+        "failed_target_count": 1,
+        "content_exposed": False,
+    }
+
+    counts["accounted"] = 9
+    with pytest.raises(SourceAssessmentRepairError, match="counts differ"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=diagnostics,
+        )
+
+    counts["accounted"] = 10
+    diagnostics["capabilities"]["policy:source-assurance"]["details"]["freshness"][
+        "revision_current"
+    ] = False
+    with pytest.raises(SourceAssessmentRepairError, match="fresh settled"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(),
+            diagnostics=diagnostics,
         )
 
 
@@ -222,6 +302,15 @@ def test_offline_activation_appends_only_exact_content_free_requests(
     )
     assert evidence["requested"] == 1
     assert evidence["content_exposed"] is False
+    assert evidence["stopped_log_snapshot"]["minimum_obligations"] == 1
+    assert evidence["stopped_log_snapshot"]["counts"] == {
+        "obligations": 1,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 0,
+        "failed": 1,
+    }
+    assert evidence["stopped_log_snapshot"]["watermark_event_id"] == failed_id
     assert "Content must never" not in str(evidence)
 
     async def inspect() -> None:
@@ -244,7 +333,7 @@ def test_offline_activation_appends_only_exact_content_free_requests(
     changed_policy = _policy(source_id).model_copy(
         update={
             "expected_counts": BaselineCounts(
-                obligations=2, accounted=2, pending=0, missing=0, failed=1
+                minimum_obligations=2, pending=0, missing=0, failed=1
             )
         }
     )

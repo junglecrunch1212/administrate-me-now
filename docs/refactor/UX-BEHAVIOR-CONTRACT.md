@@ -11,6 +11,10 @@ appearing empty or silently recovered. A delivery-time observation or identity
 mismatch records a terminal refusal for that exact command; it never renders a
 partial candidate or silently resumes if observation is later disabled and
 re-enabled.
+Settings and readiness surfaces must also show current adapter health: a
+successful Google Tasks poll clears a transient `backoff` state, while a still
+degraded readiness document cannot be presented as ordinary observation-only
+health. The immutable `adapter.error` event remains available as history.
 
 CO-016 amendment (2026-08-11): a successful Triage confirmation or typed
 dismissal clears exact-link focus, stays in the member's active working lens,

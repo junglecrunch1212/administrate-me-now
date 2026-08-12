@@ -38,8 +38,7 @@ _SOURCE_DERIVED_CAPABILITIES = frozenset(
 class BaselineCounts(BaseModel):
     model_config = {"extra": "forbid"}
 
-    obligations: int = Field(ge=1)
-    accounted: int = Field(ge=1)
+    minimum_obligations: int = Field(ge=1)
     pending: Literal[0]
     missing: Literal[0]
     failed: int = Field(ge=1, le=20)
@@ -58,7 +57,7 @@ class BaselineTarget(BaseModel):
 class SourceAssessmentRepairPolicy(BaseModel):
     model_config = {"extra": "forbid"}
 
-    contract: Literal["source-assessment-degraded-baseline-v1"]
+    contract: Literal["source-assessment-degraded-baseline-v2"]
     required_active_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     observation_mode_required: Literal[True]
     expected_counts: BaselineCounts
@@ -161,10 +160,6 @@ def load_repair_policy(candidate: Path) -> SourceAssessmentRepairPolicy:
         raise SourceAssessmentRepairError(
             "repair policy failed count does not equal its exact target set"
         )
-    if policy.expected_counts.accounted != policy.expected_counts.obligations:
-        raise SourceAssessmentRepairError(
-            "repair policy requires complete source accounting before recovery"
-        )
     return policy
 
 
@@ -188,7 +183,7 @@ def validate_declared_baseline(
     active_commit: str,
     doctor: dict[str, Any],
     diagnostics: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     """Fail unless the active machine differs from healthy in exactly one way."""
 
     if active_commit != policy.required_active_commit:
@@ -197,6 +192,8 @@ def validate_declared_baseline(
         )
     if diagnostics.get("observation_active") is not True:
         raise SourceAssessmentRepairError("repair requires active observation mode")
+    if diagnostics.get("ready") is not True:
+        raise SourceAssessmentRepairError("repair requires a ready live runtime")
     if _failed_doctor_checks(doctor) != {"source_assurance_terminal_dispositions"}:
         raise SourceAssessmentRepairError(
             "active Doctor differs from the declared source-only degradation"
@@ -215,15 +212,49 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "unexpected capability degradation is present: " + ", ".join(unexpected)
         )
+    source_capability = capabilities.get("policy:source-assurance") or {}
     details = _assurance_details(diagnostics)
+    if (
+        source_capability.get("state") != "degraded"
+        or details.get("state") != "degraded"
+    ):
+        raise SourceAssessmentRepairError(
+            "source-assurance state does not match the declared degradation"
+        )
     counts = details.get("counts") or {}
-    expected = policy.expected_counts.model_dump(mode="json")
-    if any(int(counts.get(name, -1)) != value for name, value in expected.items()):
+    try:
+        actual_counts = {
+            name: int(counts.get(name, -1))
+            for name in ("obligations", "accounted", "pending", "missing", "failed")
+        }
+    except (TypeError, ValueError) as exc:
+        raise SourceAssessmentRepairError(
+            "source-assurance counts are unavailable"
+        ) from exc
+    expected = policy.expected_counts
+    if (
+        actual_counts["obligations"] < expected.minimum_obligations
+        or actual_counts["accounted"] != actual_counts["obligations"]
+        or actual_counts["pending"] != expected.pending
+        or actual_counts["missing"] != expected.missing
+        or actual_counts["failed"] != expected.failed
+    ):
         raise SourceAssessmentRepairError(
             "source-assurance counts differ from the declared repair baseline"
         )
     if details.get("content_exposed") is not False:
         raise SourceAssessmentRepairError("source diagnostics exposed content")
+    freshness = details.get("freshness") or {}
+    if not (
+        freshness.get("state") == "fresh"
+        and freshness.get("revision_current") is True
+        and freshness.get("pending_recheck_required") is False
+        and freshness.get("settled_revision") is True
+        and freshness.get("refresh_error_type") is None
+    ):
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence is not a fresh settled revision"
+        )
     actual_failures = {
         (str(item.get("event_id") or ""), str(item.get("reason") or ""))
         for item in details.get("failed") or []
@@ -237,6 +268,12 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "failed source ids or reasons differ from the declared repair baseline"
         )
+    return {
+        "minimum_obligations": expected.minimum_obligations,
+        "counts": actual_counts,
+        "failed_target_count": len(actual_failures),
+        "content_exposed": False,
+    }
 
 
 def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
@@ -271,15 +308,28 @@ async def _offline_validate_and_append(
         )
         synthetic_diagnostics = {
             "observation_active": True,
+            "ready": True,
             "capabilities": {
                 **(diagnostics.get("capabilities") or {}),
                 "policy:source-assurance": {
                     "state": audit["state"],
-                    "details": audit,
+                    "details": {
+                        **audit,
+                        # A stopped-log audit closes over the exact latest
+                        # event watermark and is therefore the authoritative
+                        # fresh revision for activation.
+                        "freshness": {
+                            "state": "fresh",
+                            "revision_current": True,
+                            "pending_recheck_required": False,
+                            "settled_revision": True,
+                            "refresh_error_type": None,
+                        },
+                    },
                 },
             },
         }
-        validate_declared_baseline(
+        stopped_snapshot = validate_declared_baseline(
             policy,
             active_commit=policy.required_active_commit,
             doctor={
@@ -312,6 +362,10 @@ async def _offline_validate_and_append(
             return {
                 "contract": policy.contract,
                 "validated_targets": len(targets),
+                "stopped_log_snapshot": {
+                    **stopped_snapshot,
+                    "watermark_event_id": audit.get("watermark_event_id"),
+                },
                 "content_exposed": False,
             }
         target_digest = hashlib.sha256(
@@ -356,6 +410,10 @@ async def _offline_validate_and_append(
             "contract": policy.contract,
             "request_event_ids": event_ids,
             "requested": len(event_ids),
+            "stopped_log_snapshot": {
+                **stopped_snapshot,
+                "watermark_event_id": audit.get("watermark_event_id"),
+            },
             "content_exposed": False,
             "expires_after_activation": True,
         }

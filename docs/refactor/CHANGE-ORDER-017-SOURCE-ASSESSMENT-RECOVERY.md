@@ -1,6 +1,7 @@
 # Change Order 017 — Terminal source-assessment recovery
 
-Status: implementation candidate; not merged or deployed.
+Status: recovery implementation merged; deployment stopped before activation;
+guarded-release drift hardening candidate locally green and awaiting review.
 
 Governing sources: event-sourced source authority; D19 and D26; C002, C034,
 C097, C106, C107, C109, and C113; AC-12, AC-18, AC-21, AC-24, AC-34,
@@ -74,14 +75,14 @@ events. The failed assessments remain valid historical evidence.
 | New request-specific assessment and OpenClaw invocation identities | MODERNIZE | Existing failed events and idempotency meanings remain immutable. |
 | Newest-valid-assessment source-assurance rule | HARDEN | Projections read retained facts; no projection becomes a source of truth. |
 | Authenticated observation-only operator endpoint | HARDEN | Domain authorization and scope checks precede work; no member decision or provider authority is granted. |
-| Guarded release exception for the exact known baseline | HARDEN | The ordinary healthy-release gate remains unchanged for every other commit, count, source, reason, or capability. |
+| Guarded release exception for the exact known baseline | HARDEN | The original obligation floor, exact current stopped-log snapshot, exact failure set, and ordinary healthy-release gate reject every regression, unaccounted addition, changed source/reason, or degraded capability. |
 | Noise-filtering generation 20 and event schema v4 | MODERNIZE | The pinned `llm-task` seam, eleven target kinds, human gates, and provider-write ordering remain unchanged. |
 
 This change does not DEFER a required source disposition. It supplies the
 bounded mechanism needed to obtain one without altering the historical failed
 fact.
 
-## Exact release baseline exception
+## Guarded release baseline exception
 
 `bootstrap/release-exceptions/pr-334-source-assessment-recovery.json` is the
 only declared exception. Before candidate activation it requires all of the
@@ -90,7 +91,8 @@ following simultaneously:
 - active production commit
   `2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe`;
 - observation mode active;
-- 62,623 obligations and 62,623 accounted dispositions;
+- at least the original 62,623 obligations, with every current obligation
+  accounted at the fresh stopped-log watermark;
 - zero pending and zero missing dispositions;
 - exactly four current failures, all
   `language_seam_OpenClawUnreachable`;
@@ -98,13 +100,24 @@ following simultaneously:
   `ev_01KZSB7ZX20000`, and `ev_01KZSDH9CR0000`;
 - no unrelated failed Doctor capability or hidden degraded capability.
 
-The updater accepts this baseline only with the explicit
-`--approve-declared-source-assessment-repair` flag. It validates the live
-Doctor evidence before and after backup, stops services, re-audits the encrypted
-event log, and appends only the exact typed recovery requests before selecting
-the candidate. Any mismatch follows the ordinary fail-closed rollback path.
-The exception expires after successful candidate activation; post-switch
-acceptance still requires complete settlement and an entirely healthy Doctor.
+The original v1 equality snapshot correctly stopped the first authorized Phase
+B attempt after live ingestion advanced from 62,623 to 62,632 fully accounted
+obligations. A transient Google Tasks connection reset had also left the old
+adapter's current health latched in `backoff`; routine current-release restart
+proved the provider healthy and accounting advanced to 62,633/62,633. No
+candidate activation or recovery request occurred.
+
+The v2 updater accepts later count growth only when obligations never regress,
+accounted equals the exact current obligation count, pending and missing remain
+zero, the exact four failures/reasons remain current, freshness is settled, and
+no unrelated capability is degraded. It requires the explicit
+`--approve-declared-source-assessment-repair` flag, validates live Doctor and
+readiness before and after encrypted backup, stops services, re-audits the exact
+encrypted-log watermark, records that exact content-free snapshot, and appends
+only the four typed recovery requests before selecting the candidate. Any
+mismatch follows the ordinary fail-closed rollback path. The exception expires
+after successful candidate activation; post-switch acceptance still requires
+complete settlement and an entirely healthy Doctor.
 
 ## Security and privacy
 

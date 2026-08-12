@@ -1,7 +1,9 @@
 # CO-017 source-assessment recovery evidence
 
-Status: Phase A candidate evidence. No merge, release activation, or live
-recovery is claimed by this file.
+Status: PR #335 recovery implementation merged; release activation stopped
+before mutation; follow-up Phase A drift/status hardening is locally green and
+awaiting independent exact-head review. No live recovery is claimed by this
+file.
 
 ## Reproduction and cause
 
@@ -35,11 +37,35 @@ recovery is claimed by this file.
   causal failure once, while its own base/recovery-1/recovery-2 terminal
   identities remain non-repeating. A refusal is terminal for its exact command,
   and the guarded updater derives a new identity only after that refusal.
-- Release policy: the checked-in exception binds the prior live commit, exact
-  four source IDs/reasons, and exact 62,623/62,623 settled-count baseline. Every
-  changed or additional condition fails closed.
+- Release policy v2: the checked-in exception binds the prior live commit,
+  original 62,623-obligation floor, exact current full accounting at the
+  stopped-log watermark, exact four source IDs/reasons, fresh settlement,
+  observation mode, and zero unrelated degraded capabilities. New fully
+  accounted source facts may advance the snapshot; regression, pending,
+  missing, another failure, or changed identity/reason still fails closed.
 - Effect boundary: the control event itself creates no canonical object,
   provider command, provider effect, or domain approval.
+
+## First authorized transaction stop
+
+- G-001 authorization bound PR #335 to exact reviewed head
+  `bedd3180ce57c4ba9f8d4c136b3f25411b40f17f`; GitHub produced merge commit
+  `2a37aa08179a356fddfe0d4cd30ffd3e29f732a3`.
+- Read-only Phase B preflight observed 62,632/62,632 fully accounted
+  obligations instead of the checked-in 62,623 equality snapshot, with zero
+  pending/missing and the same exact four failures/reasons.
+- The same readiness document exposed Google Tasks in `backoff` after a prior
+  transient connection reset. The updater was not invoked; no backup, request,
+  release copy, pointer switch, service mutation, or provider action occurred.
+- A later explicitly requested operational fix used the current immutable
+  release's documented stop/start path. Google Tasks returned to running,
+  observation-only state with no current error, and the fresh source snapshot
+  advanced normally to 62,633/62,633.
+- The follow-up candidate makes that recovery state truthful after any later
+  successful poll, distinguishes degraded readiness from observation-only
+  readiness, permits only fully settled monotonic source growth, records the
+  exact stopped-log counts/watermark, and rejects hidden structural degradation
+  during every post-switch wait.
 
 ## Focused checks completed
 
@@ -52,7 +78,7 @@ recovery is claimed by this file.
 | Targeted Ruff checks for changed Python modules | Passed |
 | Targeted mypy checks for recovery, assurance, runtime, and updater modules | Passed |
 
-## Final-head local release gates
+## PR #335 final-head local release gates
 
 | Gate | Result |
 |---|---|
@@ -103,6 +129,36 @@ result was not counted. The harness was reinstalled and rerun with Homebrew
 
 These results prove candidate mechanics and local release readiness only. Live
 evidence must be recorded only after separately authorized guarded deployment.
+
+## Guarded-release drift/status candidate gates
+
+| Command or slice | Result |
+|---|---|
+| Focused policy, service-health, updater, and Google Tasks unit tests | PASS, including blocked-capability fail-closed coverage |
+| Combined source-recovery, runtime, updater/rollback, Google Tasks, and macOS operations slice | PASS |
+| Candidate v2 policy against the current content-free live readiness/Doctor snapshot | PASS at 62,633/62,633 accounted, zero pending/missing, and the exact four declared failures; no source content exposed |
+| `PYTHONPATH=bridge bash scripts/acceptance/release-candidate.sh` | PASS on the final worktree: 55 strict acceptance, 1,820 root/package, 60 bridge, Ruff format/lint, mypy, Pyright, dependency audits, performance, builds, architecture-negative, clean-install, tenant-isolation, backup/restore, OpenClaw 17-test contract/build/package/audit, shell, syntax, and diff checks |
+| `PYTHONPATH=bridge poetry run pytest -q` | 1,653 passed |
+| Required Ruff, mypy, and invariant commands | Passed; 219 mypy source files |
+| `PYTHONPATH=bridge poetry run ./scripts/acceptance/macos-bootstrap-rehearsal.sh` | PASS on arm64: 74 tests; runtime and OpenClaw plists valid |
+| Node 24.19.0 Gate 7 rendered browser harness with temporary evidence directory | 259/259 passed; 39 screenshots; zero console errors, page errors, request failures, or repository evidence writes |
+
+The first aggregate attempt reached the format gate only after its 55 strict
+acceptance, 1,819 root/package, and 60 bridge tests passed. Ruff identified one
+formatting-only change in `bootstrap/source_assessment_repair.py`; the formatter
+was applied, the focused policy tests passed, and the complete aggregate was
+rerun from the beginning to PASS. After the last fail-closed blocked-capability
+assertion was added, the complete aggregate and macOS rehearsal were rerun
+again to the final counts above. That interrupted attempt is not counted as the
+final aggregate result.
+
+Two final Gate 7 invocations with a manually restricted `PATH` stopped before
+browser startup with `Error: Gate 7 fixture server did not become ready at
+http://127.0.0.1:3347`; the restriction omitted
+`/opt/homebrew/bin/poetry`, so the harness could not spawn its fixture process.
+With the Poetry Python 3.14 environment first, Node 24.19 next, and the Poetry
+executable directory present, the complete harness passed at the result above.
+The two pre-browser environment invocations are not counted as test results.
 
 ## Required Phase B evidence
 

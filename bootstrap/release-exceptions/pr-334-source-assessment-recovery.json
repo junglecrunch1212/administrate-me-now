@@ -1,10 +1,9 @@
 {
-  "contract": "source-assessment-degraded-baseline-v1",
+  "contract": "source-assessment-degraded-baseline-v2",
   "required_active_commit": "2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe",
   "observation_mode_required": true,
   "expected_counts": {
-    "obligations": 62623,
-    "accounted": 62623,
+    "minimum_obligations": 62623,
     "pending": 0,
     "missing": 0,
     "failed": 4

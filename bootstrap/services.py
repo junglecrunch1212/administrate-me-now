@@ -371,7 +371,11 @@ class ServiceManager:
             return "degraded"
         if not data.get("ready"):
             return "failed" if data.get("status") == "blocked" else "degraded"
-        return "healthy" if data.get("status") == "healthy" else "observation_only"
+        if data.get("status") == "healthy":
+            return "healthy"
+        if data.get("status") == "observation_only":
+            return "observation_only"
+        return "degraded"
 
     def runtime_diagnostics(self) -> dict[str, Any] | None:
         """Return the local runtime's secret-free readiness document."""

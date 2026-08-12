@@ -257,7 +257,10 @@ class UpgradeManager:
         for capability_id, capability in capabilities.items():
             if capability_id in _SOURCE_SETTLEMENT_DERIVED_DEGRADATIONS:
                 continue
-            if isinstance(capability, dict) and capability.get("state") == "degraded":
+            if isinstance(capability, dict) and capability.get("state") in {
+                "degraded",
+                "blocked",
+            }:
                 return True
         return False
 
@@ -285,8 +288,21 @@ class UpgradeManager:
             if self.test_mode:
                 return last
 
+            diagnostics = (
+                self.services.runtime_diagnostics()
+                if failed
+                & {
+                    "launchd_and_process_state",
+                    "source_assurance_terminal_dispositions",
+                }
+                else None
+            )
+            if diagnostics is not None and self._has_new_structural_degradation(
+                diagnostics
+            ):
+                return self._run_release_doctor(release, include_synthetic_proof=False)
+
             if "source_assurance_terminal_dispositions" in failed:
-                diagnostics = self.services.runtime_diagnostics()
                 if diagnostics is None:
                     # A first source audit or saturated language-bound replay
                     # may briefly outlive one diagnostics request. Keep waiting
@@ -296,10 +312,6 @@ class UpgradeManager:
                         time.sleep(POST_SWITCH_POLL_SECONDS)
                         continue
                     return last
-                if self._has_new_structural_degradation(diagnostics):
-                    return self._run_release_doctor(
-                        release, include_synthetic_proof=False
-                    )
                 settled, _evidence = source_assurance_terminal_evidence(diagnostics)
                 if not settled and time.monotonic() < deadline:
                     time.sleep(POST_SWITCH_POLL_SECONDS)

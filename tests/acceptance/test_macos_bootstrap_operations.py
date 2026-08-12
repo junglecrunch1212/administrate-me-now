@@ -205,9 +205,22 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
         assert kwargs["append_requests"] is True
         offline_states.append(ServiceManager(paths, test_mode=True).status().status)
         return {
-            "contract": "source-assessment-degraded-baseline-v1",
+            "contract": "source-assessment-degraded-baseline-v2",
             "request_event_ids": ["ev_recovery_request"],
             "requested": 1,
+            "stopped_log_snapshot": {
+                "minimum_obligations": 1,
+                "counts": {
+                    "obligations": 1,
+                    "accounted": 1,
+                    "pending": 0,
+                    "missing": 0,
+                    "failed": 1,
+                },
+                "failed_target_count": 1,
+                "content_exposed": False,
+                "watermark_event_id": "ev_stopped_watermark",
+            },
             "content_exposed": False,
             "expires_after_activation": True,
         }
@@ -230,9 +243,22 @@ def test_declared_source_repair_runs_stopped_and_completes_guarded_upgrade(
     assert len(online_validations) == 2
     assert offline_states == ["stopped"]
     assert result["source_assessment_repair"] == {
-        "contract": "source-assessment-degraded-baseline-v1",
+        "contract": "source-assessment-degraded-baseline-v2",
         "request_event_ids": ["ev_recovery_request"],
         "requested": 1,
+        "stopped_log_snapshot": {
+            "minimum_obligations": 1,
+            "counts": {
+                "obligations": 1,
+                "accounted": 1,
+                "pending": 0,
+                "missing": 0,
+                "failed": 1,
+            },
+            "failed_target_count": 1,
+            "content_exposed": False,
+            "watermark_event_id": "ev_stopped_watermark",
+        },
         "content_exposed": False,
         "expires_after_activation": True,
     }
@@ -287,7 +313,7 @@ def test_declared_source_repair_rolls_back_on_new_post_switch_degradation(
     monkeypatch.setattr(
         "bootstrap.upgrade.offline_validate_repair_baseline",
         lambda *_args, **_kwargs: {
-            "contract": "source-assessment-degraded-baseline-v1",
+            "contract": "source-assessment-degraded-baseline-v2",
             "request_event_ids": ["ev_recovery_request"],
             "requested": 1,
             "content_exposed": False,
