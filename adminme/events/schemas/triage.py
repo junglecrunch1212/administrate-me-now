@@ -115,6 +115,25 @@ class TriageContextSourceV2(BaseModel):
             "attachment_filename_overlap",
         ]
     ] = Field(min_length=1, max_length=8)
+    relationship_source_event_ids: list[str] = Field(max_length=100)
+
+    @model_validator(mode="after")
+    def exact_relationship_provenance(self) -> "TriageContextSourceV2":
+        strong = {
+            "rfc_reference",
+            "attachment_identity",
+            "member_confirmed_context",
+        }
+        if self.relation == "related" and (
+            not strong.intersection(self.reason_codes)
+            or not self.relationship_source_event_ids
+        ):
+            raise ValueError(
+                "related context requires a strong reason and exact source edge"
+            )
+        if self.relation == "thread" and self.relationship_source_event_ids:
+            raise ValueError("provider-thread context cannot carry cross-thread edges")
+        return self
 
 
 class TriageContextInterpretationV1(BaseModel):

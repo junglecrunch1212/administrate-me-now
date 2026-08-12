@@ -47,6 +47,7 @@ from adminme.events.schemas.calendar_policy import (
 )
 from adminme.lib.scope import allowed_read, filter_one
 from adminme.lib.session import Session
+from adminme.message_context import authored_message_text
 from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
@@ -607,6 +608,7 @@ class ContextSourceTextReinstateRequest(BaseModel):
     model_config = {"extra": "forbid"}
     request_id: str = Field(min_length=8, max_length=120)
     source_event_id: str = Field(min_length=1, max_length=240)
+    correction_id: str = Field(min_length=1, max_length=240)
 
 
 class TriagePolicyPreviewRequest(BaseModel):
@@ -1071,10 +1073,18 @@ def _context_relationship_id(
 
 
 def _context_source_correction_id(
-    tenant_id: str, member_id: str, source_event_id: str
+    tenant_id: str,
+    member_id: str,
+    source_event_id: str,
+    proposal_id: str,
+    candidate_key: str,
+    evidence_quote_digest: str,
 ) -> str:
     digest = hashlib.sha256(
-        f"{tenant_id}|{member_id}|{source_event_id}".encode()
+        (
+            f"{tenant_id}|{member_id}|{source_event_id}|{proposal_id}|"
+            f"{candidate_key}|{evidence_quote_digest}"
+        ).encode()
     ).hexdigest()[:32]
     return f"context_source_text_{digest}"
 
@@ -1103,6 +1113,38 @@ async def _owned_message_source(
     ):
         raise HTTPException(404, "context source not found")
     return source
+
+
+async def _owned_active_source_text_correction(
+    runtime: Any,
+    session: Session,
+    correction_id: str,
+    source_event_id: str,
+) -> dict[str, Any]:
+    """Resolve the latest exact correction state without trusting the request."""
+
+    if runtime.event_log is None:
+        raise HTTPException(503, "event log unavailable")
+    latest: dict[str, Any] | None = None
+    async for event in runtime.event_log.read_since(
+        owner_scope=f"private:{session.auth_member_id}",
+        types=["context.source_text.corrected", "context.source_text.reinstated"],
+    ):
+        payload = event.get("payload") or {}
+        if (
+            event.get("tenant_id") == session.tenant_id
+            and payload.get("member_id") == session.auth_member_id
+            and payload.get("correction_id") == correction_id
+        ):
+            latest = event
+    if latest is None:
+        raise HTTPException(404, "source-text correction not found")
+    payload = latest.get("payload") or {}
+    if payload.get("source_event_id") != source_event_id:
+        raise HTTPException(422, "source-text correction does not match source")
+    if latest.get("type") != "context.source_text.corrected":
+        raise HTTPException(409, "source-text correction is already reinstated")
+    return latest
 
 
 def _require_same_context_coordinate(
@@ -3438,11 +3480,15 @@ async def reinstate_context_source_text(
         await runtime.wait_for_projection("context_fabric", prior["event_id"])
         return {"event_id": prior["event_id"], "state": "reinstated", "duplicate": True}
     source = await _owned_message_source(runtime, session, body.source_event_id)
+    await _owned_active_source_text_correction(
+        runtime,
+        session,
+        body.correction_id,
+        body.source_event_id,
+    )
     reinstated_at = EventEnvelope.now_utc_iso()
     payload = {
-        "correction_id": _context_source_correction_id(
-            session.tenant_id, session.auth_member_id, body.source_event_id
-        ),
+        "correction_id": body.correction_id,
         "source_event_id": body.source_event_id,
         "member_id": session.auth_member_id,
         "reinstated_by_member_id": session.auth_member_id,
@@ -3551,6 +3597,11 @@ async def _dismiss_triage_item_locked(
     correction_envelope_indexes: list[int] = []
     if correction is not None:
         interpretation = item.get("interpretation") or {}
+        context_sources = {
+            str(value.get("source_event_id")): value
+            for value in interpretation.get("context_sources") or []
+            if isinstance(value, dict) and value.get("source_event_id")
+        }
         allowed_related_source_ids = {
             str(value)
             for value in interpretation.get("related_source_event_ids") or []
@@ -3573,51 +3624,75 @@ async def _dismiss_triage_item_locked(
             raise HTTPException(
                 422, "an unrelated-source correction must select displayed context"
             )
-        source = await _owned_message_source(
-            runtime, session, str(item["source_event_id"])
-        )
         corrected_at = EventEnvelope.now_utc_iso()
-        for index, related_source_event_id in enumerate(requested_related_source_ids):
+        relationship_index = 0
+        for related_source_event_id in requested_related_source_ids:
             related = await _owned_message_source(
                 runtime, session, related_source_event_id
             )
-            provider, provider_account_id, workspace = _require_same_context_coordinate(
-                source, related
-            )
-            correction_payload = {
-                "relationship_id": _context_relationship_id(
-                    session.tenant_id,
-                    session.auth_member_id,
-                    str(item["source_event_id"]),
-                    related_source_event_id,
-                ),
-                "source_event_id": str(item["source_event_id"]),
-                "related_source_event_id": related_source_event_id,
-                "member_id": session.auth_member_id,
-                "provider": provider,
-                "provider_account_id": provider_account_id,
-                "workspace": workspace,
-                "algorithm": "message-context-pack-v2",
-                "rejected_by_member_id": session.auth_member_id,
-                "rejected_at": corrected_at,
-                "reason": "unrelated_sources",
-            }
-            await _guard_triage_write(
-                runtime, session, "context.relationship.rejected", correction_payload
-            )
-            correction_envelope_indexes.append(len(envelopes))
-            envelopes.append(
-                _triage_event(
-                    session,
-                    event_type="context.relationship.rejected",
-                    payload=correction_payload,
-                    request_id=f"{body.request_id}:context:{index}",
-                    request_fingerprint=request_fingerprint,
-                    causation_id=item["last_event_id"],
-                    sensitivity=cast(Sensitivity, item.get("sensitivity") or "normal"),
+            context_source = context_sources.get(related_source_event_id) or {}
+            relationship_source_ids = list(
+                dict.fromkeys(
+                    str(value)
+                    for value in context_source.get("relationship_source_event_ids", [])
+                    if value
                 )
             )
+            if not relationship_source_ids:
+                raise HTTPException(
+                    422,
+                    "displayed context lacks exact relationship-edge provenance",
+                )
+            for relationship_source_event_id in relationship_source_ids:
+                relationship_source = await _owned_message_source(
+                    runtime, session, relationship_source_event_id
+                )
+                provider, provider_account_id, workspace = (
+                    _require_same_context_coordinate(relationship_source, related)
+                )
+                correction_payload = {
+                    "relationship_id": _context_relationship_id(
+                        session.tenant_id,
+                        session.auth_member_id,
+                        relationship_source_event_id,
+                        related_source_event_id,
+                    ),
+                    "source_event_id": relationship_source_event_id,
+                    "related_source_event_id": related_source_event_id,
+                    "member_id": session.auth_member_id,
+                    "provider": provider,
+                    "provider_account_id": provider_account_id,
+                    "workspace": workspace,
+                    "algorithm": "message-context-pack-v2",
+                    "rejected_by_member_id": session.auth_member_id,
+                    "rejected_at": corrected_at,
+                    "reason": "unrelated_sources",
+                }
+                await _guard_triage_write(
+                    runtime,
+                    session,
+                    "context.relationship.rejected",
+                    correction_payload,
+                )
+                correction_envelope_indexes.append(len(envelopes))
+                envelopes.append(
+                    _triage_event(
+                        session,
+                        event_type="context.relationship.rejected",
+                        payload=correction_payload,
+                        request_id=(f"{body.request_id}:context:{relationship_index}"),
+                        request_fingerprint=request_fingerprint,
+                        causation_id=item["last_event_id"],
+                        sensitivity=cast(
+                            Sensitivity, item.get("sensitivity") or "normal"
+                        ),
+                    )
+                )
+                relationship_index += 1
         if correction.quoted_or_forwarded_history:
+            source = await _owned_message_source(
+                runtime, session, str(item["source_event_id"])
+            )
             evidence_quote = next(
                 (
                     str(ref.get("quote") or "")
@@ -3629,22 +3704,47 @@ async def _dismiss_triage_item_locked(
                 ),
                 "",
             )
+            authored = authored_message_text(source.get("payload") or {})
+            if not authored.reliable or not evidence_quote:
+                raise HTTPException(
+                    422, "quoted-history correction requires reliable exact evidence"
+                )
+            evidence_start = authored.text.find(evidence_quote)
+            if (
+                evidence_start < 0
+                or authored.text.find(evidence_quote, evidence_start + 1) >= 0
+            ):
+                raise HTTPException(
+                    422,
+                    "quoted-history evidence must occur exactly once in authored text",
+                )
+            evidence_end = evidence_start + len(evidence_quote)
+            evidence_quote_digest = hashlib.sha256(
+                evidence_quote.encode("utf-8")
+            ).hexdigest()
             text_payload = {
                 "correction_id": _context_source_correction_id(
                     session.tenant_id,
                     session.auth_member_id,
                     str(item["source_event_id"]),
+                    proposal_id,
+                    str(item.get("candidate_key") or "candidate"),
+                    evidence_quote_digest,
                 ),
                 "source_event_id": str(item["source_event_id"]),
+                "proposal_id": proposal_id,
+                "candidate_key": str(item.get("candidate_key") or "candidate"),
                 "member_id": session.auth_member_id,
+                "algorithm": "authored-message-text-v2",
+                "authored_text_digest": hashlib.sha256(
+                    authored.text.encode("utf-8")
+                ).hexdigest(),
+                "evidence_start": evidence_start,
+                "evidence_end": evidence_end,
                 "corrected_by_member_id": session.auth_member_id,
                 "corrected_at": corrected_at,
                 "reason": "quoted_or_forwarded_history",
-                "evidence_quote_digest": (
-                    hashlib.sha256(evidence_quote.encode()).hexdigest()
-                    if evidence_quote
-                    else None
-                ),
+                "evidence_quote_digest": evidence_quote_digest,
             }
             await _guard_triage_write(
                 runtime, session, "context.source_text.corrected", text_payload

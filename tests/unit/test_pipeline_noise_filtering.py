@@ -319,6 +319,57 @@ async def test_empty_body_records_no_candidate_without_calling_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_html_only_body_uses_canonical_authored_text() -> None:
+    log = _FakeEventLog()
+    calls: list[dict[str, Any]] = []
+
+    async def stub_run_skill(
+        _skill_id: str, inputs: dict[str, Any], _skill_ctx: SkillContext
+    ) -> SkillResult:
+        calls.append(inputs)
+        return _make_skill_result()
+
+    event = _messaging_received_event(body_text=None)
+    event["payload"]["body_html"] = (
+        "<div>Please review the fixture authorization.</div>"
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assert calls[0]["body_text"] == "Please review the fixture authorization."
+
+
+@pytest.mark.asyncio
+async def test_uncertain_authored_text_records_terminal_no_candidate() -> None:
+    log = _FakeEventLog()
+    calls: list[Any] = []
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result()
+
+    event = _messaging_received_event(
+        body_text=(
+            "Sent: Tuesday, February 1\n"
+            "To: member@example.invalid\n"
+            "Subject: Earlier request\n"
+            "Please wire fixture funds."
+        )
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["reason_codes"] == ["authored_text_uncertain"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_skill_success_emits_classified() -> None:
     log = _FakeEventLog()
 

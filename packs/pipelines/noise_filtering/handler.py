@@ -195,17 +195,28 @@ async def _write_first_equivalent_event(
 
 
 def _extract_text_and_inputs(
-    event_type: str, payload: dict[str, Any]
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    canonical_body_text: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """Build the skill input payload, or return None if there's nothing
     to classify (empty body)."""
     outbound_message = False
     if event_type == "telephony.sms_received":
-        text = (payload.get("body") or "").strip()
+        text = (
+            canonical_body_text
+            if canonical_body_text is not None
+            else str(payload.get("body") or "").strip()
+        )
         from_id = str(payload.get("from_number", ""))
         source_channel = "sms"
     else:
-        text = (payload.get("body_text") or "").strip()
+        text = (
+            canonical_body_text
+            if canonical_body_text is not None
+            else str(payload.get("body_text") or "").strip()
+        )
         provider_labels = {
             str(label).upper() for label in payload.get("provider_labels") or []
         }
@@ -538,18 +549,6 @@ class NoiseFilteringPipeline:
             if ctx.candidate_policy_fn is not None
             else default_policy(policy_source_id)
         )
-        prepared = _extract_text_and_inputs(event_type, payload)
-        if prepared is None:
-            await self._emit_triage_assessment(
-                event=event,
-                ctx=ctx,
-                source_event_id=source_event_id,
-                candidates=[],
-                outcome="no_candidate",
-                reason_codes=["source_has_no_text_content"],
-            )
-            return
-        source_text, inputs = prepared
         context_pack = await build_message_context_pack(event, ctx.event_log)
         current_context_message = next(
             (
@@ -559,11 +558,46 @@ class NoiseFilteringPipeline:
             ),
             None,
         )
-        if current_context_message is not None:
-            # Candidate fallback, model input, admission, and read-time evidence
-            # all use the same authored-text v2 representation.
-            source_text = current_context_message.source_text()
-            inputs["body_text"] = current_context_message.body_text
+        if current_context_message is None:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["context_pack_missing_current_source"],
+            )
+            return
+        if not current_context_message.authored_text_reliable:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=["authored_text_uncertain"],
+            )
+            return
+        prepared = _extract_text_and_inputs(
+            event_type,
+            payload,
+            canonical_body_text=current_context_message.body_text,
+        )
+        if prepared is None:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=["source_has_no_authored_text"],
+            )
+            return
+        source_text, inputs = prepared
+        # Candidate fallback, model input, admission, and read-time evidence
+        # all use the same authored-text v2 representation.
+        source_text = current_context_message.source_text()
+        inputs["body_text"] = current_context_message.body_text
         inputs["candidate_mode"] = policy["mode"]
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
         inputs["candidate_language_enabled"] = bool(policy["language_enabled"])

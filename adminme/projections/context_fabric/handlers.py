@@ -836,12 +836,26 @@ def _record_source_text_decision(
     )
     conn.execute(
         """INSERT INTO context_source_text_corrections (
-               tenant_id, correction_id, source_event_id, member_id, state,
-               reason, evidence_quote_digest, decided_at, decided_by_member_id,
+               tenant_id, correction_id, source_event_id, proposal_id,
+               candidate_key, member_id, algorithm, authored_text_digest,
+               evidence_start, evidence_end, state, reason,
+               evidence_quote_digest, decided_at, decided_by_member_id,
                owner_scope, visibility_scope, sensitivity, last_event_id
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(tenant_id, correction_id) DO UPDATE SET
                state=excluded.state, reason=excluded.reason,
+               proposal_id=COALESCE(excluded.proposal_id,
+                   context_source_text_corrections.proposal_id),
+               candidate_key=COALESCE(excluded.candidate_key,
+                   context_source_text_corrections.candidate_key),
+               algorithm=COALESCE(excluded.algorithm,
+                   context_source_text_corrections.algorithm),
+               authored_text_digest=COALESCE(excluded.authored_text_digest,
+                   context_source_text_corrections.authored_text_digest),
+               evidence_start=COALESCE(excluded.evidence_start,
+                   context_source_text_corrections.evidence_start),
+               evidence_end=COALESCE(excluded.evidence_end,
+                   context_source_text_corrections.evidence_end),
                evidence_quote_digest=COALESCE(
                    excluded.evidence_quote_digest,
                    context_source_text_corrections.evidence_quote_digest
@@ -854,7 +868,13 @@ def _record_source_text_decision(
             envelope["tenant_id"],
             payload["correction_id"],
             payload["source_event_id"],
+            payload.get("proposal_id"),
+            payload.get("candidate_key"),
             payload["member_id"],
+            payload.get("algorithm"),
+            payload.get("authored_text_digest"),
+            payload.get("evidence_start"),
+            payload.get("evidence_end"),
             "reinstated" if reinstated else "corrected",
             payload["reason"],
             payload.get("evidence_quote_digest"),

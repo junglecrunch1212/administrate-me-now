@@ -68,6 +68,10 @@ from adminme.lib.observation import outbound
 _log = logging.getLogger(__name__)
 
 
+class _GmailSourceTimestampError(ValueError):
+    """The provider source timestamp is absent or cannot be trusted."""
+
+
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -812,9 +816,10 @@ class GmailAdapter(CommunicationAdapter):
         ):
             return None
         try:
-            return int(raw_internal_date)
+            value = int(raw_internal_date)
         except ValueError:
             return None
+        return value if value > 0 else None
 
     @staticmethod
     def _historical_related_date_clause(
@@ -897,7 +902,7 @@ class GmailAdapter(CommunicationAdapter):
                     )
                 emitted += 1
                 self._events_since_advance += 1
-            except EventValidationError as exc:
+            except (EventValidationError, _GmailSourceTimestampError) as exc:
                 quarantined += 1
                 quarantine_event_id = await self._emit_quarantine(
                     ctx=ctx,
@@ -1289,16 +1294,22 @@ class GmailAdapter(CommunicationAdapter):
     @staticmethod
     def _epoch_ms_to_iso(epoch_ms: str | int | None) -> str:
         """Convert Gmail's ``internalDate`` (epoch ms as string) to a Z-
-        suffixed UTC ISO string. Falls back to now() on missing/invalid."""
-        if epoch_ms is None:
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        suffixed UTC ISO string or reject an untrustworthy source time."""
+        if isinstance(epoch_ms, bool) or epoch_ms is None:
+            raise _GmailSourceTimestampError("Gmail internalDate is missing")
         try:
             ms = int(epoch_ms)
         except (TypeError, ValueError):
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+            raise _GmailSourceTimestampError("Gmail internalDate is invalid") from None
+        if ms <= 0:
+            raise _GmailSourceTimestampError("Gmail internalDate must be positive")
+        try:
+            parsed = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError) as exc:
+            raise _GmailSourceTimestampError(
+                "Gmail internalDate is outside the supported range"
+            ) from exc
+        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @staticmethod
     def _headers_to_map(
@@ -1441,6 +1452,7 @@ class GmailAdapter(CommunicationAdapter):
         body_text, _body_html = self._extract_bodies(payload_dict)
         native_message_id = str(message.get("id") or "unknown")
         configured_account = str(self._config.get("user_email") or "gmail")
+        sent_iso = self._epoch_ms_to_iso(message.get("internalDate"))
         return await self._append(
             ctx=ctx,
             event_type="messaging.sent",
@@ -1453,7 +1465,7 @@ class GmailAdapter(CommunicationAdapter):
                 "thread_id": message.get("threadId"),
                 "subject": headers.get("subject"),
                 "body_text": body_text,
-                "sent_at": self._epoch_ms_to_iso(message.get("internalDate")),
+                "sent_at": sent_iso,
                 "delivery_status": "sent",
                 "member_id": str(self._config.get("member_id") or "unbound"),
                 "provider": "gmail",
@@ -1465,7 +1477,7 @@ class GmailAdapter(CommunicationAdapter):
                 "references": (headers.get("references") or "").split(),
                 "in_reply_to": headers.get("in-reply-to"),
             },
-            occurred_at_override=self._epoch_ms_to_iso(message.get("internalDate")),
+            occurred_at_override=sent_iso,
         )
 
     @staticmethod
@@ -1486,8 +1498,13 @@ class GmailAdapter(CommunicationAdapter):
         provider_watermark: str | None,
     ) -> str:
         now = ctx.now_factory().astimezone(timezone.utc).isoformat()
+        error_kind = (
+            "validation"
+            if isinstance(error, (EventValidationError, _GmailSourceTimestampError))
+            else "api_changed"
+        )
         self._status.last_error = {
-            "error_kind": "api_changed",
+            "error_kind": error_kind,
             "error_message": f"{type(error).__name__}: {error}"[:2000],
             "external_id_fingerprint": hashlib.sha256(external_id.encode()).hexdigest(),
         }
@@ -1499,7 +1516,7 @@ class GmailAdapter(CommunicationAdapter):
                 "adapter_family": self.family,
                 "external_id": external_id,
                 "content_fingerprint": fingerprint,
-                "error_kind": "api_changed",
+                "error_kind": error_kind,
                 "error_message": f"{type(error).__name__}: {error}"[:2000],
                 "quarantined_at": now,
                 "provider_watermark": provider_watermark,

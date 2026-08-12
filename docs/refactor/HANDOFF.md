@@ -31,16 +31,22 @@ exact RFC continuity, exact attachment identity, or explicit member
 confirmation for a cross-thread source. Repeated participants, addresses,
 names, subjects, and filenames are corroboration only. Authored-text v2 is
 shared by language input, deterministic fallback, exact grounding, and source
-display, including fail-closed offset-zero quoted/forwarded history.
+display, including fail-closed offset-zero and uncertain quoted/forwarded
+history. Gmail message-local attachment IDs are explicitly non-admitting, and
+invalid/missing provider timestamps are quarantined rather than rewritten as
+ingestion time.
 
-Triage wrong-context dismissal now supports an atomic exact relationship
-rejection and exact quoted-history correction. Member-owned confirmation and
+Triage wrong-context dismissal now supports an atomic rejection of the actual
+admitting source edge and an evidence-span-scoped quoted-history correction;
+other asks in the message remain intact. Member-owned confirmation and
 reinstatement endpoints reverse each decision. Context Fabric v2 rebuilds the
 state from immutable events, and wrong-context feedback cannot aggregate into a
 broad sender/account/workspace suppression suggestion. Noise filtering v21
 opts into full replay and retires only untouched stale context interpretations;
 member decisions remain permanent. The new production-composition acceptance
-test completes detach, relink, reinstate, and rebuild with no canonical or
+tests complete detach, relink, reinstate, and rebuild and exercise actual Gmail
+mapping through a v20-to-v21 full replay that supersedes the stale crossed-wire
+proposal while retaining a valid reviewable sibling, with no canonical or
 provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
 file. Independent exact-head review and the ordinary controlled-release path
 remain mandatory before any Phase B action.

@@ -8,6 +8,11 @@ explicit full replay, and the pinned classification skill advances from v6 to
 v7. Replay appends new assessments/proposals and deterministic supersession
 receipts only for untouched stale interpretations. Source events, member
 feedback, decisions, canonical records, and provider facts are never rewritten.
+The v21 replay stores exact relationship-edge provenance. Source-text
+corrections are proposal/candidate/digest/span scoped; replay no longer blanks
+unrelated authored asks. Invalid Gmail source timestamps quarantine instead of
+creating false source chronology. Gmail message-local attachment IDs remain
+non-admitting until a stable identity or content digest exists.
 
 Context Fabric advances from projection v1 to v2 with additive exact
 relationship-decision and source-text-correction tables. Rebuild derives both

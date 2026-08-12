@@ -19,6 +19,11 @@ it never implies a sender-, account-, workspace-, or keyword-wide rule. No
 correction creates household truth or a provider write. Explicit member relink
 and source-text reinstatement remain audited management actions even when their
 initial UI is API-only.
+The relationship action follows the displayed source back to the exact
+admitting edge rather than assuming the newest thread message supplied it. A
+quoted-history action suppresses only the candidate's exact cited span; it does
+not hide separate authored asks in the same message. Uncertain authored text
+does not produce a review candidate.
 
 CO-017 amendment (2026-08-11): terminal source-assessment recovery is an
 authenticated operator/release control, not a member Triage action. It adds no

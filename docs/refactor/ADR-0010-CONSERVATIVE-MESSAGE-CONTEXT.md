@@ -25,6 +25,14 @@ Cross-thread context is admitted only through:
 - an exact attachment digest or provider attachment identity; or
 - one explicit member-confirmed exact source pair.
 
+The context contract records the exact primary source event(s) that supplied
+each strong edge. A rejection targets those pairs, not whichever message later
+became the provider-thread anchor. `provider_attachment_id` from Gmail is
+message-local and is therefore not a provider attachment identity. Until the
+Gmail adapter can supply a content digest or genuinely stable file identity,
+attachment-based cross-thread admission is unavailable for Gmail; filenames
+remain corroboration only.
+
 Participant, address, subject, household/business-name, and filename overlap
 may explain an already-admitted edge but never admit one. The language model
 receives the bounded set and cannot add sources.
@@ -33,10 +41,19 @@ One `authored-message-text-v2` function normalizes line endings, removes
 recognized plain-text or HTML reply/forward containers including a boundary at
 offset zero, and supplies fallback extraction, pinned-skill input, exact-quote
 validation, and displayed evidence.
+An HTML-only body is canonicalized before the pipeline checks for empty text.
+An unrecognized quote-header/container signal produces an explicit unreliable
+result and a terminal no-candidate assessment instead of language inference.
 
 Member corrections append exact relationship-rejected or source-text-corrected
-events. Explicit relationship-confirmed and source-text-reinstated events
-reverse them. The immutable provider facts remain unchanged.
+events. A source-text correction is bound to the proposal/candidate, authored
+text digest, exact evidence digest, and immutable character span; it removes
+only that evidence span, not every other valid ask in the source. Explicit
+relationship-confirmed and source-text-reinstated events reverse the exact
+decision. The immutable provider facts remain unchanged.
+
+Missing, invalid, non-positive, or out-of-range Gmail `internalDate` values are
+terminally quarantined. They never fall back to ingestion wall-clock time.
 
 ## Rejected alternatives
 

@@ -23,7 +23,9 @@ source fact, sender identity, provider account, or household name is wrong.
 ## Required behavior
 
 - A provider message's envelope `occurred_at` is the provider message time;
-  append time remains `recorded_at`. Triage labels both when they differ.
+  append time remains `recorded_at`. Triage labels both when they differ. A
+  missing or invalid Gmail `internalDate` is quarantined rather than replaced
+  with ingestion wall-clock time.
 - Matter and provider-thread episodes use source time, span at most 30 elapsed
   days and 100 sources, and split conservatively when a provider reuses a
   thread identifier.
@@ -31,12 +33,20 @@ source fact, sender identity, provider account, or household name is wrong.
   attachment identity/digest, or an explicit member confirmation. Participant,
   email, repeated household/business names, subject tokens, and attachment
   filenames are corroboration only and can never admit a source alone.
+  Every admitted related source records the exact primary source event(s) that
+  supplied its edge, and dismissal rejects those pairs even after a later
+  same-thread anchor arrives. Gmail message-local attachment IDs are not stable
+  identities; Gmail attachment admission remains unavailable without a digest
+  or genuinely stable provider file identity.
 - `authored-message-text-v2` is the one canonical body representation for
   model input, deterministic fallback, exact-quote admission, and read-time
   evidence. Recognized reply/forward boundaries at offset zero produce empty
-  authored content and therefore no candidate.
+  authored content and therefore no candidate. HTML-only content is
+  canonicalized before the empty-body check; an unrecognized quote signal is
+  terminally classified as uncertain and never sent to the language seam.
 - A wrong-context dismissal may atomically reject selected exact source pairs
-  and/or mark one exact source's retained text as quoted/forwarded history.
+  and/or mark one exact proposal/candidate evidence span as quoted/forwarded
+  history. Other authored asks in the same source remain available.
   Corrections are private, member-owned, provider/account/workspace checked,
   guarded, audited, replayable, stamped with their context algorithm, and
   reversible through explicit confirmation or reinstatement events.
@@ -82,5 +92,8 @@ AC-43 is implemented by `tests/acceptance/test_context_correctness_vertical_slic
 `tests/unit/test_message_context.py`, `tests/unit/test_pipeline_noise_filtering.py`,
 `tests/unit/test_projection_context_fabric.py`, Gmail adapter/supervisor tests,
 and the ordinary replay, privacy, governance, browser, package, and release
-gates. Candidate evidence is recorded in
+gates. The process slice uses the actual Gmail adapter mapping, seeds a v20
+durable checkpoint, starts the production v21 runner, proves full replay,
+retires the untouched crossed-wire proposal, keeps a valid sibling reviewable,
+and creates no canonical or provider effect. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.

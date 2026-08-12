@@ -51,6 +51,11 @@ _HTML_QUOTE_BOUNDARY = re.compile(
     r"(?is)(?:<blockquote\b[^>]*>|<div\b[^>]*(?:class|id)\s*=\s*['\"][^'\"]*"
     r"(?:gmail_quote|gmail_attr|divRplyFwdMsg)[^'\"]*['\"][^>]*>)"
 )
+_PLAIN_QUOTE_HEADER_HINT = re.compile(r"(?im)^(?:sent|date|to|cc|bcc|subject):\s+\S.+$")
+_HTML_QUOTE_HINT = re.compile(
+    r"(?is)(?:moz-cite-prefix|data-(?:quoted|quote)|(?:class|id)\s*=\s*['\"]"
+    r"[^'\"]*(?:quote|reply|forward)[^'\"]*['\"])"
+)
 _HTML_BREAK = re.compile(r"(?is)<(?:br|/p|/div|/li|/tr)\b[^>]*>")
 _HTML_TAG = re.compile(r"(?is)<[^>]+>")
 _STOPWORDS = {
@@ -93,6 +98,7 @@ class ContextMessage:
     source_event_id: str
     relation: str
     relation_reason_codes: tuple[str, ...]
+    relationship_source_event_ids: tuple[str, ...]
     direction: str
     occurred_at: str
     source_channel: str
@@ -100,6 +106,7 @@ class ContextMessage:
     recipients: tuple[str, ...]
     subject: str | None
     body_text: str
+    authored_text_reliable: bool
     attachment_names: tuple[str, ...]
 
     def skill_payload(self) -> dict[str, Any]:
@@ -176,6 +183,8 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
             quoted_history_removed = True
         text = html.unescape(_HTML_TAG.sub("", _HTML_BREAK.sub("\n", html_value)))
         text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if html_boundary is None and _HTML_QUOTE_HINT.search(raw_html):
+            return AuthoredMessageText("", False, False, canonical_source_text=text)
     else:
         return AuthoredMessageText("", False, False)
     canonical_source_text = text
@@ -183,6 +192,10 @@ def authored_message_text(payload: Mapping[str, Any]) -> AuthoredMessageText:
     if boundary is not None:
         text = text[: boundary.start()].rstrip()
         quoted_history_removed = True
+    elif len(_PLAIN_QUOTE_HEADER_HINT.findall(text)) >= 2:
+        return AuthoredMessageText(
+            "", False, False, canonical_source_text=canonical_source_text
+        )
     return AuthoredMessageText(
         text=text[:MAX_MESSAGE_CHARS],
         reliable=True,
@@ -390,34 +403,21 @@ def _eligible_event(candidate: Mapping[str, Any], current: Mapping[str, Any]) ->
     ) and _coordinate(candidate, payload) == _coordinate(current, current_payload)
 
 
-def _related_reasons(
+def _related_edge_reasons(
     payload: Mapping[str, Any],
     *,
-    primary_payloads: tuple[Mapping[str, Any], ...],
+    primary_events: tuple[Mapping[str, Any], ...],
     primary_participants: frozenset[str],
     primary_subject: frozenset[str],
     primary_attachments: frozenset[str],
-) -> tuple[str, ...]:
-    """Return reasons only when a reviewed strong cross-thread edge exists."""
+) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+    """Return every exact admitting edge plus non-admitting corroboration."""
 
-    reasons: list[str] = []
+    edge_reasons: dict[str, set[str]] = {}
     participant_overlap = len(_identifiers(payload) & primary_participants)
     referenced_overlap = len(_referenced_identifiers(payload) & primary_participants)
     subject_overlap = len(_subject_tokens(payload) & primary_subject)
     attachment_overlap = len(_attachment_tokens(payload) & primary_attachments)
-    primary_message_ids = {
-        str(primary.get("rfc_message_id") or "").strip()
-        for primary in primary_payloads
-        if str(primary.get("rfc_message_id") or "").strip()
-    }
-    primary_references = {
-        str(reference).strip()
-        for primary in primary_payloads
-        for reference in (
-            list(primary.get("references") or []) + [primary.get("in_reply_to")]
-        )
-        if isinstance(reference, str) and reference.strip()
-    }
     candidate_message_id = str(payload.get("rfc_message_id") or "").strip()
     candidate_references = {
         str(reference).strip()
@@ -426,28 +426,44 @@ def _related_reasons(
         )
         if isinstance(reference, str) and reference.strip()
     }
-    if (candidate_references & primary_message_ids) or (
-        candidate_message_id and candidate_message_id in primary_references
-    ):
-        reasons.append("rfc_reference")
-    primary_attachment_ids = frozenset(
-        identity
-        for primary in primary_payloads
-        for identity in _attachment_identities(primary)
-    )
-    if _attachment_identities(payload) & primary_attachment_ids:
-        reasons.append("attachment_identity")
-    strong = bool(reasons)
+    candidate_attachment_ids = _attachment_identities(payload)
+    for primary_event in primary_events:
+        source_event_id = str(primary_event.get("event_id") or "")
+        primary = primary_event.get("payload") or {}
+        if not source_event_id or not isinstance(primary, Mapping):
+            continue
+        primary_message_id = str(primary.get("rfc_message_id") or "").strip()
+        primary_references = {
+            str(reference).strip()
+            for reference in (
+                list(primary.get("references") or []) + [primary.get("in_reply_to")]
+            )
+            if isinstance(reference, str) and reference.strip()
+        }
+        if (primary_message_id and primary_message_id in candidate_references) or (
+            candidate_message_id and candidate_message_id in primary_references
+        ):
+            edge_reasons.setdefault(source_event_id, set()).add("rfc_reference")
+        if candidate_attachment_ids & _attachment_identities(primary):
+            edge_reasons.setdefault(source_event_id, set()).add("attachment_identity")
+
+    corroboration: list[str] = []
     if participant_overlap:
-        reasons.append("participant_overlap")
+        corroboration.append("participant_overlap")
     if referenced_overlap:
-        reasons.append("participant_reference_overlap")
+        corroboration.append("participant_reference_overlap")
     if subject_overlap:
-        reasons.append("subject_token_overlap")
+        corroboration.append("subject_token_overlap")
     if attachment_overlap:
-        reasons.append("attachment_filename_overlap")
+        corroboration.append("attachment_filename_overlap")
     # Identity/address/name/subject/filename overlap is corroboration only.
-    return tuple(reasons) if strong else ()
+    return (
+        {
+            source_event_id: tuple(sorted(reasons))
+            for source_event_id, reasons in edge_reasons.items()
+        },
+        tuple(corroboration),
+    )
 
 
 async def _read_context_inputs(
@@ -527,6 +543,72 @@ def _correction_applies(event: Mapping[str, Any], current: Mapping[str, Any]) ->
     )
 
 
+def _corrected_authored_text(
+    authored: AuthoredMessageText,
+    corrections: tuple[Mapping[str, Any], ...],
+) -> AuthoredMessageText:
+    """Remove only member-identified evidence spans from one immutable body."""
+
+    if not corrections or not authored.reliable:
+        return authored
+    original = authored.text
+    original_digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    spans: set[tuple[int, int]] = set()
+    for correction in corrections:
+        if (
+            correction.get("algorithm") != authored.contract
+            or correction.get("authored_text_digest") != original_digest
+        ):
+            return AuthoredMessageText(
+                "",
+                False,
+                authored.quoted_history_removed,
+                canonical_source_text=authored.canonical_source_text,
+            )
+        start = correction.get("evidence_start")
+        end = correction.get("evidence_end")
+        if not isinstance(start, int) or not isinstance(end, int):
+            return AuthoredMessageText(
+                "",
+                False,
+                authored.quoted_history_removed,
+                canonical_source_text=authored.canonical_source_text,
+            )
+        quote = original[start:end]
+        if (
+            start < 0
+            or end <= start
+            or end > len(original)
+            or hashlib.sha256(quote.encode("utf-8")).hexdigest()
+            != correction.get("evidence_quote_digest")
+        ):
+            return AuthoredMessageText(
+                "",
+                False,
+                authored.quoted_history_removed,
+                canonical_source_text=authored.canonical_source_text,
+            )
+        spans.add((start, end))
+    merged_spans: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged_spans and start <= merged_spans[-1][1]:
+            prior_start, prior_end = merged_spans[-1]
+            merged_spans[-1] = (prior_start, max(prior_end, end))
+        else:
+            merged_spans.append((start, end))
+    corrected = original
+    for start, end in reversed(merged_spans):
+        corrected = corrected[:start] + corrected[end:]
+    corrected = corrected.strip()
+    return AuthoredMessageText(
+        corrected,
+        True,
+        authored.quoted_history_removed,
+        canonical_source_text=authored.canonical_source_text,
+        authored_span=(0, len(corrected)) if corrected else None,
+    )
+
+
 async def build_message_context_pack(
     current: Mapping[str, Any], event_log: Any
 ) -> MessageContextPack:
@@ -555,7 +637,7 @@ async def build_message_context_pack(
         all_events.append(candidate)
 
     relationship_state: dict[tuple[str, str], bool] = {}
-    source_text_state: dict[str, bool] = {}
+    source_text_state: dict[str, tuple[bool, Mapping[str, Any]]] = {}
     for correction in corrections:
         correction_payload = correction.get("payload") or {}
         if correction.get("type") in {
@@ -573,8 +655,10 @@ async def build_message_context_pack(
             "context.source_text.corrected",
             "context.source_text.reinstated",
         }:
-            source_text_state[str(correction_payload.get("source_event_id") or "")] = (
-                correction.get("type") == "context.source_text.corrected"
+            correction_id = str(correction_payload.get("correction_id") or "")
+            source_text_state[correction_id] = (
+                correction.get("type") == "context.source_text.corrected",
+                correction_payload,
             )
 
     native_thread = str(current_payload.get("thread_id") or "").strip()
@@ -617,7 +701,7 @@ async def build_message_context_pack(
         for event in same_thread
         for value in _attachment_tokens(event.get("payload") or {})
     )
-    primary_payloads = tuple(event.get("payload") or {} for event in same_thread)
+    primary_events = tuple(full_episode)
     episode_times = [
         parsed
         for event in full_episode
@@ -627,7 +711,9 @@ async def build_message_context_pack(
     episode_start = min(episode_times) if episode_times else None
     episode_end = max(episode_times) if episode_times else None
     same_ids = {str(event.get("event_id") or "") for event in full_episode}
-    related_ranked: list[tuple[int, float, dict[str, Any], tuple[str, ...]]] = []
+    related_ranked: list[
+        tuple[int, float, dict[str, Any], tuple[str, ...], tuple[str, ...]]
+    ] = []
     for candidate in all_events:
         if str(candidate.get("event_id") or "") in same_ids:
             continue
@@ -635,10 +721,6 @@ async def build_message_context_pack(
         if not isinstance(payload, Mapping):
             continue
         candidate_id = str(candidate.get("event_id") or "")
-        pair = _relationship_pair(current_event_id, candidate_id)
-        member_confirmed = relationship_state.get(pair) is True
-        if relationship_state.get(pair) is False:
-            continue
         candidate_time = _parsed_message_time(candidate, payload)
         within_episode = (
             candidate_time is not None
@@ -648,45 +730,81 @@ async def build_message_context_pack(
             <= candidate_time
             <= episode_end + timedelta(days=MAX_EPISODE_DAYS)
         )
-        reasons = (
-            ("member_confirmed_context",)
-            if member_confirmed
-            else _related_reasons(
-                payload,
-                primary_payloads=primary_payloads,
-                primary_participants=primary_participants,
-                primary_subject=primary_subject,
-                primary_attachments=primary_attachments,
-            )
-            if within_episode
-            else ()
+        edge_reasons, corroboration = _related_edge_reasons(
+            payload,
+            primary_events=primary_events,
+            primary_participants=primary_participants,
+            primary_subject=primary_subject,
+            primary_attachments=primary_attachments,
         )
-        if reasons:
+        confirmed_sources = {
+            primary_id
+            for primary_id in same_ids
+            if relationship_state.get(_relationship_pair(primary_id, candidate_id))
+            is True
+        }
+        active_strong_sources = {
+            primary_id
+            for primary_id in edge_reasons
+            if within_episode
+            and relationship_state.get(_relationship_pair(primary_id, candidate_id))
+            is not False
+        }
+        relationship_source_ids = tuple(
+            sorted(confirmed_sources | active_strong_sources)
+        )
+        if relationship_source_ids:
+            reasons: list[str] = []
+            if confirmed_sources:
+                reasons.append("member_confirmed_context")
+            for primary_id in sorted(active_strong_sources):
+                reasons.extend(edge_reasons[primary_id])
+            reasons.extend(corroboration)
+            reasons_tuple = tuple(dict.fromkeys(reasons))
             related_ranked.append(
                 (
-                    1 if member_confirmed else 0,
+                    1 if confirmed_sources else 0,
                     candidate_time.timestamp() if candidate_time is not None else 0.0,
                     candidate,
-                    reasons,
+                    reasons_tuple,
+                    relationship_source_ids,
                 )
             )
     related_ranked.sort(
         key=lambda value: (value[0], value[1], str(value[2].get("event_id") or ""))
     )
-    related = [(value[2], value[3]) for value in related_ranked[-MAX_RELATED_MESSAGES:]]
+    related = [
+        (value[2], value[3], value[4])
+        for value in related_ranked[-MAX_RELATED_MESSAGES:]
+    ]
 
-    selected: list[tuple[dict[str, Any], str, tuple[str, ...]]] = []
-    selected.extend((event, "thread", ("provider_thread_id",)) for event in same_thread)
-    selected.extend((event, "related", reasons) for event, reasons in related)
+    selected: list[tuple[dict[str, Any], str, tuple[str, ...], tuple[str, ...]]] = []
+    selected.extend(
+        (event, "thread", ("provider_thread_id",), ()) for event in same_thread
+    )
+    selected.extend(
+        (event, "related", reasons, sources) for event, reasons, sources in related
+    )
     messages: list[ContextMessage] = []
     consumed = 0
-    for index, (event, relation, relation_reasons) in enumerate(selected, start=1):
+    for index, (
+        event,
+        relation,
+        relation_reasons,
+        relationship_source_ids,
+    ) in enumerate(selected, start=1):
         payload = event.get("payload") or {}
-        body = (
-            ""
-            if source_text_state.get(str(event.get("event_id") or ""), False)
-            else _body(event, payload)
+        event_id = str(event.get("event_id") or "")
+        active_text_corrections = tuple(
+            correction_payload
+            for active, correction_payload in source_text_state.values()
+            if active
+            and str(correction_payload.get("source_event_id") or "") == event_id
         )
+        authored = _corrected_authored_text(
+            authored_message_text(payload), active_text_corrections
+        )
+        body = authored.text
         remaining = max(MAX_CONTEXT_CHARS - consumed, 0)
         if remaining == 0:
             break
@@ -707,9 +825,10 @@ async def build_message_context_pack(
         messages.append(
             ContextMessage(
                 alias=f"m{index:02d}",
-                source_event_id=str(event.get("event_id") or ""),
+                source_event_id=event_id,
                 relation=relation,
                 relation_reason_codes=relation_reasons,
+                relationship_source_event_ids=relationship_source_ids,
                 direction=_direction(event, payload),
                 occurred_at=_message_time(event, payload),
                 source_channel=str(payload.get("source_channel") or "message"),
@@ -717,6 +836,7 @@ async def build_message_context_pack(
                 recipients=recipients,
                 subject=str(payload.get("subject") or "").strip()[:1000] or None,
                 body_text=body,
+                authored_text_reliable=authored.reliable,
                 attachment_names=_attachment_names(payload),
             )
         )
@@ -731,6 +851,7 @@ async def build_message_context_pack(
             "text_sha256": hashlib.sha256(
                 message.source_text().encode("utf-8")
             ).hexdigest(),
+            "authored_text_reliable": message.authored_text_reliable,
         }
         for message in messages
     ]

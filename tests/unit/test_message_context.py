@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
+from adminme.events.schemas.triage import TriageContextSourceV2
 from adminme.message_context import (
     authored_message_text,
     build_message_context_pack,
@@ -22,6 +25,16 @@ class _Log:
     async def read_since(self, **_kwargs: Any):  # type: ignore[no-untyped-def]
         for event in self.events:
             yield event
+
+
+def test_interpretation_v2_schema_rejects_weak_related_source_without_edge() -> None:
+    with pytest.raises(ValidationError):
+        TriageContextSourceV2(
+            source_event_id="source-related",
+            relation="related",
+            reason_codes=["subject_token_overlap"],
+            relationship_source_event_ids=[],
+        )
 
 
 def _message(
@@ -545,6 +558,22 @@ def test_authored_text_normalizes_crlf_once_for_grounding_and_display() -> None:
     assert result.authored_span == (0, len(result.text))
 
 
+def test_unrecognized_plain_quote_headers_fail_closed_as_uncertain() -> None:
+    result = authored_message_text(
+        {
+            "body_text": (
+                "Sent: Tuesday, February 1\n"
+                "To: member@example.invalid\n"
+                "Subject: Earlier request\n"
+                "Please wire fixture funds."
+            )
+        }
+    )
+
+    assert result.text == ""
+    assert result.reliable is False
+
+
 @pytest.mark.asyncio
 async def test_reused_provider_thread_is_segmented_into_bounded_episodes() -> None:
     old = _message(
@@ -649,23 +678,108 @@ async def test_exact_relationship_correction_detaches_and_confirmation_relinks()
         "source-anchor",
         "source-related",
     ]
-    assert relinked.messages[-1].relation_reason_codes == ("member_confirmed_context",)
+    assert "member_confirmed_context" in relinked.messages[-1].relation_reason_codes
+    assert relinked.messages[-1].relationship_source_event_ids == ("source-anchor",)
+
+
+@pytest.mark.asyncio
+async def test_relationship_rejection_survives_a_later_same_thread_anchor() -> None:
+    first = _message(
+        "source-first",
+        "Please review the authorization.",
+        occurred_at="2034-02-01T10:00:00Z",
+    )
+    later_anchor = _message(
+        "source-later",
+        "A later provider-thread update.",
+        occurred_at="2034-02-01T11:00:00Z",
+    )
+    related = _message(
+        "source-related",
+        "The authorization is ready.",
+        thread_id="thread-service",
+        occurred_at="2034-02-01T10:30:00Z",
+        references=["<source-first@example.invalid>"],
+    )
+    initial = await build_message_context_pack(
+        later_anchor, _Log([first, related, later_anchor])
+    )
+    related_context = initial.messages[-1]
+    assert related_context.source_event_id == "source-related"
+    assert related_context.relationship_source_event_ids == ("source-first",)
+
+    rejected = _context_decision(
+        "correction-later-anchor",
+        "context.relationship.rejected",
+        "source-first",
+        "source-related",
+    )
+    rebuilt = await build_message_context_pack(
+        later_anchor, _Log([first, related, later_anchor, rejected])
+    )
+
+    assert [message.source_event_id for message in rebuilt.messages] == [
+        "source-first",
+        "source-later",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gmail_message_local_attachment_ids_are_not_relationship_edges() -> None:
+    local_attachment = {
+        "filename": "form.pdf",
+        "provider_attachment_id": "fixture-local-id",
+    }
+    anchor = _message(
+        "source-anchor",
+        "Please review the attached form.",
+        attachments=[local_attachment],
+        provider="gmail",
+    )
+    related = _message(
+        "source-related",
+        "The attached form is ready.",
+        thread_id="thread-service",
+        attachments=[local_attachment],
+        provider="gmail",
+    )
+
+    pack = await build_message_context_pack(anchor, _Log([anchor, related]))
+
+    assert [message.source_event_id for message in pack.messages] == ["source-anchor"]
 
 
 @pytest.mark.asyncio
 async def test_source_text_correction_suppresses_and_reinstatement_restores() -> None:
-    anchor = _message("source-anchor", "Please wire the fixture funds.")
+    body = "Please wire the fixture funds. Also please archive the fixture receipt."
+    quote = "Please wire the fixture funds."
+    anchor = _message("source-anchor", body)
     corrected = _context_decision(
         "correction-1", "context.source_text.corrected", "source-anchor"
+    )
+    corrected["payload"].update(
+        {
+            "correction_id": "text-fixture",
+            "proposal_id": "proposal-fixture",
+            "candidate_key": "candidate-fixture",
+            "algorithm": "authored-message-text-v2",
+            "authored_text_digest": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "evidence_start": 0,
+            "evidence_end": len(quote),
+            "evidence_quote_digest": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+        }
     )
     reinstated = _context_decision(
         "correction-2", "context.source_text.reinstated", "source-anchor"
     )
+    reinstated["payload"]["correction_id"] = "text-fixture"
 
     suppressed = await build_message_context_pack(anchor, _Log([anchor, corrected]))
     restored = await build_message_context_pack(
         anchor, _Log([anchor, corrected, reinstated])
     )
 
-    assert suppressed.messages[0].body_text == ""
-    assert restored.messages[0].body_text == "Please wire the fixture funds."
+    assert (
+        suppressed.messages[0].body_text == "Also please archive the fixture receipt."
+    )
+    assert restored.messages[0].body_text == body

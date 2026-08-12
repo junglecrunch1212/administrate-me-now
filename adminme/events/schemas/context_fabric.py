@@ -127,16 +127,28 @@ class ContextRelationshipConfirmedV1(BaseModel):
 
 
 class ContextSourceTextCorrectedV1(BaseModel):
-    """Member evidence that retained provider text is quoted/forwarded history."""
+    """One exact member-identified span of retained provider source text."""
 
     model_config = {"extra": "forbid"}
     correction_id: str = Field(min_length=1, max_length=240)
     source_event_id: str = Field(min_length=1, max_length=240)
+    proposal_id: str = Field(min_length=1, max_length=240)
+    candidate_key: str = Field(min_length=1, max_length=240)
     member_id: str = Field(min_length=1, max_length=240)
+    algorithm: Literal["authored-message-text-v2"]
+    authored_text_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_start: int = Field(ge=0)
+    evidence_end: int = Field(gt=0)
     corrected_by_member_id: str = Field(min_length=1, max_length=240)
     corrected_at: datetime
     reason: Literal["quoted_or_forwarded_history"]
-    evidence_quote_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    evidence_quote_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def valid_span(self) -> "ContextSourceTextCorrectedV1":
+        if self.evidence_end <= self.evidence_start:
+            raise ValueError("corrected source-text span must be non-empty")
+        return self
 
 
 class ContextSourceTextReinstatedV1(BaseModel):

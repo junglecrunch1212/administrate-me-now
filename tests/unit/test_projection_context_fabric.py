@@ -373,7 +373,13 @@ def test_exact_context_corrections_are_replayable_and_reversible() -> None:
         {
             "correction_id": "text-fixture",
             "source_event_id": "source-one",
+            "proposal_id": "proposal-fixture",
+            "candidate_key": "candidate-fixture",
             "member_id": MEMBER,
+            "algorithm": "authored-message-text-v2",
+            "authored_text_digest": "b" * 64,
+            "evidence_start": 0,
+            "evidence_end": 12,
             "corrected_by_member_id": MEMBER,
             "corrected_at": "2030-01-03T00:00:00Z",
             "reason": "quoted_or_forwarded_history",

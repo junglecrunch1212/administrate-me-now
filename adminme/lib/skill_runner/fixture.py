@@ -136,6 +136,19 @@ def _response(request: httpx.Request) -> httpx.Response:
                     action_owner="unknown",
                 ),
             ]
+        elif inputs.get("candidate_scope") == "primary_thread" and any(
+            "[fixture:context-correctness-replay]"
+            in str(message.get("body_text") or "")
+            for message in context_messages
+            if message.get("relation") == "thread"
+        ):
+            candidates = [
+                contextual_candidate(
+                    "Please complete the fixture authorization.",
+                    target_kind="task",
+                    compact_summary="Complete the fixture authorization",
+                )
+            ]
         fixture_kind = next(
             (
                 kind

@@ -416,6 +416,9 @@ def extract_grounded_context_candidates(
                     "source_event_id": message.source_event_id,
                     "relation": message.relation,
                     "reason_codes": list(message.relation_reason_codes),
+                    "relationship_source_event_ids": list(
+                        message.relationship_source_event_ids
+                    ),
                 }
                 for message in context_pack.messages
             ],

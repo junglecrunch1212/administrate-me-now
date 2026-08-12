@@ -534,6 +534,29 @@ async def test_initial_backfill_pages_emits_and_is_durable(tmp_path: Path) -> No
     store.close()
 
 
+async def test_invalid_internal_date_is_quarantined_without_message_fact() -> None:
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+    )
+    message = {**_fixture("message_alice.json"), "internalDate": "not-a-date"}
+    event_log = _FakeEventLog()
+
+    emitted, quarantined = await adapter._ingest_message_ids(
+        ctx=_ctx(event_log),
+        store=None,
+        cursor_id="gmail-invalid-source-time",
+        message_ids=[str(message["id"])],
+        provider_watermark="fixture-watermark",
+        prefetched_messages={str(message["id"]): message},
+    )
+
+    assert (emitted, quarantined) == (0, 1)
+    assert [call["type"] for call in event_log.calls] == ["adapter.record.quarantined"]
+
+
 async def test_initial_backfill_provider_io_does_not_block_runtime_loop() -> None:
     """A slow synchronous Gmail list call cannot starve central runtime health."""
     gate = threading.Event()
