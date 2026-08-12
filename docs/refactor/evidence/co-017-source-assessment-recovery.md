@@ -2,8 +2,8 @@
 
 Status: PR #335 recovery implementation merged; release activation stopped
 before mutation; follow-up Phase A drift/status hardening is locally green
-after a third independent-review repair and awaits a fourth exact-head review.
-No live recovery is claimed by this file.
+after repairing the host-dependent fixture exposed by the fourth reviewed head
+and awaits a fifth exact-head review. No live recovery is claimed by this file.
 
 ## Reproduction and cause
 
@@ -129,6 +129,27 @@ failed current-release restoration return. The focused source-repair, updater,
 and macOS operations slice passes 86 tests. The third rejected head has no
 release authority; complete exact-head gates and a fourth independent review
 remain pending.
+
+## PR #336 fourth independent review and hosted fixture repair
+
+The separate reviewer accepted exact head
+`1175dc6e498d0a79226179095683f7fbe9b872bb` against exact base
+`2a37aa08179a356fddfe0d4cd30ffd3e29f732a3` with no findings. The review
+confirmed all prior findings closed, all security/privacy/observation/provider
+boundaries preserved, the non-raising failed-restart probes effective, and the
+constitutional/evidence history accurate.
+
+The exact-head Constitution check passed. The hosted macOS rehearsal then
+failed at `test_upgrade_waits_only_for_known_post_switch_transients` after clean
+install and the exact OpenClaw source build had passed. The test supplied a
+transient Doctor sequence but no runtime-readiness fixture. On the local family
+Mac it accidentally read an unrelated live loopback readiness endpoint and
+passed; on the isolated runner readiness was absent, so production code
+correctly returned the transient failure immediately. The test now provides an
+explicit healthy, content-free readiness document. This changes no production
+behavior: missing readiness after runtime liveness and every non-cold-start
+transient still fail closed. The accepted-but-hosted-red head has no release
+authority; complete gates and a fifth exact-head review remain pending.
 
 ## Focused checks completed
 

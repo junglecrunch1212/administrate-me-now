@@ -124,6 +124,18 @@ failure. The focused updater/source-repair/macOS slice passes 86 tests. The
 third rejected head has no release authority; complete gates and a fourth
 independent exact-head review remain mandatory.
 
+The fourth independent review accepted head
+`1175dc6e498d0a79226179095683f7fbe9b872bb` with no findings and confirmed all
+prior P1s closed. Its hosted macOS job nevertheless exposed one deterministic-
+test gap before the repository aggregate ran: the isolated OpenClaw-transient
+unit test did not provide a readiness document, so its result depended on
+whether the executing Mac happened to have an unrelated loopback runtime.
+Production correctly failed closed when the GitHub runner had none. The test
+now supplies explicit healthy readiness, preserving the production rule while
+removing host-state dependence. That otherwise accepted head has no release
+authority because its hosted gate failed; complete gates and a fifth
+independent exact-head review remain mandatory.
+
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 
 The household owner approved G-001 to remove the deadlock between the

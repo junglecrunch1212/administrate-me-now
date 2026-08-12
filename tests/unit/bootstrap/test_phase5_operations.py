@@ -1895,9 +1895,13 @@ def test_upgrade_waits_only_for_known_post_switch_transients(
 
     monkeypatch.setattr("bootstrap.upgrade.Doctor", FakeDoctor)
     monkeypatch.setattr("bootstrap.upgrade.time.sleep", lambda _seconds: None)
-    result = UpgradeManager(
-        test_paths, root=REPO_ROOT, test_mode=False
-    )._post_switch_doctor(REPO_ROOT)
+    manager = UpgradeManager(test_paths, root=REPO_ROOT, test_mode=False)
+    monkeypatch.setattr(
+        manager.services,
+        "runtime_diagnostics",
+        lambda: {"ready": True, "capabilities": {}},
+    )
+    result = manager._post_switch_doctor(REPO_ROOT)
     assert result["status"] == "healthy"
     assert include_synthetic == [False, False, False, True]
 
