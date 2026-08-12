@@ -812,7 +812,7 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v19:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v20:")
 
 
 @pytest.mark.asyncio
@@ -926,7 +926,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v19:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v20:")
         for proposal in proposals
     )
 

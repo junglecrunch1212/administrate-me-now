@@ -70,6 +70,7 @@ def source_assurance_terminal_evidence(
         "declared_source_event_types": details.get("declared_source_event_types"),
         "declared_obligations": details.get("declared_obligations"),
         "content_exposed": details.get("content_exposed"),
+        "recovery": details.get("recovery"),
         "freshness": {
             "state": freshness.get("state"),
             "refreshed_at": freshness.get("refreshed_at"),

@@ -14,15 +14,17 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     pack = load_pipeline_pack(PACK_ROOT)
     assert pack.pack_id == "pipeline:noise_filtering"
-    assert pack.version == "19.0.0"
-    assert pack.replay_on_version_change is True
+    assert pack.version == "20.0.0"
+    assert pack.replay_on_version_change is False
     assert pack.delivery_concurrency == 8
     assert pack.triggers.get("events") == [
         "messaging.received",
         "messaging.sent",
         "telephony.sms_received",
+        "source.assessment.recovery_requested",
     ]
     assert "messaging.classified" in pack.events_emitted
     assert "messaging.semantic_features_extracted" in pack.events_emitted
     assert "triage.item.proposed" in pack.events_emitted
+    assert "source.assessment.recovery_refused" in pack.events_emitted
     assert isinstance(pack.instance, Pipeline)

@@ -146,6 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help=("authorize a separately rehearsed Python/Node baseline cutover"),
             )
+            child.add_argument(
+                "--approve-declared-source-assessment-repair",
+                action="store_true",
+                help=("activate only the candidate-declared exact degraded baseline"),
+            )
         elif name == "bridge-export":
             child.add_argument("member_id")
             child.add_argument("output", type=Path)
@@ -347,6 +352,11 @@ def main(argv: list[str] | None = None) -> int:
             test_mode=test_mode,
             approve_runtime_migration=(
                 bool(args.approve_runtime_migration)
+                if args.command == "upgrade"
+                else False
+            ),
+            approve_source_assessment_repair=(
+                bool(args.approve_declared_source_assessment_repair)
                 if args.command == "upgrade"
                 else False
             ),

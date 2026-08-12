@@ -25,6 +25,12 @@ from bootstrap.openclaw_tools import (
     reconcile_administrateme_plugin,
 )
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
+from bootstrap.source_assessment_repair import (
+    SourceAssessmentRepairPolicy,
+    load_repair_policy,
+    offline_validate_repair_baseline,
+    validate_declared_baseline,
+)
 from bootstrap.wizard import install_launch_agents, service_environment_path
 
 
@@ -150,11 +156,13 @@ class UpgradeManager:
         root: Path,
         test_mode: bool = False,
         approve_runtime_migration: bool = False,
+        approve_source_assessment_repair: bool = False,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
         self.test_mode = test_mode
         self.approve_runtime_migration = approve_runtime_migration
+        self.approve_source_assessment_repair = approve_source_assessment_repair
         self.services = ServiceManager(paths, test_mode=test_mode)
 
     def _active_release_root(self) -> Path:
@@ -172,6 +180,43 @@ class UpgradeManager:
             json.JSONDecodeError,
         ) as exc:
             raise UpgradeError("active-release pointer is invalid") from exc
+
+    def _active_release_commit(self) -> str:
+        pointer = self.paths.app_dir / "current-release.json"
+        if not pointer.is_file():
+            raise UpgradeError(
+                "declared source-assessment repair requires an active release pointer"
+            )
+        try:
+            commit = str(json.loads(pointer.read_text("utf-8"))["commit"])
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise UpgradeError("active-release pointer has no valid commit") from exc
+        if len(commit) != 40 or any(
+            value not in "0123456789abcdef" for value in commit
+        ):
+            raise UpgradeError("active-release pointer commit is invalid")
+        return commit
+
+    def _validate_source_repair_online(
+        self, policy: SourceAssessmentRepairPolicy
+    ) -> dict[str, Any]:
+        active_root = self._active_release_root()
+        doctor = self._run_release_doctor(active_root, include_synthetic_proof=False)
+        diagnostics = self.services.runtime_diagnostics()
+        if diagnostics is None:
+            raise UpgradeError(
+                "declared source-assessment repair requires live runtime diagnostics"
+            )
+        try:
+            validate_declared_baseline(
+                policy,
+                active_commit=self._active_release_commit(),
+                doctor=doctor,
+                diagnostics=diagnostics,
+            )
+        except RuntimeError as exc:
+            raise UpgradeError(str(exc)) from exc
+        return diagnostics
 
     def _attest_controller_provenance(self, candidate: Path, commit: str) -> None:
         """Require production upgrades to execute the reviewed candidate policy."""
@@ -388,6 +433,16 @@ class UpgradeManager:
         candidate = candidate.resolve()
         commit = self._candidate_commit(candidate)
         self._attest_controller_provenance(candidate, commit)
+        repair_policy = (
+            load_repair_policy(candidate)
+            if self.approve_source_assessment_repair
+            else None
+        )
+        repair_diagnostics = (
+            self._validate_source_repair_online(repair_policy)
+            if repair_policy is not None
+            else None
+        )
         evidence = validate_candidate(
             candidate,
             active_root=self._active_release_root(),
@@ -419,6 +474,11 @@ class UpgradeManager:
             root=self.root,
             test_mode=self.test_mode,
         ).create()
+        if repair_policy is not None:
+            # Backup quiescing restarts the active release. Revalidate the
+            # exact baseline after that restart before any release selector or
+            # OpenClaw executable can change.
+            repair_diagnostics = self._validate_source_repair_online(repair_policy)
         pointer = self.paths.app_dir / "current-release.json"
         previous = json.loads(pointer.read_text("utf-8")) if pointer.exists() else None
         previous_release = (
@@ -430,10 +490,24 @@ class UpgradeManager:
         pointer_switched = False
         openclaw_switched = False
         plugin_registration_attempted = False
+        source_repair_evidence: dict[str, Any] | None = None
         try:
+            if repair_policy is not None:
+                if was_running:
+                    self.services.stop()
+                assert repair_diagnostics is not None
+                source_repair_evidence = offline_validate_repair_baseline(
+                    self.paths,
+                    repository_root=self._active_release_root(),
+                    candidate_commit=commit,
+                    policy=repair_policy,
+                    diagnostics=repair_diagnostics,
+                    append_requests=True,
+                    test_mode=self.test_mode,
+                )
             self._install_reviewed_openclaw(release)
             openclaw_switched = True
-            if was_running:
+            if was_running and repair_policy is None:
                 self.services.stop()
             plugin_registration_attempted = True
             reconcile_administrateme_plugin(
@@ -506,6 +580,7 @@ class UpgradeManager:
             "compatibility": evidence,
             "upgrade_controller_attested": True,
             "rollback_available": previous is not None,
+            "source_assessment_repair": source_repair_evidence,
         }
 
     def rollback(self) -> dict[str, Any]:

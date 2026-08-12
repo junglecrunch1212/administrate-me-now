@@ -103,6 +103,49 @@ class RuntimeStartedV1(BaseModel):
     capability_state: Literal["healthy", "observation_only", "degraded", "blocked"]
 
 
+class SourceAssessmentRecoveryRequestedV1(BaseModel):
+    """Content-free command to reassess one exact retained source fact."""
+
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120)
+    batch_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_event_id: str = Field(min_length=1, max_length=240)
+    failed_assessment_event_id: str = Field(min_length=1, max_length=240)
+    expected_failure_reason: Literal[
+        "language_seam_OpenClawTimeout",
+        "language_seam_OpenClawUnreachable",
+    ]
+    owner_member_id: str = Field(min_length=1, max_length=240)
+    requested_by_actor: str = Field(min_length=1, max_length=240)
+    authority: Literal["member_principal", "guarded_release_exception"]
+    policy: Literal["source-assessment-recovery-v1"]
+    attempt_limit: Literal[3]
+    max_concurrency: Literal[2]
+
+
+class SourceAssessmentRecoveryRefusedV1(BaseModel):
+    """Stable refusal receipt; it contains identifiers and reason only."""
+
+    model_config = {"extra": "forbid"}
+    request_event_id: str = Field(min_length=1, max_length=240)
+    source_event_id: str = Field(min_length=1, max_length=240)
+    reason: Literal[
+        "observation_inactive",
+        "source_not_found",
+        "unsupported_source_type",
+        "source_not_private",
+        "source_privileged",
+        "tenant_mismatch",
+        "source_scope_mismatch",
+        "request_scope_mismatch",
+        "failed_assessment_not_current",
+        "assessment_not_failed",
+        "failure_reason_changed",
+        "failure_not_retryable",
+    ]
+    policy: Literal["source-assessment-recovery-v1"]
+
+
 registry.register("xlsx.regenerated", 1, XlsxRegeneratedV1)
 registry.register("xlsx.reverse_projected", 1, XlsxReverseProjectedV1)
 registry.register(
@@ -111,3 +154,9 @@ registry.register(
 registry.register("skill.call.failed", 1, SkillCallFailedV1)
 registry.register("skill.call.suppressed", 1, SkillCallSuppressedV1)
 registry.register("runtime.started", 1, RuntimeStartedV1)
+registry.register(
+    "source.assessment.recovery_requested", 1, SourceAssessmentRecoveryRequestedV1
+)
+registry.register(
+    "source.assessment.recovery_refused", 1, SourceAssessmentRecoveryRefusedV1
+)

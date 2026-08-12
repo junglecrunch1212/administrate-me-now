@@ -1,0 +1,31 @@
+{
+  "contract": "source-assessment-degraded-baseline-v1",
+  "required_active_commit": "2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe",
+  "observation_mode_required": true,
+  "expected_counts": {
+    "obligations": 62623,
+    "accounted": 62623,
+    "pending": 0,
+    "missing": 0,
+    "failed": 4
+  },
+  "targets": [
+    {
+      "source_event_id": "ev_01KZS9ZNGD0000",
+      "expected_failure_reason": "language_seam_OpenClawUnreachable"
+    },
+    {
+      "source_event_id": "ev_01KZSAANK30000",
+      "expected_failure_reason": "language_seam_OpenClawUnreachable"
+    },
+    {
+      "source_event_id": "ev_01KZSB7ZX20000",
+      "expected_failure_reason": "language_seam_OpenClawUnreachable"
+    },
+    {
+      "source_event_id": "ev_01KZSDH9CR0000",
+      "expected_failure_reason": "language_seam_OpenClawUnreachable"
+    }
+  ],
+  "expires_after_activation": true
+}

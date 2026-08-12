@@ -1,5 +1,39 @@
 # Migration map
 
+CO-017 update (2026-08-11): terminal source-assessment recovery is
+**HARDENED IN THE IMPLEMENTATION CANDIDATE**. Noise filtering advances from
+generation/version 19 to 20. Existing source events, v3 assessments, candidates,
+member decisions, canonical records, provider facts, and projection stores are
+not migrated or rewritten. An accepted recovery appends a content-free request
+and then a new linked v4 assessment under request-specific event and pinned
+OpenClaw invocation identities. Source assurance deterministically chooses the
+newest valid assessment for the exact source while retaining all predecessors.
+Generation 20 consumes typed recovery requests directly; it does not use a
+whole-log replay to escape an occupied prior-generation idempotency key.
+Delivery rechecks observation and tenant identity, and distinct requests for
+one failed source are single-flight through the terminal append. Request-bound
+base execution may retry the predecessor's old causal failure once while its
+own exact durable result remains replay-safe even after a later sibling attempt
+fails. Fresh-process derived IDs are ordered
+after the command rather than copied from the retained source timestamp.
+
+The guarded updater contains one explicit, expiring baseline exception for the
+known production commit, exact four source IDs/reasons, and exact settled
+counts. With the dedicated approval flag, the updater validates the baseline
+twice while services are live, stops services, revalidates the encrypted log,
+and appends only exact recovery requests before candidate selection. A request
+identity binds both the exact failed-assessment set and the stopped consumer
+checkpoint, so restart reuses it while a v19 rollback that advances beyond it
+causes the next guarded audit to append safely after that new position. Rollback
+restores release/plugin/launch selection but retains those immutable events.
+An exact command refusal is terminal and contributes a separate content-free
+identity token, so a later guarded attempt appends a new request instead of
+silently reusing the refusal.
+Generation 19 ignores the new request type; a later reviewed generation-20
+start safely delivers or reuses it. No checkpoint edit, database rewrite, event deletion,
+credential migration, provider enrollment, permission change, external write,
+or second runtime is introduced.
+
 CO-016 update (2026-08-11): Triage queue continuation is **HARDENED IN THE
 REVIEWED CANDIDATE** with browser-only focus consumption, lens-relative banner
 cleanup, a post-write refresh-failure safety latch, generation-invalidated
@@ -527,7 +561,7 @@ Classifications describe the Phase 2+ treatment, not Gate 1 edits. **KEEP** reta
 | Home Assistant Cat-C/E | `packs/adapters/automation/home-assistant/` | multi-capability implementation/tests | HARDEN | Compose; final guard, observation and verified action outcome. |
 | Pipeline protocol/loader/runner | `adminme/pipelines/` | reactive subscriptions/tests; stop delegates bus ownership | HARDEN | One bus lifecycle owner, replay/idempotency and poison policy; capability registry. |
 | Pipeline supervisor | `adminme/daemons/pipeline_supervisor.py` | prose-only future stub | REWRITE | Delete stub after composition root owns runner lifecycle. |
-| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v19 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, at most two serialized transient seam recoveries under distinct durable invocation identities, and reviewed schema/idempotency replay recovery; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-013 FINAL REPLAY ACTIVATION IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
+| Ten pipeline packs | `packs/pipelines/` | typed packs and many unit/integration tests; `noise_filtering` v20 emits classified facts, bounded semantic features, exact-quote eligible private Triage proposals, same-interpretation typed-identity collapse, atomic first-equivalent-writer cross-source deduplication, and exact request-bound terminal-assessment recovery with at most two concurrent requests and three attempts each; `identity_resolution` v2 uses per-source observation identity | KEEP/HARDEN COMPLETE; CO-017 TERMINAL RECOVERY CANDIDATE IN REVIEW | Deterministic code owns eligibility, scope/sensitivity exclusion, exact-source grounding, candidate allowlist, idempotency, context-reason vocabulary, recovery-reason validation, and outcome feedback; confidence never gates or ranks a review candidate and no model owns a decision. |
 | Ten skill packs | `packs/skills/` | schemas/prompts/tests present; `classify_message_nature` 6.0.1 returns classification, bounded semantic features, and exact-quote typed candidates defensively while admitting every fixed-code context reason | HARDEN COMPLETE; CO-013 VOCABULARY REPAIR IN REVIEW | Stay on pinned OpenClaw `llm-task`; report grounded language features only; never rank, route, authorize, schedule, send, complete, suppress, or mutate. |
 | OpenClaw skill wrapper | `adminme/lib/skill_runner/` | exactly one pinned `llm-task` request uses a canonical member-isolated Gateway session, records actual returned provider/model provenance, and versions durable terminal identity by skill version | REWRITE/HARDEN COMPLETE | OpenClaw owns routing/fallback; schemas, sensitivity, durable audit, exact-quote proposal semantics, and replay identity remain AdministrateMe-owned. |
 | Session/scope/privacy | `adminme/lib/session.py`, `scope.py` | strong unit tests for roles/view-as/redaction | HARDEN | Enforce at central middleware and every query; trusted proxy; privileged-access audit and member portal. |

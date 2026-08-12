@@ -220,6 +220,20 @@ class TriageIntentFeaturesExtractedV3(TriageIntentFeaturesExtractedV2):
     )
 
 
+class TriageIntentFeaturesExtractedV4(TriageIntentFeaturesExtractedV3):
+    """Append-only replacement assessment produced by reviewed recovery."""
+
+    model_config = {"extra": "forbid"}
+    supersedes_assessment_event_id: str = Field(min_length=1, max_length=240)
+    recovery_request_event_id: str = Field(min_length=1, max_length=240)
+    recovery_reason: Literal[
+        "language_seam_OpenClawTimeout",
+        "language_seam_OpenClawUnreachable",
+    ]
+    recovery_policy: Literal["source-assessment-recovery-v1"]
+    recovery_attempt_limit: Literal[3]
+
+
 class TriageItemEnrichedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -324,6 +338,9 @@ registry.register(
 registry.register(
     "triage.intent.features_extracted", 3, TriageIntentFeaturesExtractedV3
 )
+registry.register(
+    "triage.intent.features_extracted", 4, TriageIntentFeaturesExtractedV4
+)
 registry.register("triage.item.enriched", 1, TriageItemEnrichedV1)
 registry.register("triage.item.confirmed", 1, TriageItemConfirmedV1)
 registry.register("triage.item.confirmed", 2, TriageItemConfirmedV2)
@@ -351,4 +368,5 @@ __all__ = [
     "TriageIntentFeaturesExtractedV1",
     "TriageIntentFeaturesExtractedV2",
     "TriageIntentFeaturesExtractedV3",
+    "TriageIntentFeaturesExtractedV4",
 ]

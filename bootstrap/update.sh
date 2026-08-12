@@ -7,14 +7,27 @@ source "$SCRIPT_DIR/common.sh"
 resolve_instance_root
 
 approve_flag=""
-if [[ "${1:-}" == "--approve-runtime-migration" ]]; then
-  approve_flag="$1"
+source_repair_flag=""
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --approve-runtime-migration)
+      [[ -z "$approve_flag" ]] || fail "runtime-migration approval was repeated"
+      approve_flag="$1"
+      ;;
+    --approve-declared-source-assessment-repair)
+      [[ -z "$source_repair_flag" ]] || fail "source-repair approval was repeated"
+      source_repair_flag="$1"
+      ;;
+    *)
+      fail "unknown update option: $1"
+      ;;
+  esac
   shift
-fi
+done
 
 candidate="${1:-}"
 [[ -n "$candidate" ]] \
-  || fail "usage: update.sh [--approve-runtime-migration] /absolute/path/to/reviewed-candidate"
+  || fail "usage: update.sh [--approve-runtime-migration] [--approve-declared-source-assessment-repair] /absolute/path/to/reviewed-candidate"
 [[ "$candidate" == /* ]] || fail "candidate path must be absolute"
 [[ -d "$candidate" ]] || fail "candidate checkout does not exist"
 candidate="$(cd "$candidate" && pwd -P)"
@@ -163,6 +176,9 @@ fi
 upgrade_args=(upgrade "$candidate")
 if [[ -n "$approve_flag" ]]; then
   upgrade_args+=("$approve_flag")
+fi
+if [[ -n "$source_repair_flag" ]]; then
+  upgrade_args+=("$source_repair_flag")
 fi
 (
   cd "$candidate"

@@ -13,11 +13,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Annotated, Any, AsyncIterator, Literal
 
 import yaml
 import sqlcipher3
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from adminme.adapters.base import AdapterContext
@@ -49,7 +49,7 @@ from adminme.lib.observation import (
     set_outbound_audit_context,
 )
 from adminme.lib.adapters import OutboundMessage, WriteOperation
-from adminme.lib.session import build_internal_session
+from adminme.lib.session import Session, build_internal_session
 from adminme.lib.skill_runner import build_skill_runtime, set_default_event_sink
 from adminme.lib.skill_runner.fixture import build_fixture_runtime
 from adminme.lib.skill_runner.wrapper import run_skill
@@ -71,6 +71,7 @@ from adminme.products.capture.main import router as capture_router
 from adminme.products.comms.main import router as comms_router
 from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
+from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw.main import router as openclaw_router
 from adminme.projections.base import Projection
 from adminme.projections.runner import DEFAULT_PROJECTION_CLASSES, ProjectionRunner
@@ -78,6 +79,12 @@ from adminme.projections.xlsx_workbooks import XlsxWorkbooksProjection
 from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.settings_control import SettingsControlStore
 from adminme.source_assurance import audit_source_assurance
+from adminme.source_assessment_recovery import (
+    SourceAssessmentRecoveryBatch,
+    SourceAssessmentRecoveryRefused,
+    build_recovery_request_envelopes,
+    recovery_batch_fingerprint,
+)
 from adminme.temporary_surfaces import TemporarySurfaceStore
 
 CapabilityState = Literal[
@@ -1754,6 +1761,7 @@ class AdministrateMeRuntime:
 
 
 system_router = APIRouter(prefix="/api/system", tags=["system"])
+SystemSessionDep = Annotated[Session, Depends(session_from_request)]
 
 
 @system_router.get("/live")
@@ -1767,6 +1775,74 @@ async def ready(request: Request) -> JSONResponse:
     runtime: AdministrateMeRuntime = request.app.state.runtime
     payload = await runtime.diagnostics()
     return JSONResponse(payload, status_code=200 if payload["ready"] else 503)
+
+
+@system_router.post("/source-assessment-recoveries", status_code=202)
+async def request_source_assessment_recoveries(
+    body: SourceAssessmentRecoveryBatch,
+    request: Request,
+    session: SystemSessionDep,
+) -> dict[str, Any]:
+    """Append exact, principal-authorized recovery requests; never source text."""
+
+    require_principal(session)
+    runtime: AdministrateMeRuntime = request.app.state.runtime
+    if runtime.event_log is None or runtime.events is None:
+        raise HTTPException(503, "source recovery is unavailable")
+    if runtime.observation is None or not await runtime.observation.is_active():
+        raise HTTPException(409, "source recovery requires observation mode")
+    required_owner_scope = f"private:{session.view_member_id}"
+    fingerprint = recovery_batch_fingerprint(body.request_id, body.targets)
+    prior = [
+        await runtime.event_log.get_by_idempotency(
+            session.tenant_id,
+            f"source-assessment-recovery:{body.request_id}:{target.source_event_id}",
+        )
+        for target in body.targets
+    ]
+    if any(event is not None for event in prior):
+        if not all(
+            event is not None
+            and (event.get("payload") or {}).get("batch_fingerprint") == fingerprint
+            and event.get("owner_scope") == required_owner_scope
+            for event in prior
+        ):
+            raise HTTPException(409, "recovery request_id conflicts with prior use")
+        return {
+            "contract": "source-assessment-recovery-v1",
+            "request_id": body.request_id,
+            "accepted": len(prior),
+            "request_event_ids": [str(event["event_id"]) for event in prior if event],
+            "duplicate": True,
+            "content_exposed": False,
+            "canonical_objects_created": 0,
+            "external_write_requests": 0,
+        }
+    try:
+        envelopes = await build_recovery_request_envelopes(
+            runtime.event_log,
+            body,
+            tenant_id=session.tenant_id,
+            requested_by_actor=session.auth_member_id,
+            authority="member_principal",
+            required_owner_scope=required_owner_scope,
+        )
+    except SourceAssessmentRecoveryRefused as exc:
+        raise HTTPException(409, exc.code) from exc
+    event_ids = await runtime.events.write_batch(
+        envelopes,
+        correlation_id=session.correlation_id,
+    )
+    return {
+        "contract": "source-assessment-recovery-v1",
+        "request_id": body.request_id,
+        "accepted": len(event_ids),
+        "request_event_ids": event_ids,
+        "duplicate": False,
+        "content_exposed": False,
+        "canonical_objects_created": 0,
+        "external_write_requests": 0,
+    }
 
 
 def create_application(settings: RuntimeSettings) -> FastAPI:

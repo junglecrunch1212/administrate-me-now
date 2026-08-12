@@ -1,7 +1,7 @@
 pack:
   id: pipeline:noise_filtering
   name: Noise filtering
-  version: 19.0.0
+  version: 20.0.0
   kind: pipeline
 runtime:
   language: python
@@ -13,8 +13,12 @@ triggers:
     - messaging.received
     - messaging.sent
     - telephony.sms_received
+    - source.assessment.recovery_requested
 replay:
-  on_version_change: full
+  # v20 does not walk every retained message. The guarded updater and the
+  # authenticated operator path append exact recovery requests, which retain
+  # the v19 checkpoint and target only reviewed terminal failures.
+  on_version_change: none
 delivery:
   # The handler is idempotent; EventBus checkpoints only the ordered success
   # prefix if one of these bounded language calls fails. Eight-way delivery is
@@ -37,3 +41,4 @@ events_emitted:
   - triage.intent.features_extracted
   - triage.item.proposed
   - triage.item.superseded
+  - source.assessment.recovery_refused

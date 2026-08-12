@@ -18,6 +18,7 @@ import yaml
 
 from adminme.events.log import EventLog
 from adminme.lib.pack_registry.models import SourceAssuranceRule
+from adminme.source_assessment_recovery import assessment_outcome
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,12 @@ async def audit_source_assurance(
         for obligation in obligations
         for event_type in obligation.terminal_events
     }
+    interesting.update(
+        {
+            "source.assessment.recovery_requested",
+            "source.assessment.recovery_refused",
+        }
+    )
     payload_types = {
         event_type
         for obligation in obligations
@@ -167,6 +174,12 @@ async def audit_source_assurance(
         for obligation in obligations
         if obligation.mode == "action_request_terminal"
     }
+    payload_types.update(
+        {
+            "source.assessment.recovery_requested",
+            "source.assessment.recovery_refused",
+        }
+    )
     watermark_event_id = through_event_id
     if watermark_event_id is None:
         watermark_event_id = await event_log.latest_event_id()
@@ -174,6 +187,9 @@ async def audit_source_assurance(
 
     assessments: dict[str, dict[str, Any]] = {}
     action_terminals: set[str] = set()
+    recovery_requests: dict[str, dict[str, Any]] = {}
+    recovery_assessments: dict[str, dict[str, Any]] = {}
+    recovery_refusals: set[str] = set()
     async for event in event_log.read_metadata_since(
         # An empty log has a null public watermark; the impossible empty
         # string still provides a closed upper bound if an append races the
@@ -185,6 +201,15 @@ async def audit_source_assurance(
         payload = event.get("payload") or {}
         if event.get("type") == "triage.intent.features_extracted":
             assessments[str(payload.get("source_event_id") or "")] = event
+            recovery_request_event_id = str(
+                payload.get("recovery_request_event_id") or ""
+            )
+            if recovery_request_event_id:
+                recovery_assessments[recovery_request_event_id] = event
+        elif event.get("type") == "source.assessment.recovery_requested":
+            recovery_requests[str(event.get("event_id") or "")] = event
+        elif event.get("type") == "source.assessment.recovery_refused":
+            recovery_refusals.add(str(payload.get("request_event_id") or ""))
         elif event.get("type") in {
             "external_sync.write_completed",
             "external_sync.write_failed",
@@ -229,21 +254,7 @@ async def audit_source_assurance(
                 assessment = assessments.get(event_id)
                 if assessment is not None:
                     payload = assessment.get("payload") or {}
-                    outcome = payload.get("assessment_outcome")
-                    if outcome not in {
-                        "eligible_candidates",
-                        "no_candidate",
-                        "quarantined",
-                        "failed",
-                    }:
-                        extraction_state = str(payload.get("extraction_state") or "")
-                        outcome = (
-                            "eligible_candidates"
-                            if payload.get("candidates")
-                            else "no_candidate"
-                            if extraction_state == "complete"
-                            else "failed"
-                        )
+                    outcome = assessment_outcome(assessment)
                     counts[str(outcome)] += 1
                     detail = str(outcome)
                     if outcome == "failed" and len(failures) < 20:
@@ -330,6 +341,24 @@ async def audit_source_assurance(
                     )
 
     counts["source_facts"] = len(source_ids)
+    recovery_counts = {
+        "requested": len(recovery_requests),
+        "succeeded": 0,
+        "failed": 0,
+        "refused": 0,
+        "pending": 0,
+    }
+    for request_event_id in recovery_requests:
+        assessment = recovery_assessments.get(request_event_id)
+        if assessment is not None:
+            if assessment_outcome(assessment) == "failed":
+                recovery_counts["failed"] += 1
+            else:
+                recovery_counts["succeeded"] += 1
+        elif request_event_id in recovery_refusals:
+            recovery_counts["refused"] += 1
+        else:
+            recovery_counts["pending"] += 1
     return {
         "contract": "source-assurance-v1",
         "state": ("degraded" if counts["missing"] or counts["failed"] else "healthy"),
@@ -340,6 +369,13 @@ async def audit_source_assurance(
         "by_event_type": by_event_type,
         "declared_source_event_types": len(by_type),
         "declared_obligations": len(obligations),
+        "recovery": {
+            "contract": "source-assessment-recovery-v1",
+            "counts": recovery_counts,
+            "attempt_limit": 3,
+            "max_concurrency": 2,
+            "content_exposed": False,
+        },
         "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }

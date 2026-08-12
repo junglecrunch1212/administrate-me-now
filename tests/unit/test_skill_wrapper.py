@@ -751,18 +751,35 @@ async def test_reviewed_generation_does_not_repeat_its_own_terminal_failure(
         lambda _request: httpx.Response(503, text="fixture unavailable")
     )
     runtime = _runtime_for(event_log, tmp_path, transport=unavailable)
-    ctx = SkillContext(
+    base_ctx = SkillContext(
         session=_session(),
         triggering_event_id="source-event-current-failure",
         invocation_idempotency_key="message-fingerprint-current-failure",
         retry_prior_failure=True,
     )
+    recovery_ctx = SkillContext(
+        session=_session(),
+        triggering_event_id="source-event-current-failure",
+        invocation_idempotency_key=("message-fingerprint-current-failure:recovery-1"),
+        retry_prior_failure=True,
+    )
 
     with pytest.raises(OpenClawUnreachable):
-        await run_skill("classify_test", {"text": "same"}, ctx, _runtime=runtime)
+        await run_skill("classify_test", {"text": "same"}, base_ctx, _runtime=runtime)
     with pytest.raises(OpenClawUnreachable):
-        await run_skill("classify_test", {"text": "same"}, ctx, _runtime=runtime)
+        await run_skill(
+            "classify_test", {"text": "same"}, recovery_ctx, _runtime=runtime
+        )
+    with pytest.raises(OpenClawUnreachable):
+        await run_skill("classify_test", {"text": "same"}, base_ctx, _runtime=runtime)
+    with pytest.raises(OpenClawUnreachable):
+        await run_skill(
+            "classify_test", {"text": "same"}, recovery_ctx, _runtime=runtime
+        )
 
-    assert len(unavailable.requests) == 1
+    assert len(unavailable.requests) == 2
     events = await _read_all_events(event_log)
-    assert [event["type"] for event in events] == ["skill.call.failed"]
+    assert [event["type"] for event in events] == [
+        "skill.call.failed",
+        "skill.call.failed",
+    ]

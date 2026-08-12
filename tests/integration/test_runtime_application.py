@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.envelope import EventEnvelope
+from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.lib.session import Session
 from adminme.lib.skill_runner import wrapper as skill_wrapper
@@ -21,6 +22,7 @@ from adminme.runtime.application import (
     RuntimeSettings,
     create_application,
 )
+from adminme.source_assessment_recovery import latest_source_assessment
 from bootstrap.contracts import PROJECTION_NAMES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -418,6 +420,187 @@ def test_production_composition_injects_skill_gateway_auth_without_ambient_env(
 
     assert result.output == {"is_thing": True, "confidence": 0.9}
     assert captured["token"] == token
+
+
+def test_runtime_recovery_endpoint_is_scoped_append_only_and_human_gated(
+    tmp_path: Path,
+) -> None:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    settings = RuntimeSettings.credential_free(
+        instance_dir,
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={
+            "member-a.ts.net": "member-a",
+            "child.ts.net": "member-child",
+        },
+        member_roles={"member-a": "principal", "member-child": "child"},
+        deterministic_openclaw_fixture=True,
+        fixture_member_id="member-a",
+    )
+
+    async def preload() -> tuple[str, str]:
+        log = EventLog(settings.instance, TEST_KEY)
+        try:
+            source_id = await log.append(
+                EventEnvelope(
+                    event_at_ms=1_786_410_000_000,
+                    tenant_id=settings.instance.tenant_id,
+                    type="messaging.received",
+                    schema_version=3,
+                    occurred_at="2026-08-11T15:00:00Z",
+                    source_adapter="gmail",
+                    source_account_id="fixture-account",
+                    owner_scope="private:member-a",
+                    visibility_scope="private:member-a",
+                    sensitivity="normal",
+                    idempotency_key="runtime-recovery-source",
+                    payload={
+                        "provider": "gmail",
+                        "provider_account_id": "fixture-account",
+                        "member_id": "member-a",
+                        "source_channel": "gmail",
+                        "native_message_id": "runtime-recovery-source",
+                        "thread_id": "runtime-recovery-thread",
+                        "from_identifier": "sender@example.invalid",
+                        "to_identifier": "member@example.invalid",
+                        "workspace": "personal",
+                        "subject": "Fixture recovery",
+                        "body_text": "A private fixture update without an action.",
+                        "received_at": "2026-08-11T15:00:00Z",
+                        "provider_labels": ["INBOX"],
+                        "attachments": [],
+                    },
+                )
+            )
+            failed_id = await log.append(
+                EventEnvelope(
+                    event_at_ms=1_786_410_000_001,
+                    tenant_id=settings.instance.tenant_id,
+                    type="triage.intent.features_extracted",
+                    schema_version=3,
+                    occurred_at="2026-08-11T15:00:01Z",
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope="private:member-a",
+                    visibility_scope="private:member-a",
+                    sensitivity="normal",
+                    idempotency_key=f"triage:message-features:v19:{source_id}",
+                    payload={
+                        "intent_id": f"source:{source_id}",
+                        "source_event_id": source_id,
+                        "skill_call_event_id": None,
+                        "extractor_id": "fixture-source-assessor",
+                        "language": None,
+                        "candidates": [],
+                        "extraction_state": "unavailable",
+                        "extracted_at": "2026-08-11T15:00:01Z",
+                        "assessment_outcome": "failed",
+                        "reason_codes": [
+                            "language_seam_OpenClawUnreachable",
+                            "no_eligible_candidate",
+                        ],
+                    },
+                ),
+                causation_id=source_id,
+            )
+            bus = EventBus(log, settings.instance.bus_checkpoint_path)
+
+            async def noop(_event: dict[str, object]) -> None:
+                return None
+
+            bus.subscribe(
+                "pipeline:pipeline:noise_filtering",
+                ["messaging.received", "messaging.sent", "telephony.sms_received"],
+                noop,
+                consumer_version="19.0.0",
+            )
+            await bus.set_checkpoint("pipeline:pipeline:noise_filtering", failed_id)
+            await bus.stop()
+            return source_id, failed_id
+        finally:
+            await log.close()
+
+    source_id, failed_id = asyncio.run(preload())
+    app = create_application(settings)
+    with TestClient(app) as client:
+        body = {
+            "request_id": "runtime-recovery-request-1",
+            "targets": [
+                {
+                    "source_event_id": source_id,
+                    "failed_assessment_event_id": failed_id,
+                    "expected_failure_reason": ("language_seam_OpenClawUnreachable"),
+                }
+            ],
+        }
+        child = client.post(
+            "/api/system/source-assessment-recoveries",
+            json=body,
+            headers={"Tailscale-User-Login": "child.ts.net"},
+        )
+        assert child.status_code == 403
+        cross_scope = client.post(
+            "/api/system/source-assessment-recoveries",
+            json=body,
+            headers={
+                "Tailscale-User-Login": "member-a.ts.net",
+                "X-AdminMe-View-Member": "member-child",
+            },
+        )
+        assert cross_scope.status_code == 409
+        assert cross_scope.json()["detail"] == "request_scope_mismatch"
+
+        accepted = client.post(
+            "/api/system/source-assessment-recoveries",
+            json=body,
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        )
+        assert accepted.status_code == 202, accepted.text
+        receipt = accepted.json()
+        assert receipt["content_exposed"] is False
+        assert receipt["canonical_objects_created"] == 0
+        assert receipt["external_write_requests"] == 0
+        assert "private fixture update" not in accepted.text.lower()
+
+        runtime: AdministrateMeRuntime = app.state.runtime
+        deadline = time.monotonic() + 5
+        latest = None
+        while time.monotonic() < deadline:
+            latest = client.portal.call(
+                latest_source_assessment, runtime.event_log, source_id
+            )
+            if latest and latest["schema_version"] == 4:
+                break
+            time.sleep(0.02)
+        assert latest is not None
+        assert latest["schema_version"] == 4
+        assert latest["payload"]["assessment_outcome"] == "no_candidate"
+        assert latest["payload"]["supersedes_assessment_event_id"] == failed_id
+
+        duplicate = client.post(
+            "/api/system/source-assessment-recoveries",
+            json=body,
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        )
+        assert duplicate.status_code == 202
+        assert duplicate.json()["duplicate"] is True
+        assert duplicate.json()["request_event_ids"] == receipt["request_event_ids"]
+
+        all_events = client.portal.call(_event_types, runtime.event_log)
+        assert not {
+            "triage.item.confirmed",
+            "triage.item.materialized",
+            "task.created",
+            "commitment.created",
+            "external_sync.write_requested",
+            "external_sync.write_completed",
+        }.intersection(all_events)
+
+
+async def _event_types(log: EventLog) -> list[str]:
+    return [str(event["type"]) async for event in log.read_since()]
 
 
 def test_reviewed_household_enrollment_becomes_idempotent_people_truth(

@@ -17,6 +17,57 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-11 CO-017 candidate — terminal source-assessment recovery
+
+Status: implementation candidate; not merged or deployed. The front matter
+continues to describe the current CO-015 production release deliberately.
+
+The source-assurance baseline at current production commit
+`2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe` accounts for all 62,623 source
+obligations with zero pending and zero missing, but four exact message sources
+remain terminally failed with `language_seam_OpenClawUnreachable`. Generation
+19 exhausted its base and two transient invocation identities. Ordinary replay
+then encountered the append-only log's correct idempotency conflict because the
+generation-19 assessment key already names a different failed payload.
+
+CO-017 adds typed, content-free recovery request/refusal events and a linked v4
+assessment. An authenticated adult operator may submit only exact supported,
+private, same-member, non-privileged sources whose newest exact assessment has
+an allowlisted timeout/unreachable reason, and only while observation mode is
+active. Processing revalidates the request, uses a fresh request-bound
+assessment and pinned `llm-task` invocation namespace, caps execution at two
+concurrent requests and three total language attempts, and preserves the old
+failure. Source assurance treats the newest valid replacement as current.
+Delivery rechecks observation, tenant, and current-predecessor truth. Distinct
+requests for one source are single-flight through terminal append; derived
+events are ordered after their command on cold reopen; and the request-bound
+base call may bypass the predecessor's old causal skill failure once without
+repeating its own result. Base, recovery-1, and recovery-2 each find their exact
+durable terminal across a mid-retry restart even when a sibling failed later.
+Duplicate delivery and restart reuse durable
+identities, refusal is terminal for its exact command, and a persistent failure
+remains explicit.
+
+The updater's checked-in exception is restricted to the current production
+commit, exact 62,623/62,623 counts, the four declared source IDs, their exact
+reasons, and no unrelated degradation. It requires the explicit declared-repair
+flag, validates before and after encrypted backup, stops services, re-audits the
+encrypted log, and appends only the exact typed requests before selecting the
+candidate. Any mismatch uses ordinary fail-closed rollback. Successful switch
+still requires complete settlement and entirely healthy Doctor; the exception
+does not redefine health. Its request identity changes after a matching
+content-free refusal, permitting a later guarded attempt without making an
+unchanged pending command non-idempotent.
+
+Focused recovery, production-composition endpoint, updater-policy, existing
+noise-filtering/source-assurance/updater, and rollback-checkpoint tests pass.
+The complete release candidate suite, standalone required Python/Ruff/mypy/
+invariant/OpenClaw commands, disposable macOS rehearsal, and Node 24 Gate 7
+browser run also pass; Gate 7 recorded 259 checks with no console, page, or
+request failures. Independent review, hosted gates, PR identity, and exact-head
+evidence remain Phase A work. G-001 still forbids merge or deployment without a
+fresh instruction exactly naming the reviewed PR and 40-character head.
+
 ## 2026-08-10 G-001 controlled-release governance bootstrap
 
 The household owner approved G-001 to remove the deadlock between the
