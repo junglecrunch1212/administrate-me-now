@@ -468,8 +468,14 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
             raise HarnessError(f"{name} is bound to a different candidate")
 
     verification = artifacts["verification-report.json"]
+    preservation = artifacts["preservation-manifest.json"]
     review = artifacts["review-report.json"]
     owner = artifacts["owner-handoff.metadata.json"]
+    if preservation["rollback"]["task_owned_paths"] != verification["changed_files"]:
+        raise HarnessError(
+            "preservation-manifest.json task-owned paths differ from the bound "
+            "verification scope"
+        )
     if (run_dir / "owner-handoff.md").read_text("utf-8") != render_owner_handoff(owner):
         raise HarnessError(
             "owner-handoff.md contradicts or is stale against owner handoff metadata"

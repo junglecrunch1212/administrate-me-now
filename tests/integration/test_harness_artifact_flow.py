@@ -57,6 +57,27 @@ def test_run_artifacts_create_validate_and_refresh_in_system_temp(
     assert not str(run_dir.resolve()).startswith(str(root.resolve()))
 
 
+def test_preservation_task_paths_must_match_bound_verification_scope(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-divergent-task-paths"
+    create_run(
+        root,
+        requested_outcome="Reject a narrowed preservation scope.",
+        task_paths=["scripts/harness", "AGENTS.md"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    manifest_path = run_dir / "preservation-manifest.json"
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    manifest["rollback"]["task_owned_paths"].remove("AGENTS.md")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="task-owned paths differ"):
+        validate_run(run_dir, root)
+
+
 def test_semantically_false_green_run_is_rejected(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     run_dir = tmp_path / "administrateme-harness-false-green"
