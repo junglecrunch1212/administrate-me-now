@@ -558,6 +558,21 @@ without canonical or provider effects. Revision-bound v3 projection proof keeps
 a raced member enrichment pending and suppresses the later replacement; the
 same proof keeps dismissal and confirmation terminal without reopening work.
 
+C113/C114 release-race amendment: an exact reviewed skill invocation now has
+one first-writer durable result even when concurrent callers both pass the
+initial absence check. The losing append reuses that result rather than
+creating a false terminal source failure. The four immutable failures exposed
+by the rejected CO-018 activation, plus one exact older allowlisted transient
+failure, are recovered only through an exact, observation-only, release-scoped
+request set. The exception binds the rolled-back commit and original obligation
+floor, exact failure set, exact restored-v20 checkpoint/poison state, at most
+100 later message obligations behind that poison, an all-record content-free
+backlog summary beyond the 20-row display bound, every other stopped consumer
+healthy, and live Gateway quiescence. An older predecessor's summary is
+recomputed query-only at its exact diagnostic watermark, and the stopped audit
+recomputes it independently. No checkpoint is edited and no unrelated missing
+type, reason, Doctor failure, or degraded capability is admitted.
+
 ## Source coverage index
 
 ## Gate 2 traceability update

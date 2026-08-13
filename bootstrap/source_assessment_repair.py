@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import sqlite3
@@ -24,13 +25,27 @@ from bootstrap.secrets import secret_store
 
 
 POLICY_RELATIVE_PATH = Path(
-    "bootstrap/release-exceptions/pr-334-source-assessment-recovery.json"
+    "bootstrap/release-exceptions/co-018-release-race-recovery.json"
 )
 _SOURCE_DERIVED_CAPABILITIES = frozenset(
     {
         "policy:source-assurance",
         "product:member",
         "surface:triage-processing",
+    }
+)
+_MISSING_DETAIL_LIMIT = 20
+_MISSING_SUMMARY_KEYS = frozenset(
+    {"contract", "total_count", "detail_limit", "groups", "content_exposed"}
+)
+_MISSING_GROUP_KEYS = frozenset(
+    {
+        "event_type",
+        "mode",
+        "reason",
+        "count",
+        "first_event_id",
+        "last_event_id",
     }
 )
 
@@ -40,7 +55,7 @@ class BaselineCounts(BaseModel):
 
     minimum_obligations: int = Field(ge=1)
     pending: Literal[0]
-    missing: Literal[0]
+    maximum_missing: int = Field(ge=0, le=100)
     failed: int = Field(ge=1, le=20)
 
 
@@ -49,9 +64,22 @@ class BaselineTarget(BaseModel):
 
     source_event_id: str = Field(min_length=1, max_length=240)
     expected_failure_reason: Literal[
+        "language_seam_IdempotencyConflict",
         "language_seam_OpenClawTimeout",
         "language_seam_OpenClawUnreachable",
     ]
+
+
+class PausedConsumerBaseline(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    subscriber_id: Literal["pipeline:pipeline:noise_filtering"]
+    consumer_version: Literal["20.0.0"]
+    checkpoint_event_id: str = Field(min_length=1, max_length=240)
+    poison_event_id: str = Field(min_length=1, max_length=240)
+    consecutive_failures: Literal[5]
+    missing_event_type: Literal["messaging.received"]
+    missing_reason: Literal["assessment_event_absent_after_checkpoint_or_grace"]
 
 
 class SourceAssessmentRepairPolicy(BaseModel):
@@ -62,6 +90,7 @@ class SourceAssessmentRepairPolicy(BaseModel):
     observation_mode_required: Literal[True]
     expected_counts: BaselineCounts
     targets: list[BaselineTarget] = Field(min_length=1, max_length=20)
+    paused_consumer: PausedConsumerBaseline | None = None
     expires_after_activation: Literal[True]
 
 
@@ -177,6 +206,151 @@ def _assurance_details(diagnostics: dict[str, Any]) -> dict[str, Any]:
     ).get("details") or {}
 
 
+def _fallback_missing_summary(
+    missing: list[dict[str, Any]],
+) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in missing:
+        event_id = str(item.get("event_id") or "")
+        key = (
+            str(item.get("event_type") or ""),
+            str(item.get("mode") or ""),
+            str(item.get("reason") or ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "event_type": key[0],
+                "mode": key[1],
+                "reason": key[2],
+                "count": 0,
+                "first_event_id": event_id,
+                "last_event_id": event_id,
+            },
+        )
+        group["count"] += 1
+        group["first_event_id"] = min(group["first_event_id"], event_id)
+        group["last_event_id"] = max(group["last_event_id"], event_id)
+    return {
+        "contract": "source-assurance-missing-summary-v1",
+        "total_count": len(missing),
+        "detail_limit": _MISSING_DETAIL_LIMIT,
+        "groups": [groups[key] for key in sorted(groups)],
+        "content_exposed": False,
+    }
+
+
+def _validate_missing_backlog(
+    policy: SourceAssessmentRepairPolicy,
+    *,
+    details: dict[str, Any],
+    missing_count: int,
+) -> dict[str, Any]:
+    missing = [item for item in details.get("missing") or [] if isinstance(item, dict)]
+    summary = details.get("missing_summary")
+    if not isinstance(summary, dict):
+        if len(missing) != missing_count:
+            raise SourceAssessmentRepairError(
+                "complete missing-source summary is unavailable"
+            )
+        summary = _fallback_missing_summary(missing)
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    try:
+        summary_total = int(summary.get("total_count", -1))
+        detail_limit = int(summary.get("detail_limit", -1))
+        group_counts = [
+            int(group.get("count", -1)) for group in groups if isinstance(group, dict)
+        ]
+        group_total = sum(group_counts)
+    except (TypeError, ValueError) as exc:
+        raise SourceAssessmentRepairError("missing-source summary is invalid") from exc
+    if (
+        summary.get("contract") != "source-assurance-missing-summary-v1"
+        or frozenset(summary) != _MISSING_SUMMARY_KEYS
+        or summary.get("content_exposed") is not False
+        or summary_total != missing_count
+        or detail_limit != _MISSING_DETAIL_LIMIT
+        or len(groups) != sum(isinstance(group, dict) for group in groups)
+        or any(frozenset(group) != _MISSING_GROUP_KEYS for group in groups)
+        or any(count < 1 for count in group_counts)
+        or group_total != missing_count
+        or len(missing) != min(missing_count, detail_limit)
+    ):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    if missing_count and policy.paused_consumer is None:
+        raise SourceAssessmentRepairError(
+            "missing sources require an exact paused-consumer declaration"
+        )
+    if policy.paused_consumer is None:
+        if groups:
+            raise SourceAssessmentRepairError("missing-source summary is invalid")
+        return summary
+
+    expected = policy.paused_consumer
+    if len(groups) != (1 if missing_count else 0):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    detail_event_ids = [str(item.get("event_id") or "") for item in missing]
+    if detail_event_ids != sorted(set(detail_event_ids)):
+        raise SourceAssessmentRepairError("missing-source details are invalid")
+    for item in [*missing, *groups]:
+        first_event_id = str(item.get("first_event_id") or item.get("event_id") or "")
+        last_event_id = str(item.get("last_event_id") or first_event_id)
+        if (
+            item.get("event_type") != expected.missing_event_type
+            or item.get("mode") != "candidate_assessment"
+            or item.get("reason") != expected.missing_reason
+            or first_event_id <= expected.poison_event_id
+            or last_event_id < first_event_id
+        ):
+            raise SourceAssessmentRepairError(
+                "missing sources differ from the declared paused-consumer backlog"
+            )
+    if groups and missing:
+        group = groups[0]
+        if (
+            group["first_event_id"] != detail_event_ids[0]
+            or str(group["last_event_id"]) < detail_event_ids[-1]
+        ):
+            raise SourceAssessmentRepairError(
+                "missing-source summary differs from displayed details"
+            )
+    return summary
+
+
+def _validate_paused_consumer(
+    policy: SourceAssessmentRepairPolicy,
+    diagnostics: dict[str, Any],
+) -> bool:
+    expected = policy.paused_consumer
+    if expected is None:
+        return False
+    capability = (diagnostics.get("capabilities") or {}).get(expected.subscriber_id)
+    if not isinstance(capability, dict) or capability.get("state") != "degraded":
+        raise SourceAssessmentRepairError(
+            "declared paused consumer is not the only expected degraded worker"
+        )
+    details = capability.get("details") or {}
+    actual = {
+        "consumer_version": str(details.get("version") or ""),
+        "checkpoint_event_id": str(details.get("checkpoint_event_id") or ""),
+        "poison_event_id": str(details.get("poison_event_id") or ""),
+        "consecutive_failures": int(details.get("consecutive_failures") or 0),
+    }
+    expected_values = {
+        "consumer_version": expected.consumer_version,
+        "checkpoint_event_id": expected.checkpoint_event_id,
+        "poison_event_id": expected.poison_event_id,
+        "consecutive_failures": expected.consecutive_failures,
+    }
+    if actual != expected_values:
+        raise SourceAssessmentRepairError(
+            "paused consumer state differs from the declared release baseline"
+        )
+    return True
+
+
 def validate_declared_baseline(
     policy: SourceAssessmentRepairPolicy,
     *,
@@ -194,17 +368,50 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError("repair requires active observation mode")
     if diagnostics.get("ready") is not True:
         raise SourceAssessmentRepairError("repair requires a ready live runtime")
-    if _failed_doctor_checks(doctor) != {"source_assurance_terminal_dispositions"}:
+    paused_consumer_expected = _validate_paused_consumer(policy, diagnostics)
+    failed_doctor_checks = _failed_doctor_checks(doctor)
+    permitted_doctor_failures = {
+        frozenset({"source_assurance_terminal_dispositions"}),
+        frozenset(
+            {
+                "launchd_and_process_state",
+                "source_assurance_terminal_dispositions",
+            }
+        ),
+    }
+    if paused_consumer_expected:
+        permitted_doctor_failures = {
+            frozenset(
+                {
+                    "required_reactive_pipeline_delivery",
+                    "source_assurance_terminal_dispositions",
+                }
+            ),
+            frozenset(
+                {
+                    "required_reactive_pipeline_delivery",
+                    "launchd_and_process_state",
+                    "source_assurance_terminal_dispositions",
+                }
+            ),
+        }
+    if frozenset(failed_doctor_checks) not in permitted_doctor_failures:
         raise SourceAssessmentRepairError(
             "active Doctor differs from the declared source-only degradation"
         )
     capabilities = diagnostics.get("capabilities") or {}
     if not isinstance(capabilities, dict):
         raise SourceAssessmentRepairError("runtime capabilities are unavailable")
+    paused_subscriber_id = (
+        policy.paused_consumer.subscriber_id
+        if policy.paused_consumer is not None
+        else None
+    )
     unexpected = sorted(
         capability_id
         for capability_id, capability in capabilities.items()
         if capability_id not in _SOURCE_DERIVED_CAPABILITIES
+        and not (paused_consumer_expected and capability_id == paused_subscriber_id)
         and isinstance(capability, dict)
         and capability.get("state") in {"degraded", "blocked"}
     )
@@ -234,9 +441,12 @@ def validate_declared_baseline(
     expected = policy.expected_counts
     if (
         actual_counts["obligations"] < expected.minimum_obligations
-        or actual_counts["accounted"] != actual_counts["obligations"]
+        or actual_counts["accounted"]
+        + actual_counts["pending"]
+        + actual_counts["missing"]
+        != actual_counts["obligations"]
         or actual_counts["pending"] != expected.pending
-        or actual_counts["missing"] != expected.missing
+        or actual_counts["missing"] > expected.maximum_missing
         or actual_counts["failed"] != expected.failed
     ):
         raise SourceAssessmentRepairError(
@@ -273,10 +483,22 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "failed source ids or reasons differ from the declared repair baseline"
         )
+    missing_summary = _validate_missing_backlog(
+        policy,
+        details=details,
+        missing_count=actual_counts["missing"],
+    )
     return {
         "minimum_obligations": expected.minimum_obligations,
+        "maximum_missing": expected.maximum_missing,
         "counts": actual_counts,
         "failed_target_count": len(actual_failures),
+        "paused_consumer": (
+            policy.paused_consumer.model_dump(mode="json")
+            if policy.paused_consumer is not None
+            else None
+        ),
+        "missing_summary": missing_summary,
         "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }
@@ -291,8 +513,99 @@ def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _hydrate_online_missing_summary(
+    paths: DeploymentPaths,
+    *,
+    repository_root: Path,
+    diagnostics: dict[str, Any],
+    test_mode: bool,
+) -> dict[str, Any]:
+    details = _assurance_details(diagnostics)
+    counts = details.get("counts") or {}
+    summary = details.get("missing_summary")
+    try:
+        missing_count = int(counts.get("missing", -1))
+        summary_count = (
+            int(summary.get("total_count", -1)) if isinstance(summary, dict) else -1
+        )
+    except (TypeError, ValueError):
+        missing_count = -1
+        summary_count = -1
+    if (
+        isinstance(summary, dict)
+        and summary.get("contract") == "source-assurance-missing-summary-v1"
+        and summary_count == missing_count
+    ):
+        return diagnostics
+
+    watermark_event_id = details.get("watermark_event_id")
+    if not isinstance(watermark_event_id, str) or not watermark_event_id:
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence has no exact event watermark"
+        )
+    references = json.loads(
+        (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
+    )["references"]
+    event_key = secret_store(paths, test_mode=test_mode).get(references["event_log"])
+    event_log = EventLog(
+        paths.instance_dir / "events" / "events.db",
+        event_key,
+        read_only=True,
+    )
+    try:
+        audit = await audit_source_assurance(
+            event_log,
+            repository_root=repository_root,
+            capabilities=_capability_snapshot(diagnostics),
+            through_event_id=watermark_event_id,
+        )
+    finally:
+        await event_log.close()
+    live_counts = {
+        name: int(counts.get(name, -1))
+        for name in ("obligations", "accounted", "pending", "missing", "failed")
+    }
+    audited_counts = {
+        name: int((audit.get("counts") or {}).get(name, -1))
+        for name in ("obligations", "accounted", "pending", "missing", "failed")
+    }
+    if (
+        audit.get("watermark_event_id") != watermark_event_id
+        or audited_counts != live_counts
+        or audit.get("content_exposed") is not False
+    ):
+        raise SourceAssessmentRepairError(
+            "candidate missing-source audit differs from live source assurance"
+        )
+    hydrated = copy.deepcopy(diagnostics)
+    hydrated_details = _assurance_details(hydrated)
+    hydrated_details["missing_summary"] = audit["missing_summary"]
+    return hydrated
+
+
+def hydrate_online_repair_diagnostics(
+    paths: DeploymentPaths,
+    *,
+    repository_root: Path,
+    diagnostics: dict[str, Any],
+    test_mode: bool,
+) -> dict[str, Any]:
+    """Add an exact all-row backlog summary at the live diagnostic watermark."""
+
+    return asyncio.run(
+        _hydrate_online_missing_summary(
+            paths,
+            repository_root=repository_root,
+            diagnostics=diagnostics,
+            test_mode=test_mode,
+        )
+    )
+
+
 def _stopped_consumer_health(
-    paths: DeploymentPaths, diagnostics: dict[str, Any]
+    paths: DeploymentPaths,
+    diagnostics: dict[str, Any],
+    policy: SourceAssessmentRepairPolicy,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prove stopped projection/pipeline workers persisted no hidden failure."""
 
@@ -309,6 +622,7 @@ def _stopped_consumer_health(
                 connection.execute(
                     "SELECT subscriber_id, checkpoint_event_id, "
                     "consecutive_failures, degraded, poison_event_id "
+                    ", consumer_version "
                     "FROM bus_consumer_offsets "
                     "WHERE subscriber_id LIKE 'pipeline:%' "
                     "OR subscriber_id LIKE 'projection:%'"
@@ -332,26 +646,65 @@ def _stopped_consumer_health(
         raise SourceAssessmentRepairError(
             "stopped consumer health inventory is incomplete"
         )
-    unhealthy_count = sum(
-        bool(row["degraded"])
+    unhealthy = [
+        row
+        for row in rows
+        if bool(row["degraded"])
         or int(row["consecutive_failures"] or 0) > 0
         or row["poison_event_id"] is not None
-        for row in rows
-    )
-    if unhealthy_count:
+    ]
+    expected_paused = policy.paused_consumer
+    if expected_paused is None and unhealthy:
         raise SourceAssessmentRepairError(
             "stopped consumer health contains a degraded or poisoned worker"
         )
+    if expected_paused is not None:
+        if len(unhealthy) != 1:
+            raise SourceAssessmentRepairError(
+                "stopped consumer health differs from the declared paused worker"
+            )
+        row = unhealthy[0]
+        actual = {
+            "subscriber_id": str(row["subscriber_id"]),
+            "consumer_version": str(row["consumer_version"] or ""),
+            "checkpoint_event_id": str(row["checkpoint_event_id"] or ""),
+            "poison_event_id": str(row["poison_event_id"] or ""),
+            "consecutive_failures": int(row["consecutive_failures"] or 0),
+        }
+        declared = {
+            "subscriber_id": expected_paused.subscriber_id,
+            "consumer_version": expected_paused.consumer_version,
+            "checkpoint_event_id": expected_paused.checkpoint_event_id,
+            "poison_event_id": expected_paused.poison_event_id,
+            "consecutive_failures": expected_paused.consecutive_failures,
+        }
+        if actual != declared or not bool(row["degraded"]):
+            raise SourceAssessmentRepairError(
+                "stopped consumer poison differs from the declared release baseline"
+            )
     evidence = {
         "pipeline_count": pipeline_count,
         "projection_count": projection_count,
-        "unhealthy_count": 0,
+        "unhealthy_count": len(unhealthy),
+        "declared_paused_subscriber": (
+            expected_paused.subscriber_id if expected_paused is not None else None
+        ),
         "content_exposed": False,
     }
     capabilities = {
         str(row["subscriber_id"]): {
-            "state": "healthy",
-            "details": {"checkpoint_event_id": row["checkpoint_event_id"]},
+            "state": (
+                "degraded"
+                if expected_paused is not None
+                and row["subscriber_id"] == expected_paused.subscriber_id
+                else "healthy"
+            ),
+            "details": {
+                "checkpoint_event_id": row["checkpoint_event_id"],
+                "version": row["consumer_version"],
+                "poison_event_id": row["poison_event_id"],
+                "consecutive_failures": int(row["consecutive_failures"] or 0),
+            },
         }
         for row in rows
     }
@@ -385,7 +738,7 @@ async def _offline_validate_and_append(
                 "final live health receipt has no exact event watermark"
             )
         consumer_health, stopped_capabilities = _stopped_consumer_health(
-            paths, diagnostics
+            paths, diagnostics, policy
         )
         audit = await audit_source_assurance(
             event_log,
@@ -424,10 +777,20 @@ async def _offline_validate_and_append(
             active_commit=policy.required_active_commit,
             doctor={
                 "checks": [
+                    *(
+                        [
+                            {
+                                "name": "required_reactive_pipeline_delivery",
+                                "ok": False,
+                            }
+                        ]
+                        if policy.paused_consumer is not None
+                        else []
+                    ),
                     {
                         "name": "source_assurance_terminal_dispositions",
                         "ok": False,
-                    }
+                    },
                 ]
             },
             diagnostics=synthetic_diagnostics,
@@ -542,6 +905,7 @@ __all__ = [
     "POLICY_RELATIVE_PATH",
     "SourceAssessmentRepairError",
     "SourceAssessmentRepairPolicy",
+    "hydrate_online_repair_diagnostics",
     "load_repair_policy",
     "offline_validate_repair_baseline",
     "validate_declared_baseline",

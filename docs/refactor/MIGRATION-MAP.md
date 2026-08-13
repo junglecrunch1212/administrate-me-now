@@ -1,5 +1,24 @@
 # Migration map
 
+CO-018 release amendment (2026-08-13): PR #338 merged as `5b6c140`, but
+guarded activation rejected it and restored `d181fad`. Candidate replay
+appended four immutable `language_seam_IdempotencyConflict` assessments when
+concurrent exact skill calls raced to record different results under one
+idempotency identity. The forward repair makes the event log's first recorded
+result canonical for every losing caller. Its first repair head declared only
+those four exact failures for guarded linked recovery. During validation, restored generation
+20 reached one exact retained collision, persisted its five-attempt poison
+state, and paused later message assessment; one older allowlisted
+`OpenClawUnreachable` assessment also remains current. The amended exception
+therefore binds all five exact failure targets plus the exact v20
+checkpoint/poison state and a bounded later-`messaging.received` backlog. The
+20-row diagnostic display remains bounded while an additive content-free
+all-record summary proves the complete backlog; the candidate can hydrate that
+summary from the older predecessor at its exact watermark through a query-only
+encrypted-log connection, and the stopped audit recomputes it independently.
+This is a **HARDEN/FORWARD-REPAIR LOCAL CANDIDATE**; it performs no checkpoint
+edit, source rewrite, event deletion, provider write, or runtime migration.
+
 CO-018 update (2026-08-12): source-time and message-context correctness is a
 **MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.3.0 and emits
 additive `messaging.received@v4` / `messaging.sent@v4`; prior versions remain

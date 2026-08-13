@@ -166,6 +166,8 @@ class EventLog:
         self,
         db_path: "Path | InstanceConfig",
         encryption_key: bytes,
+        *,
+        read_only: bool = False,
     ) -> None:
         # Prompt 05: EventLog now accepts an InstanceConfig and derives its
         # own path per §15/D15. Raw paths are still accepted for tests and
@@ -178,7 +180,9 @@ class EventLog:
         else:
             resolved = Path(db_path)
         self._db_path = resolved
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = read_only
+        if not self._read_only:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._key_pragma = _format_key(encryption_key)
         self._conn = self._open_connection()
         self._lock = asyncio.Lock()
@@ -187,7 +191,8 @@ class EventLog:
         self._tenant_id_hint = (
             db_path.tenant_id if isinstance(db_path, _InstanceConfig) else None
         )
-        self._migrate()
+        if not self._read_only:
+            self._migrate()
         ensure_autoloaded()
 
     # ------------------------------------------------------------------
@@ -200,15 +205,25 @@ class EventLog:
         return self._tenant_id_hint
 
     def _open_connection(self) -> sqlcipher3.Connection:
-        conn = sqlcipher3.connect(
-            str(self._db_path),
-            isolation_level=None,  # we drive transactions explicitly
-            check_same_thread=False,
+        target = (
+            f"{self._db_path.resolve().as_uri()}?mode=ro"
+            if self._read_only
+            else str(self._db_path)
         )
+        connect_options: dict[str, Any] = {
+            "isolation_level": None,  # we drive transactions explicitly
+            "check_same_thread": False,
+        }
+        if self._read_only:
+            connect_options["uri"] = True
+        conn = sqlcipher3.connect(target, **connect_options)
         conn.row_factory = sqlcipher3.Row
         conn.execute(f'PRAGMA key = "{self._key_pragma}"')
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        if self._read_only:
+            conn.execute("PRAGMA query_only=ON")
+        else:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         # Touch the DB to surface bad-key errors eagerly.
         conn.execute("SELECT count(*) FROM sqlite_master").fetchone()

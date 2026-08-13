@@ -233,6 +233,7 @@ async def audit_source_assurance(
     missing: list[dict[str, str]] = []
     pending: list[dict[str, str]] = []
     failures: list[dict[str, str]] = []
+    missing_groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     by_event_type: dict[str, dict[str, int]] = {}
 
     for event in source_events:
@@ -328,6 +329,22 @@ async def audit_source_assurance(
 
             counts[status] += 1
             row[status] += 1
+            if status == "missing":
+                group_key = (event_type, obligation.mode, detail)
+                group = missing_groups.setdefault(
+                    group_key,
+                    {
+                        "event_type": event_type,
+                        "mode": obligation.mode,
+                        "reason": detail,
+                        "count": 0,
+                        "first_event_id": event_id,
+                        "last_event_id": event_id,
+                    },
+                )
+                group["count"] += 1
+                group["first_event_id"] = min(group["first_event_id"], event_id)
+                group["last_event_id"] = max(group["last_event_id"], event_id)
             if status in {"missing", "pending"}:
                 target = missing if status == "missing" else pending
                 if len(target) < 20:
@@ -364,6 +381,13 @@ async def audit_source_assurance(
         "state": ("degraded" if counts["missing"] or counts["failed"] else "healthy"),
         "counts": counts,
         "missing": missing,
+        "missing_summary": {
+            "contract": "source-assurance-missing-summary-v1",
+            "total_count": counts["missing"],
+            "detail_limit": 20,
+            "groups": [missing_groups[key] for key in sorted(missing_groups)],
+            "content_exposed": False,
+        },
         "pending": pending,
         "failed": failures,
         "by_event_type": by_event_type,

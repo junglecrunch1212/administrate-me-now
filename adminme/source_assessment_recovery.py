@@ -28,6 +28,7 @@ SUPPORTED_SOURCE_EVENT_TYPES = frozenset(
 )
 RETRYABLE_FAILURE_REASONS = frozenset(
     {
+        "language_seam_IdempotencyConflict",
         "language_seam_OpenClawTimeout",
         "language_seam_OpenClawUnreachable",
     }
