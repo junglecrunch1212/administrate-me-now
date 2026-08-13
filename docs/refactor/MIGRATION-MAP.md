@@ -18,9 +18,10 @@ contextual interpretation metadata, v21 supersedes the contextual proposal,
 excludes that exact event from active-history dedupe, and appends the current
 fallback under a deterministic replay-versioned proposal ID. The source and
 old proposal remain immutable, while exactly one context-free replacement is
-pending for review. The projection admits that replacement only when no active
-same-source/kind/key predecessor remains; a member revision that defeats stale
-supersession therefore also prevents duplicate replacement work.
+pending for review. The projection admits that replacement only when the same-
+source/kind/key predecessor bears the exact successful system
+`eligibility_rule_replaced` disposition; enrichment, dismissal, confirmation,
+and later terminal states therefore prevent duplicate or reopened work.
 The v21 replay stores exact relationship-edge provenance. Source-text
 corrections are proposal/candidate/digest/span scoped; replay no longer blanks
 unrelated authored asks. Invalid Gmail source timestamps quarantine instead of

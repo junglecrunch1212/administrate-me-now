@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adminme.adapters.base import AdapterContext
@@ -955,10 +956,20 @@ def test_exact_context_correction_round_trip_through_production_composition(
         )
 
 
-def test_stale_system_supersession_cannot_override_member_enrichment(
+@pytest.mark.parametrize(
+    ("member_action", "expected_state"),
+    [
+        ("enriched", "pending_review"),
+        ("dismissed", "dismissed"),
+        ("confirmed", "confirmed"),
+    ],
+)
+def test_stale_system_supersession_cannot_override_member_action(
     tmp_path: Path,
+    member_action: str,
+    expected_state: str,
 ) -> None:
-    """Production projection applies v3 supersession only to its exact revision."""
+    """Member action wins stale supersession and suppresses its replacement."""
 
     instance = tmp_path / "supersession-race-instance"
     instance.mkdir()
@@ -1047,12 +1058,36 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
             ),
         )
         client.portal.call(runtime.wait_for_projection, "triage", proposal_event_id)
-        enrichment_event_id = client.portal.call(
+        if member_action == "enriched":
+            action_payload = {
+                "proposal_id": proposal_id,
+                "enriched_at": "2026-08-10T16:36:07Z",
+                "enriched_by_member_id": MEMBER,
+                "title": "Member-corrected legitimate commitment",
+                "candidate_updates": {
+                    "note": "The member reviewed this interpretation."
+                },
+            }
+        elif member_action == "dismissed":
+            action_payload = {
+                "proposal_id": proposal_id,
+                "dismissed_at": "2026-08-10T16:36:07Z",
+                "dismissed_by_member_id": MEMBER,
+                "reason": "wrong_context",
+            }
+        else:
+            action_payload = {
+                "proposal_id": proposal_id,
+                "confirmed_at": "2026-08-10T16:36:07Z",
+                "confirmed_by_member_id": MEMBER,
+                "materialized_event_ids": ["fixture-member-confirmed-object"],
+            }
+        action_event_id = client.portal.call(
             runtime.events.write,
             EventEnvelope(
                 event_at_ms=1_786_373_766_200,
                 tenant_id=runtime.settings.instance.tenant_id,
-                type="triage.item.enriched",
+                type=f"triage.item.{member_action}",
                 schema_version=1,
                 occurred_at="2026-08-10T16:36:07Z",
                 source_adapter="member-triage",
@@ -1060,19 +1095,11 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
                 owner_scope=f"private:{MEMBER}",
                 visibility_scope=f"private:{MEMBER}",
                 sensitivity="normal",
-                idempotency_key="fixture-supersession-race-enrichment",
-                payload={
-                    "proposal_id": proposal_id,
-                    "enriched_at": "2026-08-10T16:36:07Z",
-                    "enriched_by_member_id": MEMBER,
-                    "title": "Member-corrected legitimate commitment",
-                    "candidate_updates": {
-                        "note": "The member reviewed this interpretation."
-                    },
-                },
+                idempotency_key=f"fixture-supersession-race-{member_action}",
+                payload=action_payload,
             ),
         )
-        client.portal.call(runtime.wait_for_projection, "triage", enrichment_event_id)
+        client.portal.call(runtime.wait_for_projection, "triage", action_event_id)
         stale_supersession_id = client.portal.call(
             runtime.events.write,
             EventEnvelope(
@@ -1138,20 +1165,20 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
         )
         client.portal.call(runtime.wait_for_projection, "triage", replacement_event_id)
 
-        page = client.get(
-            f"/api/member/v1/surfaces/triage?triage_item={proposal_id}",
-            headers=AUTH,
-        )
-        assert page.status_code == 200, page.text
-        item = next(
-            value
-            for value in page.json()["items"]
-            if value["proposal_id"] == proposal_id
-        )
-        assert item["state"] == "pending_review"
-        assert item["title"] == "Member-corrected legitimate commitment"
-        assert item["last_event_id"] == enrichment_event_id
         triage = runtime.projections.connection("triage")
+        predecessor = triage.execute(
+            """SELECT state, title, last_event_id FROM triage_items
+                WHERE tenant_id=? AND proposal_id=?""",
+            (runtime.settings.instance.tenant_id, proposal_id),
+        ).fetchone()
+        assert predecessor is not None
+        assert predecessor["state"] == expected_state
+        assert predecessor["title"] == (
+            "Member-corrected legitimate commitment"
+            if member_action == "enriched"
+            else "Legacy fixture interpretation"
+        )
+        assert predecessor["last_event_id"] == action_event_id
         assert (
             triage.execute(
                 "SELECT 1 FROM triage_items WHERE tenant_id=? AND proposal_id=?",

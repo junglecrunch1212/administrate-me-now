@@ -19,8 +19,8 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 ## 2026-08-12 CO-018 local candidate
 
-Status: amended again after independent review rejected exact head `c915c1c`;
-the contextualized-fallback finding is repaired and fresh complete aggregate
+Status: amended again after independent review rejected exact head `93bc404`;
+the terminal-member-decision race is repaired and fresh complete aggregate
 validation passes. Independent review, merge, deployment, and any run against
 a family Mac or live provider remain pending.
 
@@ -104,6 +104,22 @@ absence of a projected replacement. The race-hardened worktree passed the
 186-test changed-path slice, complete aggregate release-candidate suite, and
 separate 1,700-test configured root discovery. Hosted checks and independent
 review remain required for the final head.
+
+Independent review of exact head `93bc404` then proved that dismissal and
+confirmation could win the same append window yet still be followed by a new
+pending replacement. The first projection guard considered only active states;
+that preserved enrichment but treated terminal member history like successful
+system retirement. The amended projection now admits a replay replacement only
+when the predecessor bears the exact system `eligibility_rule_replaced`
+disposition. The production process is parameterized across enrichment,
+dismissal, and confirmation: each member action remains authoritative, the
+stale revision-bound supersession cannot override it, and the later replacement
+does not project. The `93bc404` receipt is rejected and grants no release
+authority. The amended worktree passed the 188-test changed-path slice, 63
+acceptance processes, 1,871 aggregate tests, 60 bridge tests, a separate
+1,702-test configured root discovery, and every invariant/static/audit/
+performance/build/isolation/backup/OpenClaw release gate. Hosted checks and
+independent exact-head review remain mandatory.
 
 ## 2026-08-12 CO-017 deployed and live verified
 

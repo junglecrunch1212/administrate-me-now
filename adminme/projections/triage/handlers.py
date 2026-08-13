@@ -314,18 +314,23 @@ def _apply_triage_proposed(
     payload = envelope["payload"]
     # Replay first appends a revision-bound supersession and then the current
     # replacement. If member action won the append race, compare-and-apply
-    # leaves the predecessor active. Do not project a second item beside that
-    # member-owned revision. When supersession won, the predecessor is already
-    # dismissed in this deterministic event order and the replacement proceeds.
+    # leaves the predecessor at its member-owned revision. Do not project a
+    # second item beside an enrichment or reopen a terminal decision. A
+    # replacement is admissible only when this event order proves the old row
+    # was actually retired by the matching eligibility-replacement path.
     idempotency_key = str(envelope.get("idempotency_key") or "")
     candidate_key = payload.get("candidate_key")
     if idempotency_key.startswith("triage:message-candidate:v") and candidate_key:
-        active_predecessor = conn.execute(
+        authoritative_predecessor = conn.execute(
             """SELECT 1 FROM triage_items
                 WHERE tenant_id=? AND owner_member_id=?
                   AND source_kind='triage_item' AND source_event_id=?
                   AND target_kind=? AND candidate_key=? AND proposal_id!=?
-                  AND state IN ('pending_interpretation','pending_review','approved')
+                  AND NOT (
+                      state='dismissed'
+                      AND resolved_by='system:source_changed'
+                      AND resolution_reason='eligibility_rule_replaced'
+                  )
                 LIMIT 1""",
             (
                 envelope["tenant_id"],
@@ -336,7 +341,7 @@ def _apply_triage_proposed(
                 payload["proposal_id"],
             ),
         ).fetchone()
-        if active_predecessor is not None:
+        if authoritative_predecessor is not None:
             return
     _insert(
         envelope,

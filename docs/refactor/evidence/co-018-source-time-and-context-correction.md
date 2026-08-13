@@ -2,8 +2,8 @@
 
 Date: 2026-08-12
 
-Status: exact head `c915c1c` was independently reviewed and rejected. Its
-contextualized-fallback finding is repaired, and the amended candidate passes
+Status: exact head `93bc404` was independently reviewed and rejected. Its
+terminal-member-decision race is repaired, and the amended candidate passes
 fresh complete supported local validation. Independent review of the amended
 head remains pending. Nothing is merged, deployed, or run against a family Mac
 or live provider. No provider action was performed.
@@ -54,9 +54,10 @@ or live provider. No provider action was performed.
   replay supersedes that old proposal, excludes its exact event from active-
   history dedupe, and emits the current context-free fallback under a distinct
   replay-versioned proposal identity. Projection admits that replacement only
-  if the predecessor is no longer active; a member revision that defeats stale
-  supersession also prevents the later replacement from becoming duplicate
-  work.
+  when the predecessor bears the exact successful system
+  `eligibility_rule_replaced` disposition. Enrichment, dismissal, confirmation,
+  and later terminal states that defeat stale supersession therefore suppress
+  the replacement and cannot become duplicate or reopened work.
 
 ## Focused evidence
 
@@ -85,8 +86,10 @@ admitting edge from outside the display window. The tests create no canonical
 record or provider effect. A controlled handler interleaving appends member
 enrichment after descendant inspection but before supersession; the production
 projection process then proves the stale v3 receipt cannot dismiss that item.
-It then appends the replay replacement and proves the still-active predecessor
-suppresses that row deterministically.
+It then appends the replay replacement and proves the enriched predecessor
+suppresses that row deterministically. Parallel dismissal and confirmation
+cases prove terminal member decisions remain terminal through the same event
+order.
 The same Gmail replay process also seeds a still-eligible v20 same-source
 deterministic fallback carrying stale contextual metadata, records the v21
 eligible assessment, supersedes the old contextual proposal, and proves
@@ -100,12 +103,12 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
-- The 16-file changed-path review slice passed 186 tests.
+- The 16-file changed-path review slice passed 188 tests.
 - `PYTHONPATH=.:bridge poetry run pytest tests packs -q --import-mode=importlib`:
-  1,869 passed. The ordinary configured root discovery
-  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,700 tests under
+  1,871 passed. The ordinary configured root discovery
+  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,702 tests under
   `pyproject.toml`'s `testpaths = ["tests"]` boundary.
-- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 61
+- `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 63
   passed.
 - Bridge package suite: 60 passed; bridge Ruff, mypy, and audit passed.
 - `poetry run ruff check adminme bridge/adminme_bridge` and the additional
@@ -191,3 +194,19 @@ passed the 186-test changed-path slice, complete aggregate release-candidate
 suite from the beginning, separate 1,700-test configured root discovery, and
 the invariant scan. The counts above remain current; hosted checks and fresh
 independent review are still required for the final head.
+
+The following independent review of exact head `93bc404` rejected the candidate
+because the replacement guard covered only active predecessor states. A member
+dismissal or confirmation could win after descendant inspection, make the
+revision-bound supersession a no-op, and still be followed by a new pending
+replacement. The amended projection no longer infers authority from a broad
+state class: it allows a replay replacement only after the predecessor carries
+the exact system `eligibility_rule_replaced` disposition. The production race
+case is parameterized across enrichment, dismissal, and confirmation and first
+failed exactly for both terminal decisions before the repair. All three now
+preserve the member revision and suppress the replacement. The amended worktree
+then passed the 188-test changed-path slice, complete aggregate release-
+candidate suite from the beginning, separate 1,702-test configured root
+discovery, and invariant scan; the counts above describe this fresh run. The
+rejected receipt grants no Phase B or release authority, and the amended head
+still requires hosted checks and fresh independent review.

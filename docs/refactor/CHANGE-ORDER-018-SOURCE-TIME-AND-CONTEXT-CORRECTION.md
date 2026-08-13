@@ -1,7 +1,7 @@
 # Change Order 018 — Source-time and conservative context correction
 
-Status: amended again after independent review rejected exact head `c915c1c`;
-the contextualized-fallback finding is repaired and fresh complete supported
+Status: amended again after independent review rejected exact head `93bc404`;
+the terminal-member-decision race is repaired and fresh complete supported
 local validation passes. Independent review, merge, and deployment remain
 pending.
 
@@ -87,8 +87,10 @@ source fact, sender identity, provider account, or household name is wrong.
   replay supersedes that old proposal and emits a distinct context-free
   replacement rather than allowing historical dedupe to erase the valid ask;
   projection admits that replacement only if the revision-bound supersession
-  actually retired the predecessor, so a member revision that won append order
-  cannot be followed by duplicate review work;
+  actually retired the predecessor with the exact system
+  `eligibility_rule_replaced` disposition, so enrichment, dismissal,
+  confirmation, or a later terminal state that won append order cannot be
+  followed by duplicate or reopened review work;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
 
@@ -133,5 +135,7 @@ a distinct context-free pending proposal. It preserves member-decided history
 and creates no canonical or provider effect. A second process case
 appends member enrichment after system inspection but before its v3
 supersession and proves the item remains reviewable while the subsequent
-replacement event is projection-suppressed. Candidate evidence is recorded in
+replacement event is projection-suppressed. Parallel dismissal and confirmation
+cases prove terminal member decisions remain terminal through the same append
+window. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.
