@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_017_DEPLOYED_LIVE_VERIFIED
-verified_local_date: 2026-08-12
-verified_github_date: 2026-08-12
-branch: main
-candidate_commit_resolution: d181fad24ef488a71ce5568cc40fb81309cb3817
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/336
+gate_result: CO_018_RELEASE_ROLLED_BACK_FORWARD_REPAIR_CANDIDATE
+verified_local_date: 2026-08-13
+verified_github_date: 2026-08-13
+branch: codex/co018-release-race-repair
+candidate_commit_resolution: pending_independent_review
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -16,6 +16,28 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
+
+## 2026-08-13 CO-018 guarded rollback and forward repair
+
+PR #338 merged as `5b6c140`, but it is not the active release. Guarded
+activation created an encrypted 0600 backup, switched through the reviewed
+updater, failed post-switch service/source-assurance Doctor, and restored
+`d181fad`. Four candidate-appended v21 assessments remain immutable with
+`language_seam_IdempotencyConflict`; observation stayed active and the
+provider-called terminal count remained zero.
+
+The follow-up candidate makes concurrent calls for one exact reviewed skill
+identity converge on the first durable `skill.call.recorded` result. A
+controlled regression reproduces the live race and now passes. The existing
+guarded source-repair mechanism is rebound to the exact rolled-back commit,
+four content-free targets, failure reason, monotonic obligation floor, settled
+source state, and quiescence checks. Focused wrapper/recovery/updater proof
+passes as part of a 169-test change-path slice. The 1,704-test configured root
+suite and full aggregate pass; the latter includes 63 strict acceptance tests,
+1,873 root/package tests, 60 bridge tests, static analysis, audits, performance,
+builds, isolation, backup/restore, and the pinned OpenClaw gates. A clean
+candidate commit, hosted checks, independent review, and new exact-head release
+authority remain required.
 
 ## 2026-08-12 CO-018 local candidate
 

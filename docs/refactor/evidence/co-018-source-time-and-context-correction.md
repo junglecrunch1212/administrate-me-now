@@ -1,12 +1,76 @@
 # CO-018 source-time and context-correction evidence
 
-Date: 2026-08-12
+Date: 2026-08-13
 
-Status: exact head `93bc404` was independently reviewed and rejected. Its
-terminal-member-decision race is repaired, and the amended candidate passes
-fresh complete supported local validation. Independent review of the amended
-head remains pending. Nothing is merged, deployed, or run against a family Mac
-or live provider. No provider action was performed.
+Status: PR #338 merged at reviewed head `ebefb5c` as merge commit `5b6c140`.
+Guarded activation failed its post-switch Doctor and automatically restored
+active release `d181fad`. The merged release is not active. A forward-only
+repair candidate now has a failing-then-passing concurrency regression,
+focused source-repair proof, and complete supported local validation.
+Independent review and hosted checks remain pending. No provider-called
+terminal effect occurred.
+
+## Guarded activation failure and preserved rollback evidence
+
+- Pre-switch status and 21/21 Doctor checks passed after the separately
+  authorized predecessor restart cleared an unrelated Google Calendar 503.
+  Observation was active, source assurance was 63,610/63,610 with zero
+  pending/missing/failed, and the provider-called terminal count was zero.
+- The updater attested immutable merged commit `5b6c140`, used no runtime
+  migration flag, prepared the reviewed OpenClaw contract, created encrypted
+  backup `administrateme-20260813T162012Z.ambackup` with mode 0600, validated
+  both LaunchAgent definitions, and selected the predecessor as rollback.
+- Post-switch Doctor failed `launchd_and_process_state` and
+  `source_assurance_terminal_dispositions`. Automatic rollback restored the
+  `d181fad` selector and predecessor service definitions. The candidate release
+  directory and encrypted backup were retained for diagnosis and recovery.
+- Four historical message sources received current v21 failed assessments with
+  reason `language_seam_IdempotencyConflict`. A controlled concurrent wrapper
+  regression reproduced the exact mechanism: two identical invocations both
+  passed the initial absence check, one recorded the durable result, and the
+  loser's different result hit the unique idempotency boundary. The pipeline's
+  broad non-authoritative failure fallback then incorrectly made that storage
+  race a terminal source failure.
+- The repair makes the first durable `skill.call.recorded` event canonical for
+  every losing exact concurrent caller. The regression failed before the code
+  change and passes afterward; the widened wrapper, pipeline, recovery,
+  updater/rollback, runtime, macOS operations, and production context journey
+  slice passes 169 tests. The shared-runtime case proves one model request;
+  the separate-runtime case proves append-boundary convergence.
+- Rollback did not and must not delete candidate-appended events. The four
+  failures are therefore declared for forward recovery through the existing
+  typed request/v4 replacement contract. The release exception is bound to
+  active commit `d181fad`, a 63,610-obligation floor, the exact four source IDs
+  and exact failure reason, observation mode, settled source accounting, no
+  unrelated degradation, stopped-consumer health, and Gateway-live quiescence.
+  The live predecessor also reports `launchd_and_process_state` because its
+  aggregate runtime status derives from source assurance. The validator permits
+  that paired check only with ready diagnostics and the exact source-derived
+  capability set; every unrelated Doctor or capability failure remains fatal.
+- Observation has never been disabled and the provider-called terminal count
+  remains zero. No member decision, canonical object, external provider write,
+  credential, permission, runtime baseline, or provider enrollment changed.
+
+## Forward-repair validation
+
+- Focused change-path slice: 169 passed.
+- Configured root suite: 1,704 passed.
+- Strict acceptance: 63 passed.
+- Complete aggregate: PASS with 1,873 root/package tests and 60 bridge tests;
+  Ruff lint/format, mypy, Pyright, dependency audits, performance, builds,
+  architecture-negative checks, clean install, tenant isolation,
+  backup/restore, pinned OpenClaw contract/17 tests/build/audit, shell checks,
+  and diff checks all passed.
+- Lifecycle catalog freshness and repository invariants passed.
+
+The first pre-single-flight aggregate attempt reached 1,871 passing root/package tests
+and then hit the previously documented intermittent Comms snooze assertion:
+the immediate read observed `focus` after a successful snooze command. The
+exact test passed on isolated rerun. The complete aggregate was rerun from the
+beginning and passed. After tightening the repair to shared-runtime
+single-flight plus cross-runtime first-writer convergence, the focused, root,
+and complete aggregate suites were rerun again; only those final results are
+counted above.
 
 ## Implemented proof surface
 

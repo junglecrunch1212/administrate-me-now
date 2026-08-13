@@ -558,6 +558,14 @@ without canonical or provider effects. Revision-bound v3 projection proof keeps
 a raced member enrichment pending and suppresses the later replacement; the
 same proof keeps dismissal and confirmation terminal without reopening work.
 
+C113/C114 release-race amendment: an exact reviewed skill invocation now has
+one first-writer durable result even when concurrent callers both pass the
+initial absence check. The losing append reuses that result rather than
+creating a false terminal source failure. The four immutable failures exposed
+by the rejected CO-018 activation are recovered only through an exact,
+observation-only, release-scoped request set bound to the rolled-back commit,
+settled source baseline, stopped consumers, and live Gateway quiescence.
+
 ## Source coverage index
 
 ## Gate 2 traceability update

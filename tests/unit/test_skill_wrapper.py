@@ -23,6 +23,7 @@ route through a bus + subscriber.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -697,6 +698,100 @@ async def test_reviewed_invocation_identity_reuses_exact_duplicate_result(
 
     assert first_result == second_result
     assert len(transport.requests) == 1
+    events = await _read_all_events(event_log)
+    assert [event["type"] for event in events] == ["skill.call.recorded"]
+
+
+async def test_concurrent_reviewed_invocation_identity_is_single_flight(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    """Concurrent exact calls make one request and return one durable result."""
+
+    request_count = 0
+
+    async def responder(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        await asyncio.sleep(0.01)
+        return _ok_responder(
+            {"is_thing": True, "confidence": 0.9},
+            invocation_id="inv-concurrent",
+        )(_request)
+
+    runtime = _runtime_for(
+        event_log,
+        tmp_path,
+        transport=httpx.MockTransport(responder),
+    )
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="source-event-concurrent",
+        invocation_idempotency_key="message-fingerprint-concurrent",
+    )
+
+    first, second = await asyncio.gather(
+        run_skill("classify_test", {"text": "same"}, context, _runtime=runtime),
+        run_skill("classify_test", {"text": "same"}, context, _runtime=runtime),
+    )
+
+    assert request_count == 1
+    assert first == second
+    events = await _read_all_events(event_log)
+    assert [event["type"] for event in events] == ["skill.call.recorded"]
+    assert (
+        first.openclaw_invocation_id == events[0]["payload"]["openclaw_invocation_id"]
+    )
+
+
+async def test_cross_runtime_exact_invocations_converge_on_first_recorded_result(
+    event_log: EventLog, tmp_path: Path
+) -> None:
+    """The append boundary resolves the race even without a shared lock."""
+
+    request_count = 0
+    both_requests_started = asyncio.Event()
+
+    async def responder(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        request_number = request_count
+        if request_count == 2:
+            both_requests_started.set()
+        await asyncio.wait_for(both_requests_started.wait(), timeout=1)
+        return _ok_responder(
+            {
+                "is_thing": request_number == 1,
+                "confidence": 0.9 if request_number == 1 else 0.8,
+            },
+            invocation_id=f"inv-cross-runtime-{request_number}",
+        )(_request)
+
+    transport = httpx.MockTransport(responder)
+    first_runtime = _runtime_for(event_log, tmp_path / "first", transport=transport)
+    second_runtime = _runtime_for(event_log, tmp_path / "second", transport=transport)
+    context = SkillContext(
+        session=_session(),
+        triggering_event_id="source-event-cross-runtime",
+        invocation_idempotency_key="message-fingerprint-cross-runtime",
+    )
+
+    first, second = await asyncio.gather(
+        run_skill(
+            "classify_test",
+            {"text": "same"},
+            context,
+            _runtime=first_runtime,
+        ),
+        run_skill(
+            "classify_test",
+            {"text": "same"},
+            context,
+            _runtime=second_runtime,
+        ),
+    )
+
+    assert request_count == 2
+    assert first == second
     events = await _read_all_events(event_log)
     assert [event["type"] for event in events] == ["skill.call.recorded"]
 

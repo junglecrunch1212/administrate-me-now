@@ -25,9 +25,10 @@ from bootstrap.source_assessment_repair import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-ACTIVE_COMMIT = "2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe"
+ACTIVE_COMMIT = "d181fad24ef488a71ce5568cc40fb81309cb3817"
 CANDIDATE_COMMIT = "a" * 40
 TENANT = "tenant-release-repair"
+FAILURE_REASON = "language_seam_IdempotencyConflict"
 
 
 def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
@@ -41,17 +42,20 @@ def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
         targets=[
             BaselineTarget(
                 source_event_id=source_id,
-                expected_failure_reason="language_seam_OpenClawUnreachable",
+                expected_failure_reason=FAILURE_REASON,
             )
         ],
         expires_after_activation=True,
     )
 
 
-def _doctor() -> dict[str, object]:
+def _doctor(*, source_derived_launch_status: bool = False) -> dict[str, object]:
+    checks = [{"name": "source_assurance_terminal_dispositions", "ok": False}]
+    if source_derived_launch_status:
+        checks.insert(0, {"name": "launchd_and_process_state", "ok": False})
     return {
         "status": "failed",
-        "checks": [{"name": "source_assurance_terminal_dispositions", "ok": False}],
+        "checks": checks,
     }
 
 
@@ -84,7 +88,7 @@ def _diagnostics(
                     "failed": [
                         {
                             "event_id": source_id,
-                            "reason": "language_seam_OpenClawUnreachable",
+                            "reason": FAILURE_REASON,
                         }
                     ],
                     "content_exposed": False,
@@ -178,11 +182,15 @@ def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
     policy = load_repair_policy(REPO_ROOT)
 
     assert policy.contract == "source-assessment-degraded-baseline-v2"
-    assert policy.expected_counts.minimum_obligations == 62_623
+    assert policy.required_active_commit == ("d181fad24ef488a71ce5568cc40fb81309cb3817")
+    assert policy.expected_counts.minimum_obligations == 63_610
     assert policy.expected_counts.pending == 0
     assert policy.expected_counts.missing == 0
     assert policy.expected_counts.failed == 4
     assert len(policy.targets) == 4
+    assert {target.expected_failure_reason for target in policy.targets} == {
+        "language_seam_IdempotencyConflict"
+    }
 
 
 async def _seed(log: EventLog) -> tuple[str, str]:
@@ -210,7 +218,7 @@ async def _seed(log: EventLog) -> tuple[str, str]:
                 "extraction_state": "unavailable",
                 "extracted_at": "2026-08-11T16:00:01Z",
                 "assessment_outcome": "failed",
-                "reason_codes": ["language_seam_OpenClawUnreachable"],
+                "reason_codes": [FAILURE_REASON],
             },
         ),
         causation_id=source_id,
@@ -228,6 +236,24 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
         doctor=_doctor(),
         diagnostics=diagnostics,
     )
+    validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=_doctor(source_derived_launch_status=True),
+        diagnostics=diagnostics,
+    )
+
+    changed_doctor = _doctor(source_derived_launch_status=True)
+    changed_doctor["checks"].append(
+        {"name": "openclaw_compatibility_and_plugin_discovery", "ok": False}
+    )
+    with pytest.raises(SourceAssessmentRepairError, match="source-only"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=changed_doctor,
+            diagnostics=diagnostics,
+        )
 
     changed = json.loads(json.dumps(diagnostics))
     changed["capabilities"]["pipeline:another"] = {"state": "degraded"}

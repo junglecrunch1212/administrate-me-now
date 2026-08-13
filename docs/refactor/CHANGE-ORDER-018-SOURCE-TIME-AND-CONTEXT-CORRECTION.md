@@ -1,9 +1,10 @@
 # Change Order 018 — Source-time and conservative context correction
 
-Status: amended again after independent review rejected exact head `93bc404`;
-the terminal-member-decision race is repaired and fresh complete supported
-local validation passes. Independent review, merge, and deployment remain
-pending.
+Status: PR #338 merged as `5b6c140`, but guarded activation rejected v21 and
+automatically restored `d181fad`. The release exposed a concurrent exact-skill-
+result append race that produced four terminal `language_seam_IdempotencyConflict`
+assessments. A forward-only repair candidate is in progress; deployment remains
+incomplete and requires fresh independent review and exact-head authority.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,
@@ -93,6 +94,18 @@ source fact, sender identity, provider account, or household name is wrong.
   followed by duplicate or reopened review work;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
+- Concurrent calls with the same reviewed skill invocation identity converge
+  on the append-only log's first recorded result. A losing exact-result append
+  re-reads and returns that canonical result instead of converting a successful
+  replay into a terminal language failure.
+- The guarded source-repair exception is rebound to the exact rolled-back
+  `d181fad` baseline and the four content-free release-created
+  `language_seam_IdempotencyConflict` targets. It requires observation mode,
+  complete source settlement, no unrelated degradation, stopped-consumer and
+  Gateway quiescence proof, and expires after activation.
+  Doctor may additionally report `launchd_and_process_state` only when that
+  status is derived from the same ready source-assurance degradation; any
+  other failed Doctor check or degraded capability still rejects activation.
 
 ## Classification
 
@@ -105,6 +118,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
 | Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. An unchanged context-free fallback stays pending; a contextualized fallback with stale context is replaced under a distinct replay-versioned proposal identity so its deterministic core remains reviewable. |
+| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the four declared rolled-back targets receive linked recovery requests. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider
@@ -119,6 +133,10 @@ receipts already appended. Older schema versions remain registered and
 readable. The older consumer ignores new correction events; a later v21 replay
 reapplies them. Because rollback can reintroduce weak context assembly, it is
 operationally compatible but not a correctness-equivalent steady state.
+The first guarded activation proved that selector rollback does not erase
+events already appended by a candidate. Its four failed v21 assessments remain
+immutable under `d181fad`; the follow-up must repair them forward through the
+typed recovery contract rather than restoring an older event-log snapshot.
 
 ## Acceptance evidence
 

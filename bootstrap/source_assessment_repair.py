@@ -24,7 +24,7 @@ from bootstrap.secrets import secret_store
 
 
 POLICY_RELATIVE_PATH = Path(
-    "bootstrap/release-exceptions/pr-334-source-assessment-recovery.json"
+    "bootstrap/release-exceptions/co-018-release-race-recovery.json"
 )
 _SOURCE_DERIVED_CAPABILITIES = frozenset(
     {
@@ -49,6 +49,7 @@ class BaselineTarget(BaseModel):
 
     source_event_id: str = Field(min_length=1, max_length=240)
     expected_failure_reason: Literal[
+        "language_seam_IdempotencyConflict",
         "language_seam_OpenClawTimeout",
         "language_seam_OpenClawUnreachable",
     ]
@@ -194,7 +195,17 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError("repair requires active observation mode")
     if diagnostics.get("ready") is not True:
         raise SourceAssessmentRepairError("repair requires a ready live runtime")
-    if _failed_doctor_checks(doctor) != {"source_assurance_terminal_dispositions"}:
+    failed_doctor_checks = _failed_doctor_checks(doctor)
+    permitted_doctor_failures = {
+        frozenset({"source_assurance_terminal_dispositions"}),
+        frozenset(
+            {
+                "launchd_and_process_state",
+                "source_assurance_terminal_dispositions",
+            }
+        ),
+    }
+    if frozenset(failed_doctor_checks) not in permitted_doctor_failures:
         raise SourceAssessmentRepairError(
             "active Doctor differs from the declared source-only degradation"
         )

@@ -710,6 +710,23 @@ async def test_selection_rejects_nonretryable_privileged_and_cross_member_source
             await validate_recovery_target(log, target)
         assert nonretryable.value.code == "failure_not_retryable"
 
+        conflict_source = await log.append(_source(member="member-conflict"))
+        conflict_failure = await _failed_assessment(
+            log,
+            conflict_source,
+            reason="language_seam_IdempotencyConflict",
+            member="member-conflict",
+        )
+        selected_conflict = await validate_recovery_target(
+            log,
+            SourceAssessmentRecoveryTarget(
+                source_event_id=conflict_source,
+                failed_assessment_event_id=conflict_failure,
+                expected_failure_reason="language_seam_IdempotencyConflict",
+            ),
+        )
+        assert selected_conflict.failure_reason == ("language_seam_IdempotencyConflict")
+
         privileged_source = await log.append(
             _source(member="member-privileged", sensitivity="privileged")
         )
