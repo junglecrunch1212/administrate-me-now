@@ -129,6 +129,55 @@ CREATE TABLE IF NOT EXISTS context_matter_sessions (
     UNIQUE (tenant_id, context_id)
 );
 
+CREATE TABLE IF NOT EXISTS context_relationship_decisions (
+    tenant_id              TEXT NOT NULL,
+    relationship_id        TEXT NOT NULL,
+    source_event_id        TEXT NOT NULL,
+    related_source_event_id TEXT NOT NULL,
+    member_id              TEXT NOT NULL,
+    provider               TEXT NOT NULL,
+    provider_account_id    TEXT NOT NULL,
+    workspace              TEXT NOT NULL,
+    algorithm              TEXT NOT NULL,
+    state                  TEXT NOT NULL CHECK (state IN ('rejected','confirmed')),
+    reason                 TEXT NOT NULL,
+    decided_at             TEXT NOT NULL,
+    decided_by_member_id   TEXT NOT NULL,
+    owner_scope            TEXT NOT NULL,
+    visibility_scope       TEXT NOT NULL,
+    sensitivity            TEXT NOT NULL,
+    last_event_id          TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, relationship_id)
+);
+
+CREATE TABLE IF NOT EXISTS context_source_text_corrections (
+    tenant_id              TEXT NOT NULL,
+    correction_id          TEXT NOT NULL,
+    source_event_id        TEXT NOT NULL,
+    proposal_id            TEXT,
+    candidate_key          TEXT,
+    member_id              TEXT NOT NULL,
+    algorithm              TEXT,
+    authored_text_digest   TEXT,
+    evidence_start         INTEGER,
+    evidence_end           INTEGER,
+    state                  TEXT NOT NULL CHECK (state IN ('corrected','reinstated')),
+    reason                 TEXT NOT NULL,
+    evidence_quote_digest  TEXT,
+    decided_at             TEXT NOT NULL,
+    decided_by_member_id   TEXT NOT NULL,
+    owner_scope            TEXT NOT NULL,
+    visibility_scope       TEXT NOT NULL,
+    sensitivity            TEXT NOT NULL,
+    last_event_id          TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, correction_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_relationship_decisions_member
+    ON context_relationship_decisions(tenant_id, member_id, state);
+CREATE INDEX IF NOT EXISTS idx_context_source_text_corrections_member
+    ON context_source_text_corrections(tenant_id, member_id, state);
+
 CREATE TABLE IF NOT EXISTS context_matter_session_sources (
     tenant_id          TEXT NOT NULL,
     owner_member_id    TEXT NOT NULL,

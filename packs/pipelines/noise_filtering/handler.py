@@ -57,6 +57,8 @@ from adminme.source_assessment_recovery import (
     RECOVERY_POLICY,
     RecoveryRefusalReason,
     SourceAssessmentRecoveryRefused,
+    assessment_outcome,
+    latest_source_assessment,
     target_from_request_event,
     validate_recovery_target,
 )
@@ -75,9 +77,15 @@ _log = logging.getLogger(__name__)
 
 SKILL_ID = "skill:classify_message_nature"
 SKILL_NAME = "classify_message_nature"
-SKILL_VERSION = "6.0.1"
+SKILL_VERSION = "7.0.0"
 DEFAULT_CLASSIFICATION = "personal"
-_REPLAY_GENERATION = 20
+_REPLAY_GENERATION = 21
+_CURRENT_MESSAGE_FALLBACK_RULE_IDS = frozenset(
+    {
+        "inbound_explicit_directive_or_due_obligation_v1",
+        "outbound_first_person_promise_v1",
+    }
+)
 
 _SKILL_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     SkillInputInvalid,
@@ -193,17 +201,28 @@ async def _write_first_equivalent_event(
 
 
 def _extract_text_and_inputs(
-    event_type: str, payload: dict[str, Any]
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    canonical_body_text: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """Build the skill input payload, or return None if there's nothing
     to classify (empty body)."""
     outbound_message = False
     if event_type == "telephony.sms_received":
-        text = (payload.get("body") or "").strip()
+        text = (
+            canonical_body_text
+            if canonical_body_text is not None
+            else str(payload.get("body") or "").strip()
+        )
         from_id = str(payload.get("from_number", ""))
         source_channel = "sms"
     else:
-        text = (payload.get("body_text") or "").strip()
+        text = (
+            canonical_body_text
+            if canonical_body_text is not None
+            else str(payload.get("body_text") or "").strip()
+        )
         provider_labels = {
             str(label).upper() for label in payload.get("provider_labels") or []
         }
@@ -255,7 +274,7 @@ def _deduplicate_candidate_keys(candidates: list[Any]) -> list[Any]:
 
 class NoiseFilteringPipeline:
     pack_id: str = "pipeline:noise_filtering"
-    version: str = "20.0.0"
+    version: str = "21.0.0"
     triggers: Triggers = {
         "events": [
             "messaging.received",
@@ -471,6 +490,20 @@ class NoiseFilteringPipeline:
             return
         source_event_id = str(event.get("event_id") or "")
         recovery = event.get("_assessment_recovery")
+        if not isinstance(recovery, dict) and hasattr(
+            ctx.event_log, "get_by_causation"
+        ):
+            prior_assessment = await latest_source_assessment(
+                ctx.event_log, source_event_id
+            )
+            # CO-017 failures require the exact, bounded recovery command.
+            # A later full consumer replay must not silently consume that
+            # authority or make the selected failed assessment stale.
+            if (
+                prior_assessment is not None
+                and assessment_outcome(prior_assessment) == "failed"
+            ):
+                return
         if event.get("sensitivity") == "privileged":
             await self._emit_triage_assessment(
                 event=event,
@@ -522,7 +555,48 @@ class NoiseFilteringPipeline:
             if ctx.candidate_policy_fn is not None
             else default_policy(policy_source_id)
         )
-        prepared = _extract_text_and_inputs(event_type, payload)
+        context_pack = await build_message_context_pack(event, ctx.event_log)
+        current_context_message = next(
+            (
+                message
+                for message in context_pack.messages
+                if message.source_event_id == source_event_id
+            ),
+            None,
+        )
+        if current_context_message is None:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="quarantined",
+                reason_codes=["context_pack_missing_current_source"],
+            )
+            return
+        if not current_context_message.authored_text_reliable:
+            await self._emit_triage_assessment(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+                candidates=[],
+                outcome="no_candidate",
+                reason_codes=list(
+                    current_context_message.authored_text_reason_codes
+                    or ("authored_text_uncertain",)
+                ),
+            )
+            await self._supersede_unreliable_source_proposals(
+                event=event,
+                ctx=ctx,
+                source_event_id=source_event_id,
+            )
+            return
+        prepared = _extract_text_and_inputs(
+            event_type,
+            payload,
+            canonical_body_text=current_context_message.body_text,
+        )
         if prepared is None:
             await self._emit_triage_assessment(
                 event=event,
@@ -530,11 +604,14 @@ class NoiseFilteringPipeline:
                 source_event_id=source_event_id,
                 candidates=[],
                 outcome="no_candidate",
-                reason_codes=["source_has_no_text_content"],
+                reason_codes=["source_has_no_authored_text"],
             )
             return
         source_text, inputs = prepared
-        context_pack = await build_message_context_pack(event, ctx.event_log)
+        # Candidate fallback, model input, admission, and read-time evidence
+        # all use the same authored-text v2 representation.
+        source_text = current_context_message.source_text()
+        inputs["body_text"] = current_context_message.body_text
         inputs["candidate_mode"] = policy["mode"]
         inputs["candidate_kinds"] = list(policy["candidate_kinds"])
         inputs["candidate_language_enabled"] = bool(policy["language_enabled"])
@@ -857,7 +934,10 @@ class NoiseFilteringPipeline:
             )
             for candidate in candidates
         ]
-        candidates = await self._reconcile_thread_candidates(
+        (
+            candidates,
+            replaced_proposal_event_ids,
+        ) = await self._reconcile_thread_candidates(
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
@@ -900,6 +980,11 @@ class NoiseFilteringPipeline:
                 proposals=prior_proposals,
                 superseded_at=extracted_at,
             )
+            # A proposal superseded by this reconciliation is immutable
+            # history, not an active duplicate. Its candidate identity must
+            # not suppress a still-eligible replacement. Member-decided and
+            # unchanged context-free proposals are absent from the replacement
+            # set and continue to suppress reopening/duplication.
             existing = {
                 (
                     str(proposal["payload"].get("target_kind") or ""),
@@ -907,6 +992,8 @@ class NoiseFilteringPipeline:
                 )
                 for proposal in prior_proposals
                 if proposal.get("type") == "triage.item.proposed"
+                and str(proposal.get("event_id") or "")
+                not in replaced_proposal_event_ids
             }
             new_candidates = [
                 candidate
@@ -986,25 +1073,27 @@ class NoiseFilteringPipeline:
         )
         for candidate in new_candidates:
             target_kind = candidate.target_kind
+            proposal_key = proposal_keys[(target_kind, candidate.candidate_key)]
+            # Proposal identity follows the replay-versioned idempotency
+            # identity. A stale contextual proposal and its context-free
+            # replacement must project as two immutable rows; reusing the old
+            # source/key/title-only ID would make ON CONFLICT hide the latter.
             fingerprint = hashlib.sha256(
-                (
-                    f"{source_event_id}:{candidate.candidate_key}:"
-                    f"{target_kind}:{candidate.title}"
-                ).encode()
+                (f"{proposal_key}:{source_event_id}:{candidate.title}").encode()
             ).hexdigest()[:24]
             proposal_id = f"triage:message:{fingerprint}"
             envelope = EventEnvelope(
                 event_at_ms=event["event_at_ms"],
                 tenant_id=event["tenant_id"],
                 type="triage.item.proposed",
-                schema_version=3,
+                schema_version=4,
                 occurred_at=extracted_at,
                 source_adapter="deterministic_candidate_eligibility",
                 source_account_id="pipeline",
                 owner_scope=owner_scope,
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=proposal_keys[(target_kind, candidate.candidate_key)],
+                idempotency_key=proposal_key,
                 payload={
                     "proposal_id": proposal_id,
                     "target_kind": target_kind,
@@ -1020,6 +1109,11 @@ class NoiseFilteringPipeline:
                     "confidence": candidate.confidence,
                     "reasons": candidate.reasons,
                     "interpretation": candidate.interpretation,
+                    "source_occurred_at": (
+                        (event.get("payload") or {}).get("received_at")
+                        or (event.get("payload") or {}).get("sent_at")
+                        or event.get("occurred_at")
+                    ),
                 },
             )
             await _write_first_equivalent_event(
@@ -1040,26 +1134,37 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         context_pack: MessageContextPack,
         candidates: list[Any],
-    ) -> list[Any]:
+    ) -> tuple[list[Any], set[str]]:
         """Replace untouched older thread interpretations; preserve decisions.
 
         A new message can answer or supersede an earlier ask.  Conversation
         candidates are therefore a versioned set rooted at the latest message.
         Member enrichments and decisions are permanent; an exact candidate the
-        member already acted on is never silently re-opened.
+        member already acted on is never silently re-opened. The returned event
+        ID set names only proposals this call superseded, allowing downstream
+        historical dedupe to admit their still-eligible replacements.
         """
 
         if not context_pack.current_is_thread_anchor or not hasattr(
             ctx.event_log, "read_since"
         ):
-            return candidates
-        thread_source_ids = {
-            message.source_event_id
-            for message in context_pack.messages
-            if message.relation == "thread"
+            return candidates, set()
+        thread_source_ids = set(context_pack.episode_source_event_ids)
+        current_same_source_fallbacks = {
+            (
+                candidate.target_kind,
+                candidate.candidate_key,
+                candidate.title,
+            )
+            for candidate in candidates
+            if str(candidate.candidate_key).startswith("message-fallback-")
+            and _CURRENT_MESSAGE_FALLBACK_RULE_IDS.intersection(
+                candidate.eligibility_rule_ids
+            )
         }
         decided_keys: set[tuple[str, str]] = set()
         decided_titles: set[tuple[str, str]] = set()
+        replaced_proposal_event_ids: set[str] = set()
         prior_proposals: list[dict[str, Any]] = []
         async for prior in ctx.event_log.read_since(
             owner_scope=str(event.get("owner_scope") or ""),
@@ -1081,6 +1186,26 @@ class NoiseFilteringPipeline:
                 and interpretation.get("context_fingerprint")
                 == context_pack.fingerprint
             ):
+                continue
+            prior_rules = {
+                str(value) for value in payload.get("eligibility_rule_ids") or []
+            }
+            prior_fallback_identity = (
+                str(payload.get("target_kind") or ""),
+                str(payload.get("candidate_key") or ""),
+                str(payload.get("title") or ""),
+            )
+            if (
+                str(payload.get("source_event_id") or "") == source_event_id
+                and not isinstance(interpretation, dict)
+                and _CURRENT_MESSAGE_FALLBACK_RULE_IDS.intersection(prior_rules)
+                and prior_fallback_identity in current_same_source_fallbacks
+            ):
+                # A context-free deterministic fallback is not a stale
+                # interpretation merely because the replay generation changed.
+                # Keep the existing review item when the current rules derive
+                # the exact same source/kind/key/title identity; the later
+                # same-source dedupe then prevents a duplicate proposal.
                 continue
             prior_proposals.append(prior)
 
@@ -1115,7 +1240,7 @@ class NoiseFilteringPipeline:
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
-                    schema_version=2,
+                    schema_version=3,
                     occurred_at=str(
                         event.get("recorded_at")
                         or event.get("occurred_at")
@@ -1127,7 +1252,7 @@ class NoiseFilteringPipeline:
                     visibility_scope=event["visibility_scope"],
                     sensitivity=event.get("sensitivity", "normal"),
                     idempotency_key=(
-                        "triage:message-thread-replaced:v12:"
+                        f"triage:message-thread-replaced:v{_REPLAY_GENERATION}:"
                         f"{proposal_id}:{source_event_id}"
                     ),
                     payload={
@@ -1139,6 +1264,7 @@ class NoiseFilteringPipeline:
                         ),
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
+                        "expected_last_event_id": prior["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,
@@ -1147,12 +1273,105 @@ class NoiseFilteringPipeline:
                     {"superseded_at", "replacement_source_event_id"}
                 ),
             )
-        return [
-            candidate
-            for candidate in candidates
-            if (candidate.target_kind, candidate.candidate_key) not in decided_keys
-            and (candidate.target_kind, candidate.title) not in decided_titles
-        ]
+            replaced_proposal_event_ids.add(str(prior["event_id"]))
+        return (
+            [
+                candidate
+                for candidate in candidates
+                if (candidate.target_kind, candidate.candidate_key) not in decided_keys
+                and (candidate.target_kind, candidate.title) not in decided_titles
+            ],
+            replaced_proposal_event_ids,
+        )
+
+    async def _supersede_unreliable_source_proposals(
+        self,
+        *,
+        event: dict[str, Any],
+        ctx: PipelineContext,
+        source_event_id: str,
+    ) -> None:
+        """Retire only untouched system proposals rooted in unreliable text.
+
+        A stricter authored-text contract may invalidate an interpretation made
+        by an older replay generation. The immutable proposal remains in the
+        log, but it must leave the pending queue. Member enrichment and every
+        terminal member/system disposition continue to dominate replay.
+        """
+
+        if not hasattr(ctx.event_log, "read_since"):
+            return
+        proposals: list[dict[str, Any]] = []
+        async for prior in ctx.event_log.read_since(
+            owner_scope=str(event.get("owner_scope") or ""),
+            types=["triage.item.proposed"],
+        ):
+            payload = prior.get("payload") or {}
+            if prior.get("tenant_id") != event.get("tenant_id"):
+                continue
+            if prior.get("source_adapter") not in {
+                "deterministic_candidate_eligibility",
+                "noise_filtering",
+                "legacy-message-extractor",
+            }:
+                continue
+            if str(payload.get("source_event_id") or "") != source_event_id:
+                continue
+            proposals.append(prior)
+
+        superseded_at = str(
+            event.get("recorded_at")
+            or event.get("occurred_at")
+            or EventEnvelope.now_utc_iso()
+        )
+        for proposal in proposals:
+            descendants = await ctx.event_log.get_by_causation(proposal["event_id"])
+            if any(
+                child.get("type")
+                in {
+                    "triage.item.enriched",
+                    "triage.item.confirmed",
+                    "triage.item.materialized",
+                    "triage.item.dismissed",
+                    "triage.item.superseded",
+                }
+                for child in descendants
+            ):
+                continue
+            proposal_id = str((proposal.get("payload") or {}).get("proposal_id") or "")
+            if not proposal_id:
+                continue
+            await _write_first_equivalent_event(
+                ctx=ctx,
+                envelope=EventEnvelope(
+                    event_at_ms=event["event_at_ms"],
+                    tenant_id=event["tenant_id"],
+                    type="triage.item.superseded",
+                    schema_version=3,
+                    occurred_at=superseded_at,
+                    source_adapter="deterministic_candidate_eligibility",
+                    source_account_id="pipeline",
+                    owner_scope=event["owner_scope"],
+                    visibility_scope=event["visibility_scope"],
+                    sensitivity=event.get("sensitivity", "normal"),
+                    idempotency_key=(
+                        "triage:message-unreliable-source-replaced:"
+                        f"v{_REPLAY_GENERATION}:{proposal_id}:{source_event_id}"
+                    ),
+                    payload={
+                        "proposal_id": proposal_id,
+                        "superseded_at": superseded_at,
+                        "replacement_source_event_id": source_event_id,
+                        "reason": "eligibility_rule_replaced",
+                        "expected_last_event_id": proposal["event_id"],
+                    },
+                ),
+                correlation_id=ctx.correlation_id,
+                causation_id=proposal["event_id"],
+                ignored_payload_fields=frozenset(
+                    {"superseded_at", "replacement_source_event_id"}
+                ),
+            )
 
     async def _supersede_retired_fallbacks(
         self,
@@ -1203,7 +1422,7 @@ class NoiseFilteringPipeline:
                     event_at_ms=event["event_at_ms"],
                     tenant_id=event["tenant_id"],
                     type="triage.item.superseded",
-                    schema_version=2,
+                    schema_version=3,
                     occurred_at=superseded_at,
                     source_adapter="deterministic_candidate_eligibility",
                     source_account_id="pipeline",
@@ -1218,6 +1437,7 @@ class NoiseFilteringPipeline:
                         "superseded_at": superseded_at,
                         "replacement_source_event_id": source_event_id,
                         "reason": "eligibility_rule_replaced",
+                        "expected_last_event_id": proposal["event_id"],
                     },
                 ),
                 correlation_id=ctx.correlation_id,

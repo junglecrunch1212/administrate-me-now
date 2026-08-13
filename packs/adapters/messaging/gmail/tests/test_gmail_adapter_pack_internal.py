@@ -20,6 +20,7 @@ root does not collide with sibling packs.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 import json
 import threading
@@ -32,6 +33,7 @@ import yaml
 
 from adminme.adapters.base import Adapter, AdapterContext
 from adminme.adapters.cursor_store import AdapterCursorStore
+from adminme.message_context import authored_message_text
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -79,7 +81,7 @@ def test_pack_manifest_loads_cleanly() -> None:
 
     assert manifest["pack"]["id"] == "adapter:messaging-gmail-api"
     assert manifest["pack"]["kind"] == "adapter"
-    assert manifest["pack"]["version"] == "1.1.1"
+    assert manifest["pack"]["version"] == "1.3.0"
     assert manifest["runtime"]["entrypoint"] == "adapter.py"
     assert manifest["runtime"]["class"] == "GmailAdapter"
     assert manifest["family"] == "messaging"
@@ -112,7 +114,7 @@ def test_gmail_adapter_satisfies_protocol() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "messaging-gmail-api"
     assert adapter.family == "messaging"
-    assert adapter.version == "1.1.1"
+    assert adapter.version == "1.3.0"
     assert adapter.sensitivity_floor == "normal"
 
 
@@ -534,6 +536,29 @@ async def test_initial_backfill_pages_emits_and_is_durable(tmp_path: Path) -> No
     store.close()
 
 
+async def test_invalid_internal_date_is_quarantined_without_message_fact() -> None:
+    adapter = GmailAdapter(
+        config={
+            "service_account_key_ref": "op://test/v/i/f",
+            "user_email": "sandbox@example.test",
+        },
+    )
+    message = {**_fixture("message_alice.json"), "internalDate": "not-a-date"}
+    event_log = _FakeEventLog()
+
+    emitted, quarantined = await adapter._ingest_message_ids(
+        ctx=_ctx(event_log),
+        store=None,
+        cursor_id="gmail-invalid-source-time",
+        message_ids=[str(message["id"])],
+        provider_watermark="fixture-watermark",
+        prefetched_messages={str(message["id"]): message},
+    )
+
+    assert (emitted, quarantined) == (0, 1)
+    assert [call["type"] for call in event_log.calls] == ["adapter.record.quarantined"]
+
+
 async def test_initial_backfill_provider_io_does_not_block_runtime_loop() -> None:
     """A slow synchronous Gmail list call cannot starve central runtime health."""
     gate = threading.Event()
@@ -819,13 +844,59 @@ async def test_history_sync_preserves_sent_direction() -> None:
 
     assert emitted == 1
     [sent] = [call for call in event_log.calls if call["type"] == "messaging.sent"]
-    assert sent["schema_version"] == 2
+    assert sent["schema_version"] == 4
     assert sent["payload"]["to_identifier"] == "recipient@example.test"
     assert sent["payload"]["body_text"] == "Hi sandbox"
+    assert sent["payload"]["body_html"] is None
     assert sent["payload"]["native_message_id"] == "msg-sent"
     assert not [
         call for call in event_log.calls if call["type"] == "messaging.received"
     ]
+
+
+async def test_sent_multipart_history_preserves_html_quote_boundary() -> None:
+    sent_message = _fixture("message_bob.json")
+    sent_message["id"] = "msg-sent-multipart"
+    sent_message["threadId"] = "thr-sent-multipart"
+    sent_message["labelIds"] = ["SENT"]
+    for header in sent_message["payload"]["headers"]:
+        if header["name"] == "From":
+            header["value"] = "sandbox@example.test"
+        elif header["name"] == "To":
+            header["value"] = "recipient@example.test"
+    quoted_text = "I will authorize the old fixture transfer."
+    sent_message["payload"]["parts"][0]["body"]["data"] = base64.urlsafe_b64encode(
+        quoted_text.encode()
+    ).decode()
+    sent_message["payload"]["parts"][1]["body"]["data"] = base64.urlsafe_b64encode(
+        f'<div class="gmail_quote">{quoted_text}</div>'.encode()
+    ).decode()
+    service = _FakeGmailService(
+        history_pages=[
+            {
+                "historyId": "9004",
+                "history": [
+                    {
+                        "id": "9004",
+                        "messagesAdded": [{"message": {"id": "msg-sent-multipart"}}],
+                    }
+                ],
+            }
+        ],
+        messages={"msg-sent-multipart": sent_message},
+    )
+    adapter = _seeded_adapter(service)
+    event_log = _FakeEventLog()
+
+    await adapter._run_poll_cycle(ctx=_ctx(event_log))
+
+    [sent] = [call for call in event_log.calls if call["type"] == "messaging.sent"]
+    assert sent["schema_version"] == 4
+    assert sent["payload"]["body_text"] == quoted_text
+    assert "gmail_quote" in sent["payload"]["body_html"]
+    authored = authored_message_text(sent["payload"])
+    assert authored.text == ""
+    assert authored.quoted_history_removed is True
 
 
 async def test_cursor_advanced_emits_on_event_milestone() -> None:

@@ -17,6 +17,110 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
+## 2026-08-12 CO-018 local candidate
+
+Status: amended again after independent review rejected exact head `93bc404`;
+the terminal-member-decision race is repaired and fresh complete aggregate
+validation passes. Independent review, merge, deployment, and any run against
+a family Mac or live provider remain pending.
+
+The candidate corrects a message-context false-association class without
+changing source facts or member authority. Gmail adapter v1.3.0 records provider
+message time as `occurred_at` and append time as `recorded_at`; additive
+`messaging.sent@v4` retains the HTML MIME alternative needed to bound quoted
+Sent history. Immutable pre-v4 Gmail Sent facts remain readable but their
+bodies fail closed with an explicit provenance-unavailable assessment during
+v21 replay; untouched system proposals previously rooted in those bodies are
+superseded while member-enriched or decided proposals remain permanent.
+Additive `triage.item.superseded@v3` carries the exact inspected proposal
+revision, so a later-appended member enrichment wins deterministically even if
+it races replay. Message context
+v2 splits reused provider threads into 30-day/100-source episodes and requires
+exact RFC continuity, exact attachment identity, or explicit member
+confirmation for a cross-thread source. Repeated participants, addresses,
+names, subjects, and filenames are corroboration only. Authored-text v2 is
+shared by language input, deterministic fallback, exact grounding, and source
+display, including fail-closed offset-zero and uncertain quoted/forwarded
+history. Explicit HTML quote boundaries constrain multipart plain-text
+alternatives, with disagreement failing closed. Gmail message-local attachment
+IDs are explicitly non-admitting, and invalid/missing provider timestamps are
+quarantined rather than rewritten as ingestion time.
+The language payload reserves its bounded character budget for the latest
+anchor while retaining the source under assessment. Replay reconciliation uses
+the full bounded episode rather than the 12-message model window.
+
+Triage wrong-context dismissal now supports an atomic rejection of the actual
+admitting source edge and an evidence-span-scoped quoted-history correction;
+other asks in the message remain intact. Its browser controls are emitted only
+for server-declared exact correction capabilities, so a deterministic fallback
+without uniquely applicable evidence cannot offer a dead-end action. Exact
+admitting sources outside the display window are separately authorized and
+hydrated before that capability is declared. Member-owned confirmation and
+reinstatement endpoints reverse each decision. Context Fabric v2 rebuilds the
+state from immutable events, and wrong-context feedback cannot aggregate into a
+broad sender/account/workspace suppression suggestion. Noise filtering v21
+opts into full replay and retires only untouched stale context interpretations;
+an unchanged context-free same-source deterministic fallback that remains
+eligible under the current high-signal rule keeps its existing pending item
+instead of being superseded and hidden by the historical candidate identity.
+When that deterministic core is attached to a stale contextual interpretation,
+the old proposal is superseded and excluded from active-history dedupe while a
+distinct replay-versioned context-free proposal keeps the valid ask pending.
+Member decisions remain permanent. The new production-composition acceptance
+tests complete detach, relink, reinstate, and rebuild and exercise actual Gmail
+mapping through a v20-to-v21 full replay that supersedes the stale crossed-wire
+proposal and an untouched false legacy-Sent proposal while retaining a newly
+derived valid sibling and replacing stale context around a still-valid v20
+deterministic fallback with exactly one context-free pending proposal;
+a separate production process appends enrichment between
+inspection and stale v3 supersession and keeps it pending, with no canonical or
+provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
+file. The rejected exact-head review also identified a rollback-documentation
+typo (`messaging.sent@v3` instead of the emitted `messaging.sent@v4`), which is
+corrected in the change order. Fresh complete gates, independent exact-head
+review, and the ordinary controlled-release path remain mandatory before any
+Phase B action.
+
+The subsequent independent review of exact head `c915c1c` found that the first
+fallback repair covered only prior proposals without an interpretation object.
+A v20 model result can overlap a deterministic fallback, retain its
+`message-fallback-*` identity, and attach contextual interpretation metadata.
+If that metadata became stale, v21 correctly superseded the old proposal but
+then historical kind/key dedupe suppressed the still-valid deterministic
+replacement. The amended implementation now carries the exact superseded
+proposal event IDs across reconciliation, excludes only those events from
+active-history dedupe, and derives replacement proposal IDs from the replay-
+versioned idempotency identity. Unit and production Gmail replay proofs cover
+both retention of an unchanged context-free prior and replacement of a
+contextualized prior. The `c915c1c` receipt is rejected and grants no release
+authority. The amended worktree passed the 186-test changed-path slice, the
+complete aggregate release-candidate suite, a separate 1,700-test configured
+root discovery, and the invariant scan. Final audit then closed the companion
+append-order case: when a member revision causes revision-bound supersession to
+no-op, the still-active same-source/kind/key predecessor now suppresses
+projection of the later replacement rather than allowing duplicate review
+work. The production race process proves both the member revision and the
+absence of a projected replacement. The race-hardened worktree passed the
+186-test changed-path slice, complete aggregate release-candidate suite, and
+separate 1,700-test configured root discovery. Hosted checks and independent
+review remain required for the final head.
+
+Independent review of exact head `93bc404` then proved that dismissal and
+confirmation could win the same append window yet still be followed by a new
+pending replacement. The first projection guard considered only active states;
+that preserved enrichment but treated terminal member history like successful
+system retirement. The amended projection now admits a replay replacement only
+when the predecessor bears the exact system `eligibility_rule_replaced`
+disposition. The production process is parameterized across enrichment,
+dismissal, and confirmation: each member action remains authoritative, the
+stale revision-bound supersession cannot override it, and the later replacement
+does not project. The `93bc404` receipt is rejected and grants no release
+authority. The amended worktree passed the 188-test changed-path slice, 63
+acceptance processes, 1,871 aggregate tests, 60 bridge tests, a separate
+1,702-test configured root discovery, and every invariant/static/audit/
+performance/build/isolation/backup/OpenClaw release gate. Hosted checks and
+independent exact-head review remain mandatory.
+
 ## 2026-08-12 CO-017 deployed and live verified
 
 Status: PR #336 is merged, deployed, and independently live verified in

@@ -8,7 +8,7 @@ integration layers respectively:
 - ``test_gmail_adapter_pack_internal.py`` (existing, 11r-a precedent) —
   manifest + ingest path canaries that live next to the pack.
 - ``test_gmail_send.py`` (11a c3) — framework-level send-contract
-  coverage (MIME builder + observation seam + ``MessagingSentV2``
+  coverage (MIME builder + observation seam + ``MessagingSentV4``
   field-mapping + ``AdapterErrorV1`` taxonomy).
 - THIS FILE (11a c4) — pack-internal coverage focused on the contract
   the pack itself owns: that the import surface of the pack's
@@ -17,7 +17,7 @@ integration layers respectively:
   trips through stdlib decoders (the wire-shape contract the Gmail v1
   ``users.messages.send`` endpoint reads), and that the
   ``messaging.sent`` payload :meth:`send` emits validates byte-for-
-  byte against the additive :class:`MessagingSentV2` schema while the
+  byte against the additive :class:`MessagingSentV4` schema while the
   immutable v1 registration remains available to historical producers.
 
 F-4: unique basename (``test_gmail_send_pack_internal.py``) per the
@@ -37,7 +37,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
-from adminme.events.schemas.ingest import MessagingSentV2
+from adminme.events.schemas.ingest import MessagingSentV4
 from adminme.lib.adapters import OutboundMessage
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
@@ -239,7 +239,7 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 # ---------------------------------------------------------------------------
 # 3) the messaging.sent payload :meth:`send` emits validates byte-for-
-#    byte against the additive :class:`MessagingSentV2` schema. The
+#    byte against the additive :class:`MessagingSentV4` schema. The
 #    inherited extra="forbid" check means any extra field on the
 #    pack's emit-side would fail validation; the field-name spelling
 #    must match the on-main registration character-for-character per
@@ -249,10 +249,10 @@ def test_mime_message_round_trips_through_base64_decode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_messaging_sent_v2_emit_validates_against_additive_schema() -> None:
+async def test_messaging_sent_v4_emit_validates_against_additive_schema() -> None:
     """End-to-end pack-internal: after a successful Phase A send (seams
     unset), the emitted ``messaging.sent`` payload validates byte-for-
-    byte against :class:`MessagingSentV2` (which has ``extra='forbid'``
+    byte against :class:`MessagingSentV4` (which has ``extra='forbid'``
     on its model_config). Any drift in field names or extras introduced
     by the pack would fail validation here — the pack-side guard
     against accidental schema-shape drift across future Gmail-adapter
@@ -275,10 +275,10 @@ async def test_messaging_sent_v2_emit_validates_against_additive_schema() -> Non
     assert result.delivered is True
     sent = [c for c in event_log.calls if c["type"] == "messaging.sent"]
     assert len(sent) == 1
-    assert sent[0]["schema_version"] == 2
+    assert sent[0]["schema_version"] == 4
     payload = sent[0]["payload"]
     # extra="forbid" — extras would raise here.
-    model = MessagingSentV2.model_validate(payload)
+    model = MessagingSentV4.model_validate(payload)
     assert model.source_channel == "gmail"
     assert model.to_identifier == "alice@example.test"
     assert model.thread_id == "thr-pack-x"

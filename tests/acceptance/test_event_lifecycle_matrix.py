@@ -63,9 +63,9 @@ def _private_envelope(
         tenant_id=runtime.settings.instance.tenant_id,
         type=event_type,
         schema_version=(
-            3
+            4
             if event_type == "messaging.received"
-            else 2
+            else 4
             if event_type == "messaging.sent"
             else 1
         ),

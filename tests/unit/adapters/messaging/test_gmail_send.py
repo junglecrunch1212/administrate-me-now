@@ -8,7 +8,7 @@ implementation shipped in 11a c2 against:
 - the Phase-A-conditional observation-wrap pattern from 11r-c (seam
   slots populated → route through :func:`adminme.lib.observation.outbound`;
   unset → direct Gmail API call);
-- the field-mapping onto the EXISTING ``messaging.sent@v1`` schema
+- the field-mapping onto the additive ``messaging.sent@v4`` schema
   registered at ``adminme/events/schemas/ingest.py`` since phase 04-3
   (commit ``2ce1cff``); the payload validates byte-for-byte against
   :class:`MessagingSentV1` with no extras (``extra="forbid"``);
@@ -20,7 +20,7 @@ implementation shipped in 11a c2 against:
 These tests live under ``tests/unit/adapters/messaging/`` (framework
 location) rather than the pack-internal ``packs/adapters/messaging/
 gmail/tests/`` directory because they exercise the framework-level send
-contract — the observation seam, the existing ``messaging.sent@v1``
+contract — the observation seam, the current ``messaging.sent@v4``
 schema, the AdapterContext shape — not the pack's internal polling
 logic. The basename is unique per F-4 so collection from the repo
 root does not collide with sibling packs (11r-c precedent +
@@ -40,7 +40,12 @@ import pytest
 
 from adminme.adapters.base import AdapterContext
 from adminme.events.registry import registry
-from adminme.events.schemas.ingest import MessagingSentV1, MessagingSentV2
+from adminme.events.schemas.ingest import (
+    MessagingSentV1,
+    MessagingSentV2,
+    MessagingSentV3,
+    MessagingSentV4,
+)
 from adminme.lib.adapters import OutboundMessage, SendResult
 from adminme.lib.observation import OutboundResult
 
@@ -286,7 +291,7 @@ async def test_send_happy_path_with_seams_populated(
     """When all three observation-seam slots are populated, the adapter
     routes through :func:`adminme.lib.observation.outbound` with the
     expected action name, payload, and target metadata; on
-    non-suppressed result it emits ``messaging.sent@v1`` and returns a
+    non-suppressed result it emits ``messaging.sent@v4`` and returns a
     ``SendResult`` carrying the Gmail message id."""
     captured: list[dict[str, Any]] = []
 
@@ -358,10 +363,10 @@ async def test_send_happy_path_with_seams_populated(
     assert service.send_calls[0]["userId"] == "me"
     assert "raw" in service.send_calls[0]["body"]
 
-    # messaging.sent@v1 emitted exactly once with the full field set.
+    # messaging.sent@v4 emitted exactly once with the full field set.
     sent = [c for c in event_log.calls if c["type"] == "messaging.sent"]
     assert len(sent) == 1
-    assert sent[0]["schema_version"] == 2
+    assert sent[0]["schema_version"] == 4
     payload = sent[0]["payload"]
     assert payload["source_channel"] == "gmail"
     assert payload["to_identifier"] == "bob@example.test"
@@ -381,7 +386,7 @@ async def test_send_observation_suppressed_path(
 ) -> None:
     """When :func:`outbound` reports suppression (Phase B observation-on
     default per [§6.16]), the adapter MUST emit
-    ``messaging.sent@v1`` with ``delivery_status="queued"`` +
+    ``messaging.sent@v4`` with ``delivery_status="queued"`` +
     ``thread_id=None`` and return ``SendResult(delivered=False,
     external_id=None, suppressed=True)``. The Gmail API is NOT called."""
 
@@ -442,7 +447,7 @@ async def test_send_direct_call_when_seams_not_populated() -> None:
     """Phase A (today): the supervisor's adapter loader does NOT yet
     populate the observation-seam slots, so :meth:`send` calls Gmail v1
     directly. The 11r-c Phase-A-conditional pattern. The
-    ``messaging.sent@v1`` event is still emitted with
+    ``messaging.sent@v4`` event is still emitted with
     ``delivery_status="sent"``."""
     service = _FakeSendService(
         response={"id": "gmail-direct-1", "threadId": "thr-direct"}
@@ -471,16 +476,15 @@ async def test_send_direct_call_when_seams_not_populated() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4) Schema fidelity — payload validates against existing MessagingSentV1
+# 4) Schema fidelity — payload validates against current MessagingSentV4
 # ---------------------------------------------------------------------------
 
 
 async def test_send_emits_only_existing_messaging_sent_fields() -> None:
     """The emitted ``messaging.sent`` payload MUST validate against the
-    EXISTING :class:`MessagingSentV1` model unchanged. ``extra="forbid"``
+    current :class:`MessagingSentV4` model. ``extra="forbid"``
     on the model means any drift introducing a new field would fail
-    validation. This pins F-6 (MAP DON'T REGISTER) — Gmail outbound
-    reuses the on-main schema; no new fields, no new schema."""
+    validation while earlier registered versions remain readable."""
     service = _FakeSendService(response={"id": "gmail-x", "threadId": "thr-x"})
     adapter = _make_adapter(service=service)
     event_log = _FakeEventLog()
@@ -499,7 +503,7 @@ async def test_send_emits_only_existing_messaging_sent_fields() -> None:
     payload = sent[0]["payload"]
     # Round-trips strict-validation; if any extra field crept in, this
     # call would raise pydantic.ValidationError.
-    MessagingSentV2.model_validate(payload)
+    MessagingSentV4.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +654,8 @@ def test_messaging_sent_v1_registry_lookup_returns_existing_model() -> None:
     """The c1 verify-only contract: ``registry.get("messaging.sent", 1)``
     returns the existing :class:`MessagingSentV1` model registered at
     ``adminme/events/schemas/ingest.py`` since phase 04-3 (commit
-    ``2ce1cff``). 11a adds NO new schema and re-registers nothing — the
-    cycle #17 c1 collision is the precedent."""
+    ``2ce1cff``). Additive later versions remain independently registered."""
     assert registry.get("messaging.sent", 1) is MessagingSentV1
     assert registry.get("messaging.sent", 2) is MessagingSentV2
+    assert registry.get("messaging.sent", 3) is MessagingSentV3
+    assert registry.get("messaging.sent", 4) is MessagingSentV4

@@ -312,6 +312,37 @@ def _apply_triage_proposed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     payload = envelope["payload"]
+    # Replay first appends a revision-bound supersession and then the current
+    # replacement. If member action won the append race, compare-and-apply
+    # leaves the predecessor at its member-owned revision. Do not project a
+    # second item beside an enrichment or reopen a terminal decision. A
+    # replacement is admissible only when this event order proves the old row
+    # was actually retired by the matching eligibility-replacement path.
+    idempotency_key = str(envelope.get("idempotency_key") or "")
+    candidate_key = payload.get("candidate_key")
+    if idempotency_key.startswith("triage:message-candidate:v") and candidate_key:
+        authoritative_predecessor = conn.execute(
+            """SELECT 1 FROM triage_items
+                WHERE tenant_id=? AND owner_member_id=?
+                  AND source_kind='triage_item' AND source_event_id=?
+                  AND target_kind=? AND candidate_key=? AND proposal_id!=?
+                  AND NOT (
+                      state='dismissed'
+                      AND resolved_by='system:source_changed'
+                      AND resolution_reason='eligibility_rule_replaced'
+                  )
+                LIMIT 1""",
+            (
+                envelope["tenant_id"],
+                payload["owner_member_id"],
+                payload["source_event_id"],
+                payload["target_kind"],
+                candidate_key,
+                payload["proposal_id"],
+            ),
+        ).fetchone()
+        if authoritative_predecessor is not None:
+            return
     _insert(
         envelope,
         conn,
@@ -601,6 +632,7 @@ def _resolve(
     materialized_event_ids: list[str] | None = None,
     resolution_reason: str | None = None,
     allow_pending_interpretation: bool = False,
+    expected_last_event_id: str | None = None,
 ) -> None:
     conn.execute(
         """UPDATE triage_items
@@ -608,6 +640,7 @@ def _resolve(
                   materialized_event_ids_json=?, resolution_reason=?, last_event_id=?
             WHERE tenant_id=? AND proposal_id=?
               AND (state='pending_review' OR (?=1 AND state='pending_interpretation'))
+              AND (? IS NULL OR last_event_id=?)
               AND last_event_id < ?""",
         (
             state,
@@ -619,6 +652,8 @@ def _resolve(
             envelope["tenant_id"],
             proposal_id,
             int(allow_pending_interpretation),
+            expected_last_event_id,
+            expected_last_event_id,
             envelope["event_id"],
         ),
     )
@@ -938,6 +973,11 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
             resolved_by="system:source_changed",
             resolution_reason=payload["reason"],
             allow_pending_interpretation=True,
+            expected_last_event_id=(
+                str(payload["expected_last_event_id"])
+                if int(envelope.get("schema_version") or 1) >= 3
+                else None
+            ),
         )
     elif event_type == "commitment.dismissed":
         _resolve(

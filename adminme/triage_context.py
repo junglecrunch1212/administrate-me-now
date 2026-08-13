@@ -16,6 +16,7 @@ from typing import Any
 
 from adminme.candidate_policy import source_id_for_event
 from adminme.lib.scope import allowed_read
+from adminme.message_context import authored_message_text
 
 
 _FIELD_LABELS = {
@@ -44,10 +45,18 @@ def _first(payload: Mapping[str, Any], *names: str) -> str | None:
 
 def _source_text(payload: Mapping[str, Any]) -> str:
     subject = _first(payload, "subject", "title")
-    body = _first(payload, "body_text", "body", "description", "notes", "text")
+    body = authored_message_text(payload).text or _first(
+        payload, "description", "notes", "text"
+    )
     if subject and body:
         return f"Subject: {subject}\n\n{body}"
     return subject or body or ""
+
+
+def _source_occurred_at(
+    event: Mapping[str, Any], payload: Mapping[str, Any]
+) -> str | None:
+    return _first(payload, "received_at", "sent_at") or _first(event, "occurred_at")
 
 
 def _exact_quote(item: Mapping[str, Any], payload: Mapping[str, Any]) -> str | None:
@@ -153,6 +162,7 @@ def compose_triage_source_context(
     context_events = context_events or {}
     evidence_refs: list[dict[str, Any]] = []
     source_chain: list[dict[str, Any]] = []
+    correctable_related_source_ids: list[str] = []
     if interpretation is not None:
         for ref in interpretation.get("evidence_refs") or []:
             if not isinstance(ref, Mapping):
@@ -184,6 +194,16 @@ def compose_triage_source_context(
             )
             context_type = str(context_event.get("type") or "")
             source_contract = source_contracts.get(event_id, {})
+            relationship_source_event_ids = [
+                str(value)
+                for value in source_contract.get("relationship_source_event_ids", [])
+                if value and str(value) in context_events
+            ]
+            if (
+                source_contract.get("relation") == "related"
+                and relationship_source_event_ids
+            ):
+                correctable_related_source_ids.append(event_id)
             context_direction = (
                 "outbound" if context_type == "messaging.sent" else "inbound"
             )
@@ -202,7 +222,8 @@ def compose_triage_source_context(
                         "from_number",
                     ),
                     "subject": _first(context_payload, "subject"),
-                    "occurred_at": context_event.get("occurred_at"),
+                    "occurred_at": _source_occurred_at(context_event, context_payload),
+                    "recorded_at": context_event.get("recorded_at"),
                 }
             )
     evidence = {
@@ -211,6 +232,20 @@ def compose_triage_source_context(
     }
     if interpretation is not None:
         evidence["quotes"] = evidence_refs
+    source_evidence_quote = next(
+        (
+            str(ref["quote"])
+            for ref in evidence_refs
+            if ref["source_event_id"] == str(source_event.get("event_id") or "")
+        ),
+        "",
+    )
+    authored = authored_message_text(payload)
+    quoted_history_correction_available = bool(
+        authored.reliable
+        and source_evidence_quote
+        and authored.text.count(source_evidence_quote) == 1
+    )
     return {
         "contract": "triage-source-context-v2",
         "source_event_id": source_event.get("event_id"),
@@ -224,7 +259,8 @@ def compose_triage_source_context(
         else None,
         "sender": sender,
         "subject": subject,
-        "occurred_at": source_event.get("occurred_at"),
+        "occurred_at": _source_occurred_at(source_event, payload),
+        "recorded_at": source_event.get("recorded_at"),
         "meaning": {
             "target_kind": item.get("target_kind"),
             "summary": (
@@ -235,6 +271,10 @@ def compose_triage_source_context(
             "extracted_fields": extracted_fields,
         },
         "evidence": evidence,
+        "correction_capabilities": {
+            "unrelated_source_event_ids": correctable_related_source_ids,
+            "quoted_or_forwarded_history": quoted_history_correction_available,
+        },
         "interpretation": (
             {
                 "label": "Context summary",
@@ -280,6 +320,13 @@ async def add_triage_source_context(
                 str(value)
                 for value in interpretation.get("context_source_event_ids") or []
             )
+            for context_source in interpretation.get("context_sources") or []:
+                if not isinstance(context_source, Mapping):
+                    continue
+                requested_ids.update(
+                    str(value)
+                    for value in context_source.get("relationship_source_event_ids", [])
+                )
     for event_id in requested_ids:
         if event_id:
             cache[event_id] = await runtime.event_log.get(event_id)
@@ -303,7 +350,18 @@ async def add_triage_source_context(
         authorized_context: dict[str, Mapping[str, Any]] = {}
         interpretation = item.get("interpretation")
         if isinstance(interpretation, Mapping):
-            for context_id in interpretation.get("context_source_event_ids") or []:
+            authorized_context_ids = {
+                str(value)
+                for value in interpretation.get("context_source_event_ids") or []
+            }
+            for context_source in interpretation.get("context_sources") or []:
+                if not isinstance(context_source, Mapping):
+                    continue
+                authorized_context_ids.update(
+                    str(value)
+                    for value in context_source.get("relationship_source_event_ids", [])
+                )
+            for context_id in authorized_context_ids:
                 context_id = str(context_id)
                 context_source = cache.get(context_id)
                 if context_source is None:

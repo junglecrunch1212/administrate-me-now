@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from adminme.triage_context import compose_triage_source_context
+from types import SimpleNamespace
+
+import pytest
+
+from adminme.triage_context import (
+    add_triage_source_context,
+    compose_triage_source_context,
+)
 
 
 def test_message_context_exposes_decision_cues_and_only_exact_quote() -> None:
@@ -42,6 +49,10 @@ def test_message_context_exposes_decision_cues_and_only_exact_quote() -> None:
         "quote": "Please pay the water bill Friday.",
         "exactly_grounded": True,
     }
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": [],
+        "quoted_or_forwarded_history": False,
+    }
     assert context["meaning"]["extracted_fields"] == [
         {"field": "due", "label": "Due", "value": "2026-08-14"}
     ]
@@ -67,3 +78,123 @@ def test_nonliteral_candidate_text_is_never_presented_as_source_evidence() -> No
         },
     )
     assert context["evidence"] == {"quote": None, "exactly_grounded": False}
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": [],
+        "quoted_or_forwarded_history": False,
+    }
+
+
+def test_context_corrections_are_exposed_only_when_server_can_apply_them() -> None:
+    source = {
+        "event_id": "message-current",
+        "type": "messaging.received",
+        "payload": {"body_text": "Please review the exact fixture transfer."},
+    }
+    related = {
+        "event_id": "message-related",
+        "type": "messaging.received",
+        "payload": {"body_text": "A related fixture update."},
+    }
+    item = {
+        "title": "Review the fixture transfer",
+        "target_kind": "task",
+        "interpretation": {
+            "evidence_refs": [
+                {
+                    "source_event_id": "message-current",
+                    "quote": "Please review the exact fixture transfer.",
+                }
+            ],
+            "context_source_event_ids": ["message-current", "message-related"],
+            "context_sources": [
+                {
+                    "source_event_id": "message-current",
+                    "relation": "thread",
+                    "relationship_source_event_ids": [],
+                },
+                {
+                    "source_event_id": "message-related",
+                    "relation": "related",
+                    "relationship_source_event_ids": ["message-current"],
+                },
+            ],
+        },
+    }
+
+    context = compose_triage_source_context(
+        item,
+        source,
+        {"message-current": source, "message-related": related},
+    )
+
+    assert context["correction_capabilities"] == {
+        "unrelated_source_event_ids": ["message-related"],
+        "quoted_or_forwarded_history": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_surface_hydrates_relationship_provenance_outside_display_window() -> (
+    None
+):
+    def event(event_id: str, body: str) -> dict[str, object]:
+        return {
+            "event_id": event_id,
+            "type": "messaging.received",
+            "owner_scope": "private:member-fixture",
+            "visibility_scope": "private:member-fixture",
+            "sensitivity": "normal",
+            "payload": {"body_text": body},
+        }
+
+    events = {
+        "message-current": event("message-current", "Current fixture update."),
+        "message-related": event("message-related", "Related fixture update."),
+        "message-old-edge": event("message-old-edge", "Older admitting message."),
+    }
+
+    class EventLog:
+        async def get(self, event_id: str):  # type: ignore[no-untyped-def]
+            return events.get(event_id)
+
+    surface = {
+        "items": [
+            {
+                "source_event_id": "message-current",
+                "title": "Current fixture update",
+                "target_kind": "task",
+                "interpretation": {
+                    "context_source_event_ids": [
+                        "message-current",
+                        "message-related",
+                    ],
+                    "context_sources": [
+                        {
+                            "source_event_id": "message-current",
+                            "relation": "thread",
+                            "relationship_source_event_ids": [],
+                        },
+                        {
+                            "source_event_id": "message-related",
+                            "relation": "related",
+                            "relationship_source_event_ids": ["message-old-edge"],
+                        },
+                    ],
+                },
+            }
+        ]
+    }
+    session = SimpleNamespace(
+        auth_role="principal",
+        auth_member_id="member-fixture",
+        allowed_scopes={"private:member-fixture"},
+    )
+
+    await add_triage_source_context(
+        SimpleNamespace(event_log=EventLog()), session, surface
+    )
+
+    assert surface["items"][0]["source_context"]["correction_capabilities"] == {
+        "unrelated_source_event_ids": ["message-related"],
+        "quoted_or_forwarded_history": False,
+    }

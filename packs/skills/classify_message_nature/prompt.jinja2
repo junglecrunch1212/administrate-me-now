@@ -26,8 +26,9 @@ Body:
 
 Candidate scope: {{ candidate_scope | default("primary_thread") }}.
 {% if context_pack %}
-Conversation context (stable aliases; `thread` is the primary conversation and
-`related` is deterministic supporting context only):
+Conversation context (stable aliases; `thread` is the episode-bounded primary
+conversation and `related` has a code-verified strong relationship such as an
+RFC reference, exact attachment identity, or explicit member confirmation):
 {% for message in context_pack.messages %}
 --- {{ message.source_id }} | {{ message.relation }} ({{ message.relation_reason_codes | join(", ") }}) | {{ message.direction }} | {{ message.occurred_at }} | {{ message.source_channel }}
 Sender: {{ message.sender }}

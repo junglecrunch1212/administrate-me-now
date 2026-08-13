@@ -352,7 +352,7 @@ def test_simple_adapter_protocol_surface_preserved() -> None:
     assert isinstance(adapter, Adapter)
     assert adapter.name == "messaging-gmail-api"
     assert adapter.family == "messaging"
-    assert adapter.version == "1.1.1"
+    assert adapter.version == "1.3.0"
     assert adapter.sensitivity_floor == "normal"
 
 

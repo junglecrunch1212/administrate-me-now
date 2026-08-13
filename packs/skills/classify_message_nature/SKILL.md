@@ -1,7 +1,7 @@
 ---
 name: classify_message_nature
 namespace: adminme
-version: 6.0.1
+version: 7.0.0
 description: Extract typed message nature, attention signals, and human-gated household candidates.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -75,11 +75,14 @@ something they needed to see."
 ## Typed features and candidates
 
 The skill extracts language features only. It receives a bounded, private,
-same-account conversation context pack assembled by deterministic code. Exact
-thread IDs, participant overlap, normalized subject tokens, and attachment
-filename tokens are the only relationship edges; the model cannot add sources
-or widen member/workspace scope. `reply_signal` describes whether
-the text explicitly calls for a response; unread state never changes it.
+same-account, episode-bounded conversation context pack assembled by
+deterministic code. Exact provider thread IDs establish primary conversation
+membership. Cross-thread context requires an exact RFC reference, exact
+attachment identity, or explicit member confirmation; participant, name,
+address, subject, and filename overlap are explanation-only corroboration. The
+model cannot add sources or widen member/workspace scope. `reply_signal`
+describes whether the text explicitly calls for a response; unread state never
+changes it.
 Automation, transactional-due, security-code, person-to-person, and deadline
 fields are typed evidence consumed by deterministic code. The model does not
 rank messages or authorize a write.

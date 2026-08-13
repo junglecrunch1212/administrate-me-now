@@ -7,9 +7,10 @@ retrofit) and §3.4 (Cohort D step 1 / prompt 11a). Real Gmail outbound
 :meth:`send` body calls Gmail v1's ``users.messages.send`` endpoint
 directly when the observation seam slots are unpopulated (Phase A),
 and routes through :func:`adminme.lib.observation.outbound` when the
-slots are populated by the supervisor (Phase B). D28 emits the additive
-``messaging.sent@v2`` schema with exact member/account/workspace coordinates;
-the existing v1 registration remains immutable for historical producers.
+slots are populated by the supervisor (Phase B). D28 now emits the additive
+``messaging.sent@v4`` schema with exact member/account/workspace coordinates,
+RFC continuity, and an optional HTML alternative; v1-v3 remain registered for
+historical producers.
 
 Per ADMINISTRATEME_BUILD.md §L1 (adapter contract), DECISIONS.md §D6
 (no LLM SDK), §D7 (schemas at v1), §D8 (correlation_id propagation),
@@ -66,6 +67,10 @@ from adminme.lib.adapters import (
 from adminme.lib.observation import outbound
 
 _log = logging.getLogger(__name__)
+
+
+class _GmailSourceTimestampError(ValueError):
+    """The provider source timestamp is absent or cannot be trusted."""
 
 
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
@@ -151,7 +156,7 @@ class GmailAdapter(CommunicationAdapter):
     pack_id: ClassVar[str] = "adapter:messaging-gmail-api"
     name: ClassVar[str] = "messaging-gmail-api"
     family: ClassVar[Literal["messaging"]] = "messaging"
-    version: ClassVar[str] = "1.1.1"
+    version: ClassVar[str] = "1.3.0"
 
     capabilities: ClassVar[list[Any]] = [
         {
@@ -812,9 +817,10 @@ class GmailAdapter(CommunicationAdapter):
         ):
             return None
         try:
-            return int(raw_internal_date)
+            value = int(raw_internal_date)
         except ValueError:
             return None
+        return value if value > 0 else None
 
     @staticmethod
     def _historical_related_date_clause(
@@ -897,7 +903,7 @@ class GmailAdapter(CommunicationAdapter):
                     )
                 emitted += 1
                 self._events_since_advance += 1
-            except EventValidationError as exc:
+            except (EventValidationError, _GmailSourceTimestampError) as exc:
                 quarantined += 1
                 quarantine_event_id = await self._emit_quarantine(
                     ctx=ctx,
@@ -938,7 +944,7 @@ class GmailAdapter(CommunicationAdapter):
         the Gmail service directly (Phase A — memo 08 §3.4
         Phase-A-conditional, mirroring 11r-c's
         :meth:`_apply_write_impl`). On success, emits one
-        ``messaging.sent@v2`` event with field-mapping from Gmail
+        ``messaging.sent@v4`` event with field-mapping from Gmail
         semantics plus the exact Comms account coordinates; on
         observation-suppress, the same event is emitted with
         ``delivery_status="queued"`` and ``thread_id=None``. The immutable
@@ -948,7 +954,7 @@ class GmailAdapter(CommunicationAdapter):
         ``AdapterErrorV1`` taxonomy (4xx auth → fatal ``auth_failed``,
         5xx → transient ``network``, 429 → transient ``rate_limited``),
         emit one ``adapter.error@v1`` event, and re-raise so the
-        supervisor's backoff handles retry. ``messaging.sent@v2`` is
+        supervisor's backoff handles retry. ``messaging.sent@v4`` is
         NOT emitted on the error path — the action did not, in fact,
         send.
         """
@@ -1031,7 +1037,8 @@ class GmailAdapter(CommunicationAdapter):
             raise
 
         # D28 retains the delivery fields and adds the account-bound
-        # ``messaging.sent@v2`` coordinates required by Comms.
+        # ``messaging.sent@v4`` coordinates, RFC continuity, and the optional
+        # HTML MIME alternative required by conservative context assembly.
         if ctx is not None:
             now_dt = ctx.now_factory()
         else:
@@ -1059,13 +1066,17 @@ class GmailAdapter(CommunicationAdapter):
             "workspace": str(self._config.get("workspace") or "personal"),
             "native_message_id": None if suppressed else response.get("id"),
             "in_reply_to_interaction_id": message.metadata.get("interaction_id"),
+            "rfc_message_id": message.metadata.get("rfc_message_id"),
+            "references": list(message.metadata.get("references") or []),
+            "in_reply_to": message.metadata.get("in_reply_to"),
         }
         if ctx is not None:
             await self._append(
                 ctx=ctx,
                 event_type="messaging.sent",
                 payload=sent_payload,
-                schema_version=2,
+                schema_version=4,
+                occurred_at_override=sent_at_iso,
             )
 
         external_id_value: str | None = None if suppressed else response.get("id")
@@ -1284,16 +1295,22 @@ class GmailAdapter(CommunicationAdapter):
     @staticmethod
     def _epoch_ms_to_iso(epoch_ms: str | int | None) -> str:
         """Convert Gmail's ``internalDate`` (epoch ms as string) to a Z-
-        suffixed UTC ISO string. Falls back to now() on missing/invalid."""
-        if epoch_ms is None:
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        suffixed UTC ISO string or reject an untrustworthy source time."""
+        if isinstance(epoch_ms, bool) or epoch_ms is None:
+            raise _GmailSourceTimestampError("Gmail internalDate is missing")
         try:
             ms = int(epoch_ms)
         except (TypeError, ValueError):
-            return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+            raise _GmailSourceTimestampError("Gmail internalDate is invalid") from None
+        if ms <= 0:
+            raise _GmailSourceTimestampError("Gmail internalDate must be positive")
+        try:
+            parsed = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError) as exc:
+            raise _GmailSourceTimestampError(
+                "Gmail internalDate is outside the supported range"
+            ) from exc
+        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     @staticmethod
     def _headers_to_map(
@@ -1355,7 +1372,7 @@ class GmailAdapter(CommunicationAdapter):
         fingerprint: str | None = None,
     ) -> str:
         """Translate a Gmail ``users.messages.get`` response into a
-        ``messaging.received`` v3 event. The pack's ``user_email`` is the
+        ``messaging.received`` v4 event. The pack's ``user_email`` is the
         ``to_identifier``; ``from_identifier`` comes from the From header.
         """
         payload_dict = message.get("payload") or {}
@@ -1396,6 +1413,7 @@ class GmailAdapter(CommunicationAdapter):
             "reply_to_identifier": headers.get("reply-to") or headers.get("from"),
             "rfc_message_id": headers.get("message-id"),
             "references": (headers.get("references") or "").split(),
+            "in_reply_to": headers.get("in-reply-to"),
             "provider_labels": labels,
             "unread": "UNREAD" in labels,
             "archived": "INBOX" not in labels,
@@ -1408,11 +1426,12 @@ class GmailAdapter(CommunicationAdapter):
             ctx=ctx,
             event_type="messaging.received",
             payload=event_payload,
-            schema_version=3,
+            schema_version=4,
             idempotency_key=(f"gmail-message:{native_message_id}:{stable_fingerprint}"),
             raw_ref=(
                 f"gmail://messages/{native_message_id}#sha256={stable_fingerprint}"
             ),
+            occurred_at_override=received_iso,
         )
 
     async def _emit_message_observation(
@@ -1431,13 +1450,14 @@ class GmailAdapter(CommunicationAdapter):
             )
         payload_dict = message.get("payload") or {}
         headers = self._headers_to_map(payload_dict.get("headers"))
-        body_text, _body_html = self._extract_bodies(payload_dict)
+        body_text, body_html = self._extract_bodies(payload_dict)
         native_message_id = str(message.get("id") or "unknown")
         configured_account = str(self._config.get("user_email") or "gmail")
+        sent_iso = self._epoch_ms_to_iso(message.get("internalDate"))
         return await self._append(
             ctx=ctx,
             event_type="messaging.sent",
-            schema_version=2,
+            schema_version=4,
             idempotency_key=(f"gmail-sent-message:{native_message_id}:{fingerprint}"),
             raw_ref=(f"gmail://messages/{native_message_id}#sha256={fingerprint}"),
             payload={
@@ -1446,7 +1466,8 @@ class GmailAdapter(CommunicationAdapter):
                 "thread_id": message.get("threadId"),
                 "subject": headers.get("subject"),
                 "body_text": body_text,
-                "sent_at": self._epoch_ms_to_iso(message.get("internalDate")),
+                "body_html": body_html,
+                "sent_at": sent_iso,
                 "delivery_status": "sent",
                 "member_id": str(self._config.get("member_id") or "unbound"),
                 "provider": "gmail",
@@ -1454,7 +1475,11 @@ class GmailAdapter(CommunicationAdapter):
                 "workspace": str(self._config.get("workspace") or "personal"),
                 "native_message_id": native_message_id,
                 "in_reply_to_interaction_id": None,
+                "rfc_message_id": headers.get("message-id"),
+                "references": (headers.get("references") or "").split(),
+                "in_reply_to": headers.get("in-reply-to"),
             },
+            occurred_at_override=sent_iso,
         )
 
     @staticmethod
@@ -1475,8 +1500,13 @@ class GmailAdapter(CommunicationAdapter):
         provider_watermark: str | None,
     ) -> str:
         now = ctx.now_factory().astimezone(timezone.utc).isoformat()
+        error_kind = (
+            "validation"
+            if isinstance(error, (EventValidationError, _GmailSourceTimestampError))
+            else "api_changed"
+        )
         self._status.last_error = {
-            "error_kind": "api_changed",
+            "error_kind": error_kind,
             "error_message": f"{type(error).__name__}: {error}"[:2000],
             "external_id_fingerprint": hashlib.sha256(external_id.encode()).hexdigest(),
         }
@@ -1488,7 +1518,7 @@ class GmailAdapter(CommunicationAdapter):
                 "adapter_family": self.family,
                 "external_id": external_id,
                 "content_fingerprint": fingerprint,
-                "error_kind": "api_changed",
+                "error_kind": error_kind,
                 "error_message": f"{type(error).__name__}: {error}"[:2000],
                 "quarantined_at": now,
                 "provider_watermark": provider_watermark,
@@ -1567,6 +1597,7 @@ class GmailAdapter(CommunicationAdapter):
         schema_version: int = 1,
         idempotency_key: str | None = None,
         raw_ref: str | None = None,
+        occurred_at_override: str | None = None,
     ) -> str:
         """Append a typed event via the supervisor-provided event log.
 
@@ -1583,6 +1614,7 @@ class GmailAdapter(CommunicationAdapter):
             schema_version=schema_version,
             idempotency_key=idempotency_key,
             raw_ref=raw_ref,
+            occurred_at_override=occurred_at_override,
         )
 
     # ------------------------------------------------------------------

@@ -183,6 +183,22 @@ class _ContextEventLog(_FakeEventLog):
             yield value
 
 
+@dataclass
+class _RacingSupersessionEventLog(_ContextEventLog):
+    gated_proposal_event_id: str = ""
+    descendants_inspected: asyncio.Event = field(default_factory=asyncio.Event)
+    resume_supersession: asyncio.Event = field(default_factory=asyncio.Event)
+    gate_used: bool = False
+
+    async def get_by_causation(self, causation_id: str) -> list[dict[str, Any]]:
+        descendants = await super().get_by_causation(causation_id)
+        if causation_id == self.gated_proposal_event_id and not self.gate_used:
+            self.gate_used = True
+            self.descendants_inspected.set()
+            await self.resume_supersession.wait()
+        return descendants
+
+
 def _make_ctx(
     event_log: Any,
     run_skill_fn: Any,
@@ -249,6 +265,7 @@ def _messaging_sent_event(*, body_text: str) -> dict[str, Any]:
     return {
         "event_id": "trigger-eid-sent-001",
         "type": "messaging.sent",
+        "schema_version": 4,
         "event_at_ms": 1700000000000,
         "tenant_id": "tenant-test",
         "owner_scope": "private:member-fixture",
@@ -257,6 +274,7 @@ def _messaging_sent_event(*, body_text: str) -> dict[str, Any]:
         "payload": {
             "member_id": "member-fixture",
             "source_channel": "gmail",
+            "provider": "gmail",
             "to_identifier": "recipient@example.invalid",
             "body_text": body_text,
             "sent_at": "2026-08-08T12:00:00Z",
@@ -319,6 +337,286 @@ async def test_empty_body_records_no_candidate_without_calling_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_html_only_body_uses_canonical_authored_text() -> None:
+    log = _FakeEventLog()
+    calls: list[dict[str, Any]] = []
+
+    async def stub_run_skill(
+        _skill_id: str, inputs: dict[str, Any], _skill_ctx: SkillContext
+    ) -> SkillResult:
+        calls.append(inputs)
+        return _make_skill_result()
+
+    event = _messaging_received_event(body_text=None)
+    event["payload"]["body_html"] = (
+        "<div>Please review the fixture authorization.</div>"
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assert calls[0]["body_text"] == "Please review the fixture authorization."
+
+
+@pytest.mark.asyncio
+async def test_uncertain_authored_text_records_terminal_no_candidate() -> None:
+    log = _FakeEventLog()
+    calls: list[Any] = []
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result()
+
+    event = _messaging_received_event(
+        body_text=(
+            "Sent: Tuesday, February 1\n"
+            "To: member@example.invalid\n"
+            "Subject: Earlier request\n"
+            "Please wire fixture funds."
+        )
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, stub_run_skill))
+
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["reason_codes"] == ["authored_text_uncertain"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_action", [None, "enriched", "dismissed"])
+async def test_legacy_sent_replay_retires_only_untouched_prior_proposal(
+    member_action: str | None,
+) -> None:
+    source = _messaging_sent_event(
+        body_text="I will authorize the old fixture transfer."
+    )
+    source.update(
+        {
+            "schema_version": 3,
+            "source_adapter": "messaging-gmail-api",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "legacy-sent-thread",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+        }
+    )
+    log = _ContextEventLog(source_events=[source])
+    proposal_id = "legacy-sent-prior-proposal"
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2026-08-08T12:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-prior-proposal-event",
+            payload={
+                "proposal_id": proposal_id,
+                "target_kind": "commitment",
+                "owner_member_id": "member-fixture",
+                "title": "Authorize the old fixture transfer",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": source["event_id"],
+                "candidate_key": "legacy-sent-candidate",
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "confidence": 0.9,
+                "reasons": ["legacy authored-text interpretation"],
+            },
+        ),
+        causation_id="legacy-sent-v20-assessment",
+    )
+    if member_action == "enriched":
+        await log.write(
+            EventEnvelope(
+                event_at_ms=1700000000002,
+                tenant_id="tenant-test",
+                type="triage.item.enriched",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:02Z",
+                source_adapter="member-triage",
+                source_account_id="member-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                idempotency_key="legacy-sent-member-enrichment",
+                payload={
+                    "proposal_id": proposal_id,
+                    "enriched_at": "2026-08-08T12:00:02Z",
+                    "enriched_by_member_id": "member-fixture",
+                    "candidate_updates": {"note": "Member reviewed this item."},
+                },
+            ),
+            causation_id=proposal_event_id,
+        )
+    elif member_action == "dismissed":
+        await log.write(
+            EventEnvelope(
+                event_at_ms=1700000000002,
+                tenant_id="tenant-test",
+                type="triage.item.dismissed",
+                schema_version=1,
+                occurred_at="2026-08-08T12:00:02Z",
+                source_adapter="member-triage",
+                source_account_id="member-fixture",
+                owner_scope="private:member-fixture",
+                visibility_scope="private:member-fixture",
+                sensitivity="normal",
+                idempotency_key="legacy-sent-member-dismissal",
+                payload={
+                    "proposal_id": proposal_id,
+                    "dismissed_at": "2026-08-08T12:00:02Z",
+                    "dismissed_by_member_id": "member-fixture",
+                    "reason": "Member already decided this item.",
+                },
+            ),
+            causation_id=proposal_event_id,
+        )
+
+    calls: list[Any] = []
+
+    async def stub_run_skill(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(source, _make_ctx(log, stub_run_skill))
+
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+    assert assessment.payload["reason_codes"] == [
+        "legacy_gmail_sent_quote_boundary_unavailable"
+    ]
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert bool(superseded) is (member_action is None)
+    if superseded:
+        assert superseded[0].payload == {
+            "proposal_id": proposal_id,
+            "superseded_at": "2026-08-08T12:00:00Z",
+            "replacement_source_event_id": source["event_id"],
+            "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": proposal_event_id,
+        }
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_sent_supersession_carries_stale_revision_through_race() -> None:
+    source = _messaging_sent_event(
+        body_text="I will authorize the old fixture transfer."
+    )
+    source.update(
+        {
+            "schema_version": 3,
+            "source_adapter": "messaging-gmail-api",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "legacy-sent-race-thread",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+        }
+    )
+    log = _RacingSupersessionEventLog(source_events=[source])
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2026-08-08T12:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-race-proposal-event",
+            payload={
+                "proposal_id": "legacy-sent-race-proposal",
+                "target_kind": "commitment",
+                "owner_member_id": "member-fixture",
+                "title": "Authorize the old fixture transfer",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": source["event_id"],
+                "candidate_key": "legacy-sent-race-candidate",
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "confidence": 0.9,
+                "reasons": ["legacy authored-text interpretation"],
+            },
+        )
+    )
+    log.gated_proposal_event_id = proposal_event_id
+
+    async def should_not_run(*_args: Any, **_kwargs: Any) -> SkillResult:
+        raise AssertionError("unreliable legacy text reached the language seam")
+
+    replay = asyncio.create_task(
+        NoiseFilteringPipeline().handle(source, _make_ctx(log, should_not_run))
+    )
+    await asyncio.wait_for(log.descendants_inspected.wait(), timeout=1)
+    enrichment_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000002,
+            tenant_id="tenant-test",
+            type="triage.item.enriched",
+            schema_version=1,
+            occurred_at="2026-08-08T12:00:02Z",
+            source_adapter="member-triage",
+            source_account_id="member-fixture",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="legacy-sent-race-member-enrichment",
+            payload={
+                "proposal_id": "legacy-sent-race-proposal",
+                "enriched_at": "2026-08-08T12:00:02Z",
+                "enriched_by_member_id": "member-fixture",
+                "title": "Member-corrected legitimate commitment",
+                "candidate_updates": {"note": "Reviewed by the member."},
+            },
+        ),
+        causation_id=proposal_event_id,
+    )
+    log.resume_supersession.set()
+    await asyncio.wait_for(replay, timeout=1)
+
+    supersession_call = next(
+        call for call in log.calls if call.envelope.type == "triage.item.superseded"
+    )
+    assert log.calls.index(
+        next(call for call in log.calls if call.event_id == enrichment_event_id)
+    ) < log.calls.index(supersession_call)
+    assert supersession_call.envelope.schema_version == 3
+    assert supersession_call.envelope.payload["expected_last_event_id"] == (
+        proposal_event_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_skill_success_emits_classified() -> None:
     log = _FakeEventLog()
 
@@ -349,7 +647,7 @@ async def test_skill_success_emits_classified() -> None:
     assert envelope.payload["classification"] == "transactional"
     assert envelope.payload["confidence"] == 0.91
     assert envelope.payload["skill_name"] == "classify_message_nature"
-    assert envelope.payload["skill_version"] == "6.0.1"
+    assert envelope.payload["skill_version"] == "7.0.0"
     assert envelope.payload["source_event_id"] == "trigger-eid-001"
     assert log.calls[0].causation_id == "trigger-eid-001"
 
@@ -373,7 +671,7 @@ async def test_skill_failure_emits_defensive_default() -> None:
     assert envelope.type == "messaging.classified"
     assert envelope.payload["classification"] == "personal"
     assert envelope.payload["confidence"] == 0.0
-    assert envelope.payload["skill_version"] == "6.0.1"
+    assert envelope.payload["skill_version"] == "7.0.0"
     assert log.calls[1].envelope.payload["reply_signal"] == "unknown"
     assert log.calls[2].envelope.payload["assessment_outcome"] == "failed"
 
@@ -705,8 +1003,9 @@ async def test_grounded_candidates_enter_triage_without_provider_route() -> None
         "event_type": "busy",
     }
     assert proposal["confidence"] == 0.91
+    assert proposal["source_occurred_at"] == event["payload"]["received_at"]
     assert log.calls[2].envelope.schema_version == 3
-    assert log.calls[3].envelope.schema_version == 3
+    assert log.calls[3].envelope.schema_version == 4
     assert log.calls[3].causation_id == "fake-event-id-3"
 
 
@@ -812,11 +1111,13 @@ async def test_reviewed_replay_adds_new_nlp_kind_without_rewriting_fallback() ->
         "task",
         "recurrence",
     ]
-    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v20:")
+    assert proposals[-1].idempotency_key.startswith("triage:message-candidate:v21:")
 
 
 @pytest.mark.asyncio
-async def test_reviewed_replay_uses_v9_after_prior_generations() -> None:
+async def test_terminal_failure_requires_explicit_recovery_before_later_replay() -> (
+    None
+):
     log = _FakeEventLog()
     event = _messaging_received_event(body_text="A message without a fixed rule.")
 
@@ -858,11 +1159,6 @@ async def test_reviewed_replay_uses_v9_after_prior_generations() -> None:
     assert classified_keys == [
         "messaging:classified:trigger-eid-001",
         "messaging:classified:v4:trigger-eid-001",
-        "messaging:classified:v5:trigger-eid-001",
-        "messaging:classified:v6:trigger-eid-001",
-        "messaging:classified:v7:trigger-eid-001",
-        "messaging:classified:v8:trigger-eid-001",
-        "messaging:classified:v9:trigger-eid-001",
     ]
 
 
@@ -926,7 +1222,7 @@ async def test_exact_duplicate_source_observations_propose_each_candidate_once()
         "recurrence",
     ]
     assert all(
-        proposal.idempotency_key.startswith("triage:message-candidate:v20:")
+        proposal.idempotency_key.startswith("triage:message-candidate:v21:")
         for proposal in proposals
     )
 
@@ -1160,12 +1456,13 @@ async def test_v9_retires_only_untouched_generic_action_verb_proposals(
     ]
     assert bool(superseded) is not member_decided
     if superseded:
-        assert superseded[0].schema_version == 2
+        assert superseded[0].schema_version == 3
         assert superseded[0].payload == {
             "proposal_id": proposal_id,
             "superseded_at": "2026-08-08T12:00:00Z",
             "replacement_source_event_id": source_event_id,
             "reason": "eligibility_rule_replaced",
+            "expected_last_event_id": proposal_event_id,
         }
 
 
@@ -1287,3 +1584,410 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
     ]
     assert len(new_proposals) == 1
     assert new_proposals[0].payload["source_event_id"] == "thread-source-current"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contextualized", [False, True])
+async def test_v21_replay_keeps_or_replaces_still_eligible_same_source_fallback(
+    contextualized: bool,
+) -> None:
+    source = _messaging_received_event(
+        body_text="Please complete the fixture checklist"
+    )
+    source.update(
+        {
+            "occurred_at": "2034-02-01T10:00:00Z",
+            "recorded_at": "2034-02-01T10:00:01Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    source["payload"].update(
+        {
+            "thread_id": "same-source-fallback-fixture",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "received_at": "2034-02-01T10:00:00Z",
+        }
+    )
+    log = _ContextEventLog(source_events=[source])
+    assessment_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.intent.features_extracted",
+            schema_version=3,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="triage:message-features:v20:trigger-eid-001",
+            payload={
+                "intent_id": "source:trigger-eid-001",
+                "source_event_id": "trigger-eid-001",
+                "skill_call_event_id": None,
+                "extractor_id": "legacy-contextual-nlp-v20",
+                "language": None,
+                "candidates": [
+                    {
+                        "candidate_key": "message-fallback-1",
+                        "target_kind": "task",
+                        "title": "Please complete the fixture checklist",
+                        "fields": {},
+                        "evidence_spans": [],
+                        "confidence": None,
+                        "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+                    }
+                ],
+                "extraction_state": "complete",
+                "extracted_at": "2034-02-01T10:00:01Z",
+                "assessment_outcome": "eligible_candidates",
+                "reason_codes": ["eligible_candidate_found"],
+            },
+        ),
+        causation_id="trigger-eid-001",
+    )
+    proposal_payload: dict[str, Any] = {
+        "proposal_id": "same-source-fallback-v20-proposal",
+        "target_kind": "task",
+        "owner_member_id": "member-fixture",
+        "title": "Please complete the fixture checklist",
+        "candidate": {},
+        "route": {"member_id": "member-fixture"},
+        "source_event_id": "trigger-eid-001",
+        "confidence": None,
+        "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+        "parent_intent_id": None,
+        "candidate_key": "message-fallback-1",
+        "extraction_event_id": assessment_event_id,
+        "eligibility_rule_ids": [
+            "inbound_explicit_directive_or_due_obligation_v1",
+            "candidate_fields_task_v1",
+        ],
+    }
+    if contextualized:
+        proposal_payload["interpretation"] = {
+            "context_fingerprint": "a" * 64,
+            "anchor_event_id": "trigger-eid-001",
+        }
+    proposal_event_id = await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000001,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="deterministic_candidate_eligibility",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="same-source-fallback-v20-proposal",
+            payload=proposal_payload,
+        ),
+        causation_id=assessment_event_id,
+    )
+
+    async def no_language_candidate(*_args: Any, **_kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(source, _make_ctx(log, no_language_candidate))
+
+    supersessions = [
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+        and call.envelope.payload.get("proposal_id")
+        == "same-source-fallback-v20-proposal"
+    ]
+    same_source_proposals = [
+        call
+        for call in log.calls
+        if call.envelope.type == "triage.item.proposed"
+        and call.envelope.payload.get("source_event_id") == "trigger-eid-001"
+    ]
+    if contextualized:
+        assert len(supersessions) == 1
+        assert len(same_source_proposals) == 2
+        replacement = same_source_proposals[-1]
+        assert replacement.event_id != proposal_event_id
+        assert replacement.envelope.payload["proposal_id"] != (
+            "same-source-fallback-v20-proposal"
+        )
+        assert replacement.envelope.payload["interpretation"] is None
+    else:
+        assert supersessions == []
+        assert [call.event_id for call in same_source_proposals] == [proposal_event_id]
+    current_assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.idempotency_key
+        == "triage:message-features:v21:trigger-eid-001"
+    )
+    assert current_assessment.payload["assessment_outcome"] == "eligible_candidates"
+
+
+@pytest.mark.asyncio
+async def test_latest_anchor_reconciles_proposals_outside_model_window() -> None:
+    source_events: list[dict[str, Any]] = []
+    for index in range(13):
+        source = _messaging_received_event(body_text=f"Routine fixture update {index}.")
+        source.update(
+            {
+                "event_id": f"long-thread-source-{index:02d}",
+                "occurred_at": f"2034-02-01T10:{index:02d}:00Z",
+                "recorded_at": f"2034-02-01T10:{index:02d}:01Z",
+                "source_account_id": "fixture-account",
+            }
+        )
+        source["payload"].update(
+            {
+                "thread_id": "long-thread-context-fixture",
+                "provider": "fixture",
+                "provider_account_id": "fixture-account",
+                "workspace": "personal",
+                "received_at": f"2034-02-01T10:{index:02d}:00Z",
+            }
+        )
+        source_events.append(source)
+    log = _ContextEventLog(source_events=source_events)
+    await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=4,
+            occurred_at="2034-02-01T10:00:01Z",
+            source_adapter="noise_filtering",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="long-thread-prior-proposal",
+            payload={
+                "proposal_id": "long-thread-prior-proposal",
+                "target_kind": "task",
+                "owner_member_id": "member-fixture",
+                "title": "Old exact fixture ask",
+                "candidate": {"description": "Old exact fixture ask"},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": "long-thread-source-00",
+                "confidence": 0.8,
+                "reasons": ["grounded_language_exact_quote_v1"],
+                "parent_intent_id": None,
+                "candidate_key": "long-thread-old-candidate",
+                "extraction_event_id": None,
+                "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                "source_occurred_at": "2034-02-01T10:00:00Z",
+                "interpretation": {
+                    "contract": "triage-context-interpretation-v2",
+                    "context_fingerprint": "b" * 64,
+                    "thread_key": "old-long-thread",
+                    "anchor_event_id": "long-thread-source-00",
+                    "compact_summary": "Old exact fixture ask",
+                    "case_summary": "Old context.",
+                    "why_member": "Old context.",
+                    "next_step": "Review.",
+                    "thread_state": "unclear",
+                    "action_owner": "member",
+                    "lifecycle_state": "open",
+                    "unresolved_questions": [],
+                    "evidence_refs": [
+                        {
+                            "source_event_id": "long-thread-source-00",
+                            "quote": "Routine fixture update 0.",
+                        }
+                    ],
+                    "context_source_event_ids": ["long-thread-source-00"],
+                    "context_sources": [
+                        {
+                            "source_event_id": "long-thread-source-00",
+                            "relation": "thread",
+                            "reason_codes": ["provider_thread_id"],
+                            "relationship_source_event_ids": [],
+                        }
+                    ],
+                    "related_source_event_ids": [],
+                },
+            },
+        )
+    )
+
+    async def no_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(
+        source_events[-1], _make_ctx(log, no_candidate)
+    )
+
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert len(superseded) == 1
+    assert superseded[0].payload["proposal_id"] == "long-thread-prior-proposal"
+
+
+@pytest.mark.asyncio
+async def test_wholly_quoted_reply_cannot_become_a_candidate() -> None:
+    log = _FakeEventLog()
+
+    async def quoted_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "title": "Wire fixture funds",
+                    "evidence_quote": "Please wire the fixture funds.",
+                    "candidate": {},
+                    "confidence": 0.99,
+                }
+            ]
+        )
+
+    event = _messaging_received_event(
+        body_text=(
+            "On Tuesday, Fixture Sender wrote:\r\n> Please wire the fixture funds."
+        )
+    )
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, quoted_candidate))
+
+    assert not any(call.envelope.type == "triage.item.proposed" for call in log.calls)
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+
+
+@pytest.mark.asyncio
+async def test_multipart_html_quote_boundary_blocks_plain_text_candidate() -> None:
+    log = _FakeEventLog()
+    calls: list[Any] = []
+
+    async def quoted_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        calls.append((args, kwargs))
+        return _make_skill_result(
+            candidates=[
+                {
+                    "target_kind": "task",
+                    "title": "Wire fixture funds",
+                    "evidence_quote": "Please wire the fixture funds.",
+                    "candidate": {},
+                    "confidence": 0.99,
+                }
+            ]
+        )
+
+    event = _messaging_received_event(body_text="Please wire the fixture funds.")
+    event["payload"]["body_html"] = (
+        '<div class="gmail_quote">Please wire the fixture funds.</div>'
+    )
+
+    await NoiseFilteringPipeline().handle(event, _make_ctx(log, quoted_candidate))
+
+    assert calls == []
+    assert not any(call.envelope.type == "triage.item.proposed" for call in log.calls)
+    assessment = next(
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.intent.features_extracted"
+    )
+    assert assessment.payload["assessment_outcome"] == "no_candidate"
+
+
+@pytest.mark.asyncio
+async def test_replay_supersedes_untouched_weak_cross_thread_candidate() -> None:
+    current = _messaging_received_event(
+        body_text="A normal fixture update with no new ask."
+    )
+    current.update(
+        {
+            "event_id": "weak-source-current",
+            "occurred_at": "2034-02-01T11:00:00Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    current["payload"].update(
+        {
+            "thread_id": "thread-current",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "subject": "Fixture Holdings update",
+            "received_at": "2034-02-01T11:00:00Z",
+        }
+    )
+    weak_related = _messaging_received_event(
+        body_text="Another Fixture Holdings account update."
+    )
+    weak_related.update(
+        {
+            "event_id": "weak-source-unrelated",
+            "occurred_at": "2034-02-01T10:00:00Z",
+            "source_account_id": "fixture-account",
+        }
+    )
+    weak_related["payload"].update(
+        {
+            "thread_id": "thread-unrelated",
+            "provider": "fixture",
+            "provider_account_id": "fixture-account",
+            "workspace": "personal",
+            "subject": "Fixture Holdings account",
+            "received_at": "2034-02-01T10:00:00Z",
+        }
+    )
+    log = _ContextEventLog(source_events=[weak_related, current])
+    await log.write(
+        EventEnvelope(
+            event_at_ms=1700000000000,
+            tenant_id="tenant-test",
+            type="triage.item.proposed",
+            schema_version=3,
+            occurred_at="2034-02-01T11:00:01Z",
+            source_adapter="noise_filtering",
+            source_account_id="pipeline",
+            owner_scope="private:member-fixture",
+            visibility_scope="private:member-fixture",
+            sensitivity="normal",
+            idempotency_key="weak-context-prior-proposal",
+            payload={
+                "proposal_id": "weak-context-prior-proposal",
+                "target_kind": "task",
+                "owner_member_id": "member-fixture",
+                "title": "Act on the unrelated fixture account",
+                "candidate": {},
+                "route": {"member_id": "member-fixture"},
+                "source_event_id": "weak-source-current",
+                "candidate_key": "weak-context-candidate",
+                "eligibility_rule_ids": ["exact_source_quote_grounded_v1"],
+                "confidence": 0.8,
+                "reasons": ["legacy weak context"],
+                "interpretation": {
+                    "context_fingerprint": "b" * 64,
+                    "thread_key": "legacy-weak-context",
+                    "compact_summary": "Legacy weak context",
+                    "related_source_event_ids": ["weak-source-unrelated"],
+                },
+            },
+        )
+    )
+
+    async def no_candidate(*args: Any, **kwargs: Any) -> SkillResult:
+        return _make_skill_result()
+
+    await NoiseFilteringPipeline().handle(current, _make_ctx(log, no_candidate))
+
+    superseded = [
+        call.envelope
+        for call in log.calls
+        if call.envelope.type == "triage.item.superseded"
+    ]
+    assert len(superseded) == 1
+    assert superseded[0].payload["proposal_id"] == "weak-context-prior-proposal"
+    assert superseded[0].payload["reason"] == "eligibility_rule_replaced"

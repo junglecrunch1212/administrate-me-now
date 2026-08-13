@@ -163,6 +163,7 @@ def feedback_pattern_counts(
                    FROM triage_feedback
                   WHERE tenant_id=? AND member_id=? AND owner_scope=?
                     AND visibility_scope=?
+                    AND reason='wrong_context'
                     AND context_id IS NOT NULL AND context_id!=''
                   GROUP BY context_id, reason
                  UNION ALL
@@ -170,6 +171,10 @@ def feedback_pattern_counts(
                    FROM triage_feedback
                   WHERE tenant_id=? AND member_id=? AND owner_scope=?
                     AND visibility_scope=?
+                    AND reason IN (
+                        'not_actionable','duplicate','wrong_kind',
+                        'recurring_normal','low_signal'
+                    )
                     AND target_kind IS NOT NULL AND target_kind!=''
                   GROUP BY target_kind, reason
                  UNION ALL
@@ -177,6 +182,7 @@ def feedback_pattern_counts(
                    FROM triage_feedback
                   WHERE tenant_id=? AND member_id=? AND owner_scope=?
                     AND visibility_scope=?
+                    AND reason IN ('spam','provider_promotion')
                     AND provider_account_id IS NOT NULL AND provider_account_id!=''
                   GROUP BY provider_account_id, reason
                  UNION ALL
@@ -184,6 +190,7 @@ def feedback_pattern_counts(
                    FROM triage_feedback
                   WHERE tenant_id=? AND member_id=? AND owner_scope=?
                     AND visibility_scope=?
+                    AND reason IN ('spam','provider_promotion')
                     AND workspace IS NOT NULL AND workspace!=''
                   GROUP BY workspace, reason
                  UNION ALL
@@ -191,6 +198,7 @@ def feedback_pattern_counts(
                    FROM triage_feedback
                   WHERE tenant_id=? AND member_id=? AND owner_scope=?
                     AND visibility_scope=?
+                    AND reason IN ('spam','provider_promotion')
                     AND sender_digest IS NOT NULL AND sender_digest!=''
                   GROUP BY sender_digest, reason
              )

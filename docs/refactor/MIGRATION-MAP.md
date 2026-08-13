@@ -1,5 +1,61 @@
 # Migration map
 
+CO-018 update (2026-08-12): source-time and message-context correctness is a
+**MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.3.0 and emits
+additive `messaging.received@v4` / `messaging.sent@v4`; prior versions remain
+registered and readable. Noise filtering advances from v20 to v21 with an
+explicit full replay, and the pinned classification skill advances from v6 to
+v7. Replay appends new assessments/proposals and deterministic supersession
+receipts only for untouched stale interpretations. Source events, member
+feedback, decisions, canonical records, and provider facts are never rewritten.
+An unchanged context-free deterministic fallback that v21 derives from the
+same source under the same current high-signal rule retains its existing
+pending proposal. The new assessment is appended, but replay does not
+supersede the valid item or emit a duplicate merely because a v20 extraction
+already owns the candidate identity.
+If the prior proposal combines that deterministic identity with stale
+contextual interpretation metadata, v21 supersedes the contextual proposal,
+excludes that exact event from active-history dedupe, and appends the current
+fallback under a deterministic replay-versioned proposal ID. The source and
+old proposal remain immutable, while exactly one context-free replacement is
+pending for review. The projection admits that replacement only when the same-
+source/kind/key predecessor bears the exact successful system
+`eligibility_rule_replaced` disposition; enrichment, dismissal, confirmation,
+and later terminal states therefore prevent duplicate or reopened work.
+The v21 replay stores exact relationship-edge provenance. Source-text
+corrections are proposal/candidate/digest/span scoped; replay no longer blanks
+unrelated authored asks. Invalid Gmail source timestamps quarantine instead of
+creating false source chronology. Gmail message-local attachment IDs remain
+non-admitting until a stable identity or content digest exists.
+Multipart authored-text agreement and server-declared correction capabilities
+are derived read/pipeline behavior only; they add no event, projection, or
+provider migration. `messaging.sent@v4` additively retains `body_html` for
+historical Sent observations; older v1-v3 facts remain readable and immutable,
+but Gmail Sent bodies from those versions are not eligible as authored evidence
+because the missing HTML alternative makes quote-boundary recovery impossible.
+They receive a new content-free v21 assessment with reason
+`legacy_gmail_sent_quote_boundary_unavailable`; any untouched system proposal
+rooted in that now-unreliable body receives an append-only
+`eligibility_rule_replaced` supersession, while member enrichment and decisions
+remain permanent. Additive `triage.item.superseded@v3` binds current pipeline
+supersessions to the exact inspected proposal revision; deterministic
+projection compare-and-apply ignores a stale receipt when a newer member event
+won append order. Prior v1/v2 supersession events remain readable with their
+historical semantics. No source migration or provider refetch occurs. Model-window budget reservation, full-episode reconciliation
+scope, and off-window relationship hydration are derived behavior and migrate
+no stored facts.
+
+Context Fabric advances from projection v1 to v2 with additive exact
+relationship-decision and source-text-correction tables. Rebuild derives both
+from immutable reject/confirm/correct/reinstate events. Existing projection
+databases receive the `CREATE TABLE IF NOT EXISTS` additions through the normal
+schema initialization before replay. `triage.item.proposed@v4` carries provider
+source time and interpretation v2 while v1–v3 remain compatible. Rollback can
+read the retained older facts and ignores new correction events, but it cannot
+delete them and can temporarily restore the superseded weak context behavior.
+No credential, provider enrollment, permission, Python/Node runtime, OpenClaw
+pin, canonical model, or external object migrates.
+
 CO-017 update (2026-08-12): terminal source-assessment recovery is
 **HARDENED AND DEPLOYED**. Noise filtering advances from
 generation/version 19 to 20. Existing source events, v3 assessments, candidates,

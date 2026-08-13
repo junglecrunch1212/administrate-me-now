@@ -30,7 +30,7 @@ def test_pack_loads_cleanly() -> None:
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
     assert loaded.pack_id == "skill:classify_message_nature"
-    assert loaded.version == "6.0.1"
+    assert loaded.version == "7.0.0"
     assert loaded.skill_frontmatter["sensitivity_required"] == "normal"
     assert (
         "anthropic/claude-haiku-4-5" in loaded.skill_frontmatter["provider_preferences"]
@@ -49,7 +49,7 @@ def test_pack_loads_cleanly() -> None:
     assert set(candidate_enum) == ALL_TRIAGE_TARGETS
 
 
-def test_input_schema_accepts_exact_participant_reference_context_edge() -> None:
+def test_input_schema_accepts_strong_rfc_edge_with_weak_corroboration() -> None:
     """The fixed-code context vocabulary and pinned skill schema stay atomic."""
     invalidate_cache()
     loaded = load_pack(PACK_ROOT)
@@ -58,7 +58,7 @@ def test_input_schema_accepts_exact_participant_reference_context_edge() -> None
         "source_channel": "gmail",
         "from_identifier": "service@example.invalid",
         "context_pack": {
-            "contract": "message-context-pack-v1",
+            "contract": "message-context-pack-v2",
             "thread_key": "a" * 64,
             "context_fingerprint": "b" * 64,
             "current_source_id": "m01",
@@ -67,6 +67,7 @@ def test_input_schema_accepts_exact_participant_reference_context_edge() -> None
                     "source_id": "m01",
                     "relation": "related",
                     "relation_reason_codes": [
+                        "rfc_reference",
                         "participant_overlap",
                         "participant_reference_overlap",
                     ],
