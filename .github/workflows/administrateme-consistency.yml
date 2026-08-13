@@ -1,0 +1,68 @@
+name: AdministrateMe consistency
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - codex/administrateme-v2-runtime
+
+permissions:
+  contents: read
+
+concurrency:
+  group: administrateme-consistency-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-consistency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14.6"
+
+      - name: Install reviewed Poetry
+        run: pipx install poetry==2.4.1
+
+      - name: Install locked dependencies
+        run: poetry sync --with dev
+
+      - name: Validate harness and preservation flow
+        env:
+          PYTHONPATH: bridge
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          poetry run pytest -p no:cacheprovider -q
+          tests/unit/harness
+          tests/integration/test_harness_artifact_flow.py
+          tests/integration/test_harness_member_navigation.py
+
+      - name: Validate current constitution, inventories, and generated references
+        if: github.event_name == 'pull_request'
+        env:
+          PYTHONPATH: bridge
+          ADMINME_BASE_REF: origin/${{ github.base_ref }}
+        run: >-
+          poetry run python -m scripts.harness.cli consistency
+          --base-ref "$ADMINME_BASE_REF"
+          --check-generated
+
+      - name: Validate branch current state
+        if: github.event_name != 'pull_request'
+        env:
+          PYTHONPATH: bridge
+        run: poetry run python -m scripts.harness.cli consistency --check-generated
+
+      - name: Enforce diff hygiene
+        run: git diff --check
+
+# Hosted model review is intentionally NOT CONFIGURED here. It may be added
+# only after an OpenAI secret and repository policy already exist under the
+# read-only, key-isolated boundary in docs/refactor/CURRENT-STATE.md.

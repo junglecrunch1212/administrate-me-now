@@ -1,0 +1,4 @@
+interface:
+  display_name: "AdministrateMe Frontend QA"
+  short_description: "Prove desktop and narrow journeys"
+  default_prompt: "Use $adminme-frontend-qa to prove the requested member journey at desktop and narrow widths."

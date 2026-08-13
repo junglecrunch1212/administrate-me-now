@@ -13,6 +13,7 @@ const evidenceDir = process.env.ADMINME_GATE7_EVIDENCE_DIR
   ? resolve(process.env.ADMINME_GATE7_EVIDENCE_DIR)
   : join(repoRoot, "docs", "refactor", "evidence", "gate-7", "visual");
 const basePort = Number.parseInt(process.env.ADMINME_GATE7_VISUAL_PORT ?? "3347", 10);
+const fixedNow = process.env.ADMINME_GATE7_VISUAL_NOW ?? "2026-08-13T14:00:00Z";
 const identities = {
   principal: "visual-principal.ts.net",
   adult: "visual-adult.ts.net",
@@ -30,7 +31,20 @@ let expected409Console = 0;
 let observedExpected409Console = 0;
 let expected503Console = 0;
 let observedExpected503Console = 0;
+let contextSequence = 0;
 let browserDescription = "installed Chromium browser via playwright-core@1.62.0";
+const deterministicRasterArgs = [
+  "--deterministic-mode",
+  "--disable-font-subpixel-positioning",
+  "--disable-gpu",
+  "--disable-gpu-rasterization",
+  "--disable-lcd-text",
+  "--disable-skia-runtime-opts",
+  "--font-render-hinting=none",
+  "--force-color-profile=srgb",
+  "--force-device-scale-factor=1",
+  "--hide-scrollbars",
+];
 
 function record(name, pass, detail) {
   results.push({ name, status: pass ? "PASS" : "FAIL", detail });
@@ -47,11 +61,21 @@ async function launchEdge() {
     try {
       await access(executablePath);
       browserDescription = `${executablePath.includes("Google Chrome") ? "Google Chrome" : "Microsoft Edge"} via playwright-core@1.62.0`;
-      return await chromium.launch({ executablePath, headless: true, timeout: 20_000 });
+      return await chromium.launch({
+        args: deterministicRasterArgs,
+        executablePath,
+        headless: true,
+        timeout: 20_000,
+      });
     } catch {}
   }
   browserDescription = "Microsoft Edge via playwright-core@1.62.0";
-  return chromium.launch({ channel: "msedge", headless: true, timeout: 20_000 });
+  return chromium.launch({
+    args: deterministicRasterArgs,
+    channel: "msedge",
+    headless: true,
+    timeout: 20_000,
+  });
 }
 
 async function waitForServer(baseUrl) {
@@ -67,9 +91,10 @@ async function waitForServer(baseUrl) {
 
 async function startServer(port, modelConfigured) {
   const instance = await mkdtemp(join(tmpdir(), `adminme-gate7-visual-${port}-`));
+  const fixturePython = process.env.ADMINME_GATE7_PYTHON;
   const child = spawn(
-    process.platform === "win32" ? "poetry.exe" : "poetry",
-    ["run", "python", "tools/gate7_visual_server.py"],
+    fixturePython ?? (process.platform === "win32" ? "poetry.exe" : "poetry"),
+    fixturePython ? ["tools/gate7_visual_server.py"] : ["run", "python", "tools/gate7_visual_server.py"],
     {
       cwd: repoRoot,
       env: {
@@ -78,6 +103,7 @@ async function startServer(port, modelConfigured) {
         ADMINME_GATE7_VISUAL_INSTANCE: instance,
         ADMINME_GATE7_VISUAL_PORT: String(port),
         ADMINME_GATE7_VISUAL_MODEL: modelConfigured ? "1" : "0",
+        ADMINME_GATE7_VISUAL_NOW: fixedNow,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -138,6 +164,18 @@ async function jsonRequest(baseUrl, path, identity, method = "GET", body) {
   return { response, value };
 }
 
+async function settle(baseUrl) {
+  const result = await jsonRequest(
+    baseUrl,
+    "/__gate7/settle",
+    identities.principal,
+    "POST",
+  );
+  if (!result.response.ok || result.value.settled !== true) {
+    throw new Error(`Gate 7 fixture did not settle: ${JSON.stringify(result.value)}`);
+  }
+}
+
 async function seed(baseUrl) {
   const message = await jsonRequest(
     baseUrl,
@@ -152,6 +190,7 @@ async function seed(baseUrl) {
     },
   );
   record("canonical fixture seeded", message.response.ok, message.response.status);
+  await settle(baseUrl);
   const task = await jsonRequest(
     baseUrl,
     "/api/member/v1/tasks",
@@ -170,6 +209,7 @@ async function seed(baseUrl) {
     },
   );
   record("canonical task fixture seeded", task.response.ok, task.value);
+  await settle(baseUrl);
   const triageTask = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-task",
@@ -177,6 +217,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Triage task fixture seeded", triageTask.response.ok && triageTask.value.seeded === 1, triageTask.value);
+  await settle(baseUrl);
   const triageGoogleTask = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-google-task",
@@ -184,6 +225,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Google Tasks Triage fixture seeded", triageGoogleTask.response.ok && triageGoogleTask.value.seeded === 2, triageGoogleTask.value);
+  await settle(baseUrl);
   const triageContinuity = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-continuity",
@@ -191,6 +233,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Triage continuity fixtures seeded", triageContinuity.response.ok && triageContinuity.value.seeded === 9, triageContinuity.value);
+  await settle(baseUrl);
   const triageFinalReady = await jsonRequest(
     baseUrl,
     "/__gate7/seed-triage-final-ready",
@@ -198,6 +241,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("isolated final Ready fixture seeded", triageFinalReady.response.ok && triageFinalReady.value.seeded === 1, triageFinalReady.value);
+  await settle(baseUrl);
   const calendar = await jsonRequest(
     baseUrl,
     "/__gate7/seed-calendar",
@@ -205,6 +249,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("calendar fixture seeded", calendar.response.ok && calendar.value.seeded === 7, calendar.value);
+  await settle(baseUrl);
   const notes = await jsonRequest(
     baseUrl,
     "/__gate7/seed-notes",
@@ -212,6 +257,7 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Notes fixture seeded", notes.response.ok && notes.value.seeded === 4, notes.value);
+  await settle(baseUrl);
   const finance = await jsonRequest(
     baseUrl,
     "/__gate7/seed-finance",
@@ -219,15 +265,38 @@ async function seed(baseUrl) {
     "POST",
   );
   record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 10, finance.value);
+  await settle(baseUrl);
 }
 
 async function newContext(browser, identity, viewport, reducedMotion = "no-preference") {
+  contextSequence += 1;
   const context = await browser.newContext({
     viewport,
     reducedMotion,
     extraHTTPHeaders: headers(identity),
     colorScheme: "light",
   });
+  await context.addInitScript(({ instant, contextId }) => {
+    const RealDate = Date;
+    const frozen = new RealDate(instant).getTime();
+    class FixedDate extends RealDate {
+      constructor(...args) {
+        super(...(args.length ? args : [frozen]));
+      }
+      static now() { return frozen; }
+    }
+    Object.defineProperty(globalThis, "Date", { configurable: true, value: FixedDate });
+    Object.defineProperty(globalThis.crypto, "randomUUID", {
+      configurable: true,
+      value: () => {
+        const prior = /^adminme-gate7:(\d+)$/.exec(globalThis.name);
+        const uuidSequence = Number(prior?.[1] || "0") + 1;
+        globalThis.name = `adminme-gate7:${uuidSequence}`;
+        const suffix = (BigInt(contextId) * 1000000n + BigInt(uuidSequence)).toString(16).padStart(12, "0");
+        return `00000000-0000-4000-8000-${suffix}`;
+      },
+    });
+  }, { instant: fixedNow, contextId: contextSequence });
   const page = await context.newPage();
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -255,10 +324,40 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
 
 async function screenshot(page, name) {
   const path = join(evidenceDir, name);
+  await page.evaluate(async () => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    globalThis.scrollTo(0, 0);
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
   await page.screenshot({
     path,
     fullPage: true,
-    style: ".skip-link { display: none !important; }",
+    style: `
+      .skip-link { display: none !important; }
+      .chat-fab {
+        bottom: auto !important;
+        position: absolute !important;
+        top: 50rem !important;
+      }
+      .rail {
+        position: static !important;
+      }
+      html {
+        scrollbar-width: none !important;
+      }
+      ::-webkit-scrollbar {
+        display: none !important;
+        height: 0 !important;
+        width: 0 !important;
+      }
+      *, *::before, *::after {
+        animation: none !important;
+        caret-color: transparent !important;
+        text-rendering: geometricPrecision !important;
+        transition: none !important;
+        -webkit-font-smoothing: antialiased !important;
+      }
+    `,
   });
   const metadata = await stat(path);
   const digest = createHash("sha256").update(await readFile(path)).digest("hex");
@@ -347,6 +446,7 @@ async function run() {
   const server = await startServer(basePort, true);
   let degraded;
   const browser = await launchEdge();
+  browserDescription = `${browserDescription}; engine ${browser.version()}`;
   try {
     await seed(server.baseUrl);
 
@@ -1132,9 +1232,14 @@ async function run() {
     await screenshot(adult.page, "mode-compressed-observation-tablet.png");
     await adult.page.locator("#chat-open").click();
     await adult.page.locator("#chat-input").fill("What is one kind next step?");
+    const chatResponsePromise = adult.page.waitForResponse((response) =>
+      response.url().includes("/api/member/v1/chat/stream")
+      && response.request().method() === "POST");
     await adult.page.locator("#chat-send").click();
+    const chatResponse = await chatResponsePromise;
     await adult.page.locator(".message.assistant").filter({ hasText: "next small step" }).last().waitFor();
     await adult.page.locator("#chat-state").filter({ hasText: "Ready" }).waitFor();
+    await chatResponse.finished();
     record("adult OpenClaw stream rendered", await adult.page.locator(".message.assistant").last().textContent() === "I'm here. I can help you choose the next small step.", await adult.page.locator(".message.assistant").last().textContent());
     await screenshot(adult.page, "adult-chat-streamed-tablet.png");
     const browserPersistence = await adult.page.evaluate(async () => ({
@@ -1190,11 +1295,16 @@ async function run() {
       action_verbs: ["task.complete"],
       required_capabilities: ["product:core", "projection:tasks"],
       compatible_modes: ["compressed"],
-      expires_at: new Date(Date.now() + 1000).toISOString(),
+      expires_at: new Date(new Date(fixedNow).getTime() + 1000).toISOString(),
     });
     record("expiring quest created", expiringQuest.response.status === 201, expiringQuest.response.status);
     const expiringQuestId = expiringQuest.value.surface.stable_id;
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const advancedClock = await jsonRequest(server.baseUrl, "/__gate7/advance-clock", identities.adult, "POST");
+    record(
+      "fixture clock advanced past quest expiry",
+      advancedClock.response.ok && advancedClock.value.expired.includes(expiringQuestId),
+      JSON.stringify(advancedClock.value),
+    );
     expected404Console += 1;
     await adult.page.goto(`${server.baseUrl}/member/quests/${expiringQuestId}`, { waitUntil: "networkidle" });
     await adult.page.locator(".state-card").waitFor();

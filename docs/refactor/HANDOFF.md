@@ -2493,3 +2493,62 @@ tenant isolation, backup/restore, the pinned OpenClaw contract, its 17 plugin
 tests, exact OpenClaw source install, and the 69-test arm64 macOS rehearsal.
 Final candidate head, hosted checks, independent review, and any authorized
 release evidence remain pending.
+
+## 2026-08-13 Outcome Harness local candidate
+
+The local candidate adds a thin exact-bound Outcome Harness, five bounded
+repository skills, deterministic current-state consistency CI, and a focused
+member-navigation module behind compatibility imports. The pilot intentionally
+changes no visible route, label, order, click, payload, authorization, mode,
+observation, event, projection, pipeline, provider, or release behavior.
+
+An independent final review found that generic receipt filenames had overwritten
+the earlier pilot's exact-bound non-browser receipts. The legacy Claude-era
+executor/recovery workflows, settings, MCP configuration, hooks, agent
+instructions, and setup verdict were therefore restored. A first separate
+pre-retirement run was also correctly rejected: it did not bind those eighteen
+legacy paths, permitted incomplete review-scope declarations, omitted untracked
+mode/file-type identity and four outcome-state classifications, and described a
+pre-extraction baseline it had not retained.
+
+The next run, `20260813t180234z-18dafbf8-5xod__dw`, bound all eighteen paths and
+passed its functional and browser checks, but independent review correctly
+rejected it because the OpenClaw install/check/test breadth receipts ran under
+Node 22.23.2/npm 10.9.8. A separate Node 24 browser receipt was not proof for
+those commands. That rejected run grants no retirement authority.
+
+The repaired harness binds untracked modes, file types, and symlink targets;
+requires all eight review scopes and all eight outcome states exactly once; runs
+the production navigation case from an immutable archive of `HEAD` as the
+pre-extraction baseline; and requires every prerequisite removal path in its
+task binding. OpenClaw breadth and browser receipts each require exact supported
+Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 toolchain evidence in their
+hashed logs.
+
+Pre-retirement run `20260813t182422z-739bfefa-22y57puv`, bound to diff
+`d54819ab905da1d4e2e7071ce3496846008b4f84e83af45a1415f29188009376`,
+retained all eighteen legacy paths byte/mode exact to `HEAD` and passed static,
+focused, immutable-baseline, current production-composition, full breadth, and
+260-assertion/39-screenshot browser proof. Its independent read-only review
+returned `APPROVE` with no findings or unresolved evidence; canonical review
+SHA-256 is
+`98e1ee1f182fe058d723fa7d904947e3c5f56ed9bd76febb88574f0060cb5fe5`.
+Only after preserving that exact `NOT_RELEASED` run did the local retirement
+patch remove the six Claude executor/constitution/smoke workflows, Claude
+settings/MCP registration, three hooks, six agent instructions, and obsolete
+setup verdict. Intended replacements and Git provenance remain mapped in
+`LEGACY-EXECUTOR-HISTORY.md`.
+
+This is not released. Final breadth/release-tier receipts, final exact-diff
+review, and owner handoff are required for the post-retirement candidate. No
+commit, push, PR, merge, deployment, Phase B, provider effect, observation
+change, household-state access, or G-001 authority has occurred.
+
+Post-retirement run `20260813t184707z-a1b88771-msfn5j52` is rejected and must
+not be reused. Its static, focused, immutable-baseline, production-composition,
+breadth, and all substantive release checks passed, including 63 release
+acceptance tests, 1,932 root tests, and 60 bridge tests. The aggregate release
+command exited 1 because Ruff reported that `scripts/harness/checks.py` and
+`tests/unit/harness/test_core.py` required formatting. Ruff then mechanically
+formatted exactly those two files. Because that changed the binding, all final
+receipts and review must come from a new post-format run.

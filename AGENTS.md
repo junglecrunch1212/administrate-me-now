@@ -86,6 +86,14 @@ itself by observing that the file changed.
 - `bootstrap/`: baseline prose/config scaffolding. Its target is `docs/refactor/BOOTSTRAP-AND-TOPOLOGY-CONTRACT.md`.
 - `tests/acceptance/`: golden process gates. Run with `--runxfail` for release gating.
 
+## Outcome Harness
+
+- Start current local change work from `docs/refactor/CURRENT-STATE.md` and the repository skills `adminme-outcome`, `adminme-change`, `adminme-review`, `adminme-frontend-qa`, and `adminme-evidence` under `.agents/skills/`.
+- Use `python -m scripts.harness.cli` for bound run artifacts, reviewed check selection, consistency validation, browser proof, and owner evidence. A changed binding invalidates earlier receipts and review.
+- A retirement or removal proof must bind every path whose continued presence is a prerequisite. Task bindings include tracked mode changes and untracked file mode, file type, and symlink target; a same-content executable or link change is not equivalent evidence.
+- Every OpenClaw breadth receipt and browser receipt must attest the exact supported Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 executables in its hashed log. A green command under the live Node 22 rollback runtime is not candidate evidence.
+- `docs/refactor/CURRENT-STATE.md` reports whether legacy Claude executor surfaces are still present pending a parity gate or have been retired. They are never current Codex authority. `docs/refactor/LEGACY-EXECUTOR-HISTORY.md` preserves their provenance; an absent path must not be restored by inference.
+
 ## Supported checks
 
 Use Python 3.14 and Node 24, matching the candidate manifests and ADR-0006. Existing Python 3.11/Node 22 deployments remain untouched until the separately approved runtime-migration gate. The bridge package must be importable when running the root suite.

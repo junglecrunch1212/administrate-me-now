@@ -1,0 +1,4 @@
+interface:
+  display_name: "AdministrateMe Review"
+  short_description: "Review exact diffs without writing"
+  default_prompt: "Use $adminme-review to inspect this exact AdministrateMe diff read-only and return a structured verdict."

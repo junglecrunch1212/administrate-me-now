@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/verification-report-v1.json",
+  "title": "AdministrateMe verification report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "binding", "status", "started_at", "finished_at", "changed_files", "checks", "browser", "metrics", "unresolved"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,79}$"},
+    "binding": {"$ref": "#/$defs/binding"},
+    "status": {"type": "string", "enum": ["PASS", "FAIL", "UNDETERMINED"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "changed_files": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "tier", "command", "status", "exit_code", "duration_seconds", "evidence_class", "receipt"],
+        "properties": {
+          "check_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+          "tier": {"type": "string", "enum": ["static", "focused", "journey", "breadth", "release"]},
+          "command": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["PASS", "FAIL", "UNDETERMINED", "NOT_APPLICABLE", "NOT_CONFIGURED"]},
+          "exit_code": {"type": ["integer", "null"]},
+          "duration_seconds": {"type": "number", "minimum": 0},
+          "evidence_class": {"type": "string", "enum": ["fixture", "local_candidate", "hosted_ci", "live"]},
+          "receipt": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "output_directory", "report_path", "report_sha256", "assertion_count", "browser_engine", "desktop", "narrow", "console_errors", "page_errors", "request_failures"],
+      "properties": {
+        "status": {"type": "string", "enum": ["PASS", "FAIL", "UNDETERMINED", "NOT_APPLICABLE"]},
+        "output_directory": {"type": ["string", "null"]},
+        "report_path": {"type": ["string", "null"]},
+        "report_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "assertion_count": {"type": "integer", "minimum": 0},
+        "browser_engine": {"type": ["string", "null"]},
+        "desktop": {"type": "array", "items": {"$ref": "#/$defs/screenshot"}},
+        "narrow": {"type": "array", "items": {"$ref": "#/$defs/screenshot"}},
+        "console_errors": {"type": "array", "items": {"type": "string"}},
+        "page_errors": {"type": "array", "items": {"type": "string"}},
+        "request_failures": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend_questions", "product_checkpoints", "technical_owner_minutes", "applicable_journeys", "passed_journeys", "false_green_count", "first_pass_focused", "autonomous_recovery_rate"],
+      "properties": {
+        "backend_questions": {"type": "integer", "minimum": 0},
+        "product_checkpoints": {"type": "integer", "minimum": 0},
+        "technical_owner_minutes": {"type": "number", "minimum": 0},
+        "applicable_journeys": {"type": "integer", "minimum": 0},
+        "passed_journeys": {"type": "integer", "minimum": 0},
+        "false_green_count": {"type": "integer", "minimum": 0},
+        "first_pass_focused": {"type": "string", "enum": ["PASS", "FAIL", "UNDETERMINED"]},
+        "autonomous_recovery_rate": {"type": ["number", "string"], "pattern": "^UNDETERMINED$", "minimum": 0, "maximum": 1}
+      }
+    },
+    "unresolved": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "screenshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "width", "height"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_sha", "head_sha", "diff_sha256", "branch", "evidence_class"],
+      "properties": {
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "diff_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "branch": {"type": "string", "minLength": 1},
+        "evidence_class": {"type": "string", "enum": ["fixture", "local_candidate", "hosted_ci", "live"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://administrateme.local/schemas/harness/review-report-v1.json",
+  "title": "AdministrateMe independent review report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "binding", "reviewer", "read_only", "scope", "findings", "unresolved_evidence", "conclusion"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,79}$"},
+    "binding": {"$ref": "#/$defs/binding"},
+    "reviewer": {"type": "string", "minLength": 1},
+    "read_only": {"type": "boolean", "const": true},
+    "scope": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {"type": "string", "enum": ["correctness", "privacy", "replay", "determinism", "surface", "failure_paths", "completeness", "release_boundary"]}
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "severity", "category", "path", "line", "summary", "evidence", "actionable"],
+        "properties": {
+          "finding_id": {"type": "string", "pattern": "^[A-Z]+-[0-9]{3}$"},
+          "severity": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "category": {"type": "string", "enum": ["correctness", "privacy", "replay", "determinism", "surface", "failure_paths", "completeness", "release_boundary"]},
+          "path": {"type": "string", "minLength": 1},
+          "line": {"type": "integer", "minimum": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string", "minLength": 1},
+          "actionable": {"type": "boolean"}
+        }
+      }
+    },
+    "unresolved_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "conclusion": {"type": "string", "enum": ["APPROVE", "CHANGES_REQUIRED", "UNDETERMINED"]}
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_sha", "head_sha", "diff_sha256", "branch", "evidence_class"],
+      "properties": {
+        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "diff_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "branch": {"type": "string", "minLength": 1},
+        "evidence_class": {"type": "string", "enum": ["fixture", "local_candidate", "hosted_ci", "live"]}
+      }
+    }
+  }
+}
