@@ -16,8 +16,10 @@ from bootstrap.secrets import secret_store
 from bootstrap.source_assessment_repair import (
     BaselineCounts,
     BaselineTarget,
+    PausedConsumerBaseline,
     SourceAssessmentRepairError,
     SourceAssessmentRepairPolicy,
+    hydrate_online_repair_diagnostics,
     load_repair_policy,
     offline_validate_repair_baseline,
     validate_declared_baseline,
@@ -25,9 +27,10 @@ from bootstrap.source_assessment_repair import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-ACTIVE_COMMIT = "2fede3f6a72f3ee6df99c0cefb7fca71471ff7fe"
+ACTIVE_COMMIT = "d181fad24ef488a71ce5568cc40fb81309cb3817"
 CANDIDATE_COMMIT = "a" * 40
 TENANT = "tenant-release-repair"
+FAILURE_REASON = "language_seam_IdempotencyConflict"
 
 
 def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
@@ -36,22 +39,25 @@ def _policy(source_id: str) -> SourceAssessmentRepairPolicy:
         required_active_commit=ACTIVE_COMMIT,
         observation_mode_required=True,
         expected_counts=BaselineCounts(
-            minimum_obligations=1, pending=0, missing=0, failed=1
+            minimum_obligations=1, pending=0, maximum_missing=0, failed=1
         ),
         targets=[
             BaselineTarget(
                 source_event_id=source_id,
-                expected_failure_reason="language_seam_OpenClawUnreachable",
+                expected_failure_reason=FAILURE_REASON,
             )
         ],
         expires_after_activation=True,
     )
 
 
-def _doctor() -> dict[str, object]:
+def _doctor(*, source_derived_launch_status: bool = False) -> dict[str, object]:
+    checks = [{"name": "source_assurance_terminal_dispositions", "ok": False}]
+    if source_derived_launch_status:
+        checks.insert(0, {"name": "launchd_and_process_state", "ok": False})
     return {
         "status": "failed",
-        "checks": [{"name": "source_assurance_terminal_dispositions", "ok": False}],
+        "checks": checks,
     }
 
 
@@ -84,9 +90,16 @@ def _diagnostics(
                     "failed": [
                         {
                             "event_id": source_id,
-                            "reason": "language_seam_OpenClawUnreachable",
+                            "reason": FAILURE_REASON,
                         }
                     ],
+                    "missing_summary": {
+                        "contract": "source-assurance-missing-summary-v1",
+                        "total_count": 0,
+                        "detail_limit": 20,
+                        "groups": [],
+                        "content_exposed": False,
+                    },
                     "content_exposed": False,
                     "watermark_event_id": watermark_event_id or source_id,
                     "freshness": {
@@ -178,11 +191,25 @@ def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
     policy = load_repair_policy(REPO_ROOT)
 
     assert policy.contract == "source-assessment-degraded-baseline-v2"
-    assert policy.expected_counts.minimum_obligations == 62_623
+    assert policy.required_active_commit == ("d181fad24ef488a71ce5568cc40fb81309cb3817")
+    assert policy.expected_counts.minimum_obligations == 63_610
     assert policy.expected_counts.pending == 0
-    assert policy.expected_counts.missing == 0
-    assert policy.expected_counts.failed == 4
-    assert len(policy.targets) == 4
+    assert policy.expected_counts.maximum_missing == 100
+    assert policy.expected_counts.failed == 5
+    assert len(policy.targets) == 5
+    assert {target.expected_failure_reason for target in policy.targets} == {
+        "language_seam_IdempotencyConflict",
+        "language_seam_OpenClawUnreachable",
+    }
+    assert policy.paused_consumer == PausedConsumerBaseline(
+        subscriber_id="pipeline:pipeline:noise_filtering",
+        consumer_version="20.0.0",
+        checkpoint_event_id="ev_01KZV3JKPE0000",
+        poison_event_id="ev_01KZV4FY0B0000",
+        consecutive_failures=5,
+        missing_event_type="messaging.received",
+        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+    )
 
 
 async def _seed(log: EventLog) -> tuple[str, str]:
@@ -210,7 +237,7 @@ async def _seed(log: EventLog) -> tuple[str, str]:
                 "extraction_state": "unavailable",
                 "extracted_at": "2026-08-11T16:00:01Z",
                 "assessment_outcome": "failed",
-                "reason_codes": ["language_seam_OpenClawUnreachable"],
+                "reason_codes": [FAILURE_REASON],
             },
         ),
         causation_id=source_id,
@@ -228,6 +255,24 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
         doctor=_doctor(),
         diagnostics=diagnostics,
     )
+    validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=_doctor(source_derived_launch_status=True),
+        diagnostics=diagnostics,
+    )
+
+    changed_doctor = _doctor(source_derived_launch_status=True)
+    changed_doctor["checks"].append(
+        {"name": "openclaw_compatibility_and_plugin_discovery", "ok": False}
+    )
+    with pytest.raises(SourceAssessmentRepairError, match="source-only"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=changed_doctor,
+            diagnostics=diagnostics,
+        )
 
     changed = json.loads(json.dumps(diagnostics))
     changed["capabilities"]["pipeline:another"] = {"state": "degraded"}
@@ -262,6 +307,238 @@ def test_declared_baseline_rejects_any_extra_degradation_or_failure_change() -> 
         )
 
 
+def test_declared_baseline_accepts_only_the_exact_bounded_paused_backlog() -> None:
+    failed_source_id = "ev_01PAUSED00000001"
+    checkpoint_event_id = "ev_01PAUSED00000002"
+    poison_event_id = "ev_01PAUSED00000003"
+    missing_event_id = "ev_01PAUSED00000004"
+    paused = PausedConsumerBaseline(
+        subscriber_id="pipeline:pipeline:noise_filtering",
+        consumer_version="20.0.0",
+        checkpoint_event_id=checkpoint_event_id,
+        poison_event_id=poison_event_id,
+        consecutive_failures=5,
+        missing_event_type="messaging.received",
+        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+    )
+    policy = _policy(failed_source_id).model_copy(
+        update={
+            "expected_counts": BaselineCounts(
+                minimum_obligations=2,
+                pending=0,
+                maximum_missing=2,
+                failed=1,
+            ),
+            "paused_consumer": paused,
+        }
+    )
+    diagnostics = _diagnostics(failed_source_id)
+    diagnostics["capabilities"]["pipeline:pipeline:noise_filtering"] = {
+        "state": "degraded",
+        "details": {
+            "version": "20.0.0",
+            "checkpoint_event_id": checkpoint_event_id,
+            "poison_event_id": poison_event_id,
+            "consecutive_failures": 5,
+        },
+    }
+    assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    assurance["counts"] = {
+        "obligations": 2,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 1,
+        "failed": 1,
+    }
+    assurance["missing"] = [
+        {
+            "event_id": missing_event_id,
+            "event_type": "messaging.received",
+            "mode": "candidate_assessment",
+            "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        }
+    ]
+    assurance["missing_summary"] = {
+        "contract": "source-assurance-missing-summary-v1",
+        "total_count": 1,
+        "detail_limit": 20,
+        "groups": [
+            {
+                "event_type": "messaging.received",
+                "mode": "candidate_assessment",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "count": 1,
+                "first_event_id": missing_event_id,
+                "last_event_id": missing_event_id,
+            }
+        ],
+        "content_exposed": False,
+    }
+    doctor = _doctor(source_derived_launch_status=True)
+    doctor["checks"].insert(
+        0, {"name": "required_reactive_pipeline_delivery", "ok": False}
+    )
+
+    snapshot = validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=doctor,
+        diagnostics=diagnostics,
+    )
+    assert snapshot["maximum_missing"] == 2
+    assert snapshot["counts"]["missing"] == 1
+    assert snapshot["paused_consumer"] == paused.model_dump(mode="json")
+
+    with pytest.raises(SourceAssessmentRepairError, match="source-only"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=_doctor(source_derived_launch_status=True),
+            diagnostics=diagnostics,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed["capabilities"]["pipeline:pipeline:noise_filtering"]["details"][
+        "poison_event_id"
+    ] = "ev_other_poison"
+    with pytest.raises(SourceAssessmentRepairError, match="paused consumer state"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed["capabilities"]["policy:source-assurance"]["details"]["missing"][0][
+        "event_type"
+    ] = "calendar.event_added"
+    with pytest.raises(SourceAssessmentRepairError, match="paused-consumer backlog"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
+    counts = changed["capabilities"]["policy:source-assurance"]["details"]["counts"]
+    counts["obligations"] = 4
+    counts["missing"] = 3
+    changed["capabilities"]["policy:source-assurance"]["details"]["missing"] *= 3
+    with pytest.raises(SourceAssessmentRepairError, match="counts differ"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+
+def test_declared_baseline_uses_complete_summary_beyond_detail_display_limit() -> None:
+    failed_source_id = "ev_01SUMMARY0000001"
+    checkpoint_event_id = "ev_01SUMMARY0000002"
+    poison_event_id = "ev_01SUMMARY0000003"
+    missing_ids = [f"ev_01SUMMARY{i:07d}" for i in range(4, 25)]
+    paused = PausedConsumerBaseline(
+        subscriber_id="pipeline:pipeline:noise_filtering",
+        consumer_version="20.0.0",
+        checkpoint_event_id=checkpoint_event_id,
+        poison_event_id=poison_event_id,
+        consecutive_failures=5,
+        missing_event_type="messaging.received",
+        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+    )
+    policy = _policy(failed_source_id).model_copy(
+        update={
+            "expected_counts": BaselineCounts(
+                minimum_obligations=22,
+                pending=0,
+                maximum_missing=100,
+                failed=1,
+            ),
+            "paused_consumer": paused,
+        }
+    )
+    diagnostics = _diagnostics(failed_source_id)
+    diagnostics["capabilities"]["pipeline:pipeline:noise_filtering"] = {
+        "state": "degraded",
+        "details": {
+            "version": "20.0.0",
+            "checkpoint_event_id": checkpoint_event_id,
+            "poison_event_id": poison_event_id,
+            "consecutive_failures": 5,
+        },
+    }
+    assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    assurance["counts"] = {
+        "obligations": 22,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 21,
+        "failed": 1,
+    }
+    assurance["missing"] = [
+        {
+            "event_id": event_id,
+            "event_type": "messaging.received",
+            "mode": "candidate_assessment",
+            "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        }
+        for event_id in missing_ids[:20]
+    ]
+    assurance["missing_summary"] = {
+        "contract": "source-assurance-missing-summary-v1",
+        "total_count": 21,
+        "detail_limit": 20,
+        "groups": [
+            {
+                "event_type": "messaging.received",
+                "mode": "candidate_assessment",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "count": 21,
+                "first_event_id": missing_ids[0],
+                "last_event_id": missing_ids[-1],
+            }
+        ],
+        "content_exposed": False,
+    }
+    doctor = _doctor(source_derived_launch_status=True)
+    doctor["checks"].insert(
+        0, {"name": "required_reactive_pipeline_delivery", "ok": False}
+    )
+
+    snapshot = validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=doctor,
+        diagnostics=diagnostics,
+    )
+    assert snapshot["counts"]["missing"] == 21
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed["capabilities"]["policy:source-assurance"]["details"]["missing"] = []
+    with pytest.raises(SourceAssessmentRepairError, match="summary is invalid"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed["capabilities"]["policy:source-assurance"]["details"]["missing_summary"][
+        "groups"
+    ][0]["reason"] = "projection_checkpoint_overdue"
+    with pytest.raises(SourceAssessmentRepairError, match="paused-consumer backlog"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+
 def test_declared_baseline_accepts_only_new_fully_settled_obligations() -> None:
     source_id = "ev_fixture_source"
     policy = _policy(source_id)
@@ -279,6 +556,7 @@ def test_declared_baseline_accepts_only_new_fully_settled_obligations() -> None:
 
     assert snapshot == {
         "minimum_obligations": 1,
+        "maximum_missing": 0,
         "counts": {
             "obligations": 10,
             "accounted": 10,
@@ -287,6 +565,14 @@ def test_declared_baseline_accepts_only_new_fully_settled_obligations() -> None:
             "failed": 1,
         },
         "failed_target_count": 1,
+        "paused_consumer": None,
+        "missing_summary": {
+            "contract": "source-assurance-missing-summary-v1",
+            "total_count": 0,
+            "detail_limit": 20,
+            "groups": [],
+            "content_exposed": False,
+        },
         "watermark_event_id": source_id,
         "content_exposed": False,
     }
@@ -445,6 +731,174 @@ def test_stopped_activation_rejects_post_validation_event_or_consumer_failure(
         )
 
 
+def test_stopped_activation_accepts_only_the_declared_poisoned_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment", production=False)
+    config = paths.instance_dir / "config"
+    events = paths.instance_dir / "events"
+    config.mkdir(parents=True)
+    events.mkdir(parents=True)
+    event_key = b"e" * 32
+    reference = secret_store(paths, test_mode=True).put("event-log", event_key)
+    (config / "secret-references.json").write_text(
+        json.dumps({"references": {"event_log": reference}}), encoding="utf-8"
+    )
+
+    async def seed() -> tuple[str, str, list[str]]:
+        log = EventLog(events / "events.db", event_key)
+        try:
+            failed_source_id, failed_assessment_id = await _seed(log)
+            missing_source_ids: list[str] = []
+            for index in range(21):
+                payload = dict(_source().payload)
+                payload["native_message_id"] = (
+                    f"release-repair-missing-source-{index:02d}"
+                )
+                missing_source_ids.append(
+                    await log.append(
+                        _source().model_copy(
+                            update={
+                                "event_at_ms": 1_786_420_000_002 + index,
+                                "idempotency_key": (
+                                    f"release-repair-missing-source-{index:02d}"
+                                ),
+                                "payload": payload,
+                            }
+                        )
+                    )
+                )
+            return failed_source_id, failed_assessment_id, missing_source_ids
+        finally:
+            await log.close()
+
+    failed_source_id, _failed_assessment_id, missing_source_ids = asyncio.run(seed())
+    _seed_healthy_consumer_health(paths)
+    checkpoint_db = events / "bus_checkpoints.db"
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "UPDATE bus_consumer_offsets SET checkpoint_event_id=?, "
+            "consecutive_failures=5, degraded=1, poison_event_id=?, "
+            "consumer_version='20.0.0' WHERE subscriber_id=?",
+            (
+                failed_source_id,
+                failed_source_id,
+                "pipeline:pipeline:noise_filtering",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    paused = PausedConsumerBaseline(
+        subscriber_id="pipeline:pipeline:noise_filtering",
+        consumer_version="20.0.0",
+        checkpoint_event_id=failed_source_id,
+        poison_event_id=failed_source_id,
+        consecutive_failures=5,
+        missing_event_type="messaging.received",
+        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+    )
+    policy = _policy(failed_source_id).model_copy(
+        update={
+            "expected_counts": BaselineCounts(
+                minimum_obligations=22,
+                pending=0,
+                maximum_missing=100,
+                failed=1,
+            ),
+            "paused_consumer": paused,
+        }
+    )
+    diagnostics = _diagnostics(
+        failed_source_id, watermark_event_id=missing_source_ids[-1]
+    )
+    diagnostics["capabilities"]["pipeline:pipeline:noise_filtering"] = {
+        "state": "degraded",
+        "details": {
+            "version": "20.0.0",
+            "checkpoint_event_id": failed_source_id,
+            "poison_event_id": failed_source_id,
+            "consecutive_failures": 5,
+        },
+    }
+    assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    assurance["counts"] = {
+        "obligations": 22,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 21,
+        "failed": 1,
+    }
+    assurance["missing"] = [
+        {
+            "event_id": event_id,
+            "event_type": "messaging.received",
+            "mode": "candidate_assessment",
+            "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        }
+        for event_id in missing_source_ids[:20]
+    ]
+    del assurance["missing_summary"]
+
+    diagnostics = hydrate_online_repair_diagnostics(
+        paths,
+        repository_root=REPO_ROOT,
+        diagnostics=diagnostics,
+        test_mode=True,
+    )
+    assert (
+        diagnostics["capabilities"]["policy:source-assurance"]["details"][
+            "missing_summary"
+        ]["total_count"]
+        == 21
+    )
+
+    evidence = offline_validate_repair_baseline(
+        paths,
+        repository_root=REPO_ROOT,
+        candidate_commit=CANDIDATE_COMMIT,
+        policy=policy,
+        diagnostics=diagnostics,
+        gateway_live_at_quiescence=True,
+        append_requests=False,
+        test_mode=True,
+    )
+    assert evidence["validated_targets"] == 1
+    assert evidence["stopped_log_snapshot"]["counts"]["missing"] == 21
+    assert evidence["stopped_log_snapshot"]["consumer_health"] == {
+        "pipeline_count": 1,
+        "projection_count": 1,
+        "unhealthy_count": 1,
+        "declared_paused_subscriber": "pipeline:pipeline:noise_filtering",
+        "content_exposed": False,
+    }
+
+    connection = sqlite3.connect(checkpoint_db)
+    try:
+        connection.execute(
+            "UPDATE bus_consumer_offsets SET poison_event_id='ev_wrong_poison' "
+            "WHERE subscriber_id=?",
+            ("pipeline:pipeline:noise_filtering",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(SourceAssessmentRepairError, match="consumer poison differs"):
+        offline_validate_repair_baseline(
+            paths,
+            repository_root=REPO_ROOT,
+            candidate_commit=CANDIDATE_COMMIT,
+            policy=policy,
+            diagnostics=diagnostics,
+            gateway_live_at_quiescence=True,
+            append_requests=False,
+            test_mode=True,
+        )
+
+
 def test_offline_activation_appends_only_exact_content_free_requests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -495,6 +949,7 @@ def test_offline_activation_appends_only_exact_content_free_requests(
         "pipeline_count": 1,
         "projection_count": 1,
         "unhealthy_count": 0,
+        "declared_paused_subscriber": None,
         "content_exposed": False,
     }
     assert evidence["stopped_log_snapshot"]["gateway_live_at_quiescence"] is True
@@ -520,7 +975,7 @@ def test_offline_activation_appends_only_exact_content_free_requests(
     changed_policy = _policy(source_id).model_copy(
         update={
             "expected_counts": BaselineCounts(
-                minimum_obligations=2, pending=0, missing=0, failed=1
+                minimum_obligations=2, pending=0, maximum_missing=0, failed=1
             )
         }
     )

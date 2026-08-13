@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import sqlcipher3
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.log import EventLog
@@ -103,6 +104,89 @@ async def test_checkpointed_source_without_assessment_is_missing_not_empty(
         assert accounted["counts"]["no_candidate"] == 1
     finally:
         await log.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_summary_accounts_for_rows_beyond_detail_display_limit(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "bounded-missing-detail.db", b"m" * 32)
+    try:
+        source_ids: list[str] = []
+        for index in range(21):
+            message = _message("tenant-missing-summary")
+            payload = {
+                **message.payload,
+                "native_message_id": f"source-assurance-message-{index:02d}",
+            }
+            source_ids.append(
+                await log.append(
+                    message.model_copy(
+                        update={
+                            "event_at_ms": message.event_at_ms + index,
+                            "idempotency_key": (
+                                f"source-assurance-message-{index:02d}"
+                            ),
+                            "payload": payload,
+                        }
+                    )
+                )
+            )
+
+        audit = await audit_source_assurance(
+            log,
+            repository_root=REPO_ROOT,
+            capabilities={
+                "pipeline:pipeline:noise_filtering": {
+                    "state": "degraded",
+                    "details": {"checkpoint_event_id": source_ids[0]},
+                }
+            },
+        )
+
+        assert audit["counts"]["missing"] == 21
+        assert len(audit["missing"]) == 20
+        assert audit["missing_summary"] == {
+            "contract": "source-assurance-missing-summary-v1",
+            "total_count": 21,
+            "detail_limit": 20,
+            "groups": [
+                {
+                    "event_type": "messaging.received",
+                    "mode": "candidate_assessment",
+                    "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                    "count": 21,
+                    "first_event_id": source_ids[0],
+                    "last_event_id": source_ids[-1],
+                }
+            ],
+            "content_exposed": False,
+        }
+    finally:
+        await log.close()
+
+
+@pytest.mark.asyncio
+async def test_event_log_read_only_connection_reads_but_cannot_append(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "read-only-event-log.db"
+    key = b"r" * 32
+    writable = EventLog(path, key)
+    try:
+        event_id = await writable.append(_message("tenant-read-only"))
+    finally:
+        await writable.close()
+
+    read_only = EventLog(path, key, read_only=True)
+    try:
+        assert await read_only.latest_event_id() == event_id
+        with pytest.raises(
+            sqlcipher3.DatabaseError, match="readonly|read-only|query only"
+        ):
+            await read_only.append(_message("tenant-read-only"))
+    finally:
+        await read_only.close()
 
 
 @pytest.mark.asyncio

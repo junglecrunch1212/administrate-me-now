@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_017_DEPLOYED_LIVE_VERIFIED
-verified_local_date: 2026-08-12
-verified_github_date: 2026-08-12
-branch: main
-candidate_commit_resolution: d181fad24ef488a71ce5568cc40fb81309cb3817
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/336
+gate_result: CO_018_RELEASE_ROLLED_BACK_FORWARD_REPAIR_CANDIDATE
+verified_local_date: 2026-08-13
+verified_github_date: 2026-08-13
+branch: codex/co018-release-race-repair
+candidate_commit_resolution: amended_after_e22c66e_local_gates_passed_pending_publish_and_review
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/339
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -16,6 +16,46 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
+
+## 2026-08-13 CO-018 guarded rollback and forward repair
+
+PR #338 merged as `5b6c140`, but it is not the active release. Guarded
+activation created an encrypted 0600 backup, switched through the reviewed
+updater, failed post-switch service/source-assurance Doctor, and restored
+`d181fad`. Four candidate-appended v21 assessments remain immutable with
+`language_seam_IdempotencyConflict`; observation stayed active and the
+provider-called terminal count remained zero. A later read-only snapshot found
+that restored v20 replay had reached one exact retained collision, persisted
+its normal five-attempt poison state, and paused later ordinary messages. One
+older allowlisted `language_seam_OpenClawUnreachable` assessment is also
+current.
+
+The follow-up candidate makes concurrent calls for one exact reviewed skill
+identity converge on the first durable `skill.call.recorded` result. A
+controlled regression reproduces the live race and now passes. The existing
+guarded source-repair mechanism is rebound to the exact rolled-back commit,
+five content-free targets, exact restored-v20 checkpoint/poison state,
+monotonic obligation floor, a bounded later-message backlog, and quiescence
+checks. The first published PR #339 head passed both hosted checks, but its
+four-target healthy-consumer baseline was superseded by this live drift before
+independent review. A later amended exact head `e22c66e` passed the 173-test
+focused slice, 1,706-test configured root suite, 63 strict acceptance tests,
+1,875 root/package aggregate tests, 60 bridge tests, static analysis, audits,
+performance, builds, isolation, clean install, backup/restore, and the pinned
+OpenClaw gates, but independent review rejected it because the 100-obligation
+exception could prove only 20 detail rows and AC-42 still named the old
+four-target contract. The current amendment retains the 20-row display bound,
+adds a complete content-free grouped backlog summary with query-only
+predecessor hydration and stopped-log recomputation, and updates AC-42 to the
+exact five-target paused-v20 contract. The amendment passes the 180-test
+focused slice, 1,709-test configured root suite, 63 strict acceptance tests,
+1,878 root/package aggregate tests, 60 bridge tests, 79-test macOS rehearsal,
+deterministic Gate 7 browser harness, lifecycle and invariant checks, static
+analysis, audits, performance, builds, isolation, clean install,
+backup/restore, and pinned OpenClaw gates. A query-only live preflight also
+validated the exact paused baseline and complete six-message backlog summary
+without changing live state. Publication, fresh hosted checks, independent
+review, and new exact-head release authority remain required.
 
 ## 2026-08-12 CO-018 local candidate
 

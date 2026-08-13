@@ -112,6 +112,7 @@ class SourceAssessmentRecoveryRequestedV1(BaseModel):
     source_event_id: str = Field(min_length=1, max_length=240)
     failed_assessment_event_id: str = Field(min_length=1, max_length=240)
     expected_failure_reason: Literal[
+        "language_seam_IdempotencyConflict",
         "language_seam_OpenClawTimeout",
         "language_seam_OpenClawUnreachable",
     ]

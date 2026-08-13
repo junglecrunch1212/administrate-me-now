@@ -27,6 +27,7 @@ from bootstrap.openclaw_tools import (
 from bootstrap.services import ServiceManager, source_assurance_terminal_evidence
 from bootstrap.source_assessment_repair import (
     SourceAssessmentRepairPolicy,
+    hydrate_online_repair_diagnostics,
     load_repair_policy,
     offline_validate_repair_baseline,
     validate_declared_baseline,
@@ -208,6 +209,12 @@ class UpgradeManager:
                 "declared source-assessment repair requires live runtime diagnostics"
             )
         try:
+            diagnostics = hydrate_online_repair_diagnostics(
+                self.paths,
+                repository_root=active_root,
+                diagnostics=diagnostics,
+                test_mode=self.test_mode,
+            )
             validate_declared_baseline(
                 policy,
                 active_commit=self._active_release_commit(),

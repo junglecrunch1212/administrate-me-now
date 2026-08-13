@@ -24,11 +24,13 @@ allowlists these emits to this file only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +40,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import IdempotencyConflict
 from adminme.lib.skill_runner.pack_loader import LoadedPack, load_pack
 
 if TYPE_CHECKING:
@@ -124,6 +127,21 @@ class SkillResult:
     duration_ms: int
 
 
+def _recorded_skill_result(event: dict[str, Any]) -> SkillResult:
+    """Return the canonical result stored for one reviewed invocation."""
+
+    payload = event["payload"]
+    return SkillResult(
+        output=dict(payload["outputs"]),
+        openclaw_invocation_id=payload.get("openclaw_invocation_id"),
+        provider=str(payload["provider"]),
+        input_tokens=payload.get("input_tokens"),
+        output_tokens=payload.get("output_tokens"),
+        cost_usd=payload.get("cost_usd"),
+        duration_ms=int(payload["duration_ms"]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # EventLog DI (matches 08b's ObservationManager pattern)
 # ---------------------------------------------------------------------------
@@ -151,6 +169,11 @@ class _Runtime:
     gateway_url: str = OPENCLAW_GATEWAY_URL
     gateway_token: str | None = field(default=None, repr=False)
     event_log: Any = None
+    invocation_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = field(
+        default_factory=weakref.WeakValueDictionary,
+        compare=False,
+        repr=False,
+    )
 
 
 _RUNTIME_OVERRIDE: _Runtime | None = None
@@ -601,7 +624,42 @@ async def run_skill(
     input_sensitivities: dict[str, str] | None = None,
     _runtime: _Runtime | None = None,
 ) -> SkillResult:
-    """Validate + invoke an OpenClaw skill. See module docstring."""
+    """Run one durable skill identity at a time inside the shared runtime."""
+
+    runtime = _runtime or _resolve_runtime()
+    invocation_identity = ctx.invocation_idempotency_key or ctx.triggering_event_id
+    if not invocation_identity:
+        return await _run_skill_unlocked(
+            skill_id,
+            inputs,
+            ctx,
+            input_sensitivities=input_sensitivities,
+            _runtime=runtime,
+        )
+    lock_key = ":".join((ctx.session.tenant_id, skill_id, invocation_identity))
+    lock = runtime.invocation_locks.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        runtime.invocation_locks[lock_key] = lock
+    async with lock:
+        return await _run_skill_unlocked(
+            skill_id,
+            inputs,
+            ctx,
+            input_sensitivities=input_sensitivities,
+            _runtime=runtime,
+        )
+
+
+async def _run_skill_unlocked(
+    skill_id: str,
+    inputs: dict,
+    ctx: SkillContext,
+    *,
+    input_sensitivities: dict[str, str] | None = None,
+    _runtime: _Runtime | None = None,
+) -> SkillResult:
+    """Validate and invoke after any exact-identity single-flight lock."""
     runtime = _runtime or _resolve_runtime()
 
     # Step 1 — load pack.
@@ -623,16 +681,7 @@ async def run_skill(
             ctx.session.tenant_id, idempotency_key
         )
         if prior is not None:
-            payload = prior["payload"]
-            return SkillResult(
-                output=dict(payload["outputs"]),
-                openclaw_invocation_id=payload.get("openclaw_invocation_id"),
-                provider=str(payload["provider"]),
-                input_tokens=payload.get("input_tokens"),
-                output_tokens=payload.get("output_tokens"),
-                cost_usd=payload.get("cost_usd"),
-                duration_ms=int(payload["duration_ms"]),
-            )
+            return _recorded_skill_result(prior)
         related = await runtime.event_log.get_by_causation(ctx.triggering_event_id)
         related_terminals = [
             event
@@ -876,20 +925,34 @@ async def run_skill(
 
     # Step 9 — emit skill.call.recorded with size-capped inputs.
     inputs_payload = _spill_inputs_if_large(runtime, inputs)
-    await _emit_recorded(
-        runtime,
-        ctx,
-        pack_id_str=pack_id_str,
-        pack_version=pack_version,
-        invocation_id=outcome.invocation_id,
-        inputs_payload=inputs_payload,
-        outputs=processed,
-        provider=chosen_provider,
-        input_tokens=outcome.input_tokens,
-        output_tokens=outcome.output_tokens,
-        cost_usd=outcome.cost_usd,
-        duration_ms=duration_ms,
-    )
+    try:
+        await _emit_recorded(
+            runtime,
+            ctx,
+            pack_id_str=pack_id_str,
+            pack_version=pack_version,
+            invocation_id=outcome.invocation_id,
+            inputs_payload=inputs_payload,
+            outputs=processed,
+            provider=chosen_provider,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
+            cost_usd=outcome.cost_usd,
+            duration_ms=duration_ms,
+        )
+    except IdempotencyConflict:
+        # Two exact invocations can both pass the initial lookup before either
+        # result is durable. The append-only log chooses the first writer. A
+        # losing concurrent caller must reuse that canonical result instead of
+        # turning a successful language assessment into a terminal failure.
+        if idempotency_key is None or runtime.event_log is None:
+            raise
+        recorded = await runtime.event_log.get_by_idempotency(
+            ctx.session.tenant_id, idempotency_key
+        )
+        if recorded is None or recorded.get("type") != "skill.call.recorded":
+            raise
+        return _recorded_skill_result(recorded)
 
     return SkillResult(
         output=processed,

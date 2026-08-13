@@ -20491,6 +20491,7 @@
         },
         "expected_failure_reason": {
           "enum": [
+            "language_seam_IdempotencyConflict",
             "language_seam_OpenClawTimeout",
             "language_seam_OpenClawUnreachable"
           ],

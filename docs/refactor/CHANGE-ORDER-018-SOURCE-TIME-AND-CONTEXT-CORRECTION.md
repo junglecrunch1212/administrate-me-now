@@ -1,9 +1,15 @@
 # Change Order 018 — Source-time and conservative context correction
 
-Status: amended again after independent review rejected exact head `93bc404`;
-the terminal-member-decision race is repaired and fresh complete supported
-local validation passes. Independent review, merge, and deployment remain
-pending.
+Status: PR #338 merged as `5b6c140`, but guarded activation rejected v21 and
+automatically restored `d181fad`. The release exposed a concurrent exact-skill-
+result append race that produced four terminal `language_seam_IdempotencyConflict`
+assessments. While that forward repair was being validated, the restored v20
+consumer reached another retained replay collision, poisoned at exact source
+`ev_01KZV4FY0B0000`, and accumulated a bounded post-checkpoint message
+backlog; one older allowlisted `language_seam_OpenClawUnreachable` assessment
+also remains current. A forward-only repair candidate is in progress;
+deployment remains incomplete and requires fresh independent review and
+exact-head authority.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,
@@ -93,6 +99,30 @@ source fact, sender identity, provider account, or household name is wrong.
   followed by duplicate or reopened review work;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
+- Concurrent calls with the same reviewed skill invocation identity converge
+  on the append-only log's first recorded result. A losing exact-result append
+  re-reads and returns that canonical result instead of converting a successful
+  replay into a terminal language failure.
+- The guarded source-repair exception is rebound to the exact rolled-back
+  `d181fad` baseline, the four content-free release-created
+  `language_seam_IdempotencyConflict` targets, and one exact allowlisted
+  `language_seam_OpenClawUnreachable` target. It also binds the restored
+  v20 consumer's exact version, checkpoint, poison event, and five-failure
+  threshold. Up to 100 ordinary `messaging.received` obligations may remain
+  behind that exact poison while review proceeds; every such missing record
+  must be later than the poison and carry only the canonical
+  after-checkpoint/grace reason. Source assurance keeps its 20-row diagnostic
+  display bound and adds a content-free all-record count/range summary; when
+  the predecessor does not emit that additive summary, the candidate
+  controller recomputes it through a query-only encrypted-log connection at
+  the predecessor's exact diagnostic watermark. The stopped audit recomputes
+  the same summary independently. It requires observation mode, zero pending,
+  no unrelated degradation, stopped-consumer and Gateway quiescence proof,
+  and expires after activation. Doctor may additionally report
+  `required_reactive_pipeline_delivery` and
+  `launchd_and_process_state` only when they match that exact paused-consumer
+  and source-assurance state; any other failed Doctor check or degraded
+  capability still rejects activation.
 
 ## Classification
 
@@ -105,6 +135,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
 | Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. An unchanged context-free fallback stays pending; a contextualized fallback with stale context is replaced under a distinct replay-versioned proposal identity so its deterministic core remains reviewable. |
+| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the five declared targets receive linked recovery requests. The exact restored-v20 poison and bounded later message backlog are admitted only for candidate v21 settlement, with complete content-free backlog proof beyond the 20-row display bound. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider
@@ -119,6 +150,13 @@ receipts already appended. Older schema versions remain registered and
 readable. The older consumer ignores new correction events; a later v21 replay
 reapplies them. Because rollback can reintroduce weak context assembly, it is
 operationally compatible but not a correctness-equivalent steady state.
+The first guarded activation proved that selector rollback does not erase
+events already appended by a candidate. Its four failed v21 assessments remain
+immutable under `d181fad`; the restored v20 replay subsequently reached the
+exact declared poison and the older transient target remains failed. The
+follow-up must repair all five forward through the typed recovery contract and
+settle the bounded later backlog rather than restoring an older event-log
+snapshot or editing a checkpoint.
 
 ## Acceptance evidence
 
