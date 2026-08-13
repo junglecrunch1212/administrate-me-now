@@ -111,9 +111,14 @@ source fact, sender identity, provider account, or household name is wrong.
   threshold. Up to 100 ordinary `messaging.received` obligations may remain
   behind that exact poison while review proceeds; every such missing record
   must be later than the poison and carry only the canonical
-  after-checkpoint/grace reason. It requires observation mode, zero pending,
-  no unrelated degradation, stopped-consumer and Gateway quiescence proof, and
-  expires after activation. Doctor may additionally report
+  after-checkpoint/grace reason. Source assurance keeps its 20-row diagnostic
+  display bound and adds a content-free all-record count/range summary; when
+  the predecessor does not emit that additive summary, the candidate
+  controller recomputes it through a query-only encrypted-log connection at
+  the predecessor's exact diagnostic watermark. The stopped audit recomputes
+  the same summary independently. It requires observation mode, zero pending,
+  no unrelated degradation, stopped-consumer and Gateway quiescence proof,
+  and expires after activation. Doctor may additionally report
   `required_reactive_pipeline_delivery` and
   `launchd_and_process_state` only when they match that exact paused-consumer
   and source-assurance state; any other failed Doctor check or degraded
@@ -130,7 +135,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
 | Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. An unchanged context-free fallback stays pending; a contextualized fallback with stale context is replaced under a distinct replay-versioned proposal identity so its deterministic core remains reviewable. |
-| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the five declared targets receive linked recovery requests. The exact restored-v20 poison and bounded later message backlog are admitted only for candidate v21 settlement. |
+| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the five declared targets receive linked recovery requests. The exact restored-v20 poison and bounded later message backlog are admitted only for candidate v21 settlement, with complete content-free backlog proof beyond the 20-row display bound. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider

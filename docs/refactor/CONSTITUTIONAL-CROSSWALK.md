@@ -566,9 +566,12 @@ by the rejected CO-018 activation, plus one exact older allowlisted transient
 failure, are recovered only through an exact, observation-only, release-scoped
 request set. The exception binds the rolled-back commit and original obligation
 floor, exact failure set, exact restored-v20 checkpoint/poison state, at most
-100 later message obligations behind that poison, every other stopped consumer
-healthy, and live Gateway quiescence. No checkpoint is edited and no unrelated
-missing type, reason, Doctor failure, or degraded capability is admitted.
+100 later message obligations behind that poison, an all-record content-free
+backlog summary beyond the 20-row display bound, every other stopped consumer
+healthy, and live Gateway quiescence. An older predecessor's summary is
+recomputed query-only at its exact diagnostic watermark, and the stopped audit
+recomputes it independently. No checkpoint is edited and no unrelated missing
+type, reason, Doctor failure, or degraded capability is admitted.
 
 ## Source coverage index
 

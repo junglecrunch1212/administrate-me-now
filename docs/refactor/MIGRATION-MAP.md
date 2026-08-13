@@ -11,9 +11,13 @@ those four exact failures for guarded linked recovery. During validation, restor
 state, and paused later message assessment; one older allowlisted
 `OpenClawUnreachable` assessment also remains current. The amended exception
 therefore binds all five exact failure targets plus the exact v20
-checkpoint/poison state and a bounded later-`messaging.received` backlog. This
-is a **HARDEN/FORWARD-REPAIR LOCAL CANDIDATE**; it performs no checkpoint edit,
-source rewrite, event deletion, provider write, or runtime migration.
+checkpoint/poison state and a bounded later-`messaging.received` backlog. The
+20-row diagnostic display remains bounded while an additive content-free
+all-record summary proves the complete backlog; the candidate can hydrate that
+summary from the older predecessor at its exact watermark through a query-only
+encrypted-log connection, and the stopped audit recomputes it independently.
+This is a **HARDEN/FORWARD-REPAIR LOCAL CANDIDATE**; it performs no checkpoint
+edit, source rewrite, event deletion, provider write, or runtime migration.
 
 CO-018 update (2026-08-12): source-time and message-context correctness is a
 **MODERNIZE/SUPERSEDE LOCAL CANDIDATE**. Gmail advances from v1.1.1 to v1.3.0 and emits

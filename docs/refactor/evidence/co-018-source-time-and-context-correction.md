@@ -7,10 +7,15 @@ Guarded activation failed its post-switch Doctor and automatically restored
 active release `d181fad`. The merged release is not active. A forward-only
 repair candidate now has a failing-then-passing concurrency regression,
 focused source-repair proof, complete supported local validation, and passing
-hosted checks on its first published head. A later read-only live preflight
-found exact baseline drift described below, so that head is superseded and
-fresh hosted checks plus independent review remain pending. No provider-called
-terminal effect occurred.
+hosted checks. Independent review rejected exact head `e22c66e`: its repair
+validator could see only the 20 retained detail rows despite allowing up to
+100 missing obligations, and AC-42 still described the superseded four-target
+healthy-consumer exception. The amendment adds an all-record content-free
+summary, query-only predecessor hydration, independent stopped-log
+recomputation, and the corrected five-target paused-consumer acceptance text.
+The amended candidate passes complete local validation; hosted checks and
+independent exact-head review remain pending. No provider-called terminal
+effect occurred.
 
 ## Guarded activation failure and preserved rollback evidence
 
@@ -54,8 +59,13 @@ terminal effect occurred.
   v20 checkpoint/poison/failure state, zero pending, and no unrelated
   degradation. It admits at most 100 later `messaging.received` obligations
   carrying only the canonical after-checkpoint/grace missing reason. The
-  stopped audit requires that same single poisoned worker, every other durable
-  consumer healthy, an unchanged event watermark, and Gateway-live quiescence.
+  20-row detail display is now paired with an all-record content-free summary
+  of type, obligation mode, reason, count, and first/last event IDs. The
+  candidate hydrates that summary from the older predecessor through a
+  query-only encrypted-log connection at the exact live watermark. The stopped
+  audit recomputes it and requires that same single poisoned worker, every
+  other durable consumer healthy, an unchanged event watermark, and
+  Gateway-live quiescence.
   Doctor's reactive-pipeline, aggregate launchd, and source-assurance failures
   are permitted only as that exact declared combination; every other Doctor or
   capability failure remains fatal.
@@ -63,7 +73,27 @@ terminal effect occurred.
   remains zero. No member decision, canonical object, external provider write,
   credential, permission, runtime baseline, or provider enrollment changed.
 
-## Forward-repair validation
+## Amended-candidate validation
+
+- Focused change-path slice: 180 passed.
+- Configured root suite: 1,709 passed.
+- Strict acceptance: 63 passed.
+- Complete aggregate: PASS with 1,878 root/package tests and 60 bridge tests;
+  Ruff lint/format, mypy, Pyright, dependency audits, performance, builds,
+  architecture-negative checks, clean install, tenant isolation,
+  backup/restore, pinned OpenClaw contract/17 tests/build/audit, shell checks,
+  and diff checks all passed.
+- Lifecycle catalog freshness, repository invariants, 79-test Apple-silicon
+  macOS rehearsal, and the deterministic Gate 7 browser harness passed.
+- A content-free query-only live preflight against active `d181fad` validated
+  observation mode, the exact paused v20 consumer, the five declared failures,
+  zero pending, 63,616 obligations, and all six later missing messages in one
+  canonical summary group. No live state was modified.
+
+## Rejected-head forward-repair validation
+
+These receipts belong to rejected exact head `e22c66e`; they are retained as
+history and do not validate the amended candidate.
 
 - Focused change-path slice: 173 passed.
 - Configured root suite: 1,706 passed.

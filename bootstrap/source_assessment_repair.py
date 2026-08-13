@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import sqlite3
@@ -31,6 +32,20 @@ _SOURCE_DERIVED_CAPABILITIES = frozenset(
         "policy:source-assurance",
         "product:member",
         "surface:triage-processing",
+    }
+)
+_MISSING_DETAIL_LIMIT = 20
+_MISSING_SUMMARY_KEYS = frozenset(
+    {"contract", "total_count", "detail_limit", "groups", "content_exposed"}
+)
+_MISSING_GROUP_KEYS = frozenset(
+    {
+        "event_type",
+        "mode",
+        "reason",
+        "count",
+        "first_event_id",
+        "last_event_id",
     }
 )
 
@@ -189,6 +204,119 @@ def _assurance_details(diagnostics: dict[str, Any]) -> dict[str, Any]:
     return (
         (diagnostics.get("capabilities") or {}).get("policy:source-assurance") or {}
     ).get("details") or {}
+
+
+def _fallback_missing_summary(
+    missing: list[dict[str, Any]],
+) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in missing:
+        event_id = str(item.get("event_id") or "")
+        key = (
+            str(item.get("event_type") or ""),
+            str(item.get("mode") or ""),
+            str(item.get("reason") or ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "event_type": key[0],
+                "mode": key[1],
+                "reason": key[2],
+                "count": 0,
+                "first_event_id": event_id,
+                "last_event_id": event_id,
+            },
+        )
+        group["count"] += 1
+        group["first_event_id"] = min(group["first_event_id"], event_id)
+        group["last_event_id"] = max(group["last_event_id"], event_id)
+    return {
+        "contract": "source-assurance-missing-summary-v1",
+        "total_count": len(missing),
+        "detail_limit": _MISSING_DETAIL_LIMIT,
+        "groups": [groups[key] for key in sorted(groups)],
+        "content_exposed": False,
+    }
+
+
+def _validate_missing_backlog(
+    policy: SourceAssessmentRepairPolicy,
+    *,
+    details: dict[str, Any],
+    missing_count: int,
+) -> dict[str, Any]:
+    missing = [item for item in details.get("missing") or [] if isinstance(item, dict)]
+    summary = details.get("missing_summary")
+    if not isinstance(summary, dict):
+        if len(missing) != missing_count:
+            raise SourceAssessmentRepairError(
+                "complete missing-source summary is unavailable"
+            )
+        summary = _fallback_missing_summary(missing)
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    try:
+        summary_total = int(summary.get("total_count", -1))
+        detail_limit = int(summary.get("detail_limit", -1))
+        group_counts = [
+            int(group.get("count", -1)) for group in groups if isinstance(group, dict)
+        ]
+        group_total = sum(group_counts)
+    except (TypeError, ValueError) as exc:
+        raise SourceAssessmentRepairError("missing-source summary is invalid") from exc
+    if (
+        summary.get("contract") != "source-assurance-missing-summary-v1"
+        or frozenset(summary) != _MISSING_SUMMARY_KEYS
+        or summary.get("content_exposed") is not False
+        or summary_total != missing_count
+        or detail_limit != _MISSING_DETAIL_LIMIT
+        or len(groups) != sum(isinstance(group, dict) for group in groups)
+        or any(frozenset(group) != _MISSING_GROUP_KEYS for group in groups)
+        or any(count < 1 for count in group_counts)
+        or group_total != missing_count
+        or len(missing) != min(missing_count, detail_limit)
+    ):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    if missing_count and policy.paused_consumer is None:
+        raise SourceAssessmentRepairError(
+            "missing sources require an exact paused-consumer declaration"
+        )
+    if policy.paused_consumer is None:
+        if groups:
+            raise SourceAssessmentRepairError("missing-source summary is invalid")
+        return summary
+
+    expected = policy.paused_consumer
+    if len(groups) != (1 if missing_count else 0):
+        raise SourceAssessmentRepairError("missing-source summary is invalid")
+    detail_event_ids = [str(item.get("event_id") or "") for item in missing]
+    if detail_event_ids != sorted(set(detail_event_ids)):
+        raise SourceAssessmentRepairError("missing-source details are invalid")
+    for item in [*missing, *groups]:
+        first_event_id = str(item.get("first_event_id") or item.get("event_id") or "")
+        last_event_id = str(item.get("last_event_id") or first_event_id)
+        if (
+            item.get("event_type") != expected.missing_event_type
+            or item.get("mode") != "candidate_assessment"
+            or item.get("reason") != expected.missing_reason
+            or first_event_id <= expected.poison_event_id
+            or last_event_id < first_event_id
+        ):
+            raise SourceAssessmentRepairError(
+                "missing sources differ from the declared paused-consumer backlog"
+            )
+    if groups and missing:
+        group = groups[0]
+        if (
+            group["first_event_id"] != detail_event_ids[0]
+            or str(group["last_event_id"]) < detail_event_ids[-1]
+        ):
+            raise SourceAssessmentRepairError(
+                "missing-source summary differs from displayed details"
+            )
+    return summary
 
 
 def _validate_paused_consumer(
@@ -355,27 +483,11 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "failed source ids or reasons differ from the declared repair baseline"
         )
-    missing = [item for item in details.get("missing") or [] if isinstance(item, dict)]
-    if len(missing) != actual_counts["missing"]:
-        raise SourceAssessmentRepairError(
-            "missing source detail count differs from the declared repair baseline"
-        )
-    if missing and policy.paused_consumer is None:
-        raise SourceAssessmentRepairError(
-            "missing sources require an exact paused-consumer declaration"
-        )
-    if policy.paused_consumer is not None:
-        unexpected_missing = [
-            item
-            for item in missing
-            if item.get("event_type") != policy.paused_consumer.missing_event_type
-            or item.get("reason") != policy.paused_consumer.missing_reason
-            or str(item.get("event_id") or "") <= policy.paused_consumer.poison_event_id
-        ]
-        if unexpected_missing:
-            raise SourceAssessmentRepairError(
-                "missing sources differ from the declared paused-consumer backlog"
-            )
+    missing_summary = _validate_missing_backlog(
+        policy,
+        details=details,
+        missing_count=actual_counts["missing"],
+    )
     return {
         "minimum_obligations": expected.minimum_obligations,
         "maximum_missing": expected.maximum_missing,
@@ -386,6 +498,7 @@ def validate_declared_baseline(
             if policy.paused_consumer is not None
             else None
         ),
+        "missing_summary": missing_summary,
         "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }
@@ -398,6 +511,95 @@ def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
         for key, value in capabilities.items()
         if str(key).startswith(("pipeline:", "projection:"))
     }
+
+
+async def _hydrate_online_missing_summary(
+    paths: DeploymentPaths,
+    *,
+    repository_root: Path,
+    diagnostics: dict[str, Any],
+    test_mode: bool,
+) -> dict[str, Any]:
+    details = _assurance_details(diagnostics)
+    counts = details.get("counts") or {}
+    summary = details.get("missing_summary")
+    try:
+        missing_count = int(counts.get("missing", -1))
+        summary_count = (
+            int(summary.get("total_count", -1)) if isinstance(summary, dict) else -1
+        )
+    except (TypeError, ValueError):
+        missing_count = -1
+        summary_count = -1
+    if (
+        isinstance(summary, dict)
+        and summary.get("contract") == "source-assurance-missing-summary-v1"
+        and summary_count == missing_count
+    ):
+        return diagnostics
+
+    watermark_event_id = details.get("watermark_event_id")
+    if not isinstance(watermark_event_id, str) or not watermark_event_id:
+        raise SourceAssessmentRepairError(
+            "source-assurance evidence has no exact event watermark"
+        )
+    references = json.loads(
+        (paths.instance_dir / "config" / "secret-references.json").read_text("utf-8")
+    )["references"]
+    event_key = secret_store(paths, test_mode=test_mode).get(references["event_log"])
+    event_log = EventLog(
+        paths.instance_dir / "events" / "events.db",
+        event_key,
+        read_only=True,
+    )
+    try:
+        audit = await audit_source_assurance(
+            event_log,
+            repository_root=repository_root,
+            capabilities=_capability_snapshot(diagnostics),
+            through_event_id=watermark_event_id,
+        )
+    finally:
+        await event_log.close()
+    live_counts = {
+        name: int(counts.get(name, -1))
+        for name in ("obligations", "accounted", "pending", "missing", "failed")
+    }
+    audited_counts = {
+        name: int((audit.get("counts") or {}).get(name, -1))
+        for name in ("obligations", "accounted", "pending", "missing", "failed")
+    }
+    if (
+        audit.get("watermark_event_id") != watermark_event_id
+        or audited_counts != live_counts
+        or audit.get("content_exposed") is not False
+    ):
+        raise SourceAssessmentRepairError(
+            "candidate missing-source audit differs from live source assurance"
+        )
+    hydrated = copy.deepcopy(diagnostics)
+    hydrated_details = _assurance_details(hydrated)
+    hydrated_details["missing_summary"] = audit["missing_summary"]
+    return hydrated
+
+
+def hydrate_online_repair_diagnostics(
+    paths: DeploymentPaths,
+    *,
+    repository_root: Path,
+    diagnostics: dict[str, Any],
+    test_mode: bool,
+) -> dict[str, Any]:
+    """Add an exact all-row backlog summary at the live diagnostic watermark."""
+
+    return asyncio.run(
+        _hydrate_online_missing_summary(
+            paths,
+            repository_root=repository_root,
+            diagnostics=diagnostics,
+            test_mode=test_mode,
+        )
+    )
 
 
 def _stopped_consumer_health(
@@ -703,6 +905,7 @@ __all__ = [
     "POLICY_RELATIVE_PATH",
     "SourceAssessmentRepairError",
     "SourceAssessmentRepairPolicy",
+    "hydrate_online_repair_diagnostics",
     "load_repair_policy",
     "offline_validate_repair_baseline",
     "validate_declared_baseline",

@@ -7,7 +7,7 @@ gate_result: CO_018_RELEASE_ROLLED_BACK_FORWARD_REPAIR_CANDIDATE
 verified_local_date: 2026-08-13
 verified_github_date: 2026-08-13
 branch: codex/co018-release-race-repair
-candidate_commit_resolution: amended_after_live_baseline_drift_pending_checks_and_review
+candidate_commit_resolution: amended_after_e22c66e_local_gates_passed_pending_publish_and_review
 pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/339
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
@@ -38,12 +38,24 @@ five content-free targets, exact restored-v20 checkpoint/poison state,
 monotonic obligation floor, a bounded later-message backlog, and quiescence
 checks. The first published PR #339 head passed both hosted checks, but its
 four-target healthy-consumer baseline was superseded by this live drift before
-independent review. The amended head passes the 173-test focused slice,
-1,706-test configured root suite, 63 strict acceptance tests, 1,875
-root/package aggregate tests, 60 bridge tests, static analysis, audits,
+independent review. A later amended exact head `e22c66e` passed the 173-test
+focused slice, 1,706-test configured root suite, 63 strict acceptance tests,
+1,875 root/package aggregate tests, 60 bridge tests, static analysis, audits,
 performance, builds, isolation, clean install, backup/restore, and the pinned
-OpenClaw gates. Fresh hosted checks, independent review, and new exact-head
-release authority remain required.
+OpenClaw gates, but independent review rejected it because the 100-obligation
+exception could prove only 20 detail rows and AC-42 still named the old
+four-target contract. The current amendment retains the 20-row display bound,
+adds a complete content-free grouped backlog summary with query-only
+predecessor hydration and stopped-log recomputation, and updates AC-42 to the
+exact five-target paused-v20 contract. The amendment passes the 180-test
+focused slice, 1,709-test configured root suite, 63 strict acceptance tests,
+1,878 root/package aggregate tests, 60 bridge tests, 79-test macOS rehearsal,
+deterministic Gate 7 browser harness, lifecycle and invariant checks, static
+analysis, audits, performance, builds, isolation, clean install,
+backup/restore, and pinned OpenClaw gates. A query-only live preflight also
+validated the exact paused baseline and complete six-message backlog summary
+without changing live state. Publication, fresh hosted checks, independent
+review, and new exact-head release authority remain required.
 
 ## 2026-08-12 CO-018 local candidate
 
