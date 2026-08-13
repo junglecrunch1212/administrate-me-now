@@ -21,6 +21,7 @@ from .core import (
     GATE7_MIN_SCREENSHOTS,
     HarnessError,
     _validate_browser_evidence,
+    binding,
     clean_environment,
     ensure_ephemeral_run_dir,
     load_json,
@@ -198,6 +199,10 @@ def run_check(
     ensure_ephemeral_run_dir(run_dir, root)
     logs = run_dir / "check-logs"
     logs.mkdir(exist_ok=True)
+    receipt_path = run_dir / "check-receipts" / f"{spec.tier}-{spec.check_id}.json"
+    receipt_path.parent.mkdir(exist_ok=True)
+    receipt_path.unlink(missing_ok=True)
+    expected_binding = _assert_current_candidate_binding(root, run_dir, "before")
     started = utc_now()
     begin = time.monotonic()
     process = subprocess.run(
@@ -210,6 +215,12 @@ def run_check(
         env=clean_environment(environment),
     )
     duration = time.monotonic() - begin
+    _assert_current_candidate_binding(
+        root,
+        run_dir,
+        "after",
+        expected=expected_binding,
+    )
     log_path = logs / f"{spec.tier}-{spec.check_id}.log"
     log_path.write_text(
         "\n".join(
@@ -236,11 +247,9 @@ def run_check(
         "duration_seconds": round(duration, 3),
         "evidence_class": "local_candidate",
     }
-    receipt_path = run_dir / "check-receipts" / f"{spec.tier}-{spec.check_id}.json"
-    receipt_path.parent.mkdir(exist_ok=True)
     receipt_value = {
         "schema_version": 1,
-        "binding": _current_run_binding(run_dir),
+        "binding": expected_binding,
         "check": check,
         "log": {
             "path": log_path.relative_to(run_dir).as_posix(),
@@ -685,6 +694,33 @@ def _current_run_binding(run_dir: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise HarnessError("run outcome binding is invalid")
     return value
+
+
+def _assert_current_candidate_binding(
+    root: Path,
+    run_dir: Path,
+    phase: str,
+    *,
+    expected: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fail closed if a check is not running against its declared candidate."""
+
+    verification_path = run_dir / "verification-report.json"
+    if not verification_path.is_file():
+        raise HarnessError("run lacks verification-report.json task scope")
+    changed_files = load_json(verification_path).get("changed_files")
+    if not isinstance(changed_files, list) or not all(
+        isinstance(path, str) for path in changed_files
+    ):
+        raise HarnessError("run verification task scope is invalid")
+    declared = expected or _current_run_binding(run_dir)
+    current = binding(root, changed_files)
+    if current != declared:
+        raise HarnessError(
+            f"candidate binding changed {phase} check execution; "
+            "refresh the run and rerun every check"
+        )
+    return current
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:

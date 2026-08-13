@@ -17,6 +17,7 @@ from scripts.harness.checks import (
     compare_browser_evidence,
     focused_checks,
     run_browser,
+    run_check,
     run_tier,
 )
 from scripts.harness.baseline_navigation import BASELINE_TEST
@@ -43,6 +44,9 @@ def _bind_browser_run(run_dir: Path, *directories: Path) -> None:
     current = binding(repository_root(), [])
     (run_dir / "outcome-contract.json").write_text(
         json.dumps({"binding": current}), encoding="utf-8"
+    )
+    (run_dir / "verification-report.json").write_text(
+        json.dumps({"changed_files": []}), encoding="utf-8"
     )
     for directory in directories:
         (directory / "harness-binding.json").write_text(
@@ -189,6 +193,77 @@ def test_detached_checkout_binding_has_exact_nonempty_identity(tmp_path: Path) -
 
     assert candidate_branch(tmp_path) == f"detached@{head_sha}"
     assert binding(tmp_path, ["fixture.txt"])["branch"] == f"detached@{head_sha}"
+
+
+def _bound_check_fixture(root: Path, run_dir: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=root,
+        check=True,
+    )
+    (root / "candidate.txt").write_text("bound\n", encoding="utf-8")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head_sha],
+        cwd=root,
+        check=True,
+    )
+    run_dir.mkdir()
+    current = binding(root, ["candidate.txt"])
+    (run_dir / "outcome-contract.json").write_text(
+        json.dumps({"binding": current}), encoding="utf-8"
+    )
+    (run_dir / "verification-report.json").write_text(
+        json.dumps({"changed_files": ["candidate.txt"]}), encoding="utf-8"
+    )
+
+
+def test_check_refuses_stale_binding_before_command_execution(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    run_dir = tmp_path / "administrateme-harness-stale-check"
+    root.mkdir()
+    _bound_check_fixture(root, run_dir)
+    (root / "candidate.txt").write_text("stale\n", encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="changed before check execution"):
+        run_check(
+            root,
+            run_dir,
+            CheckSpec("stale", "static", "touch command-ran"),
+        )
+
+    assert not (root / "command-ran").exists()
+    assert not (run_dir / "check-receipts/static-stale.json").exists()
+
+
+def test_check_refuses_binding_changed_during_command(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    run_dir = tmp_path / "administrateme-harness-mid-check"
+    root.mkdir()
+    _bound_check_fixture(root, run_dir)
+
+    with pytest.raises(HarnessError, match="changed after check execution"):
+        run_check(
+            root,
+            run_dir,
+            CheckSpec(
+                "mid-check",
+                "static",
+                "printf 'changed\\n' > candidate.txt",
+            ),
+        )
+
+    assert not (run_dir / "check-receipts/static-mid-check.json").exists()
 
 
 def test_committed_candidate_diff_binds_content_and_declared_path_scope(
