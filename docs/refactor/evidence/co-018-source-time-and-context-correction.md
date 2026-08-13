@@ -6,8 +6,10 @@ Status: PR #338 merged at reviewed head `ebefb5c` as merge commit `5b6c140`.
 Guarded activation failed its post-switch Doctor and automatically restored
 active release `d181fad`. The merged release is not active. A forward-only
 repair candidate now has a failing-then-passing concurrency regression,
-focused source-repair proof, and complete supported local validation.
-Independent review and hosted checks remain pending. No provider-called
+focused source-repair proof, complete supported local validation, and passing
+hosted checks on its first published head. A later read-only live preflight
+found exact baseline drift described below, so that head is superseded and
+fresh hosted checks plus independent review remain pending. No provider-called
 terminal effect occurred.
 
 ## Guarded activation failure and preserved rollback evidence
@@ -35,28 +37,38 @@ terminal effect occurred.
   every losing exact concurrent caller. The regression failed before the code
   change and passes afterward; the widened wrapper, pipeline, recovery,
   updater/rollback, runtime, macOS operations, and production context journey
-  slice passes 169 tests. The shared-runtime case proves one model request;
+  slice passes 173 tests. The shared-runtime case proves one model request;
   the separate-runtime case proves append-boundary convergence.
 - Rollback did not and must not delete candidate-appended events. The four
   failures are therefore declared for forward recovery through the existing
-  typed request/v4 replacement contract. The release exception is bound to
-  active commit `d181fad`, a 63,610-obligation floor, the exact four source IDs
-  and exact failure reason, observation mode, settled source accounting, no
-  unrelated degradation, stopped-consumer health, and Gateway-live quiescence.
-  The live predecessor also reports `launchd_and_process_state` because its
-  aggregate runtime status derives from source assurance. The validator permits
-  that paired check only with ready diagnostics and the exact source-derived
-  capability set; every unrelated Doctor or capability failure remains fatal.
+  typed request/v4 replacement contract.
+- During candidate validation, restored generation 20 advanced to exact source
+  `ev_01KZV4FY0B0000`, repeated an append-only replay collision five times,
+  and persisted its normal poison state at checkpoint
+  `ev_01KZV3JKPE0000`. One older source remains failed with the already
+  allowlisted `language_seam_OpenClawUnreachable` reason, and new ordinary
+  messages accumulate behind the paused consumer. The live readiness document
+  remains available and content-free; observation remains active.
+- The amended release exception is bound to active commit `d181fad`, the
+  63,610-obligation floor, all five exact failed source IDs/reasons, the exact
+  v20 checkpoint/poison/failure state, zero pending, and no unrelated
+  degradation. It admits at most 100 later `messaging.received` obligations
+  carrying only the canonical after-checkpoint/grace missing reason. The
+  stopped audit requires that same single poisoned worker, every other durable
+  consumer healthy, an unchanged event watermark, and Gateway-live quiescence.
+  Doctor's reactive-pipeline, aggregate launchd, and source-assurance failures
+  are permitted only as that exact declared combination; every other Doctor or
+  capability failure remains fatal.
 - Observation has never been disabled and the provider-called terminal count
   remains zero. No member decision, canonical object, external provider write,
   credential, permission, runtime baseline, or provider enrollment changed.
 
 ## Forward-repair validation
 
-- Focused change-path slice: 169 passed.
-- Configured root suite: 1,704 passed.
+- Focused change-path slice: 173 passed.
+- Configured root suite: 1,706 passed.
 - Strict acceptance: 63 passed.
-- Complete aggregate: PASS with 1,873 root/package tests and 60 bridge tests;
+- Complete aggregate: PASS with 1,875 root/package tests and 60 bridge tests;
   Ruff lint/format, mypy, Pyright, dependency audits, performance, builds,
   architecture-negative checks, clean install, tenant isolation,
   backup/restore, pinned OpenClaw contract/17 tests/build/audit, shell checks,

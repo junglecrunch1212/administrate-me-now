@@ -40,7 +40,7 @@ class BaselineCounts(BaseModel):
 
     minimum_obligations: int = Field(ge=1)
     pending: Literal[0]
-    missing: Literal[0]
+    maximum_missing: int = Field(ge=0, le=100)
     failed: int = Field(ge=1, le=20)
 
 
@@ -55,6 +55,18 @@ class BaselineTarget(BaseModel):
     ]
 
 
+class PausedConsumerBaseline(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    subscriber_id: Literal["pipeline:pipeline:noise_filtering"]
+    consumer_version: Literal["20.0.0"]
+    checkpoint_event_id: str = Field(min_length=1, max_length=240)
+    poison_event_id: str = Field(min_length=1, max_length=240)
+    consecutive_failures: Literal[5]
+    missing_event_type: Literal["messaging.received"]
+    missing_reason: Literal["assessment_event_absent_after_checkpoint_or_grace"]
+
+
 class SourceAssessmentRepairPolicy(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -63,6 +75,7 @@ class SourceAssessmentRepairPolicy(BaseModel):
     observation_mode_required: Literal[True]
     expected_counts: BaselineCounts
     targets: list[BaselineTarget] = Field(min_length=1, max_length=20)
+    paused_consumer: PausedConsumerBaseline | None = None
     expires_after_activation: Literal[True]
 
 
@@ -178,6 +191,38 @@ def _assurance_details(diagnostics: dict[str, Any]) -> dict[str, Any]:
     ).get("details") or {}
 
 
+def _validate_paused_consumer(
+    policy: SourceAssessmentRepairPolicy,
+    diagnostics: dict[str, Any],
+) -> bool:
+    expected = policy.paused_consumer
+    if expected is None:
+        return False
+    capability = (diagnostics.get("capabilities") or {}).get(expected.subscriber_id)
+    if not isinstance(capability, dict) or capability.get("state") != "degraded":
+        raise SourceAssessmentRepairError(
+            "declared paused consumer is not the only expected degraded worker"
+        )
+    details = capability.get("details") or {}
+    actual = {
+        "consumer_version": str(details.get("version") or ""),
+        "checkpoint_event_id": str(details.get("checkpoint_event_id") or ""),
+        "poison_event_id": str(details.get("poison_event_id") or ""),
+        "consecutive_failures": int(details.get("consecutive_failures") or 0),
+    }
+    expected_values = {
+        "consumer_version": expected.consumer_version,
+        "checkpoint_event_id": expected.checkpoint_event_id,
+        "poison_event_id": expected.poison_event_id,
+        "consecutive_failures": expected.consecutive_failures,
+    }
+    if actual != expected_values:
+        raise SourceAssessmentRepairError(
+            "paused consumer state differs from the declared release baseline"
+        )
+    return True
+
+
 def validate_declared_baseline(
     policy: SourceAssessmentRepairPolicy,
     *,
@@ -195,6 +240,7 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError("repair requires active observation mode")
     if diagnostics.get("ready") is not True:
         raise SourceAssessmentRepairError("repair requires a ready live runtime")
+    paused_consumer_expected = _validate_paused_consumer(policy, diagnostics)
     failed_doctor_checks = _failed_doctor_checks(doctor)
     permitted_doctor_failures = {
         frozenset({"source_assurance_terminal_dispositions"}),
@@ -205,6 +251,22 @@ def validate_declared_baseline(
             }
         ),
     }
+    if paused_consumer_expected:
+        permitted_doctor_failures = {
+            frozenset(
+                {
+                    "required_reactive_pipeline_delivery",
+                    "source_assurance_terminal_dispositions",
+                }
+            ),
+            frozenset(
+                {
+                    "required_reactive_pipeline_delivery",
+                    "launchd_and_process_state",
+                    "source_assurance_terminal_dispositions",
+                }
+            ),
+        }
     if frozenset(failed_doctor_checks) not in permitted_doctor_failures:
         raise SourceAssessmentRepairError(
             "active Doctor differs from the declared source-only degradation"
@@ -212,10 +274,16 @@ def validate_declared_baseline(
     capabilities = diagnostics.get("capabilities") or {}
     if not isinstance(capabilities, dict):
         raise SourceAssessmentRepairError("runtime capabilities are unavailable")
+    paused_subscriber_id = (
+        policy.paused_consumer.subscriber_id
+        if policy.paused_consumer is not None
+        else None
+    )
     unexpected = sorted(
         capability_id
         for capability_id, capability in capabilities.items()
         if capability_id not in _SOURCE_DERIVED_CAPABILITIES
+        and not (paused_consumer_expected and capability_id == paused_subscriber_id)
         and isinstance(capability, dict)
         and capability.get("state") in {"degraded", "blocked"}
     )
@@ -245,9 +313,12 @@ def validate_declared_baseline(
     expected = policy.expected_counts
     if (
         actual_counts["obligations"] < expected.minimum_obligations
-        or actual_counts["accounted"] != actual_counts["obligations"]
+        or actual_counts["accounted"]
+        + actual_counts["pending"]
+        + actual_counts["missing"]
+        != actual_counts["obligations"]
         or actual_counts["pending"] != expected.pending
-        or actual_counts["missing"] != expected.missing
+        or actual_counts["missing"] > expected.maximum_missing
         or actual_counts["failed"] != expected.failed
     ):
         raise SourceAssessmentRepairError(
@@ -284,10 +355,37 @@ def validate_declared_baseline(
         raise SourceAssessmentRepairError(
             "failed source ids or reasons differ from the declared repair baseline"
         )
+    missing = [item for item in details.get("missing") or [] if isinstance(item, dict)]
+    if len(missing) != actual_counts["missing"]:
+        raise SourceAssessmentRepairError(
+            "missing source detail count differs from the declared repair baseline"
+        )
+    if missing and policy.paused_consumer is None:
+        raise SourceAssessmentRepairError(
+            "missing sources require an exact paused-consumer declaration"
+        )
+    if policy.paused_consumer is not None:
+        unexpected_missing = [
+            item
+            for item in missing
+            if item.get("event_type") != policy.paused_consumer.missing_event_type
+            or item.get("reason") != policy.paused_consumer.missing_reason
+            or str(item.get("event_id") or "") <= policy.paused_consumer.poison_event_id
+        ]
+        if unexpected_missing:
+            raise SourceAssessmentRepairError(
+                "missing sources differ from the declared paused-consumer backlog"
+            )
     return {
         "minimum_obligations": expected.minimum_obligations,
+        "maximum_missing": expected.maximum_missing,
         "counts": actual_counts,
         "failed_target_count": len(actual_failures),
+        "paused_consumer": (
+            policy.paused_consumer.model_dump(mode="json")
+            if policy.paused_consumer is not None
+            else None
+        ),
         "watermark_event_id": watermark_event_id,
         "content_exposed": False,
     }
@@ -303,7 +401,9 @@ def _capability_snapshot(diagnostics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stopped_consumer_health(
-    paths: DeploymentPaths, diagnostics: dict[str, Any]
+    paths: DeploymentPaths,
+    diagnostics: dict[str, Any],
+    policy: SourceAssessmentRepairPolicy,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prove stopped projection/pipeline workers persisted no hidden failure."""
 
@@ -320,6 +420,7 @@ def _stopped_consumer_health(
                 connection.execute(
                     "SELECT subscriber_id, checkpoint_event_id, "
                     "consecutive_failures, degraded, poison_event_id "
+                    ", consumer_version "
                     "FROM bus_consumer_offsets "
                     "WHERE subscriber_id LIKE 'pipeline:%' "
                     "OR subscriber_id LIKE 'projection:%'"
@@ -343,26 +444,65 @@ def _stopped_consumer_health(
         raise SourceAssessmentRepairError(
             "stopped consumer health inventory is incomplete"
         )
-    unhealthy_count = sum(
-        bool(row["degraded"])
+    unhealthy = [
+        row
+        for row in rows
+        if bool(row["degraded"])
         or int(row["consecutive_failures"] or 0) > 0
         or row["poison_event_id"] is not None
-        for row in rows
-    )
-    if unhealthy_count:
+    ]
+    expected_paused = policy.paused_consumer
+    if expected_paused is None and unhealthy:
         raise SourceAssessmentRepairError(
             "stopped consumer health contains a degraded or poisoned worker"
         )
+    if expected_paused is not None:
+        if len(unhealthy) != 1:
+            raise SourceAssessmentRepairError(
+                "stopped consumer health differs from the declared paused worker"
+            )
+        row = unhealthy[0]
+        actual = {
+            "subscriber_id": str(row["subscriber_id"]),
+            "consumer_version": str(row["consumer_version"] or ""),
+            "checkpoint_event_id": str(row["checkpoint_event_id"] or ""),
+            "poison_event_id": str(row["poison_event_id"] or ""),
+            "consecutive_failures": int(row["consecutive_failures"] or 0),
+        }
+        declared = {
+            "subscriber_id": expected_paused.subscriber_id,
+            "consumer_version": expected_paused.consumer_version,
+            "checkpoint_event_id": expected_paused.checkpoint_event_id,
+            "poison_event_id": expected_paused.poison_event_id,
+            "consecutive_failures": expected_paused.consecutive_failures,
+        }
+        if actual != declared or not bool(row["degraded"]):
+            raise SourceAssessmentRepairError(
+                "stopped consumer poison differs from the declared release baseline"
+            )
     evidence = {
         "pipeline_count": pipeline_count,
         "projection_count": projection_count,
-        "unhealthy_count": 0,
+        "unhealthy_count": len(unhealthy),
+        "declared_paused_subscriber": (
+            expected_paused.subscriber_id if expected_paused is not None else None
+        ),
         "content_exposed": False,
     }
     capabilities = {
         str(row["subscriber_id"]): {
-            "state": "healthy",
-            "details": {"checkpoint_event_id": row["checkpoint_event_id"]},
+            "state": (
+                "degraded"
+                if expected_paused is not None
+                and row["subscriber_id"] == expected_paused.subscriber_id
+                else "healthy"
+            ),
+            "details": {
+                "checkpoint_event_id": row["checkpoint_event_id"],
+                "version": row["consumer_version"],
+                "poison_event_id": row["poison_event_id"],
+                "consecutive_failures": int(row["consecutive_failures"] or 0),
+            },
         }
         for row in rows
     }
@@ -396,7 +536,7 @@ async def _offline_validate_and_append(
                 "final live health receipt has no exact event watermark"
             )
         consumer_health, stopped_capabilities = _stopped_consumer_health(
-            paths, diagnostics
+            paths, diagnostics, policy
         )
         audit = await audit_source_assurance(
             event_log,
@@ -435,10 +575,20 @@ async def _offline_validate_and_append(
             active_commit=policy.required_active_commit,
             doctor={
                 "checks": [
+                    *(
+                        [
+                            {
+                                "name": "required_reactive_pipeline_delivery",
+                                "ok": False,
+                            }
+                        ]
+                        if policy.paused_consumer is not None
+                        else []
+                    ),
                     {
                         "name": "source_assurance_terminal_dispositions",
                         "ok": False,
-                    }
+                    },
                 ]
             },
             diagnostics=synthetic_diagnostics,

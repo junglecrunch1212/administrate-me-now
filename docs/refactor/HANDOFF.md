@@ -7,8 +7,8 @@ gate_result: CO_018_RELEASE_ROLLED_BACK_FORWARD_REPAIR_CANDIDATE
 verified_local_date: 2026-08-13
 verified_github_date: 2026-08-13
 branch: codex/co018-release-race-repair
-candidate_commit_resolution: pending_independent_review
-pull_request_url: pending
+candidate_commit_resolution: amended_after_live_baseline_drift_pending_checks_and_review
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/339
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -24,20 +24,26 @@ activation created an encrypted 0600 backup, switched through the reviewed
 updater, failed post-switch service/source-assurance Doctor, and restored
 `d181fad`. Four candidate-appended v21 assessments remain immutable with
 `language_seam_IdempotencyConflict`; observation stayed active and the
-provider-called terminal count remained zero.
+provider-called terminal count remained zero. A later read-only snapshot found
+that restored v20 replay had reached one exact retained collision, persisted
+its normal five-attempt poison state, and paused later ordinary messages. One
+older allowlisted `language_seam_OpenClawUnreachable` assessment is also
+current.
 
 The follow-up candidate makes concurrent calls for one exact reviewed skill
 identity converge on the first durable `skill.call.recorded` result. A
 controlled regression reproduces the live race and now passes. The existing
 guarded source-repair mechanism is rebound to the exact rolled-back commit,
-four content-free targets, failure reason, monotonic obligation floor, settled
-source state, and quiescence checks. Focused wrapper/recovery/updater proof
-passes as part of a 169-test change-path slice. The 1,704-test configured root
-suite and full aggregate pass; the latter includes 63 strict acceptance tests,
-1,873 root/package tests, 60 bridge tests, static analysis, audits, performance,
-builds, isolation, backup/restore, and the pinned OpenClaw gates. A clean
-candidate commit, hosted checks, independent review, and new exact-head release
-authority remain required.
+five content-free targets, exact restored-v20 checkpoint/poison state,
+monotonic obligation floor, a bounded later-message backlog, and quiescence
+checks. The first published PR #339 head passed both hosted checks, but its
+four-target healthy-consumer baseline was superseded by this live drift before
+independent review. The amended head passes the 173-test focused slice,
+1,706-test configured root suite, 63 strict acceptance tests, 1,875
+root/package aggregate tests, 60 bridge tests, static analysis, audits,
+performance, builds, isolation, clean install, backup/restore, and the pinned
+OpenClaw gates. Fresh hosted checks, independent review, and new exact-head
+release authority remain required.
 
 ## 2026-08-12 CO-018 local candidate
 

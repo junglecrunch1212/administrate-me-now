@@ -562,9 +562,13 @@ C113/C114 release-race amendment: an exact reviewed skill invocation now has
 one first-writer durable result even when concurrent callers both pass the
 initial absence check. The losing append reuses that result rather than
 creating a false terminal source failure. The four immutable failures exposed
-by the rejected CO-018 activation are recovered only through an exact,
-observation-only, release-scoped request set bound to the rolled-back commit,
-settled source baseline, stopped consumers, and live Gateway quiescence.
+by the rejected CO-018 activation, plus one exact older allowlisted transient
+failure, are recovered only through an exact, observation-only, release-scoped
+request set. The exception binds the rolled-back commit and original obligation
+floor, exact failure set, exact restored-v20 checkpoint/poison state, at most
+100 later message obligations behind that poison, every other stopped consumer
+healthy, and live Gateway quiescence. No checkpoint is edited and no unrelated
+missing type, reason, Doctor failure, or degraded capability is admitted.
 
 ## Source coverage index
 
