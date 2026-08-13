@@ -53,7 +53,10 @@ or live provider. No provider action was performed.
   duplicate. If the prior fallback carries stale contextual interpretation,
   replay supersedes that old proposal, excludes its exact event from active-
   history dedupe, and emits the current context-free fallback under a distinct
-  replay-versioned proposal identity.
+  replay-versioned proposal identity. Projection admits that replacement only
+  if the predecessor is no longer active; a member revision that defeats stale
+  supersession also prevents the later replacement from becoming duplicate
+  work.
 
 ## Focused evidence
 
@@ -82,6 +85,8 @@ admitting edge from outside the display window. The tests create no canonical
 record or provider effect. A controlled handler interleaving appends member
 enrichment after descendant inspection but before supersession; the production
 projection process then proves the stale v3 receipt cannot dismiss that item.
+It then appends the replay replacement and proves the still-active predecessor
+suppresses that row deterministically.
 The same Gmail replay process also seeds a still-eligible v20 same-source
 deterministic fallback carrying stale contextual metadata, records the v21
 eligible assessment, supersedes the old contextual proposal, and proves
@@ -180,4 +185,9 @@ the complete aggregate release-candidate suite from the beginning, the
 separate 1,700-test configured root discovery, and the invariant scan; the
 counts above describe this fresh run. The rejected receipt grants no Phase B
 or release authority, and the amended head still requires hosted checks and a
-fresh independent review.
+fresh independent review. Final audit added projection-level closure for the
+companion member-race case described above. The race-hardened worktree then
+passed the 186-test changed-path slice, complete aggregate release-candidate
+suite from the beginning, separate 1,700-test configured root discovery, and
+the invariant scan. The counts above remain current; hosted checks and fresh
+independent review are still required for the final head.

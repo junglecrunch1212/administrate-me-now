@@ -312,6 +312,32 @@ def _apply_triage_proposed(
     envelope: dict[str, Any], conn: sqlcipher3.Connection
 ) -> None:
     payload = envelope["payload"]
+    # Replay first appends a revision-bound supersession and then the current
+    # replacement. If member action won the append race, compare-and-apply
+    # leaves the predecessor active. Do not project a second item beside that
+    # member-owned revision. When supersession won, the predecessor is already
+    # dismissed in this deterministic event order and the replacement proceeds.
+    idempotency_key = str(envelope.get("idempotency_key") or "")
+    candidate_key = payload.get("candidate_key")
+    if idempotency_key.startswith("triage:message-candidate:v") and candidate_key:
+        active_predecessor = conn.execute(
+            """SELECT 1 FROM triage_items
+                WHERE tenant_id=? AND owner_member_id=?
+                  AND source_kind='triage_item' AND source_event_id=?
+                  AND target_kind=? AND candidate_key=? AND proposal_id!=?
+                  AND state IN ('pending_interpretation','pending_review','approved')
+                LIMIT 1""",
+            (
+                envelope["tenant_id"],
+                payload["owner_member_id"],
+                payload["source_event_id"],
+                payload["target_kind"],
+                candidate_key,
+                payload["proposal_id"],
+            ),
+        ).fetchone()
+        if active_predecessor is not None:
+            return
     _insert(
         envelope,
         conn,

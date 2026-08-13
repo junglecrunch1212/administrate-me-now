@@ -64,7 +64,10 @@ interpretation whose fingerprint is stale, replay retires the contextualized
 proposal but does not treat its historical candidate key as active. The
 current deterministic candidate receives a distinct, replay-versioned proposal
 identity, so the stale context leaves the queue while the still-valid ask
-remains available for human review.
+remains available for human review. Projection applies that replacement only
+after the revision-bound supersession actually retired the predecessor. If a
+member revision won the append order, the predecessor stays active and the
+later replacement event cannot create duplicate review work beside it.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 

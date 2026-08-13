@@ -86,6 +86,9 @@ source fact, sender identity, provider account, or household name is wrong.
   if an otherwise identical fallback carries stale contextual interpretation,
   replay supersedes that old proposal and emits a distinct context-free
   replacement rather than allowing historical dedupe to erase the valid ask;
+  projection admits that replacement only if the revision-bound supersession
+  actually retired the predecessor, so a member revision that won append order
+  cannot be followed by duplicate review work;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
 
@@ -129,5 +132,6 @@ still-eligible v20 same-source fallback's stale contextual interpretation with
 a distinct context-free pending proposal. It preserves member-decided history
 and creates no canonical or provider effect. A second process case
 appends member enrichment after system inspection but before its v3
-supersession and proves the item remains reviewable. Candidate evidence is recorded in
+supersession and proves the item remains reviewable while the subsequent
+replacement event is projection-suppressed. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.

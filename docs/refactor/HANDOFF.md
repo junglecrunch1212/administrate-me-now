@@ -95,8 +95,15 @@ both retention of an unchanged context-free prior and replacement of a
 contextualized prior. The `c915c1c` receipt is rejected and grants no release
 authority. The amended worktree passed the 186-test changed-path slice, the
 complete aggregate release-candidate suite, a separate 1,700-test configured
-root discovery, and the invariant scan; the new head still requires hosted
-checks and fresh independent review.
+root discovery, and the invariant scan. Final audit then closed the companion
+append-order case: when a member revision causes revision-bound supersession to
+no-op, the still-active same-source/kind/key predecessor now suppresses
+projection of the later replacement rather than allowing duplicate review
+work. The production race process proves both the member revision and the
+absence of a projected replacement. The race-hardened worktree passed the
+186-test changed-path slice, complete aggregate release-candidate suite, and
+separate 1,700-test configured root discovery. Hosted checks and independent
+review remain required for the final head.
 
 ## 2026-08-12 CO-017 deployed and live verified
 

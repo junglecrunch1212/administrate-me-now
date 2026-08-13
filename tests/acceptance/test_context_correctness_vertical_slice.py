@@ -1014,6 +1014,35 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
                     "candidate_key": "fixture-supersession-race",
                     "extraction_event_id": None,
                     "eligibility_rule_ids": ["grounded_language_exact_quote_v1"],
+                    "interpretation": {
+                        "contract": "triage-context-interpretation-v1",
+                        "context_fingerprint": "e" * 64,
+                        "thread_key": "fixture-supersession-race-thread",
+                        "anchor_event_id": source_id,
+                        "compact_summary": "Legacy fixture interpretation",
+                        "case_summary": "Context that replay will replace.",
+                        "why_member": "The source appeared to contain an ask.",
+                        "next_step": "Review the fixture interpretation.",
+                        "thread_state": "waiting_on_member",
+                        "action_owner": "member",
+                        "lifecycle_state": "open",
+                        "unresolved_questions": [],
+                        "evidence_refs": [
+                            {
+                                "source_event_id": source_id,
+                                "quote": "A fixture item that the member will correct.",
+                            }
+                        ],
+                        "context_source_event_ids": [source_id],
+                        "context_sources": [
+                            {
+                                "source_event_id": source_id,
+                                "relation": "thread",
+                                "reason_codes": ["provider_thread_id"],
+                            }
+                        ],
+                        "related_source_event_ids": [],
+                    },
                 },
             ),
         )
@@ -1068,6 +1097,46 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
             ),
         )
         client.portal.call(runtime.wait_for_projection, "triage", stale_supersession_id)
+        replacement_id = "fixture-supersession-race-replacement"
+        replacement_event_id = client.portal.call(
+            runtime.events.write,
+            EventEnvelope(
+                event_at_ms=1_786_373_766_400,
+                tenant_id=runtime.settings.instance.tenant_id,
+                type="triage.item.proposed",
+                schema_version=4,
+                occurred_at="2026-08-10T16:36:09Z",
+                source_adapter="deterministic_candidate_eligibility",
+                source_account_id="pipeline",
+                owner_scope=f"private:{MEMBER}",
+                visibility_scope=f"private:{MEMBER}",
+                sensitivity="normal",
+                idempotency_key=(
+                    "triage:message-candidate:v21:fixture-race:"
+                    "fixture-supersession-race:commitment"
+                ),
+                payload={
+                    "proposal_id": replacement_id,
+                    "target_kind": "commitment",
+                    "owner_member_id": MEMBER,
+                    "title": "Legacy fixture interpretation",
+                    "candidate": {},
+                    "route": {"member_id": MEMBER},
+                    "source_event_id": source_id,
+                    "confidence": None,
+                    "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+                    "parent_intent_id": None,
+                    "candidate_key": "fixture-supersession-race",
+                    "extraction_event_id": None,
+                    "eligibility_rule_ids": [
+                        "inbound_explicit_directive_or_due_obligation_v1"
+                    ],
+                    "interpretation": None,
+                    "source_occurred_at": "2024-01-31T15:00:00Z",
+                },
+            ),
+        )
+        client.portal.call(runtime.wait_for_projection, "triage", replacement_event_id)
 
         page = client.get(
             f"/api/member/v1/surfaces/triage?triage_item={proposal_id}",
@@ -1082,6 +1151,14 @@ def test_stale_system_supersession_cannot_override_member_enrichment(
         assert item["state"] == "pending_review"
         assert item["title"] == "Member-corrected legitimate commitment"
         assert item["last_event_id"] == enrichment_event_id
+        triage = runtime.projections.connection("triage")
+        assert (
+            triage.execute(
+                "SELECT 1 FROM triage_items WHERE tenant_id=? AND proposal_id=?",
+                (runtime.settings.instance.tenant_id, replacement_id),
+            ).fetchone()
+            is None
+        )
         assert (
             client.portal.call(_events, runtime, "triage.item.superseded")[-1][
                 "event_id"

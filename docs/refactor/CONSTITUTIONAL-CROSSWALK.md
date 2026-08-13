@@ -554,8 +554,9 @@ attachment IDs remain non-admitting. Production composition proves actual
 Gmail mapping through the v20-to-v21 full replay, crossed-wire and untouched
 legacy-Sent supersession, a valid newly derived sibling, and deterministic
 replacement of stale context around a still-eligible same-source fallback
-without canonical or provider effects. Revision-bound v3 projection proof keeps a raced member
-enrichment pending.
+without canonical or provider effects. Revision-bound v3 projection proof keeps
+a raced member enrichment pending and suppresses the later replacement while
+that predecessor remains active.
 
 ## Source coverage index
 
