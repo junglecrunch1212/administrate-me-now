@@ -934,7 +934,10 @@ class NoiseFilteringPipeline:
             )
             for candidate in candidates
         ]
-        candidates = await self._reconcile_thread_candidates(
+        (
+            candidates,
+            replaced_proposal_event_ids,
+        ) = await self._reconcile_thread_candidates(
             event=event,
             ctx=ctx,
             source_event_id=source_event_id,
@@ -977,6 +980,11 @@ class NoiseFilteringPipeline:
                 proposals=prior_proposals,
                 superseded_at=extracted_at,
             )
+            # A proposal superseded by this reconciliation is immutable
+            # history, not an active duplicate. Its candidate identity must
+            # not suppress a still-eligible replacement. Member-decided and
+            # unchanged context-free proposals are absent from the replacement
+            # set and continue to suppress reopening/duplication.
             existing = {
                 (
                     str(proposal["payload"].get("target_kind") or ""),
@@ -984,6 +992,8 @@ class NoiseFilteringPipeline:
                 )
                 for proposal in prior_proposals
                 if proposal.get("type") == "triage.item.proposed"
+                and str(proposal.get("event_id") or "")
+                not in replaced_proposal_event_ids
             }
             new_candidates = [
                 candidate
@@ -1063,11 +1073,13 @@ class NoiseFilteringPipeline:
         )
         for candidate in new_candidates:
             target_kind = candidate.target_kind
+            proposal_key = proposal_keys[(target_kind, candidate.candidate_key)]
+            # Proposal identity follows the replay-versioned idempotency
+            # identity. A stale contextual proposal and its context-free
+            # replacement must project as two immutable rows; reusing the old
+            # source/key/title-only ID would make ON CONFLICT hide the latter.
             fingerprint = hashlib.sha256(
-                (
-                    f"{source_event_id}:{candidate.candidate_key}:"
-                    f"{target_kind}:{candidate.title}"
-                ).encode()
+                (f"{proposal_key}:{source_event_id}:{candidate.title}").encode()
             ).hexdigest()[:24]
             proposal_id = f"triage:message:{fingerprint}"
             envelope = EventEnvelope(
@@ -1081,7 +1093,7 @@ class NoiseFilteringPipeline:
                 owner_scope=owner_scope,
                 visibility_scope=owner_scope,
                 sensitivity=event.get("sensitivity", "normal"),
-                idempotency_key=proposal_keys[(target_kind, candidate.candidate_key)],
+                idempotency_key=proposal_key,
                 payload={
                     "proposal_id": proposal_id,
                     "target_kind": target_kind,
@@ -1122,19 +1134,21 @@ class NoiseFilteringPipeline:
         source_event_id: str,
         context_pack: MessageContextPack,
         candidates: list[Any],
-    ) -> list[Any]:
+    ) -> tuple[list[Any], set[str]]:
         """Replace untouched older thread interpretations; preserve decisions.
 
         A new message can answer or supersede an earlier ask.  Conversation
         candidates are therefore a versioned set rooted at the latest message.
         Member enrichments and decisions are permanent; an exact candidate the
-        member already acted on is never silently re-opened.
+        member already acted on is never silently re-opened. The returned event
+        ID set names only proposals this call superseded, allowing downstream
+        historical dedupe to admit their still-eligible replacements.
         """
 
         if not context_pack.current_is_thread_anchor or not hasattr(
             ctx.event_log, "read_since"
         ):
-            return candidates
+            return candidates, set()
         thread_source_ids = set(context_pack.episode_source_event_ids)
         current_same_source_fallbacks = {
             (
@@ -1150,6 +1164,7 @@ class NoiseFilteringPipeline:
         }
         decided_keys: set[tuple[str, str]] = set()
         decided_titles: set[tuple[str, str]] = set()
+        replaced_proposal_event_ids: set[str] = set()
         prior_proposals: list[dict[str, Any]] = []
         async for prior in ctx.event_log.read_since(
             owner_scope=str(event.get("owner_scope") or ""),
@@ -1258,12 +1273,16 @@ class NoiseFilteringPipeline:
                     {"superseded_at", "replacement_source_event_id"}
                 ),
             )
-        return [
-            candidate
-            for candidate in candidates
-            if (candidate.target_kind, candidate.candidate_key) not in decided_keys
-            and (candidate.target_kind, candidate.title) not in decided_titles
-        ]
+            replaced_proposal_event_ids.add(str(prior["event_id"]))
+        return (
+            [
+                candidate
+                for candidate in candidates
+                if (candidate.target_kind, candidate.candidate_key) not in decided_keys
+                and (candidate.target_kind, candidate.title) not in decided_titles
+            ],
+            replaced_proposal_event_ids,
+        )
 
     async def _supersede_unreliable_source_proposals(
         self,

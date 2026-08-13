@@ -1,8 +1,9 @@
 # Change Order 018 — Source-time and conservative context correction
 
-Status: implemented and locally validated amended candidate; exact head
-`12c4a16` was independently rejected, both findings are repaired, and the
-amended head is not yet independently reviewed, merged, or deployed.
+Status: amended again after independent review rejected exact head `c915c1c`;
+the contextualized-fallback finding is repaired and fresh complete supported
+local validation passes. Independent review, merge, and deployment remain
+pending.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,
@@ -82,6 +83,9 @@ source fact, sender identity, provider account, or household name is wrong.
   an unchanged context-free deterministic fallback that remains eligible under
   the current high-signal rule retains its existing pending proposal instead
   of being superseded and suppressed by its historical candidate key;
+  if an otherwise identical fallback carries stale contextual interpretation,
+  replay supersedes that old proposal and emits a distinct context-free
+  replacement rather than allowing historical dedupe to erase the valid ask;
   a member enrichment, dismissal, confirmation, or materialization remains
   permanent.
 
@@ -95,7 +99,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Exact relationship/text correction and reversal events | MODERNIZE | Correction is append-only member evidence, not deletion or mutation of the source. |
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
-| Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire, while an unchanged still-eligible same-source deterministic fallback remains reviewable. |
+| Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. An unchanged context-free fallback stays pending; a contextualized fallback with stale context is replaced under a distinct replay-versioned proposal identity so its deterministic core remains reviewable. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider
@@ -120,9 +124,10 @@ and the ordinary replay, privacy, governance, browser, package, and release
 gates. The process slice uses the actual Gmail adapter mapping, seeds a v20
 durable checkpoint, starts the production v21 runner, proves full replay,
 retires both the untouched crossed-wire proposal and an untouched false legacy-
-Sent proposal, keeps both a newly derived valid sibling and an unchanged
-still-eligible v20 same-source fallback reviewable, preserves member-decided
-history, and creates no canonical or provider effect. A second process case
+Sent proposal, keeps a newly derived valid sibling reviewable, and replaces a
+still-eligible v20 same-source fallback's stale contextual interpretation with
+a distinct context-free pending proposal. It preserves member-decided history
+and creates no canonical or provider effect. A second process case
 appends member enrichment after system inspection but before its v3
 supersession and proves the item remains reviewable. Candidate evidence is recorded in
 `docs/refactor/evidence/co-018-source-time-and-context-correction.md`.

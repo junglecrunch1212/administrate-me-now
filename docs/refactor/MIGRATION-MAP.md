@@ -13,6 +13,12 @@ same source under the same current high-signal rule retains its existing
 pending proposal. The new assessment is appended, but replay does not
 supersede the valid item or emit a duplicate merely because a v20 extraction
 already owns the candidate identity.
+If the prior proposal combines that deterministic identity with stale
+contextual interpretation metadata, v21 supersedes the contextual proposal,
+excludes that exact event from active-history dedupe, and appends the current
+fallback under a deterministic replay-versioned proposal ID. The source and
+old proposal remain immutable, while exactly one context-free replacement is
+pending for review.
 The v21 replay stores exact relationship-edge provenance. Source-text
 corrections are proposal/candidate/digest/span scoped; replay no longer blanks
 unrelated authored asks. Invalid Gmail source timestamps quarantine instead of

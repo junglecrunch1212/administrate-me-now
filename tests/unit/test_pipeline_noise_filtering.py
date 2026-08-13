@@ -1587,7 +1587,10 @@ async def test_new_thread_anchor_supersedes_untouched_prior_interpretation() -> 
 
 
 @pytest.mark.asyncio
-async def test_v21_replay_keeps_still_eligible_same_source_fallback() -> None:
+@pytest.mark.parametrize("contextualized", [False, True])
+async def test_v21_replay_keeps_or_replaces_still_eligible_same_source_fallback(
+    contextualized: bool,
+) -> None:
     source = _messaging_received_event(
         body_text="Please complete the fixture checklist"
     )
@@ -1646,6 +1649,29 @@ async def test_v21_replay_keeps_still_eligible_same_source_fallback() -> None:
         ),
         causation_id="trigger-eid-001",
     )
+    proposal_payload: dict[str, Any] = {
+        "proposal_id": "same-source-fallback-v20-proposal",
+        "target_kind": "task",
+        "owner_member_id": "member-fixture",
+        "title": "Please complete the fixture checklist",
+        "candidate": {},
+        "route": {"member_id": "member-fixture"},
+        "source_event_id": "trigger-eid-001",
+        "confidence": None,
+        "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
+        "parent_intent_id": None,
+        "candidate_key": "message-fallback-1",
+        "extraction_event_id": assessment_event_id,
+        "eligibility_rule_ids": [
+            "inbound_explicit_directive_or_due_obligation_v1",
+            "candidate_fields_task_v1",
+        ],
+    }
+    if contextualized:
+        proposal_payload["interpretation"] = {
+            "context_fingerprint": "a" * 64,
+            "anchor_event_id": "trigger-eid-001",
+        }
     proposal_event_id = await log.write(
         EventEnvelope(
             event_at_ms=1700000000001,
@@ -1659,24 +1685,7 @@ async def test_v21_replay_keeps_still_eligible_same_source_fallback() -> None:
             visibility_scope="private:member-fixture",
             sensitivity="normal",
             idempotency_key="same-source-fallback-v20-proposal",
-            payload={
-                "proposal_id": "same-source-fallback-v20-proposal",
-                "target_kind": "task",
-                "owner_member_id": "member-fixture",
-                "title": "Please complete the fixture checklist",
-                "candidate": {},
-                "route": {"member_id": "member-fixture"},
-                "source_event_id": "trigger-eid-001",
-                "confidence": None,
-                "reasons": ["inbound_explicit_directive_or_due_obligation_v1"],
-                "parent_intent_id": None,
-                "candidate_key": "message-fallback-1",
-                "extraction_event_id": assessment_event_id,
-                "eligibility_rule_ids": [
-                    "inbound_explicit_directive_or_due_obligation_v1",
-                    "candidate_fields_task_v1",
-                ],
-            },
+            payload=proposal_payload,
         ),
         causation_id=assessment_event_id,
     )
@@ -1686,20 +1695,31 @@ async def test_v21_replay_keeps_still_eligible_same_source_fallback() -> None:
 
     await NoiseFilteringPipeline().handle(source, _make_ctx(log, no_language_candidate))
 
-    assert [
+    supersessions = [
         call
         for call in log.calls
         if call.envelope.type == "triage.item.superseded"
         and call.envelope.payload.get("proposal_id")
         == "same-source-fallback-v20-proposal"
-    ] == []
+    ]
     same_source_proposals = [
         call
         for call in log.calls
         if call.envelope.type == "triage.item.proposed"
         and call.envelope.payload.get("source_event_id") == "trigger-eid-001"
     ]
-    assert [call.event_id for call in same_source_proposals] == [proposal_event_id]
+    if contextualized:
+        assert len(supersessions) == 1
+        assert len(same_source_proposals) == 2
+        replacement = same_source_proposals[-1]
+        assert replacement.event_id != proposal_event_id
+        assert replacement.envelope.payload["proposal_id"] != (
+            "same-source-fallback-v20-proposal"
+        )
+        assert replacement.envelope.payload["interpretation"] is None
+    else:
+        assert supersessions == []
+        assert [call.event_id for call in same_source_proposals] == [proposal_event_id]
     current_assessment = next(
         call.envelope
         for call in log.calls

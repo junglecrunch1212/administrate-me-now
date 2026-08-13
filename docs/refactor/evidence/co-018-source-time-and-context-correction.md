@@ -2,11 +2,11 @@
 
 Date: 2026-08-12
 
-Status: exact head `12c4a16` was independently reviewed and rejected. Both
-findings are repaired and fresh complete supported local validation passes.
-Independent review of the amended head remains pending. Nothing is merged,
-deployed, or run against a family Mac or live provider. No provider action was
-performed.
+Status: exact head `c915c1c` was independently reviewed and rejected. Its
+contextualized-fallback finding is repaired, and the amended candidate passes
+fresh complete supported local validation. Independent review of the amended
+head remains pending. Nothing is merged, deployed, or run against a family Mac
+or live provider. No provider action was performed.
 
 ## Implemented proof surface
 
@@ -50,7 +50,10 @@ performed.
   unchanged context-free same-source deterministic fallback that remains
   eligible under the current high-signal rule keeps its existing pending
   proposal instead of being superseded and then suppressed as a historical
-  duplicate.
+  duplicate. If the prior fallback carries stale contextual interpretation,
+  replay supersedes that old proposal, excludes its exact event from active-
+  history dedupe, and emits the current context-free fallback under a distinct
+  replay-versioned proposal identity.
 
 ## Focused evidence
 
@@ -79,10 +82,12 @@ admitting edge from outside the display window. The tests create no canonical
 record or provider effect. A controlled handler interleaving appends member
 enrichment after descendant inspection but before supersession; the production
 projection process then proves the stale v3 receipt cannot dismiss that item.
-The same Gmail replay process also seeds an unchanged, still-eligible v20
-same-source deterministic fallback, records the v21 eligible assessment, and
-proves the original proposal remains pending with no supersession, duplicate,
-or queue disappearance.
+The same Gmail replay process also seeds a still-eligible v20 same-source
+deterministic fallback carrying stale contextual metadata, records the v21
+eligible assessment, supersedes the old contextual proposal, and proves
+exactly one distinct context-free replacement remains pending without a
+duplicate or queue disappearance. The handler-level proof separately retains
+an unchanged context-free prior without replacement.
 
 ## Validation record
 
@@ -90,9 +95,10 @@ The complete supported local command set passed on Python 3.14 and Node
 24.19.0:
 
 - `poetry sync --with dev`: lock satisfied; no dependency change.
+- The 16-file changed-path review slice passed 186 tests.
 - `PYTHONPATH=.:bridge poetry run pytest tests packs -q --import-mode=importlib`:
-  1,868 passed. The ordinary configured root discovery
-  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,699 tests under
+  1,869 passed. The ordinary configured root discovery
+  (`PYTHONPATH=bridge poetry run pytest -q`) passed 1,700 tests under
   `pyproject.toml`'s `testpaths = ["tests"]` boundary.
 - `PYTHONPATH=bridge poetry run pytest tests/acceptance --runxfail -q`: 61
   passed.
@@ -158,3 +164,20 @@ from the beginning, the separate 1,699-test configured root discovery, and the
 invariant scan; the counts above now describe that fresh run. The replacement
 commit still requires hosted checks and a fresh independent exact-head review.
 No Phase B action is authorized.
+
+The next separate user-visible review of exact head `c915c1c` rejected the
+candidate because the first repair exempted only prior proposals without an
+interpretation dictionary. `merge_intent_candidates` can attach contextual
+metadata to an overlapping deterministic `message-fallback-*` identity, making
+the disappearing-item path reachable. The amended implementation returns the
+exact proposal-event set superseded by contextual reconciliation, omits only
+that set from active-history dedupe, and derives a distinct deterministic
+proposal ID from the replay-versioned proposal key. The regression proof now
+covers both prior shapes through the handler and the contextualized shape
+through actual Gmail mapping, the production v21 runner, projection, and member
+Triage API. The amended worktree then passed the 186-test changed-path slice,
+the complete aggregate release-candidate suite from the beginning, the
+separate 1,700-test configured root discovery, and the invariant scan; the
+counts above describe this fresh run. The rejected receipt grants no Phase B
+or release authority, and the amended head still requires hosted checks and a
+fresh independent review.

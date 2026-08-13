@@ -19,10 +19,10 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 ## 2026-08-12 CO-018 local candidate
 
-Status: amended after independent review rejected exact head `12c4a16`; the
-two findings are repaired and fresh complete local aggregate validation passes.
-The amended head has not yet completed independent review, merge, deployment,
-or any run against a family Mac or live provider.
+Status: amended again after independent review rejected exact head `c915c1c`;
+the contextualized-fallback finding is repaired and fresh complete aggregate
+validation passes. Independent review, merge, deployment, and any run against
+a family Mac or live provider remain pending.
 
 The candidate corrects a message-context false-association class without
 changing source facts or member authority. Gmail adapter v1.3.0 records provider
@@ -63,11 +63,15 @@ opts into full replay and retires only untouched stale context interpretations;
 an unchanged context-free same-source deterministic fallback that remains
 eligible under the current high-signal rule keeps its existing pending item
 instead of being superseded and hidden by the historical candidate identity.
+When that deterministic core is attached to a stale contextual interpretation,
+the old proposal is superseded and excluded from active-history dedupe while a
+distinct replay-versioned context-free proposal keeps the valid ask pending.
 Member decisions remain permanent. The new production-composition acceptance
 tests complete detach, relink, reinstate, and rebuild and exercise actual Gmail
 mapping through a v20-to-v21 full replay that supersedes the stale crossed-wire
 proposal and an untouched false legacy-Sent proposal while retaining a newly
-derived valid sibling and an unchanged v20 deterministic fallback as reviewable;
+derived valid sibling and replacing stale context around a still-valid v20
+deterministic fallback with exactly one context-free pending proposal;
 a separate production process appends enrichment between
 inspection and stale v3 supersession and keeps it pending, with no canonical or
 provider effect. Aggregate gate evidence is recorded in the CO-018 evidence
@@ -76,6 +80,23 @@ typo (`messaging.sent@v3` instead of the emitted `messaging.sent@v4`), which is
 corrected in the change order. Fresh complete gates, independent exact-head
 review, and the ordinary controlled-release path remain mandatory before any
 Phase B action.
+
+The subsequent independent review of exact head `c915c1c` found that the first
+fallback repair covered only prior proposals without an interpretation object.
+A v20 model result can overlap a deterministic fallback, retain its
+`message-fallback-*` identity, and attach contextual interpretation metadata.
+If that metadata became stale, v21 correctly superseded the old proposal but
+then historical kind/key dedupe suppressed the still-valid deterministic
+replacement. The amended implementation now carries the exact superseded
+proposal event IDs across reconciliation, excludes only those events from
+active-history dedupe, and derives replacement proposal IDs from the replay-
+versioned idempotency identity. Unit and production Gmail replay proofs cover
+both retention of an unchanged context-free prior and replacement of a
+contextualized prior. The `c915c1c` receipt is rejected and grants no release
+authority. The amended worktree passed the 186-test changed-path slice, the
+complete aggregate release-candidate suite, a separate 1,700-test configured
+root discovery, and the invariant scan; the new head still requires hosted
+checks and fresh independent review.
 
 ## 2026-08-12 CO-017 deployed and live verified
 

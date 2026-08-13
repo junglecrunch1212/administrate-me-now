@@ -451,6 +451,35 @@ async def _preload_gmail_replay_fixture(
                         "inbound_explicit_directive_or_due_obligation_v1",
                         "candidate_fields_task_v1",
                     ],
+                    "interpretation": {
+                        "contract": "triage-context-interpretation-v1",
+                        "context_fingerprint": "d" * 64,
+                        "thread_key": "fixture-replay-stable-fallback",
+                        "anchor_event_id": stable_fallback_source_id,
+                        "compact_summary": "Complete the fixture checklist",
+                        "case_summary": "A stale contextualized fixture fallback.",
+                        "why_member": "The exact source contains a directive.",
+                        "next_step": "Review the exact deterministic ask.",
+                        "thread_state": "waiting_on_member",
+                        "action_owner": "member",
+                        "lifecycle_state": "open",
+                        "unresolved_questions": [],
+                        "evidence_refs": [
+                            {
+                                "source_event_id": stable_fallback_source_id,
+                                "quote": "Please complete the fixture checklist",
+                            }
+                        ],
+                        "context_source_event_ids": [stable_fallback_source_id],
+                        "context_sources": [
+                            {
+                                "source_event_id": stable_fallback_source_id,
+                                "relation": "thread",
+                                "reason_codes": ["provider_thread_id"],
+                            }
+                        ],
+                        "related_source_event_ids": [],
+                    },
                 },
             ),
             causation_id=stable_fallback_assessment_id,
@@ -1170,16 +1199,31 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
             for event in client.portal.call(_events, runtime, "triage.item.superseded")
             if event["payload"]["proposal_id"] == stable_fallback_proposal_id
         ]
-        assert stable_fallback_supersessions == []
+        assert len(stable_fallback_supersessions) == 1
         stable_fallback_proposals = [
             event
             for event in client.portal.call(_events, runtime, "triage.item.proposed")
             if event["payload"].get("source_event_id") == stable_fallback_source_id
         ]
-        assert len(stable_fallback_proposals) == 1
-        assert stable_fallback_proposals[0]["payload"]["proposal_id"] == (
-            stable_fallback_proposal_id
+        assert len(stable_fallback_proposals) == 2
+        original_stable_proposal = next(
+            event
+            for event in stable_fallback_proposals
+            if event["payload"]["proposal_id"] == stable_fallback_proposal_id
         )
+        replacement_stable_proposal = next(
+            event
+            for event in stable_fallback_proposals
+            if event["payload"]["proposal_id"] != stable_fallback_proposal_id
+        )
+        assert original_stable_proposal["payload"]["interpretation"]["contract"] == (
+            "triage-context-interpretation-v1"
+        )
+        assert (
+            stable_fallback_supersessions[0]["payload"]["expected_last_event_id"]
+            == original_stable_proposal["event_id"]
+        )
+        assert replacement_stable_proposal["payload"]["interpretation"] is None
         stable_fallback_assessments = [
             event
             for event in client.portal.call(
@@ -1195,20 +1239,25 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         current_stable_assessment = max(
             stable_fallback_assessments, key=lambda event: event["event_id"]
         )
+        assert current_stable_assessment["idempotency_key"] == (
+            f"triage:message-features:v21:{stable_fallback_source_id}"
+        )
         client.portal.call(
             runtime.wait_for_projection,
             "triage",
-            current_stable_assessment["event_id"],
+            replacement_stable_proposal["event_id"],
         )
         stable_page = client.get(
-            f"/api/member/v1/surfaces/triage?triage_item={stable_fallback_proposal_id}",
+            "/api/member/v1/surfaces/triage"
+            f"?triage_item={replacement_stable_proposal['payload']['proposal_id']}",
             headers=AUTH,
         )
         assert stable_page.status_code == 200, stable_page.text
         stable_item = next(
             item
             for item in stable_page.json()["items"]
-            if item["proposal_id"] == stable_fallback_proposal_id
+            if item["proposal_id"]
+            == replacement_stable_proposal["payload"]["proposal_id"]
         )
         assert stable_item["state"] == "pending_review"
         assert stable_item["review_state"]["human_gate_required"] is True
@@ -1219,6 +1268,12 @@ def test_gmail_full_replay_supersedes_crossed_wire_and_keeps_valid_sibling(
         items = page.json()["items"]
         assert old_proposal_id not in {item["proposal_id"] for item in items}
         assert legacy_proposal_id not in {item["proposal_id"] for item in items}
+        assert stable_fallback_proposal_id not in {
+            item["proposal_id"] for item in items
+        }
+        assert replacement_stable_proposal["payload"]["proposal_id"] in {
+            item["proposal_id"] for item in items
+        }
         valid = next(
             item
             for item in items

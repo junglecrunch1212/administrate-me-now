@@ -59,6 +59,12 @@ interpretation merely because the replay generation changed. When v21 derives
 the exact same source, target kind, candidate key, title, and current
 high-signal fallback rule, it retains the existing pending proposal and records
 the new assessment without superseding or duplicating the review item.
+If that same deterministic core is attached to an older contextual
+interpretation whose fingerprint is stale, replay retires the contextualized
+proposal but does not treat its historical candidate key as active. The
+current deterministic candidate receives a distinct, replay-versioned proposal
+identity, so the stale context leaves the queue while the still-valid ask
+remains available for human review.
 An unrecognized quote-header/container signal produces an explicit unreliable
 result and a terminal no-candidate assessment instead of language inference.
 
