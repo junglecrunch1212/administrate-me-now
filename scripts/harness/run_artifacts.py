@@ -176,7 +176,7 @@ def create_run(
             "inventories": inventories,
             "evidence": [
                 {
-                    "claim": "The immutable HEAD baseline and current candidate each pass the reviewed navigation production-composition journey.",
+                    "claim": "The immutable candidate merge base and current candidate each pass the reviewed navigation production-composition journey.",
                     "source": "scripts/harness/baseline_navigation.py and bound check receipts",
                     "evidence_class": "local_candidate",
                 }

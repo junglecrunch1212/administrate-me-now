@@ -130,7 +130,7 @@ PATH_RULES: tuple[tuple[tuple[str, ...], tuple[CheckSpec, ...]], ...] = (
                 "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run pytest -p no:cacheprovider -q tests/unit/harness/test_member_navigation_characterization.py tests/integration/test_harness_member_navigation.py",
             ),
             CheckSpec(
-                "member-navigation-head-baseline",
+                "member-navigation-base-baseline",
                 "focused",
                 "PYTHONPATH=bridge PYTHONDONTWRITEBYTECODE=1 poetry run python -m scripts.harness.baseline_navigation",
             ),

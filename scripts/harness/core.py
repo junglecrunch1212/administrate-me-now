@@ -301,33 +301,64 @@ def new_run_directory(run_id: str | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"administrateme-harness-{identifier}-"))
 
 
-def task_diff_bytes(root: Path, paths: Iterable[str]) -> bytes:
+def candidate_base_sha(root: Path) -> str:
+    """Return the immutable merge base between the candidate and current main."""
+
+    return _run_git(root, "merge-base", "HEAD", "origin/main").strip()
+
+
+def task_diff_bytes(
+    root: Path,
+    paths: Iterable[str],
+    *,
+    base_sha: str | None = None,
+) -> bytes:
     """Return a deterministic diff over only explicitly task-owned paths."""
 
     normalized = sorted({str(Path(path)) for path in paths})
     if not normalized:
         return b""
-    tracked = _run_git(root, "diff", "--binary", "HEAD", "--", *normalized).encode()
-    blocks = [tracked]
+    base = base_sha or _run_git(root, "rev-parse", "HEAD").strip()
+    manifest = [b"TASK_PATHS_V2\0"]
     for relative in normalized:
-        for child_relative in git_lines(
-            root, "ls-files", "--others", "--exclude-standard", "--", relative
-        ):
-            child = root / child_relative
-            mode = child.lstat().st_mode
-            header = (
-                f"\nUNTRACKED:{child_relative}\n"
-                f"MODE:{stat.S_IFMT(mode):o}:{stat.S_IMODE(mode):o}\n"
-            ).encode()
-            if stat.S_ISREG(mode):
-                payload = child.read_bytes()
-            elif stat.S_ISLNK(mode):
-                payload = f"SYMLINK:{os.readlink(child)}".encode()
-            else:
-                raise HarnessError(
-                    f"unsupported untracked file type in task binding: {child_relative}"
-                )
-            blocks.extend([header, payload])
+        encoded = relative.encode("utf-8")
+        manifest.extend((f"{len(encoded)}:".encode("ascii"), encoded, b"\0"))
+    committed = _run_git(
+        root, "diff", "--binary", base, "HEAD", "--", *normalized
+    ).encode()
+    working = _run_git(root, "diff", "--binary", "HEAD", "--", *normalized).encode()
+    blocks = [
+        *manifest,
+        b"\nCOMMITTED_DIFF\0",
+        committed,
+        b"\nWORKING_TREE_DIFF\0",
+        working,
+    ]
+    untracked = sorted(
+        {
+            child
+            for relative in normalized
+            for child in git_lines(
+                root, "ls-files", "--others", "--exclude-standard", "--", relative
+            )
+        }
+    )
+    for child_relative in untracked:
+        child = root / child_relative
+        mode = child.lstat().st_mode
+        header = (
+            f"\nUNTRACKED:{child_relative}\n"
+            f"MODE:{stat.S_IFMT(mode):o}:{stat.S_IMODE(mode):o}\n"
+        ).encode()
+        if stat.S_ISREG(mode):
+            payload = child.read_bytes()
+        elif stat.S_ISLNK(mode):
+            payload = f"SYMLINK:{os.readlink(child)}".encode()
+        else:
+            raise HarnessError(
+                f"unsupported untracked file type in task binding: {child_relative}"
+            )
+        blocks.extend([header, payload])
     return b"".join(blocks)
 
 
@@ -337,9 +368,12 @@ def binding(
     *,
     evidence_class: str = "local_candidate",
 ) -> dict[str, str]:
-    digest = hashlib.sha256(task_diff_bytes(root, task_paths)).hexdigest()
+    base_sha = candidate_base_sha(root)
+    digest = hashlib.sha256(
+        task_diff_bytes(root, task_paths, base_sha=base_sha)
+    ).hexdigest()
     return {
-        "base_sha": _run_git(root, "merge-base", "HEAD", "origin/main").strip(),
+        "base_sha": base_sha,
         "head_sha": _run_git(root, "rev-parse", "HEAD").strip(),
         "diff_sha256": digest,
         "branch": _run_git(root, "branch", "--show-current").strip(),
@@ -774,14 +808,26 @@ def clean_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build a subprocess environment without inventing credentials or live paths."""
 
     environment = dict(os.environ)
-    for name in (
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-    ):
-        environment.pop(name, None)
     if extra:
         environment.update(extra)
+    safe_adminme_names = {
+        "ADMINME_GATE7_EVIDENCE_DIR",
+        "ADMINME_GATE7_PYTHON",
+        "ADMINME_GATE7_VISUAL_NOW",
+    }
+    credential_names = {
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CODEX_API_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "OPENAI_API_KEY",
+    }
+    for name in tuple(environment):
+        if (
+            name in credential_names
+            or name.startswith("OPENCLAW_")
+            or (name.startswith("ADMINME_") and name not in safe_adminme_names)
+        ):
+            environment.pop(name, None)
     return environment

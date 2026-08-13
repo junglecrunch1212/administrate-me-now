@@ -19,11 +19,14 @@ from scripts.harness.checks import (
     run_browser,
     run_tier,
 )
+from scripts.harness.baseline_navigation import BASELINE_TEST
 from scripts.harness.core import (
     HarnessError,
     _validate_browser_evidence,
     applicable_instructions,
     binding,
+    candidate_base_sha,
+    clean_environment,
     ensure_ephemeral_run_dir,
     executable_inventory,
     normalize_undetermined,
@@ -158,6 +161,107 @@ def test_binding_base_is_the_candidate_merge_base_not_a_moving_remote_tip() -> N
     assert binding(root, ["scripts/harness"])["base_sha"] == expected
 
 
+def test_committed_candidate_diff_binds_content_and_declared_path_scope(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    candidate = tmp_path / "candidate.txt"
+    prerequisite = tmp_path / "prerequisite.txt"
+    candidate.write_text("baseline\n", "utf-8")
+    prerequisite.write_text("must remain bound\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    candidate.write_text("candidate\n", "utf-8")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=tmp_path, check=True)
+
+    complete = task_diff_bytes(
+        tmp_path,
+        ["candidate.txt", "prerequisite.txt"],
+        base_sha=base,
+    )
+    incomplete = task_diff_bytes(tmp_path, ["candidate.txt"], base_sha=base)
+
+    assert b"-baseline" in complete
+    assert b"+candidate" in complete
+    assert complete != incomplete
+
+
+def test_candidate_base_and_navigation_baseline_select_merge_base(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "fixture.txt").write_text("base\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", base],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "fixture.txt").write_text("candidate\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=tmp_path, check=True)
+
+    assert candidate_base_sha(tmp_path) == base
+    assert "test_ten_surfaces_three_modes" in BASELINE_TEST
+
+
+def test_clean_environment_removes_live_authority_even_from_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsafe = {
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_STATE_DIR",
+        "ADMINME_OPENCLAW_GATEWAY_TOKEN",
+        "ADMINME_OPENCLAW_SHARED_SECRET",
+        "ADMINME_EVENT_LOG_KEY_HEX",
+        "ADMINME_INSTANCE_ROOT",
+        "ADMINME_INSTANCE_DIR",
+    }
+    for name in unsafe:
+        monkeypatch.setenv(name, "ambient-live-value")
+
+    environment = clean_environment(
+        {
+            **{name: "override-live-value" for name in unsafe},
+            "ADMINME_GATE7_EVIDENCE_DIR": "/tmp/fixture-evidence",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+    )
+
+    assert unsafe.isdisjoint(environment)
+    assert environment["ADMINME_GATE7_EVIDENCE_DIR"] == "/tmp/fixture-evidence"
+    assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
 def test_task_diff_excludes_ignored_runtime_residue(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(
@@ -252,7 +356,7 @@ def test_path_mapping_selects_navigation_and_harness_proof() -> None:
     assert ids == {
         "harness-focused",
         "member-navigation-characterization",
-        "member-navigation-head-baseline",
+        "member-navigation-base-baseline",
         "member-navigation-acceptance",
     }
 

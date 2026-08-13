@@ -1,4 +1,4 @@
-"""Run the navigation production journey against immutable pre-change HEAD."""
+"""Run the navigation production journey against the immutable candidate base."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from .core import HarnessError, repository_root
+from .core import HarnessError, candidate_base_sha, clean_environment, repository_root
 
 BASELINE_TEST = (
     "tests/acceptance/test_gate7_household_experience.py::"
@@ -19,27 +19,21 @@ BASELINE_TEST = (
 
 
 def run() -> None:
-    """Archive HEAD to system temp and execute its production-composition case."""
+    """Archive the candidate merge base and execute its production-composition case."""
 
     root = repository_root()
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    base = candidate_base_sha(root)
     archive = subprocess.run(
-        ["git", "archive", "--format=tar", head],
+        ["git", "archive", "--format=tar", base],
         cwd=root,
         check=True,
         capture_output=True,
     ).stdout
-    with tempfile.TemporaryDirectory(prefix="administrateme-head-baseline-") as value:
+    with tempfile.TemporaryDirectory(prefix="administrateme-base-baseline-") as value:
         baseline = Path(value)
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             bundle.extractall(baseline, filter="data")
-        environment = dict(os.environ)
+        environment = clean_environment()
         environment["PYTHONPATH"] = os.pathsep.join(
             (str(baseline / "bridge"), str(baseline))
         )
@@ -60,13 +54,13 @@ def run() -> None:
             capture_output=True,
             text=True,
         )
-    print(f"baseline_head={head}")
+    print(f"baseline_base={base}")
     print(result.stdout, end="")
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
     if result.returncode != 0:
         raise HarnessError(
-            f"immutable HEAD navigation baseline failed with exit {result.returncode}"
+            f"immutable base navigation baseline failed with exit {result.returncode}"
         )
 
 

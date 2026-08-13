@@ -2557,11 +2557,13 @@ rejected it because the OpenClaw install/check/test breadth receipts ran under
 Node 22.23.2/npm 10.9.8. A separate Node 24 browser receipt was not proof for
 those commands. That rejected run grants no retirement authority.
 
-The repaired harness binds untracked modes, file types, and symlink targets;
+The repaired harness binds the declared task-path manifest, committed and
+working-tree diffs, untracked modes, file types, and symlink targets;
 requires all eight review scopes and all eight outcome states exactly once; runs
-the production navigation case from an immutable archive of `HEAD` as the
-pre-extraction baseline; and requires every prerequisite removal path in its
-task binding. OpenClaw breadth and browser receipts each require exact supported
+the production navigation case from an immutable archive of the candidate merge
+base; removes ambient provider credentials and live-instance selectors from
+check subprocesses; and requires every prerequisite removal path in its task
+binding. OpenClaw breadth and browser receipts each require exact supported
 Python 3.14, Node >=24.15,<25, and npm >=11.6,<12 toolchain evidence in their
 hashed logs.
 
@@ -2579,10 +2581,10 @@ settings/MCP registration, three hooks, six agent instructions, and obsolete
 setup verdict. Intended replacements and Git provenance remain mapped in
 `LEGACY-EXECUTOR-HISTORY.md`.
 
-This is not released. Final breadth/release-tier receipts, final exact-diff
-review, and owner handoff are required for the post-retirement candidate. No
-commit, push, PR, merge, deployment, Phase B, provider effect, observation
-change, household-state access, or G-001 authority has occurred.
+This is not released. Candidate commits, current-main integration merge commits,
+pushes, and a draft PR are publication steps only and grant no release authority.
+No PR merge, deployment, Phase B, provider effect, observation change,
+household-state access, or G-001 authority is claimed here.
 
 Post-retirement run `20260813t184707z-a1b88771-msfn5j52` is rejected and must
 not be reused. Its static, focused, immutable-baseline, production-composition,
