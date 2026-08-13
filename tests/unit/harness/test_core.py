@@ -26,6 +26,7 @@ from scripts.harness.core import (
     applicable_instructions,
     binding,
     candidate_base_sha,
+    candidate_branch,
     clean_environment,
     ensure_ephemeral_run_dir,
     executable_inventory,
@@ -159,6 +160,35 @@ def test_binding_base_is_the_candidate_merge_base_not_a_moving_remote_tip() -> N
     ).strip()
 
     assert binding(root, ["scripts/harness"])["base_sha"] == expected
+
+
+def test_detached_checkout_binding_has_exact_nonempty_identity(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "fixture.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=tmp_path, check=True)
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head_sha],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "--detach", "-q"], cwd=tmp_path, check=True)
+
+    assert candidate_branch(tmp_path) == f"detached@{head_sha}"
+    assert binding(tmp_path, ["fixture.txt"])["branch"] == f"detached@{head_sha}"
 
 
 def test_committed_candidate_diff_binds_content_and_declared_path_scope(

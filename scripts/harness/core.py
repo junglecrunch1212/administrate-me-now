@@ -307,6 +307,16 @@ def candidate_base_sha(root: Path) -> str:
     return _run_git(root, "merge-base", "HEAD", "origin/main").strip()
 
 
+def candidate_branch(root: Path) -> str:
+    """Return the attached branch or an exact detached-HEAD identity."""
+
+    branch = _run_git(root, "branch", "--show-current").strip()
+    if branch:
+        return branch
+    head_sha = _run_git(root, "rev-parse", "HEAD").strip()
+    return f"detached@{head_sha}"
+
+
 def task_diff_bytes(
     root: Path,
     paths: Iterable[str],
@@ -376,7 +386,7 @@ def binding(
         "base_sha": base_sha,
         "head_sha": _run_git(root, "rev-parse", "HEAD").strip(),
         "diff_sha256": digest,
-        "branch": _run_git(root, "branch", "--show-current").strip(),
+        "branch": candidate_branch(root),
         "evidence_class": evidence_class,
     }
 
