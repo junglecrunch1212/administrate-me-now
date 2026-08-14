@@ -74,6 +74,6 @@ poetry run bash scripts/acceptance/backup-restore.sh
 
 shellcheck -x bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
 bash -n bootstrap/*.sh scripts/acceptance/*.sh scripts/verify_invariants.sh
-git diff --check
+PYTHONPATH=bridge poetry run python -m scripts.harness.cli diff-hygiene
 
 echo "ADMINISTRATEME RELEASE CANDIDATE SUITE: PASS"

@@ -426,6 +426,23 @@ def test_diff_hygiene_rejects_committed_whitespace_from_clean_checkout(
         run_diff_hygiene(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        ".github/workflows/administrateme-consistency.yml",
+        ".github/workflows/macos-bootstrap.yml",
+        "scripts/acceptance/release-candidate.sh",
+    ],
+)
+def test_required_diff_hygiene_entrypoints_use_range_aware_harness(
+    relative: str,
+) -> None:
+    content = (repository_root() / relative).read_text("utf-8")
+
+    assert "python -m scripts.harness.cli diff-hygiene" in content
+    assert "git diff --check" not in content
+
+
 def test_repository_state_and_scope_include_staged_tracked_changes(
     tmp_path: Path,
 ) -> None:

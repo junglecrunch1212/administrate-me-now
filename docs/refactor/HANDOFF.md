@@ -2608,8 +2608,11 @@ merge or deployment authority.
 The remediation is **HARDEN** under AC-44/C115 while preserving member and
 runtime behavior. Run creation now completes the declared manifest with every
 committed candidate path, and validation independently rejects a self-consistent
-manifest that omits any base-to-head path or deletion. Local and hosted diff
-hygiene run against the committed candidate range as well as current task work.
+manifest that omits any base-to-head path or deletion. The harness static gate,
+release-candidate script, consistency workflow, and macOS workflow all invoke
+the same range-aware diff hygiene against the committed candidate range as well
+as current task work; a wiring test rejects any return to plain worktree-only
+`git diff --check`.
 Protected work is represented only by content-free SHA-256 fingerprints that
 bind content, mode, file type, recursive directory state, and symlink targets;
 an in-place change invalidates the run without recording protected content.
