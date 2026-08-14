@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import subprocess
 import zlib
@@ -158,11 +159,24 @@ def test_ephemeral_runs_refuse_repository_paths() -> None:
 
 def test_binding_base_is_the_candidate_merge_base_not_a_moving_remote_tip() -> None:
     root = repository_root()
-    expected = subprocess.check_output(
-        ["git", "merge-base", "HEAD", "origin/main"],
+    remote_main = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
         cwd=root,
+        check=False,
+        capture_output=True,
         text=True,
-    ).strip()
+    )
+    if remote_main.returncode == 0:
+        expected = subprocess.check_output(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=root,
+            text=True,
+        ).strip()
+    else:
+        event_path = os.environ.get("GITHUB_EVENT_PATH")
+        assert event_path is not None
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        expected = event["pull_request"]["base"]["sha"]
 
     assert binding(root, ["scripts/harness"])["base_sha"] == expected
 
