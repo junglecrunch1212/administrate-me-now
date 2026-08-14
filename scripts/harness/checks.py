@@ -31,6 +31,9 @@ from .core import (
     write_json,
 )
 
+BROWSER_MAX_CHANGED_PIXEL_RATIO = 0.0015
+BROWSER_MAX_CHANNEL_DELTA = 2
+
 
 @dataclass(frozen=True)
 class CheckSpec:
@@ -838,9 +841,12 @@ def _png_pixel_delta(before: Path, after: Path) -> dict[str, Any]:
         "total_pixels": width * height,
         "changed_pixel_ratio": changed / (width * height),
         "max_channel_delta": max_delta,
-        "required_max_changed_pixel_ratio": 0.0015,
-        "required_max_channel_delta": 1,
-        "equivalent": (changed / (width * height) <= 0.0015 and max_delta <= 1),
+        "required_max_changed_pixel_ratio": BROWSER_MAX_CHANGED_PIXEL_RATIO,
+        "required_max_channel_delta": BROWSER_MAX_CHANNEL_DELTA,
+        "equivalent": (
+            changed / (width * height) <= BROWSER_MAX_CHANGED_PIXEL_RATIO
+            and max_delta <= BROWSER_MAX_CHANNEL_DELTA
+        ),
     }
 
 

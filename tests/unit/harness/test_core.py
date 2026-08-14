@@ -1196,6 +1196,45 @@ def test_browser_equivalence_rejects_excess_low_delta_rendering_change(
     assert "screenshot_pixels:surface.png" in comparison["mismatches"]
 
 
+def test_browser_equivalence_rejects_sparse_channel_delta_above_bound(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "administrateme-harness-browser-channel-bound"
+    before_dir = run_dir / "browser"
+    after_dir = run_dir / "browser-after"
+    before_dir.mkdir(parents=True)
+    after_dir.mkdir(parents=True)
+    _bind_browser_run(run_dir, before_dir, after_dir)
+    report = _complete_visual_report("surface.png")
+    changed = json.loads(json.dumps(report))
+    _write_visual_report(
+        before_dir,
+        report,
+        pixels={"surface.png": _fixture_png(100, width=1000)},
+    )
+    _write_visual_report(
+        after_dir,
+        changed,
+        pixels={
+            "surface.png": _fixture_png(
+                100,
+                width=1000,
+                overrides={0: 103},
+            )
+        },
+    )
+
+    receipt = compare_browser_evidence(repository_root(), run_dir)
+
+    assert receipt["status"] == "FAIL"
+    comparison = json.loads((run_dir / "browser-comparison.json").read_text("utf-8"))
+    assert comparison["pixel_comparisons"]["surface.png"][
+        "changed_pixel_ratio"
+    ] == pytest.approx(0.001)
+    assert comparison["pixel_comparisons"]["surface.png"]["max_channel_delta"] == 3
+    assert "screenshot_pixels:surface.png" in comparison["mismatches"]
+
+
 def test_browser_equivalence_rejects_two_identically_failed_runs(
     tmp_path: Path,
 ) -> None:

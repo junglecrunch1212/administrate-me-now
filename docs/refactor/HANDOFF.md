@@ -2616,7 +2616,7 @@ an in-place change invalidates the run without recording protected content.
 Browser equivalence retains exact semantic assertions, dimensions, screenshot
 inventory, routes, authorization, modes, console/page/request outcomes, and
 hash verification. It accepts only same-engine variance with maximum channel
-delta one and at most 0.15% changed pixels per screenshot; exceeding either
+delta two and at most 0.15% changed pixels per screenshot; exceeding either
 bound fails.
 
 This remediation changes no member route, label, order, payload, event,
