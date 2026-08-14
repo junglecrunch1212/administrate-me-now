@@ -27,9 +27,11 @@
     "repository_state": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tracked_changes", "untracked_paths", "protected_paths", "protected_path_bindings"],
+      "required": ["tracked_changes", "staged_tracked_changes", "unstaged_tracked_changes", "untracked_paths", "protected_paths", "protected_path_bindings"],
       "properties": {
         "tracked_changes": {"type": "array", "items": {"type": "string"}},
+        "staged_tracked_changes": {"type": "array", "items": {"type": "string"}},
+        "unstaged_tracked_changes": {"type": "array", "items": {"type": "string"}},
         "untracked_paths": {"type": "array", "items": {"type": "string"}},
         "protected_paths": {"type": "array", "items": {"type": "string"}},
         "protected_path_bindings": {

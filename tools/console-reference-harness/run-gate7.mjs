@@ -324,24 +324,38 @@ async function newContext(browser, identity, viewport, reducedMotion = "no-prefe
 
 async function screenshot(page, name) {
   const path = join(evidenceDir, name);
-  await page.evaluate(async () => {
+  const productionPositioning = await page.evaluate(async () => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     globalThis.scrollTo(0, 0);
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const rail = document.querySelector(".rail");
+    const chatFab = document.querySelector(".chat-fab");
+    const railStyle = rail ? getComputedStyle(rail) : null;
+    const chatFabStyle = chatFab ? getComputedStyle(chatFab) : null;
+    return {
+      viewportWidth: globalThis.innerWidth,
+      railPosition: railStyle?.position,
+      railTop: railStyle?.top,
+      chatFabPosition: chatFabStyle?.position,
+      chatFabRight: chatFabStyle?.right,
+      chatFabBottom: chatFabStyle?.bottom,
+    };
   });
+  const expectedRailPosition = productionPositioning.viewportWidth <= 720 ? "sticky" : "static";
+  record(
+    `${name} production floating layout`,
+    productionPositioning.railPosition === expectedRailPosition
+      && (expectedRailPosition !== "sticky" || productionPositioning.railTop === "0px")
+      && productionPositioning.chatFabPosition === "fixed"
+      && productionPositioning.chatFabRight === "16px"
+      && productionPositioning.chatFabBottom === "16px",
+    productionPositioning,
+  );
   await page.screenshot({
     path,
     fullPage: true,
     style: `
       .skip-link { display: none !important; }
-      .chat-fab {
-        bottom: auto !important;
-        position: absolute !important;
-        top: 50rem !important;
-      }
-      .rail {
-        position: static !important;
-      }
       html {
         scrollbar-width: none !important;
       }

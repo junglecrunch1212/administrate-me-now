@@ -124,7 +124,7 @@ def _complete_visual_report(primary_name: str) -> dict[str, object]:
         ],
         "results": [
             {"name": f"assertion-{index}", "status": "PASS", "detail": "same"}
-            for index in range(260)
+            for index in range(299)
         ],
         "screenshots": {name: {"sha256": "0" * 64} for name in names},
         "console_errors": [],
@@ -473,6 +473,11 @@ def test_repository_state_and_scope_include_staged_tracked_changes(
         "candidate.txt",
         "outside.txt",
     ]
+    assert repository_state(tmp_path, ["outside.txt"])["staged_tracked_changes"] == [
+        "candidate.txt",
+        "outside.txt",
+    ]
+    assert repository_state(tmp_path, ["outside.txt"])["unstaged_tracked_changes"] == []
     with pytest.raises(HarnessError, match="outside task-owned or protected"):
         assert_task_scope_covers_tracked_changes(tmp_path, ["candidate.txt"], [])
     assert_task_scope_covers_tracked_changes(
@@ -480,6 +485,62 @@ def test_repository_state_and_scope_include_staged_tracked_changes(
         ["candidate.txt"],
         ["outside.txt"],
     )
+
+
+def test_repository_state_and_binding_distinguish_index_from_worktree(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    candidate = tmp_path / "candidate.txt"
+    candidate.write_text("baseline\n", "utf-8")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+
+    candidate.write_text("changed\n", "utf-8")
+    unstaged_binding = task_diff_bytes(tmp_path, ["candidate.txt"])
+    unstaged_state = repository_state(tmp_path, [])
+    subprocess.run(["git", "add", "candidate.txt"], cwd=tmp_path, check=True)
+    staged_binding = task_diff_bytes(tmp_path, ["candidate.txt"])
+    staged_state = repository_state(tmp_path, [])
+
+    assert staged_binding != unstaged_binding
+    assert unstaged_state["staged_tracked_changes"] == []
+    assert unstaged_state["unstaged_tracked_changes"] == ["candidate.txt"]
+    assert staged_state["staged_tracked_changes"] == ["candidate.txt"]
+    assert staged_state["unstaged_tracked_changes"] == []
+
+    candidate.write_text("baseline\n", "utf-8")
+    cancelling_binding = task_diff_bytes(tmp_path, ["candidate.txt"])
+    cancelling_state = repository_state(tmp_path, [])
+    assert cancelling_binding not in {staged_binding, unstaged_binding}
+    assert cancelling_state["tracked_changes"] == ["candidate.txt"]
+    assert cancelling_state["staged_tracked_changes"] == ["candidate.txt"]
+    assert cancelling_state["unstaged_tracked_changes"] == ["candidate.txt"]
+
+
+def test_browser_capture_keeps_and_asserts_production_positioning() -> None:
+    content = (
+        repository_root() / "tools/console-reference-harness/run-gate7.mjs"
+    ).read_text("utf-8")
+
+    assert "production floating layout" in content
+    assert 'productionPositioning.chatFabPosition === "fixed"' in content
+    assert (
+        "expectedRailPosition = productionPositioning.viewportWidth <= 720 "
+        '? "sticky" : "static"' in content
+    )
+    assert "position: absolute !important" not in content
+    assert ".rail {\n        position: static !important;" not in content
 
 
 def test_protected_path_binding_covers_content_mode_type_and_link_target(

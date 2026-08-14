@@ -2646,6 +2646,21 @@ calibrated to 0.25% while the channel-delta limit and every semantic, route,
 authorization, mode, navigation, error, dimension, and inventory check remain
 unchanged.
 
+The subsequent exact-head read-only review at
+`feb10ec40b5098ada81cfa9c68b4f6c25cc9c47c` found three more false-green paths
+before publication. Aggregate `HEAD` versus worktree state could collapse the
+index and unstaged delta; capture-time CSS overrides could hide a sticky rail
+or fixed chat-button regression; and the artifact restoration branches had
+not been driven through a post-write failure. The harness now binds and
+inventories staged and unstaged state independently, checks their diff hygiene
+independently, and proves the index/worktree cancellation case. Browser capture
+no longer changes rail or chat-button positioning and records the expected
+computed production position before each of the 39 screenshots. Forced
+post-write review reconciliation and owner validation failures prove
+byte-for-byte restoration of review, verification, owner metadata, and owner
+prose. The `feb10ec` run remains rejected diagnostic evidence and must not be
+promoted.
+
 This remediation changes no member route, label, order, payload, event,
 projection, pipeline, provider boundary, observation state, or live state. A
 fresh exact-bound run, new candidate commit/head, hosted checks, and a separate

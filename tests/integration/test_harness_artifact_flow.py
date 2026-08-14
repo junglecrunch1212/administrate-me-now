@@ -385,6 +385,54 @@ def test_record_review_rejects_stale_repository_state_without_overwriting(
     assert verification_path.read_bytes() == previous_verification
 
 
+def test_record_review_restores_artifacts_after_post_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-review-post-write-failure"
+    create_run(
+        root,
+        requested_outcome="Restore canonical review proof after failed reconciliation.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    canonical_path = run_dir / "review-report.json"
+    verification_path = run_dir / "verification-report.json"
+    review = load_json(canonical_path)
+    review.update(
+        {
+            "reviewer": "independent-reviewer",
+            "unresolved_evidence": [],
+            "conclusion": "APPROVE",
+        }
+    )
+    external = tmp_path / "post-write-review.json"
+    write_json(external, review)
+    previous_review = canonical_path.read_bytes()
+    previous_verification = verification_path.read_bytes()
+
+    def fail_after_write(reconciled_run_dir: Path) -> None:
+        assert (
+            load_json(reconciled_run_dir / "review-report.json")["conclusion"]
+            == "APPROVE"
+        )
+        write_json(
+            reconciled_run_dir / "verification-report.json",
+            {"mutated": "during reconciliation"},
+        )
+        raise HarnessError("forced post-write reconciliation failure")
+
+    monkeypatch.setattr(run_artifacts, "_reconcile_verification", fail_after_write)
+
+    with pytest.raises(HarnessError, match="forced post-write"):
+        record_review(run_dir, external, root)
+
+    assert canonical_path.read_bytes() == previous_review
+    assert verification_path.read_bytes() == previous_verification
+
+
 def test_finalize_owner_refuses_incomplete_evidence(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     run_dir = tmp_path / "administrateme-harness-owner-finalize"
@@ -441,6 +489,81 @@ def test_finalize_owner_rejects_stale_state_without_overwriting(
     assert owner_path.read_bytes() == previous_owner
     assert handoff_path.read_bytes() == previous_handoff
     assert verification_path.read_bytes() == previous_verification
+
+
+def test_finalize_owner_restores_artifacts_after_post_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-owner-post-write-failure"
+    create_run(
+        root,
+        requested_outcome="Restore canonical owner proof after failed validation.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    owner_path = run_dir / "owner-handoff.metadata.json"
+    handoff_path = run_dir / "owner-handoff.md"
+    verification_path = run_dir / "verification-report.json"
+    review_path = run_dir / "review-report.json"
+    verification = load_json(verification_path)
+    verification["status"] = "PASS"
+    verification["browser"]["status"] = "PASS"
+    verification["browser"]["desktop"] = [{"path": "desktop.png", "sha256": "a" * 64}]
+    verification["browser"]["narrow"] = [{"path": "narrow.png", "sha256": "b" * 64}]
+    verification["checks"] = [
+        {"tier": tier, "check_id": check_id, "status": "PASS"}
+        for tier, check_id in (
+            ("static", "static-fixture"),
+            ("focused", "focused-fixture"),
+            ("journey", "navigation-production-composition"),
+            ("breadth", "breadth-fixture"),
+        )
+    ]
+    write_json(verification_path, verification)
+    review = load_json(review_path)
+    review.update(
+        {
+            "reviewer": "independent-reviewer",
+            "unresolved_evidence": [],
+            "conclusion": "APPROVE",
+        }
+    )
+    write_json(review_path, review)
+    previous_owner = owner_path.read_bytes()
+    previous_handoff = handoff_path.read_bytes()
+    previous_verification = verification_path.read_bytes()
+    previous_review = review_path.read_bytes()
+
+    def fail_after_write(validated_run_dir: Path, _root: Path | None = None) -> None:
+        assert (
+            load_json(validated_run_dir / "owner-handoff.metadata.json")[
+                "release_status"
+            ]
+            == "CANDIDATE_ONLY"
+        )
+        assert "Candidate cleanup is proved." in (
+            validated_run_dir / "owner-handoff.md"
+        ).read_text("utf-8")
+        raise HarnessError("forced post-write owner validation failure")
+
+    monkeypatch.setattr(run_artifacts, "validate_run", fail_after_write)
+
+    with pytest.raises(HarnessError, match="forced post-write"):
+        finalize_owner_handoff(
+            run_dir,
+            what_now_works="Candidate cleanup is proved.",
+            task="Open Today.",
+            expected_result="Existing member behavior remains visible.",
+            root=root,
+        )
+
+    assert owner_path.read_bytes() == previous_owner
+    assert handoff_path.read_bytes() == previous_handoff
+    assert verification_path.read_bytes() == previous_verification
+    assert review_path.read_bytes() == previous_review
 
 
 def test_fabricated_green_checks_without_bound_receipts_are_rejected(

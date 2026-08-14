@@ -36,7 +36,7 @@ ARTIFACT_SCHEMAS = {
     "review-report.json": "review-report.schema.json",
     "owner-handoff.metadata.json": "owner-handoff.schema.json",
 }
-GATE7_MIN_ASSERTIONS = 260
+GATE7_MIN_ASSERTIONS = 299
 GATE7_MIN_SCREENSHOTS = 39
 GATE7_REQUIRED_VIEWPORTS = frozenset(
     {"1440x1000", "1280x900", "1024x768", "820x1180", "390x844"}
@@ -473,21 +473,31 @@ def assert_task_scope_covers_tracked_changes(
     """Reject staged or unstaged tracked work outside the declared boundaries."""
 
     normalized_task_paths = sorted({str(Path(path)) for path in task_paths})
-    tracked = set(git_lines(root, "diff", "--name-only", "HEAD"))
-    selected = (
-        set(
+    staged = set(git_lines(root, "diff", "--cached", "--name-only", "HEAD"))
+    unstaged = set(git_lines(root, "diff", "--name-only"))
+    tracked = staged | unstaged
+    if normalized_task_paths:
+        selected = set(
             git_lines(
                 root,
                 "diff",
+                "--cached",
                 "--name-only",
                 "HEAD",
                 "--",
                 *normalized_task_paths,
             )
+        ) | set(
+            git_lines(
+                root,
+                "diff",
+                "--name-only",
+                "--",
+                *normalized_task_paths,
+            )
         )
-        if normalized_task_paths
-        else set()
-    )
+    else:
+        selected = set()
     normalized_protected = sorted(
         {_protected_relative_path(path) for path in protected_paths}
     )
@@ -514,11 +524,12 @@ def run_diff_hygiene(root: Path) -> str:
     base_sha = candidate_base_sha(root)
     checks = (
         ("committed candidate diff", [base_sha, "HEAD"]),
-        ("working-tree diff", ["HEAD"]),
+        ("staged diff", ["--cached", "HEAD"]),
+        ("unstaged diff", []),
     )
-    for label, revisions in checks:
+    for label, arguments in checks:
         process = subprocess.run(
-            ["git", "diff", "--check", *revisions],
+            ["git", "diff", "--check", *arguments],
             cwd=root,
             check=False,
             capture_output=True,
@@ -549,13 +560,18 @@ def task_diff_bytes(
     committed = _run_git(
         root, "diff", "--binary", base, "HEAD", "--", *normalized
     ).encode()
-    working = _run_git(root, "diff", "--binary", "HEAD", "--", *normalized).encode()
+    staged = _run_git(
+        root, "diff", "--cached", "--binary", "HEAD", "--", *normalized
+    ).encode()
+    unstaged = _run_git(root, "diff", "--binary", "--", *normalized).encode()
     blocks = [
         *manifest,
         b"\nCOMMITTED_DIFF\0",
         committed,
-        b"\nWORKING_TREE_DIFF\0",
-        working,
+        b"\nSTAGED_DIFF\0",
+        staged,
+        b"\nUNSTAGED_DIFF\0",
+        unstaged,
     ]
     untracked = sorted(
         {
@@ -702,8 +718,12 @@ def protected_path_binding(root: Path, relative: str) -> dict[str, Any]:
 
 def repository_state(root: Path, protected_paths: Iterable[str]) -> dict[str, Any]:
     normalized = sorted({_protected_relative_path(path) for path in protected_paths})
+    staged = git_lines(root, "diff", "--cached", "--name-only", "HEAD")
+    unstaged = git_lines(root, "diff", "--name-only")
     return {
-        "tracked_changes": git_lines(root, "diff", "--name-only", "HEAD"),
+        "tracked_changes": sorted(set(staged) | set(unstaged)),
+        "staged_tracked_changes": staged,
+        "unstaged_tracked_changes": unstaged,
         "untracked_paths": git_lines(
             root, "ls-files", "--others", "--exclude-standard"
         ),
