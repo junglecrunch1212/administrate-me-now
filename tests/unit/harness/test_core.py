@@ -338,6 +338,169 @@ def test_candidate_base_and_navigation_baseline_select_merge_base(
     assert "test_ten_surfaces_three_modes" in BASELINE_TEST
 
 
+def _shallow_github_pull_request_checkout(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, str]]:
+    source = tmp_path / "source"
+    remote = tmp_path / "remote.git"
+    checkout = tmp_path / "checkout"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=source,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=source,
+        check=True,
+    )
+    (source / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=source, check=True)
+    base_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+    ).strip()
+    subprocess.run(["git", "checkout", "-qb", "candidate"], cwd=source, check=True)
+    (source / "candidate.txt").write_text("candidate\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=source, check=True)
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+    ).strip()
+    subprocess.run(["git", "checkout", "-q", "main"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "merge", "--no-ff", "candidate", "-qm", "pull request merge"],
+        cwd=source,
+        check=True,
+    )
+    merge_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+    ).strip()
+
+    subprocess.run(["git", "clone", "-q", "--bare", str(source), str(remote)], check=True)
+    subprocess.run(
+        ["git", "update-ref", "refs/heads/main", base_sha], cwd=remote, check=True
+    )
+    subprocess.run(
+        ["git", "update-ref", "refs/pull/1/merge", merge_sha],
+        cwd=remote,
+        check=True,
+    )
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", f"file://{remote}"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "fetch",
+            "-q",
+            "--depth=1",
+            "origin",
+            "+refs/pull/1/merge:refs/remotes/pull/1/merge",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", "refs/remotes/pull/1/merge"],
+        cwd=checkout,
+        check=True,
+    )
+    return checkout, {"base": base_sha, "head": head_sha, "merge": merge_sha}
+
+
+def _set_github_pull_request_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    revisions: dict[str, str],
+) -> Path:
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "pull_request": {
+                    "base": {"ref": "main", "sha": revisions["base"]},
+                    "head": {"sha": revisions["head"]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_SHA", revisions["merge"])
+    return event_path
+
+
+def test_candidate_base_materializes_verified_shallow_github_pr_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout, revisions = _shallow_github_pull_request_checkout(tmp_path)
+    _set_github_pull_request_environment(monkeypatch, tmp_path, revisions)
+
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{revisions['base']}^{{commit}}"],
+            cwd=checkout,
+            check=False,
+        ).returncode
+        != 0
+    )
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/remotes/origin/main"],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+
+    assert candidate_base_sha(checkout) == revisions["base"]
+    current = binding(checkout, ["candidate.txt"])
+
+    assert current["base_sha"] == revisions["base"]
+    assert current["branch"] == f"detached@{revisions['merge']}"
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{revisions['base']}^{{commit}}"],
+            cwd=checkout,
+            check=False,
+        ).returncode
+        == 0
+    )
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/remotes/origin/main"],
+            cwd=checkout,
+            check=False,
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+
+
+def test_candidate_base_rejects_pr_event_that_disagrees_with_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout, revisions = _shallow_github_pull_request_checkout(tmp_path)
+    event_path = _set_github_pull_request_environment(monkeypatch, tmp_path, revisions)
+    event = json.loads(event_path.read_text(encoding="utf-8"))
+    event["pull_request"]["base"]["sha"] = "f" * 40
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="do not match checkout parents"):
+        candidate_base_sha(checkout)
+
+
 def test_clean_environment_removes_live_authority_even_from_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

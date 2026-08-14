@@ -301,10 +301,103 @@ def new_run_directory(run_id: str | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"administrateme-harness-{identifier}-"))
 
 
-def candidate_base_sha(root: Path) -> str:
-    """Return the immutable merge base between the candidate and current main."""
+def _git_commit_exists(root: Path, revision: str) -> bool:
+    process = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return process.returncode == 0
 
-    return _run_git(root, "merge-base", "HEAD", "origin/main").strip()
+
+def _github_pull_request_base_sha(root: Path) -> str:
+    """Resolve and materialize an exact base for GitHub's shallow PR checkout."""
+
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise HarnessError(
+            "origin/main is unavailable outside a verified GitHub Actions checkout"
+        )
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        raise HarnessError(
+            "origin/main is unavailable and the GitHub event is not pull_request"
+        )
+    if os.environ.get("GITHUB_BASE_REF") != "main":
+        raise HarnessError(
+            "origin/main is unavailable and GITHUB_BASE_REF is not main"
+        )
+
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        raise HarnessError("GitHub pull-request checkout has no GITHUB_EVENT_PATH")
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        pull_request = event["pull_request"]
+        base_ref = pull_request["base"]["ref"]
+        base_sha = pull_request["base"]["sha"]
+        head_sha = pull_request["head"]["sha"]
+    except (KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+        raise HarnessError(
+            f"cannot read GitHub pull-request base and head from {event_path}: {exc}"
+        ) from exc
+
+    sha_pattern = re.compile(r"[0-9a-f]{40}")
+    if base_ref != "main" or not isinstance(base_sha, str) or not sha_pattern.fullmatch(
+        base_sha
+    ):
+        raise HarnessError("GitHub pull-request event has an invalid main base")
+    if not isinstance(head_sha, str) or not sha_pattern.fullmatch(head_sha):
+        raise HarnessError("GitHub pull-request event has an invalid head SHA")
+
+    checkout_sha = _run_git(root, "rev-parse", "HEAD").strip()
+    if os.environ.get("GITHUB_SHA") != checkout_sha:
+        raise HarnessError("GITHUB_SHA does not identify the checked-out commit")
+    commit_headers = _run_git(root, "cat-file", "-p", "HEAD").split("\n\n", 1)[0]
+    parents = [
+        line.removeprefix("parent ")
+        for line in commit_headers.splitlines()
+        if line.startswith("parent ")
+    ]
+    if parents != [base_sha, head_sha]:
+        raise HarnessError(
+            "GitHub pull-request event base/head do not match checkout parents"
+        )
+
+    if not _git_commit_exists(root, base_sha):
+        process = subprocess.run(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--depth=1",
+                "origin",
+                base_sha,
+            ],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if process.returncode != 0:
+            detail = process.stderr.strip() or process.stdout.strip() or "no diagnostic"
+            raise HarnessError(
+                f"cannot fetch exact GitHub pull-request base {base_sha}: {detail}"
+            )
+    if not _git_commit_exists(root, base_sha):
+        raise HarnessError(
+            f"exact GitHub pull-request base {base_sha} is not a commit object"
+        )
+    return base_sha
+
+
+def candidate_base_sha(root: Path) -> str:
+    """Return the candidate's verified immutable main base."""
+
+    if _git_commit_exists(root, "refs/remotes/origin/main"):
+        return _run_git(root, "merge-base", "HEAD", "origin/main").strip()
+    return _github_pull_request_base_sha(root)
 
 
 def candidate_branch(root: Path) -> str:
