@@ -465,6 +465,49 @@ def complete_task_scope(root: Path, task_paths: Iterable[str]) -> list[str]:
     )
 
 
+def assert_task_scope_covers_tracked_changes(
+    root: Path,
+    task_paths: Iterable[str],
+    protected_paths: Iterable[str],
+) -> None:
+    """Reject staged or unstaged tracked work outside the declared boundaries."""
+
+    normalized_task_paths = sorted({str(Path(path)) for path in task_paths})
+    tracked = set(git_lines(root, "diff", "--name-only", "HEAD"))
+    selected = (
+        set(
+            git_lines(
+                root,
+                "diff",
+                "--name-only",
+                "HEAD",
+                "--",
+                *normalized_task_paths,
+            )
+        )
+        if normalized_task_paths
+        else set()
+    )
+    normalized_protected = sorted(
+        {_protected_relative_path(path) for path in protected_paths}
+    )
+
+    def is_protected(relative: str) -> bool:
+        return any(
+            relative == protected or relative.startswith(f"{protected}/")
+            for protected in normalized_protected
+        )
+
+    uncovered = sorted(
+        relative for relative in tracked - selected if not is_protected(relative)
+    )
+    if uncovered:
+        raise HarnessError(
+            "tracked worktree changes fall outside task-owned or protected paths: "
+            + ", ".join(uncovered)
+        )
+
+
 def run_diff_hygiene(root: Path) -> str:
     """Check both the committed candidate and current task worktree for defects."""
 
@@ -660,7 +703,7 @@ def protected_path_binding(root: Path, relative: str) -> dict[str, Any]:
 def repository_state(root: Path, protected_paths: Iterable[str]) -> dict[str, Any]:
     normalized = sorted({_protected_relative_path(path) for path in protected_paths})
     return {
-        "tracked_changes": git_lines(root, "diff", "--name-only"),
+        "tracked_changes": git_lines(root, "diff", "--name-only", "HEAD"),
         "untracked_paths": git_lines(
             root, "ls-files", "--others", "--exclude-standard"
         ),
@@ -759,19 +802,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
             "owner-handoff.md contradicts or is stale against owner handoff metadata"
         )
     if root is not None:
-        assert_task_scope_covers_candidate_diff(root, verification["changed_files"])
-        current = binding(root, verification["changed_files"])
-        if current != canonical_binding:
-            raise HarnessError(
-                "run binding is stale for the current task-owned diff; "
-                "refreshing must invalidate and rerun evidence"
-            )
-        evidence_inventory = artifacts["evidence-inventory.json"]
-        protected = evidence_inventory["repository_state"]["protected_paths"]
-        if evidence_inventory["repository_state"] != repository_state(root, protected):
-            raise HarnessError(
-                "evidence-inventory.json repository state is stale for the current worktree"
-            )
+        assert_current_run_state(run_dir, root, artifacts=artifacts)
 
     check_statuses = [check["status"] for check in verification["checks"]]
     for check in verification["checks"]:
@@ -847,6 +878,34 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
         or any(finding["actionable"] for finding in review["findings"])
     ):
         raise HarnessError("review APPROVE retains actionable or unresolved evidence")
+
+
+def assert_current_run_state(
+    run_dir: Path,
+    root: Path,
+    *,
+    artifacts: dict[str, Any] | None = None,
+) -> None:
+    """Verify candidate and repository state without mutating canonical evidence."""
+
+    loaded = artifacts or {name: load_json(run_dir / name) for name in ARTIFACT_SCHEMAS}
+    canonical_binding = loaded["outcome-contract.json"]["binding"]
+    verification = loaded["verification-report.json"]
+    evidence_inventory = loaded["evidence-inventory.json"]
+    task_paths = verification["changed_files"]
+    protected = evidence_inventory["repository_state"]["protected_paths"]
+    assert_task_scope_covers_candidate_diff(root, task_paths)
+    assert_task_scope_covers_tracked_changes(root, task_paths, protected)
+    current = binding(root, task_paths)
+    if current != canonical_binding:
+        raise HarnessError(
+            "run binding is stale for the current task-owned diff; "
+            "refreshing must invalidate and rerun evidence"
+        )
+    if evidence_inventory["repository_state"] != repository_state(root, protected):
+        raise HarnessError(
+            "evidence-inventory.json repository state is stale for the current worktree"
+        )
 
 
 def _validate_required_check_specs(verification: dict[str, Any]) -> None:

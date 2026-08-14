@@ -179,6 +179,32 @@ def test_validation_invalidates_in_place_protected_file_change(
     with pytest.raises(HarnessError, match="repository state is stale"):
         _validate_run_semantics(run_dir, root)
 
+    verification_path = run_dir / "verification-report.json"
+    verification = load_json(verification_path)
+    verification["checks"] = [{"stale": "proof"}]
+    write_json(verification_path, verification)
+    review_path = run_dir / "review-report.json"
+    review = load_json(review_path)
+    review["unresolved_evidence"] = []
+    review["conclusion"] = "APPROVE"
+    write_json(review_path, review)
+    owner_path = run_dir / "owner-handoff.metadata.json"
+    owner = load_json(owner_path)
+    owner["proof"]["deterministic"] = "PASS"
+    write_json(owner_path, owner)
+    sync_owner_handoff(run_dir)
+
+    refresh_bindings(root, run_dir, [])
+
+    verification = load_json(verification_path)
+    review = load_json(review_path)
+    owner = load_json(owner_path)
+    assert verification["checks"] == []
+    assert verification["browser"]["status"] == "UNDETERMINED"
+    assert review["conclusion"] == "UNDETERMINED"
+    assert owner["proof"]["deterministic"] == "UNDETERMINED"
+    _validate_run_semantics(run_dir, root)
+
 
 def test_semantically_false_green_run_is_rejected(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
@@ -321,6 +347,44 @@ def test_record_review_accepts_exact_binding_and_reconciles(
     assert not any("Independent review" in gap for gap in verification["unresolved"])
 
 
+def test_record_review_rejects_stale_repository_state_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-review-stale-state"
+    create_run(
+        root,
+        requested_outcome="Reject review import after repository state changes.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    canonical_path = run_dir / "review-report.json"
+    verification_path = run_dir / "verification-report.json"
+    review = load_json(canonical_path)
+    review.update(
+        {
+            "reviewer": "independent-reviewer",
+            "unresolved_evidence": [],
+            "conclusion": "APPROVE",
+        }
+    )
+    external = tmp_path / "stale-state-review.json"
+    write_json(external, review)
+    evidence_path = run_dir / "evidence-inventory.json"
+    evidence = load_json(evidence_path)
+    evidence["repository_state"]["tracked_changes"] = ["stale-state.txt"]
+    write_json(evidence_path, evidence)
+    previous_review = canonical_path.read_bytes()
+    previous_verification = verification_path.read_bytes()
+
+    with pytest.raises(HarnessError, match="repository state is stale"):
+        record_review(run_dir, external, root)
+
+    assert canonical_path.read_bytes() == previous_review
+    assert verification_path.read_bytes() == previous_verification
+
+
 def test_finalize_owner_refuses_incomplete_evidence(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     run_dir = tmp_path / "administrateme-harness-owner-finalize"
@@ -340,6 +404,43 @@ def test_finalize_owner_refuses_incomplete_evidence(tmp_path: Path) -> None:
             expected_result="Existing member behavior remains visible.",
             root=root,
         )
+
+
+def test_finalize_owner_rejects_stale_state_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-owner-stale-state"
+    create_run(
+        root,
+        requested_outcome="Refuse owner proof after repository state changes.",
+        task_paths=["scripts/harness"],
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    evidence_path = run_dir / "evidence-inventory.json"
+    evidence = load_json(evidence_path)
+    evidence["repository_state"]["tracked_changes"] = ["stale-state.txt"]
+    write_json(evidence_path, evidence)
+    owner_path = run_dir / "owner-handoff.metadata.json"
+    handoff_path = run_dir / "owner-handoff.md"
+    verification_path = run_dir / "verification-report.json"
+    previous_owner = owner_path.read_bytes()
+    previous_handoff = handoff_path.read_bytes()
+    previous_verification = verification_path.read_bytes()
+
+    with pytest.raises(HarnessError, match="repository state is stale"):
+        finalize_owner_handoff(
+            run_dir,
+            what_now_works="This must not be written.",
+            task="Open Today.",
+            expected_result="No stale proof is promoted.",
+            root=root,
+        )
+
+    assert owner_path.read_bytes() == previous_owner
+    assert handoff_path.read_bytes() == previous_handoff
+    assert verification_path.read_bytes() == previous_verification
 
 
 def test_fabricated_green_checks_without_bound_receipts_are_rejected(

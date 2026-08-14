@@ -9,6 +9,8 @@ from typing import Any
 from .core import (
     HARNESS_SCHEMA_VERSION,
     HarnessError,
+    assert_current_run_state,
+    assert_task_scope_covers_tracked_changes,
     binding,
     complete_task_scope,
     ensure_ephemeral_run_dir,
@@ -46,6 +48,7 @@ def create_run(
     run_dir: Path | None = None,
 ) -> Path:
     task_paths = complete_task_scope(root, task_paths)
+    assert_task_scope_covers_tracked_changes(root, task_paths, protected_paths)
     directory = run_dir or new_run_directory()
     ensure_ephemeral_run_dir(directory, root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -362,11 +365,17 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
 def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
     ensure_ephemeral_run_dir(run_dir, root)
     task_paths = complete_task_scope(root, task_paths)
+    evidence_path = run_dir / "evidence-inventory.json"
+    evidence = json.loads(evidence_path.read_text("utf-8"))
+    previous_state = evidence["repository_state"]
+    protected_paths = previous_state["protected_paths"]
+    assert_task_scope_covers_tracked_changes(root, task_paths, protected_paths)
     current = binding(root, task_paths)
     previous = json.loads((run_dir / "outcome-contract.json").read_text("utf-8"))[
         "binding"
     ]
-    changed = previous != current
+    current_state = repository_state(root, protected_paths)
+    changed = previous != current or previous_state != current_state
     for name in (
         "outcome-contract.json",
         "evidence-inventory.json",
@@ -381,8 +390,7 @@ def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
         if name == "verification-report.json":
             data["changed_files"] = task_paths
         elif name == "evidence-inventory.json":
-            protected = data["repository_state"]["protected_paths"]
-            data["repository_state"] = repository_state(root, protected)
+            data["repository_state"] = current_state
         elif name == "preservation-manifest.json":
             data["rollback"]["task_owned_paths"] = task_paths
         write_json(path, data)
@@ -414,7 +422,7 @@ def _invalidate_stale_evidence(run_dir: Path) -> None:
                 "request_failures": [],
             },
             "unresolved": [
-                "The candidate binding changed; every check, browser journey, and independent review must be rerun."
+                "The candidate binding or repository state changed; every check, browser journey, and independent review must be rerun."
             ],
         }
     )
@@ -429,7 +437,7 @@ def _invalidate_stale_evidence(run_dir: Path) -> None:
             "reviewer": "not-yet-run-for-current-binding",
             "findings": [],
             "unresolved_evidence": [
-                "Independent exact-diff review is not yet run for the current binding."
+                "Independent exact-diff review is not yet run for the current binding and repository state."
             ],
             "conclusion": "UNDETERMINED",
         }
@@ -561,6 +569,8 @@ def record_review(run_dir: Path, review_path: Path, root: Path | None = None) ->
     """Import an independently produced review only when it matches this run."""
 
     ensure_ephemeral_run_dir(run_dir, root)
+    if root is not None:
+        assert_current_run_state(run_dir, root)
     candidate = validate_artifact_value(
         "review-report.json",
         load_json(review_path),
@@ -571,8 +581,19 @@ def record_review(run_dir: Path, review_path: Path, root: Path | None = None) ->
         raise HarnessError("independent review belongs to a different harness run")
     if candidate["binding"] != outcome["binding"]:
         raise HarnessError("independent review is bound to a different candidate")
-    write_json(run_dir / "review-report.json", candidate)
-    _reconcile_verification(run_dir)
+    canonical_review = run_dir / "review-report.json"
+    verification_path = run_dir / "verification-report.json"
+    previous_review = canonical_review.read_bytes()
+    previous_verification = verification_path.read_bytes()
+    try:
+        write_json(canonical_review, candidate)
+        _reconcile_verification(run_dir)
+        if root is not None:
+            assert_current_run_state(run_dir, root)
+    except Exception:
+        canonical_review.write_bytes(previous_review)
+        verification_path.write_bytes(previous_verification)
+        raise
 
 
 def finalize_owner_handoff(
@@ -589,9 +610,10 @@ def finalize_owner_handoff(
     """Derive the owner handoff from current-bound PASS evidence."""
 
     ensure_ephemeral_run_dir(run_dir, root)
+    if root is not None:
+        assert_current_run_state(run_dir, root)
     if release_status not in {"NOT_RELEASED", "CANDIDATE_ONLY"}:
         raise HarnessError("a local harness run cannot finalize as RELEASED")
-    _reconcile_verification(run_dir)
     verification = json.loads((run_dir / "verification-report.json").read_text("utf-8"))
     review = json.loads((run_dir / "review-report.json").read_text("utf-8"))
     outcome = json.loads((run_dir / "outcome-contract.json").read_text("utf-8"))
@@ -658,9 +680,18 @@ def finalize_owner_handoff(
         "release_status": release_status,
     }
     owner = validate_artifact_value("owner-handoff.metadata.json", owner, root)
-    write_json(run_dir / "owner-handoff.metadata.json", owner)
-    _write_owner_handoff(run_dir, owner)
-    validate_run(run_dir, root)
+    owner_path = run_dir / "owner-handoff.metadata.json"
+    owner_markdown_path = run_dir / "owner-handoff.md"
+    previous_owner = owner_path.read_bytes()
+    previous_markdown = owner_markdown_path.read_bytes()
+    try:
+        write_json(owner_path, owner)
+        _write_owner_handoff(run_dir, owner)
+        validate_run(run_dir, root)
+    except Exception:
+        owner_path.write_bytes(previous_owner)
+        owner_markdown_path.write_bytes(previous_markdown)
+        raise
 
 
 def sync_owner_handoff(run_dir: Path) -> None:

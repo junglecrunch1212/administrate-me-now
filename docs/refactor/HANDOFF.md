@@ -2619,6 +2619,21 @@ hash verification. It accepts only same-engine variance with maximum channel
 delta two and at most 0.15% changed pixels per screenshot; exceeding either
 bound fails.
 
+The first post-remediation run,
+`20260814t154830z-91069a88-vz6oe70h`, passed deterministic, production,
+browser-repeat, breadth, and release-candidate checks but was rejected by its
+read-only exact-diff review. That review proved three additional stale-state
+paths: refreshing could absorb a protected-only change without invalidating
+old proof; review and owner imports could write before current-state
+validation; and the repository-state inventory omitted staged tracked work.
+The amended harness compares protected and complete repository state before
+refresh, invalidates every proof on either binding or state change, inventories
+tracked changes against `HEAD`, rejects staged or unstaged tracked work outside
+task/protected boundaries, preflights review and owner imports, and restores
+their prior canonical artifacts if a post-write validation fails. The rejected
+run is retained only as diagnostic evidence and grants no candidate or release
+authority.
+
 This remediation changes no member route, label, order, payload, event,
 projection, pipeline, provider boundary, observation state, or live state. A
 fresh exact-bound run, new candidate commit/head, hosted checks, and a separate

@@ -28,6 +28,7 @@ from scripts.harness.core import (
     _validate_browser_evidence,
     applicable_instructions,
     assert_task_scope_covers_candidate_diff,
+    assert_task_scope_covers_tracked_changes,
     binding,
     candidate_base_sha,
     candidate_branch,
@@ -425,10 +426,62 @@ def test_diff_hygiene_rejects_committed_whitespace_from_clean_checkout(
         run_diff_hygiene(tmp_path)
 
 
+def test_repository_state_and_scope_include_staged_tracked_changes(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    candidate = tmp_path / "candidate.txt"
+    outside = tmp_path / "outside.txt"
+    candidate.write_text("baseline\n", "utf-8")
+    outside.write_text("baseline\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    candidate.write_text("staged candidate\n", "utf-8")
+    outside.write_text("staged outside\n", "utf-8")
+    subprocess.run(
+        ["git", "add", "candidate.txt", "outside.txt"], cwd=tmp_path, check=True
+    )
+
+    assert repository_state(tmp_path, ["outside.txt"])["tracked_changes"] == [
+        "candidate.txt",
+        "outside.txt",
+    ]
+    with pytest.raises(HarnessError, match="outside task-owned or protected"):
+        assert_task_scope_covers_tracked_changes(tmp_path, ["candidate.txt"], [])
+    assert_task_scope_covers_tracked_changes(
+        tmp_path,
+        ["candidate.txt"],
+        ["outside.txt"],
+    )
+
+
 def test_protected_path_binding_covers_content_mode_type_and_link_target(
     tmp_path: Path,
 ) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "tracked.txt").write_text("baseline\n", "utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
     protected = tmp_path / "protected"
     protected.mkdir()
     item = protected / "item"
