@@ -379,7 +379,9 @@ def _shallow_github_pull_request_checkout(
         ["git", "rev-parse", "HEAD"], cwd=source, text=True
     ).strip()
 
-    subprocess.run(["git", "clone", "-q", "--bare", str(source), str(remote)], check=True)
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(source), str(remote)], check=True
+    )
     subprocess.run(
         ["git", "update-ref", "refs/heads/main", base_sha], cwd=remote, check=True
     )

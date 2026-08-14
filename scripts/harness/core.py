@@ -324,9 +324,7 @@ def _github_pull_request_base_sha(root: Path) -> str:
             "origin/main is unavailable and the GitHub event is not pull_request"
         )
     if os.environ.get("GITHUB_BASE_REF") != "main":
-        raise HarnessError(
-            "origin/main is unavailable and GITHUB_BASE_REF is not main"
-        )
+        raise HarnessError("origin/main is unavailable and GITHUB_BASE_REF is not main")
 
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if not event_path:
@@ -343,8 +341,10 @@ def _github_pull_request_base_sha(root: Path) -> str:
         ) from exc
 
     sha_pattern = re.compile(r"[0-9a-f]{40}")
-    if base_ref != "main" or not isinstance(base_sha, str) or not sha_pattern.fullmatch(
-        base_sha
+    if (
+        base_ref != "main"
+        or not isinstance(base_sha, str)
+        or not sha_pattern.fullmatch(base_sha)
     ):
         raise HarnessError("GitHub pull-request event has an invalid main base")
     if not isinstance(head_sha, str) or not sha_pattern.fullmatch(head_sha):
