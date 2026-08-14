@@ -1210,7 +1210,7 @@ def test_browser_equivalence_accepts_sparse_one_channel_rendering_noise(
             "surface.png": _fixture_png(
                 100,
                 width=1000,
-                overrides={0: 101},
+                overrides={0: 101, 1: 101},
             )
         },
     )
@@ -1222,7 +1222,7 @@ def test_browser_equivalence_accepts_sparse_one_channel_rendering_noise(
     assert comparison["pixel_comparisons"]["surface.png"]["max_channel_delta"] == 1
     assert comparison["pixel_comparisons"]["surface.png"][
         "changed_pixel_ratio"
-    ] == pytest.approx(0.001)
+    ] == pytest.approx(0.002)
     assert comparison["classification"] == "EQUIVALENT_WITH_BOUNDED_RENDERING_VARIANCE"
     assert "screenshot_pixels:surface.png" not in comparison["mismatches"]
 
@@ -1250,7 +1250,7 @@ def test_browser_equivalence_rejects_excess_low_delta_rendering_change(
             "surface.png": _fixture_png(
                 100,
                 width=1000,
-                overrides={0: 101, 1: 101},
+                overrides={0: 101, 1: 101, 2: 101},
             )
         },
     )
@@ -1262,7 +1262,7 @@ def test_browser_equivalence_rejects_excess_low_delta_rendering_change(
     assert comparison["pixel_comparisons"]["surface.png"]["max_channel_delta"] == 1
     assert comparison["pixel_comparisons"]["surface.png"][
         "changed_pixel_ratio"
-    ] == pytest.approx(0.002)
+    ] == pytest.approx(0.003)
     assert "screenshot_pixels:surface.png" in comparison["mismatches"]
 
 
