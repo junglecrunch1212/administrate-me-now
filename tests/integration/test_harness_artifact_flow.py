@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from scripts.harness.core import HarnessError, repository_state, validate_run
+from scripts.harness.core import (
+    HarnessError,
+    _validate_run_semantics,
+    binding,
+    candidate_diff_paths,
+    executable_inventory,
+    load_json,
+    repository_state,
+    validate_run,
+    write_json,
+)
+from scripts.harness import run_artifacts
 from scripts.harness.run_artifacts import (
     create_run,
     finalize_owner_handoff,
@@ -76,6 +88,96 @@ def test_preservation_task_paths_must_match_bound_verification_scope(
 
     with pytest.raises(HarnessError, match="task-owned paths differ"):
         validate_run(run_dir, root)
+
+
+def test_validation_rejects_self_consistent_manifest_missing_candidate_path(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    run_dir = tmp_path / "administrateme-harness-incomplete-candidate-scope"
+    complete = candidate_diff_paths(root)
+    assert len(complete) > 1
+    create_run(
+        root,
+        requested_outcome="Reject a self-consistent but incomplete candidate manifest.",
+        task_paths=complete,
+        protected_paths=[],
+        run_dir=run_dir,
+    )
+    narrowed = complete[1:]
+    narrowed_binding = binding(root, narrowed)
+    for name in (
+        "outcome-contract.json",
+        "evidence-inventory.json",
+        "preservation-manifest.json",
+        "verification-report.json",
+        "review-report.json",
+        "owner-handoff.metadata.json",
+    ):
+        path = run_dir / name
+        artifact = load_json(path)
+        artifact["binding"] = narrowed_binding
+        if name == "verification-report.json":
+            artifact["changed_files"] = narrowed
+        elif name == "preservation-manifest.json":
+            artifact["rollback"]["task_owned_paths"] = narrowed
+        write_json(path, artifact)
+    sync_owner_handoff(run_dir)
+
+    with pytest.raises(HarnessError, match="omits candidate diff paths"):
+        validate_run(run_dir, root)
+
+
+def test_validation_invalidates_in_place_protected_file_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=root,
+        check=True,
+    )
+    (root / "candidate.txt").write_text("candidate\n", "utf-8")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=root, check=True)
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head],
+        cwd=root,
+        check=True,
+    )
+    protected = root / "protected.txt"
+    protected.write_text("private fixture one\n", "utf-8")
+    run_dir = tmp_path / "administrateme-harness-protected-state"
+    monkeypatch.setattr(
+        run_artifacts,
+        "executable_inventory",
+        lambda _root: executable_inventory(),
+    )
+    monkeypatch.setattr(run_artifacts, "validate_run", lambda *_args: None)
+    create_run(
+        root,
+        requested_outcome="Invalidate protected content changes.",
+        task_paths=[],
+        protected_paths=["protected.txt"],
+        run_dir=run_dir,
+    )
+    _validate_run_semantics(run_dir, root)
+
+    protected.write_text("private fixture two\n", "utf-8")
+
+    with pytest.raises(HarnessError, match="repository state is stale"):
+        _validate_run_semantics(run_dir, root)
 
 
 def test_semantically_false_green_run_is_rejected(tmp_path: Path) -> None:

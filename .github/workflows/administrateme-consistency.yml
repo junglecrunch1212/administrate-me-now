@@ -61,7 +61,9 @@ jobs:
         run: poetry run python -m scripts.harness.cli consistency --check-generated
 
       - name: Enforce diff hygiene
-        run: git diff --check
+        env:
+          PYTHONPATH: bridge
+        run: poetry run python -m scripts.harness.cli diff-hygiene
 
 # Hosted model review is intentionally NOT CONFIGURED here. It may be added
 # only after an OpenAI secret and repository policy already exist under the

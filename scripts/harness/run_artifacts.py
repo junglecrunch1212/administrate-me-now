@@ -10,6 +10,7 @@ from .core import (
     HARNESS_SCHEMA_VERSION,
     HarnessError,
     binding,
+    complete_task_scope,
     ensure_ephemeral_run_dir,
     executable_inventory,
     load_json,
@@ -44,6 +45,7 @@ def create_run(
     protected_paths: list[str],
     run_dir: Path | None = None,
 ) -> Path:
+    task_paths = complete_task_scope(root, task_paths)
     directory = run_dir or new_run_directory()
     ensure_ephemeral_run_dir(directory, root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -359,6 +361,7 @@ Stop on any unexplained behavior difference. Preserve logs in this temporary run
 
 def refresh_bindings(root: Path, run_dir: Path, task_paths: list[str]) -> None:
     ensure_ephemeral_run_dir(run_dir, root)
+    task_paths = complete_task_scope(root, task_paths)
     current = binding(root, task_paths)
     previous = json.loads((run_dir / "outcome-contract.json").read_text("utf-8"))[
         "binding"

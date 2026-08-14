@@ -2594,3 +2594,33 @@ command exited 1 because Ruff reported that `scripts/harness/checks.py` and
 `tests/unit/harness/test_core.py` required formatting. Ruff then mechanically
 formatted exactly those two files. Because that changed the binding, all final
 receipts and review must come from a new post-format run.
+
+## 2026-08-14 Outcome Harness independent-review remediation
+
+G-001 independent review rejected draft PR #340 at exact head
+`464892304b3c9c297469e06fdfb30b5172227349`. The otherwise-green candidate did
+not bind sixteen committed retirement paths, used clean-worktree-only diff
+hygiene, inventoried protected paths without fingerprinting their state, and
+required zero changed screenshot pixels even across semantically identical
+same-head browser runs. That head and its receipts remain rejected and grant no
+merge or deployment authority.
+
+The remediation is **HARDEN** under AC-44/C115 while preserving member and
+runtime behavior. Run creation now completes the declared manifest with every
+committed candidate path, and validation independently rejects a self-consistent
+manifest that omits any base-to-head path or deletion. Local and hosted diff
+hygiene run against the committed candidate range as well as current task work.
+Protected work is represented only by content-free SHA-256 fingerprints that
+bind content, mode, file type, recursive directory state, and symlink targets;
+an in-place change invalidates the run without recording protected content.
+Browser equivalence retains exact semantic assertions, dimensions, screenshot
+inventory, routes, authorization, modes, console/page/request outcomes, and
+hash verification. It accepts only same-engine variance with maximum channel
+delta one and at most 0.15% changed pixels per screenshot; exceeding either
+bound fails.
+
+This remediation changes no member route, label, order, payload, event,
+projection, pipeline, provider boundary, observation state, or live state. A
+fresh exact-bound run, new candidate commit/head, hosted checks, and a separate
+G-001 independent review remain required. PR #340 remains draft; no merge,
+deployment, provider write, or Phase B action is authorized.

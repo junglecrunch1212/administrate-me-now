@@ -21,6 +21,7 @@ from .core import (
     GATE7_MIN_SCREENSHOTS,
     HarnessError,
     _validate_browser_evidence,
+    assert_task_scope_covers_candidate_diff,
     binding,
     clean_environment,
     ensure_ephemeral_run_dir,
@@ -50,7 +51,11 @@ STATIC_CHECKS = (
         "PYTHONPATH=bridge poetry run python -m scripts.harness.cli consistency --check-generated",
     ),
     CheckSpec("invariants", "static", "bash scripts/verify_invariants.sh"),
-    CheckSpec("diff-hygiene", "static", "git diff --check"),
+    CheckSpec(
+        "diff-hygiene",
+        "static",
+        "PYTHONPATH=bridge poetry run python -m scripts.harness.cli diff-hygiene",
+    ),
 )
 
 JOURNEY_CHECKS = (
@@ -629,16 +634,15 @@ def compare_browser_evidence(
                 mismatches.append(f"screenshot_hash:{before_label}:{name}")
             if after_shots[name].get("sha256") != after_hash:
                 mismatches.append(f"screenshot_hash:{after_label}:{name}")
+            if _png_dimensions(before_png) != _png_dimensions(after_png):
+                structure_differences.append(name)
+                continue
             comparison = _png_pixel_delta(before_png, after_png)
             pixel_comparisons[name] = comparison
             if comparison["changed_pixels"] != 0:
                 pixel_differences.append(name)
+            if not comparison["equivalent"]:
                 mismatches.append(f"screenshot_pixels:{name}")
-        for name in before_shots:
-            before_png = before_dir / name
-            after_png = after_dir / name
-            if _png_dimensions(before_png) != _png_dimensions(after_png):
-                structure_differences.append(name)
         if structure_differences:
             mismatches.append("screenshot_dimensions")
     check = {
@@ -661,7 +665,13 @@ def compare_browser_evidence(
         "pixel_differences": pixel_differences,
         "pixel_comparisons": pixel_comparisons,
         "screenshot_structure_differences": structure_differences,
-        "classification": "EXACT" if not mismatches else "REGRESSION_OR_UNDETERMINED",
+        "classification": (
+            "REGRESSION_OR_UNDETERMINED"
+            if mismatches
+            else "EQUIVALENT_WITH_BOUNDED_RENDERING_VARIANCE"
+            if pixel_differences
+            else "EXACT"
+        ),
         "required_minimums": {
             "assertions": GATE7_MIN_ASSERTIONS,
             "screenshots": GATE7_MIN_SCREENSHOTS,
@@ -713,6 +723,7 @@ def _assert_current_candidate_binding(
         isinstance(path, str) for path in changed_files
     ):
         raise HarnessError("run verification task scope is invalid")
+    assert_task_scope_covers_candidate_diff(root, changed_files)
     declared = expected or _current_run_binding(run_dir)
     current = binding(root, changed_files)
     if current != declared:
@@ -827,8 +838,9 @@ def _png_pixel_delta(before: Path, after: Path) -> dict[str, Any]:
         "total_pixels": width * height,
         "changed_pixel_ratio": changed / (width * height),
         "max_channel_delta": max_delta,
-        "required_changed_pixels": 0,
-        "required_max_channel_delta": 0,
+        "required_max_changed_pixel_ratio": 0.0015,
+        "required_max_channel_delta": 1,
+        "equivalent": (changed / (width * height) <= 0.0015 and max_delta <= 1),
     }
 
 

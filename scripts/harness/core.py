@@ -410,6 +410,83 @@ def candidate_branch(root: Path) -> str:
     return f"detached@{head_sha}"
 
 
+def candidate_diff_paths(root: Path, *, base_sha: str | None = None) -> list[str]:
+    """Return every committed path changed between the immutable base and HEAD."""
+
+    base = base_sha or candidate_base_sha(root)
+    return sorted(set(git_lines(root, "diff", "--name-only", base, "HEAD")))
+
+
+def _task_selected_candidate_paths(
+    root: Path,
+    task_paths: Iterable[str],
+    *,
+    base_sha: str,
+) -> list[str]:
+    normalized = sorted({str(Path(path)) for path in task_paths})
+    if not normalized:
+        return []
+    return sorted(
+        set(
+            git_lines(
+                root,
+                "diff",
+                "--name-only",
+                base_sha,
+                "HEAD",
+                "--",
+                *normalized,
+            )
+        )
+    )
+
+
+def assert_task_scope_covers_candidate_diff(
+    root: Path,
+    task_paths: Iterable[str],
+) -> None:
+    """Fail when a declared task manifest omits any committed candidate path."""
+
+    base_sha = candidate_base_sha(root)
+    complete = set(candidate_diff_paths(root, base_sha=base_sha))
+    selected = set(_task_selected_candidate_paths(root, task_paths, base_sha=base_sha))
+    missing = sorted(complete - selected)
+    if missing:
+        raise HarnessError(
+            "task-owned path manifest omits candidate diff paths: " + ", ".join(missing)
+        )
+
+
+def complete_task_scope(root: Path, task_paths: Iterable[str]) -> list[str]:
+    """Add exact committed candidate paths to an explicitly supplied task scope."""
+
+    return sorted(
+        {str(Path(path)) for path in task_paths} | set(candidate_diff_paths(root))
+    )
+
+
+def run_diff_hygiene(root: Path) -> str:
+    """Check both the committed candidate and current task worktree for defects."""
+
+    base_sha = candidate_base_sha(root)
+    checks = (
+        ("committed candidate diff", [base_sha, "HEAD"]),
+        ("working-tree diff", ["HEAD"]),
+    )
+    for label, revisions in checks:
+        process = subprocess.run(
+            ["git", "diff", "--check", *revisions],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if process.returncode != 0:
+            detail = process.stdout.strip() or process.stderr.strip() or "no diagnostic"
+            raise HarnessError(f"diff hygiene failed for {label}: {detail}")
+    return base_sha
+
+
 def task_diff_bytes(
     root: Path,
     paths: Iterable[str],
@@ -484,15 +561,113 @@ def binding(
     }
 
 
-def repository_state(
-    root: Path, protected_paths: Iterable[str]
-) -> dict[str, list[str]]:
+def _protected_relative_path(relative: str) -> str:
+    candidate = Path(relative)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise HarnessError(
+            f"protected path must stay within the repository: {relative}"
+        )
+    normalized = candidate.as_posix().rstrip("/")
+    if not normalized or normalized == ".":
+        raise HarnessError("protected path must name a repository child")
+    return normalized
+
+
+def _protected_file_type(mode: int) -> str:
+    if stat.S_ISREG(mode):
+        return "regular"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "other"
+
+
+def _protected_entry_digest(path: Path, relative: str) -> tuple[str, int]:
+    mode = path.lstat().st_mode
+    file_type = _protected_file_type(mode)
+    header = (
+        f"PROTECTED_ENTRY_V1\0{relative}\0{file_type}\0"
+        f"{stat.S_IFMT(mode):o}:{stat.S_IMODE(mode):o}\0"
+    ).encode("utf-8")
+    if file_type == "regular":
+        payload = bytes.fromhex(sha256_file(path))
+        count = 1
+    elif file_type == "symlink":
+        payload = hashlib.sha256(os.fsencode(os.readlink(path))).digest()
+        count = 1
+    elif file_type == "directory":
+        blocks: list[bytes] = []
+        count = 1
+        with os.scandir(path) as entries:
+            children = sorted(entries, key=lambda entry: entry.name)
+        for child in children:
+            child_relative = f"{relative}/{child.name}"
+            child_digest, child_count = _protected_entry_digest(
+                Path(child.path), child_relative
+            )
+            blocks.extend(
+                (
+                    child.name.encode("utf-8"),
+                    b"\0",
+                    bytes.fromhex(child_digest),
+                )
+            )
+            count += child_count
+        payload = b"".join(blocks)
+    else:
+        payload = b""
+        count = 1
+    return hashlib.sha256(header + payload).hexdigest(), count
+
+
+def protected_path_binding(root: Path, relative: str) -> dict[str, Any]:
+    """Bind protected work by hashes and metadata without recording its content."""
+
+    normalized = _protected_relative_path(relative)
+    path = root / normalized
+    if not path.exists() and not path.is_symlink():
+        return {
+            "path": normalized,
+            "exists": False,
+            "file_type": "absent",
+            "mode": None,
+            "content_sha256": hashlib.sha256(
+                f"PROTECTED_ABSENT_V1\0{normalized}".encode("utf-8")
+            ).hexdigest(),
+            "symlink_target_sha256": None,
+            "entry_count": 0,
+        }
+    mode = path.lstat().st_mode
+    file_type = _protected_file_type(mode)
+    digest, count = _protected_entry_digest(path, normalized)
+    target_digest = (
+        hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
+        if file_type == "symlink"
+        else None
+    )
+    return {
+        "path": normalized,
+        "exists": True,
+        "file_type": file_type,
+        "mode": f"{stat.S_IMODE(mode):04o}",
+        "content_sha256": digest,
+        "symlink_target_sha256": target_digest,
+        "entry_count": count,
+    }
+
+
+def repository_state(root: Path, protected_paths: Iterable[str]) -> dict[str, Any]:
+    normalized = sorted({_protected_relative_path(path) for path in protected_paths})
     return {
         "tracked_changes": git_lines(root, "diff", "--name-only"),
         "untracked_paths": git_lines(
             root, "ls-files", "--others", "--exclude-standard"
         ),
-        "protected_paths": sorted(set(protected_paths)),
+        "protected_paths": normalized,
+        "protected_path_bindings": [
+            protected_path_binding(root, path) for path in normalized
+        ],
     }
 
 
@@ -584,6 +759,7 @@ def _validate_run_semantics(run_dir: Path, root: Path | None) -> None:
             "owner-handoff.md contradicts or is stale against owner handoff metadata"
         )
     if root is not None:
+        assert_task_scope_covers_candidate_diff(root, verification["changed_files"])
         current = binding(root, verification["changed_files"])
         if current != canonical_binding:
             raise HarnessError(

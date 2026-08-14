@@ -27,11 +27,15 @@
     "repository_state": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tracked_changes", "untracked_paths", "protected_paths"],
+      "required": ["tracked_changes", "untracked_paths", "protected_paths", "protected_path_bindings"],
       "properties": {
         "tracked_changes": {"type": "array", "items": {"type": "string"}},
         "untracked_paths": {"type": "array", "items": {"type": "string"}},
-        "protected_paths": {"type": "array", "items": {"type": "string"}}
+        "protected_paths": {"type": "array", "items": {"type": "string"}},
+        "protected_path_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/protected_path_binding"}
+        }
       }
     },
     "inventories": {
@@ -63,6 +67,20 @@
   },
   "$defs": {
     "string_list": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "protected_path_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "exists", "file_type", "mode", "content_sha256", "symlink_target_sha256", "entry_count"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "exists": {"type": "boolean"},
+        "file_type": {"type": "string", "enum": ["absent", "regular", "directory", "symlink", "other"]},
+        "mode": {"anyOf": [{"type": "string", "pattern": "^[0-7]{4}$"}, {"type": "null"}]},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "symlink_target_sha256": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]},
+        "entry_count": {"type": "integer", "minimum": 0}
+      }
+    },
     "binding": {
       "type": "object",
       "additionalProperties": false,

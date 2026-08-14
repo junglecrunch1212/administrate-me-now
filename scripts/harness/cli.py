@@ -19,6 +19,7 @@ from .core import (
     applicable_instructions,
     executable_inventory,
     repository_root,
+    run_diff_hygiene,
     validate_artifact,
     validate_run,
 )
@@ -69,6 +70,8 @@ def _parser() -> argparse.ArgumentParser:
     consistency = subparsers.add_parser("consistency")
     consistency.add_argument("--base-ref")
     consistency.add_argument("--check-generated", action="store_true")
+
+    subparsers.add_parser("diff-hygiene")
 
     skill_refs = subparsers.add_parser("skill-references")
     skill_refs.add_argument("--check", action="store_true")
@@ -163,6 +166,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             if any(finding.status == "FAIL" for finding in findings):
                 return 1
+        elif args.command == "diff-hygiene":
+            base_sha = run_diff_hygiene(root)
+            print(f"PASS committed={base_sha}..HEAD working=HEAD")
         elif args.command == "skill-references":
             if args.check:
                 stale = check_skill_references(root)

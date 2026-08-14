@@ -27,14 +27,20 @@ from scripts.harness.core import (
     HarnessError,
     _validate_browser_evidence,
     applicable_instructions,
+    assert_task_scope_covers_candidate_diff,
     binding,
     candidate_base_sha,
     candidate_branch,
+    candidate_diff_paths,
     clean_environment,
+    complete_task_scope,
     ensure_ephemeral_run_dir,
     executable_inventory,
     normalize_undetermined,
+    protected_path_binding,
     repository_root,
+    repository_state,
+    run_diff_hygiene,
     task_diff_bytes,
     validate_artifact,
     validate_artifact_value,
@@ -43,12 +49,13 @@ from scripts.harness.core import (
 
 
 def _bind_browser_run(run_dir: Path, *directories: Path) -> None:
-    current = binding(repository_root(), [])
+    task_paths = complete_task_scope(repository_root(), [])
+    current = binding(repository_root(), task_paths)
     (run_dir / "outcome-contract.json").write_text(
         json.dumps({"binding": current}), encoding="utf-8"
     )
     (run_dir / "verification-report.json").write_text(
-        json.dumps({"changed_files": []}), encoding="utf-8"
+        json.dumps({"changed_files": task_paths}), encoding="utf-8"
     )
     for directory in directories:
         (directory / "harness-binding.json").write_text(
@@ -56,7 +63,13 @@ def _bind_browser_run(run_dir: Path, *directories: Path) -> None:
         )
 
 
-def _fixture_png(value: int = 0) -> bytes:
+def _fixture_png(
+    value: int = 0,
+    *,
+    width: int = 1,
+    height: int = 1,
+    overrides: dict[int, int] | None = None,
+) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (
             struct.pack(">I", len(data))
@@ -65,10 +78,20 @@ def _fixture_png(value: int = 0) -> bytes:
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
         )
 
+    pixels = bytearray()
+    changes = overrides or {}
+    for row in range(height):
+        pixels.append(0)
+        for column in range(width):
+            channel = changes.get(row * width + column, value)
+            pixels.extend((channel, channel, channel))
     return (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(bytes((0, value, value, value))))
+        + chunk(
+            b"IHDR",
+            struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0),
+        )
+        + chunk(b"IDAT", zlib.compress(bytes(pixels)))
         + chunk(b"IEND", b"")
     )
 
@@ -318,6 +341,122 @@ def test_committed_candidate_diff_binds_content_and_declared_path_scope(
     assert b"-baseline" in complete
     assert b"+candidate" in complete
     assert complete != incomplete
+
+
+def test_declared_scope_must_cover_every_committed_candidate_path(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    kept = tmp_path / "kept.txt"
+    retired = tmp_path / "retired.txt"
+    kept.write_text("base\n", "utf-8")
+    retired.write_text("retire me\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", base],
+        cwd=tmp_path,
+        check=True,
+    )
+    kept.write_text("candidate\n", "utf-8")
+    retired.unlink()
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=tmp_path, check=True)
+
+    assert candidate_diff_paths(tmp_path) == ["kept.txt", "retired.txt"]
+    with pytest.raises(HarnessError, match="omits candidate diff paths"):
+        assert_task_scope_covers_candidate_diff(tmp_path, ["kept.txt"])
+    assert complete_task_scope(tmp_path, ["kept.txt"]) == [
+        "kept.txt",
+        "retired.txt",
+    ]
+
+
+def test_diff_hygiene_rejects_committed_whitespace_from_clean_checkout(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "fixture@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Harness fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    candidate = tmp_path / "candidate.txt"
+    candidate.write_text("clean\n", "utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=tmp_path, check=True)
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", base],
+        cwd=tmp_path,
+        check=True,
+    )
+    candidate.write_text("committed trailing space \n", "utf-8")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=tmp_path, check=True)
+    assert (
+        subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=tmp_path, text=True
+        )
+        == ""
+    )
+
+    with pytest.raises(HarnessError, match="committed candidate diff"):
+        run_diff_hygiene(tmp_path)
+
+
+def test_protected_path_binding_covers_content_mode_type_and_link_target(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    item = protected / "item"
+    item.write_text("first\n", "utf-8")
+    initial = protected_path_binding(tmp_path, "protected")
+    serialized = json.dumps(initial, sort_keys=True)
+    assert "first" not in serialized
+
+    item.write_text("second\n", "utf-8")
+    content_changed = protected_path_binding(tmp_path, "protected")
+    assert content_changed["content_sha256"] != initial["content_sha256"]
+
+    item.chmod(0o600)
+    mode_changed = protected_path_binding(tmp_path, "protected")
+    assert mode_changed["content_sha256"] != content_changed["content_sha256"]
+
+    item.unlink()
+    item.symlink_to("first-target")
+    linked = protected_path_binding(tmp_path, "protected")
+    assert linked["content_sha256"] != mode_changed["content_sha256"]
+    item.unlink()
+    item.symlink_to("second-target")
+    retargeted = protected_path_binding(tmp_path, "protected")
+    assert retargeted["content_sha256"] != linked["content_sha256"]
+    assert "second-target" not in json.dumps(retargeted, sort_keys=True)
+    assert repository_state(tmp_path, ["protected"])["protected_path_bindings"] == [
+        retargeted
+    ]
 
 
 def test_candidate_base_and_navigation_baseline_select_merge_base(
@@ -843,7 +982,7 @@ def test_required_browser_evidence_is_rehashed_and_decoded_on_validation(
     _write_visual_report(evidence_dir, report)
     report_path = evidence_dir / "visual-results.json"
     summary = _browser_summary(evidence_dir, report_path, report)
-    current = binding(repository_root(), [])
+    current = binding(repository_root(), complete_task_scope(repository_root(), []))
 
     _validate_browser_evidence(run_dir, current, summary)
     (evidence_dir / "surface-today-narrow.png").write_bytes(_fixture_png(9))
@@ -977,7 +1116,9 @@ def test_browser_equivalence_fails_on_same_size_pixel_change(tmp_path: Path) -> 
     assert "screenshot_pixels:surface.png" in comparison["mismatches"]
 
 
-def test_browser_equivalence_fails_on_one_low_delta_pixel(tmp_path: Path) -> None:
+def test_browser_equivalence_accepts_sparse_one_channel_rendering_noise(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "administrateme-harness-browser-low-delta"
     before_dir = run_dir / "browser"
     after_dir = run_dir / "browser-after"
@@ -990,12 +1131,58 @@ def test_browser_equivalence_fails_on_one_low_delta_pixel(tmp_path: Path) -> Non
     _write_visual_report(
         before_dir,
         report,
-        pixels={"surface.png": _fixture_png(100)},
+        pixels={"surface.png": _fixture_png(100, width=1000)},
     )
     _write_visual_report(
         after_dir,
         changed,
-        pixels={"surface.png": _fixture_png(101)},
+        pixels={
+            "surface.png": _fixture_png(
+                100,
+                width=1000,
+                overrides={0: 101},
+            )
+        },
+    )
+
+    receipt = compare_browser_evidence(repository_root(), run_dir)
+
+    assert receipt["status"] == "PASS"
+    comparison = json.loads((run_dir / "browser-comparison.json").read_text("utf-8"))
+    assert comparison["pixel_comparisons"]["surface.png"]["max_channel_delta"] == 1
+    assert comparison["pixel_comparisons"]["surface.png"][
+        "changed_pixel_ratio"
+    ] == pytest.approx(0.001)
+    assert comparison["classification"] == "EQUIVALENT_WITH_BOUNDED_RENDERING_VARIANCE"
+    assert "screenshot_pixels:surface.png" not in comparison["mismatches"]
+
+
+def test_browser_equivalence_rejects_excess_low_delta_rendering_change(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "administrateme-harness-browser-excess-noise"
+    before_dir = run_dir / "browser"
+    after_dir = run_dir / "browser-after"
+    before_dir.mkdir(parents=True)
+    after_dir.mkdir(parents=True)
+    _bind_browser_run(run_dir, before_dir, after_dir)
+    report = _complete_visual_report("surface.png")
+    changed = json.loads(json.dumps(report))
+    _write_visual_report(
+        before_dir,
+        report,
+        pixels={"surface.png": _fixture_png(100, width=1000)},
+    )
+    _write_visual_report(
+        after_dir,
+        changed,
+        pixels={
+            "surface.png": _fixture_png(
+                100,
+                width=1000,
+                overrides={0: 101, 1: 101},
+            )
+        },
     )
 
     receipt = compare_browser_evidence(repository_root(), run_dir)
@@ -1003,6 +1190,9 @@ def test_browser_equivalence_fails_on_one_low_delta_pixel(tmp_path: Path) -> Non
     assert receipt["status"] == "FAIL"
     comparison = json.loads((run_dir / "browser-comparison.json").read_text("utf-8"))
     assert comparison["pixel_comparisons"]["surface.png"]["max_channel_delta"] == 1
+    assert comparison["pixel_comparisons"]["surface.png"][
+        "changed_pixel_ratio"
+    ] == pytest.approx(0.002)
     assert "screenshot_pixels:surface.png" in comparison["mismatches"]
 
 
