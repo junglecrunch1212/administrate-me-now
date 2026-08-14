@@ -2654,8 +2654,9 @@ or fixed chat-button regression; and the artifact restoration branches had
 not been driven through a post-write failure. The harness now binds and
 inventories staged and unstaged state independently, checks their diff hygiene
 independently, and proves the index/worktree cancellation case. Browser capture
-no longer changes rail or chat-button positioning and records the expected
-computed production position before each of the 39 screenshots. Forced
+records and asserts the computed production rail/chat position and viewport
+geometry before each of the 39 screenshots, then freezes only those observed
+geometries during full-page expansion. Forced
 post-write review reconciliation and owner validation failures prove
 byte-for-byte restoration of review, verification, owner metadata, and owner
 prose. The `feb10ec` run remains rejected diagnostic evidence and must not be

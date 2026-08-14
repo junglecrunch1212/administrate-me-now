@@ -326,36 +326,77 @@ async function screenshot(page, name) {
   const path = join(evidenceDir, name);
   const productionPositioning = await page.evaluate(async () => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    globalThis.scrollTo(0, 0);
-    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    document.documentElement.style.setProperty("scroll-behavior", "auto", "important");
+    document.documentElement.style.setProperty("overflow-anchor", "none", "important");
+    document.body.style.setProperty("overflow-anchor", "none", "important");
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      globalThis.scrollTo({ left: 0, top: 0, behavior: "instant" });
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
     const rail = document.querySelector(".rail");
     const chatFab = document.querySelector(".chat-fab");
     const railStyle = rail ? getComputedStyle(rail) : null;
     const chatFabStyle = chatFab ? getComputedStyle(chatFab) : null;
+    const railRect = rail?.getBoundingClientRect();
+    const chatFabRect = chatFab?.getBoundingClientRect();
     return {
       viewportWidth: globalThis.innerWidth,
+      viewportHeight: globalThis.innerHeight,
+      scrollX: globalThis.scrollX,
+      scrollY: globalThis.scrollY,
       railPosition: railStyle?.position,
       railTop: railStyle?.top,
+      railRenderedTop: railRect?.top,
+      railLeftGap: railRect?.left,
+      railRightGap: railRect ? globalThis.innerWidth - railRect.right : null,
+      chatFabDisplay: chatFabStyle?.display,
       chatFabPosition: chatFabStyle?.position,
-      chatFabRight: chatFabStyle?.right,
-      chatFabBottom: chatFabStyle?.bottom,
+      chatFabStyleRight: chatFabStyle?.right,
+      chatFabStyleBottom: chatFabStyle?.bottom,
+      chatFabTop: chatFabRect?.top,
+      chatFabRightGap: chatFabRect ? globalThis.innerWidth - chatFabRect.right : null,
+      chatFabBottomGap: chatFabRect ? globalThis.innerHeight - chatFabRect.bottom : null,
     };
   });
   const expectedRailPosition = productionPositioning.viewportWidth <= 720 ? "sticky" : "static";
   record(
     `${name} production floating layout`,
-    productionPositioning.railPosition === expectedRailPosition
-      && (expectedRailPosition !== "sticky" || productionPositioning.railTop === "0px")
+    productionPositioning.scrollX === 0
+      && productionPositioning.scrollY === 0
+      && productionPositioning.railPosition === expectedRailPosition
+      && (expectedRailPosition !== "sticky"
+        || productionPositioning.railTop === "0px"
+          && Math.abs(productionPositioning.railRenderedTop) < 0.01
+          && Math.abs(productionPositioning.railLeftGap) < 0.01
+          && Math.abs(productionPositioning.railRightGap) < 0.01)
       && productionPositioning.chatFabPosition === "fixed"
-      && productionPositioning.chatFabRight === "16px"
-      && productionPositioning.chatFabBottom === "16px",
+      && (productionPositioning.chatFabDisplay === "none"
+        ? productionPositioning.chatFabStyleRight === "16px"
+          && productionPositioning.chatFabStyleBottom === "16px"
+        : Math.abs(productionPositioning.chatFabRightGap - 16) < 0.01
+          && Math.abs(productionPositioning.chatFabBottomGap - 16) < 0.01),
     productionPositioning,
   );
+  const fixedOverlayCaptureStyle = productionPositioning.chatFabDisplay === "none"
+    ? ""
+    : `
+      .chat-fab {
+        bottom: auto !important;
+        position: absolute !important;
+        right: ${productionPositioning.chatFabRightGap}px !important;
+        top: ${productionPositioning.chatFabTop}px !important;
+      }
+    `;
+  const stickyRailCaptureStyle = expectedRailPosition === "sticky"
+    ? ".rail { position: static !important; }"
+    : "";
   await page.screenshot({
     path,
     fullPage: true,
     style: `
       .skip-link { display: none !important; }
+      ${fixedOverlayCaptureStyle}
+      ${stickyRailCaptureStyle}
       html {
         scrollbar-width: none !important;
       }

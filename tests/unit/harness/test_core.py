@@ -535,12 +535,23 @@ def test_browser_capture_keeps_and_asserts_production_positioning() -> None:
 
     assert "production floating layout" in content
     assert 'productionPositioning.chatFabPosition === "fixed"' in content
+    assert "productionPositioning.chatFabRightGap - 16" in content
+    assert "productionPositioning.chatFabBottomGap - 16" in content
+    assert 'productionPositioning.chatFabDisplay === "none"' in content
+    assert 'productionPositioning.chatFabStyleRight === "16px"' in content
     assert (
         "expectedRailPosition = productionPositioning.viewportWidth <= 720 "
         '? "sticky" : "static"' in content
     )
-    assert "position: absolute !important" not in content
-    assert ".rail {\n        position: static !important;" not in content
+    assert "productionPositioning.railRenderedTop" in content
+    assert "productionPositioning.railLeftGap" in content
+    assert "productionPositioning.railRightGap" in content
+    assert "productionPositioning.scrollY === 0" in content
+    assert 'style.setProperty("overflow-anchor", "none", "important")' in content
+    assert "top: 50rem !important" not in content
+    assert "top: ${productionPositioning.chatFabTop}px !important" in content
+    assert 'expectedRailPosition === "sticky"' in content
+    assert '".rail { position: static !important; }"' in content
 
 
 def test_protected_path_binding_covers_content_mode_type_and_link_target(
