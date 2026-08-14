@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.harness import core as harness_core
 from scripts.harness.checks import (
     CheckSpec,
     _browser_summary,
@@ -442,11 +443,19 @@ def _set_github_pull_request_environment(
     return event_path
 
 
-def test_candidate_base_materializes_verified_shallow_github_pr_base(
+@pytest.fixture
+def shallow_github_pull_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> tuple[Path, dict[str, str], Path]:
     checkout, revisions = _shallow_github_pull_request_checkout(tmp_path)
-    _set_github_pull_request_environment(monkeypatch, tmp_path, revisions)
+    event_path = _set_github_pull_request_environment(monkeypatch, tmp_path, revisions)
+    return checkout, revisions, event_path
+
+
+def test_candidate_base_materializes_verified_shallow_github_pr_base(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+) -> None:
+    checkout, revisions, _event_path = shallow_github_pull_request
 
     assert (
         subprocess.run(
@@ -490,16 +499,134 @@ def test_candidate_base_materializes_verified_shallow_github_pr_base(
     )
 
 
+@pytest.mark.parametrize("side", ["base", "head"])
 def test_candidate_base_rejects_pr_event_that_disagrees_with_checkout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    side: str,
 ) -> None:
-    checkout, revisions = _shallow_github_pull_request_checkout(tmp_path)
-    event_path = _set_github_pull_request_environment(monkeypatch, tmp_path, revisions)
+    checkout, _revisions, event_path = shallow_github_pull_request
     event = json.loads(event_path.read_text(encoding="utf-8"))
-    event["pull_request"]["base"]["sha"] = "f" * 40
+    event["pull_request"][side]["sha"] = "f" * 40
     event_path.write_text(json.dumps(event), encoding="utf-8")
 
     with pytest.raises(HarnessError, match="do not match checkout parents"):
+        candidate_base_sha(checkout)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "message"),
+    [
+        (
+            "GITHUB_ACTIONS",
+            "false",
+            "outside a verified GitHub Actions checkout",
+        ),
+        ("GITHUB_EVENT_NAME", "push", "event is not pull_request"),
+        ("GITHUB_BASE_REF", "other", "GITHUB_BASE_REF is not main"),
+        ("GITHUB_EVENT_PATH", None, "has no GITHUB_EVENT_PATH"),
+    ],
+)
+def test_candidate_base_rejects_unverified_github_context(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    value: str | None,
+    message: str,
+) -> None:
+    checkout, _revisions, _event_path = shallow_github_pull_request
+    if value is None:
+        monkeypatch.delenv(variable)
+    else:
+        monkeypatch.setenv(variable, value)
+
+    with pytest.raises(HarnessError, match=message):
+        candidate_base_sha(checkout)
+
+
+@pytest.mark.parametrize("event_content", ["{", '{"pull_request": {}}'])
+def test_candidate_base_rejects_malformed_or_incomplete_pull_request_event(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    event_content: str,
+) -> None:
+    checkout, _revisions, event_path = shallow_github_pull_request
+    event_path.write_text(event_content, encoding="utf-8")
+
+    with pytest.raises(HarnessError, match="cannot read GitHub pull-request"):
+        candidate_base_sha(checkout)
+
+
+@pytest.mark.parametrize(
+    ("coordinate", "value", "message"),
+    [
+        (("base", "ref"), "other", "invalid main base"),
+        (("base", "sha"), "not-a-sha", "invalid main base"),
+        (("head", "sha"), "not-a-sha", "invalid head SHA"),
+    ],
+)
+def test_candidate_base_rejects_invalid_pull_request_fields(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    coordinate: tuple[str, str],
+    value: str,
+    message: str,
+) -> None:
+    checkout, _revisions, event_path = shallow_github_pull_request
+    event = json.loads(event_path.read_text(encoding="utf-8"))
+    event["pull_request"][coordinate[0]][coordinate[1]] = value
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+
+    with pytest.raises(HarnessError, match=message):
+        candidate_base_sha(checkout)
+
+
+def test_candidate_base_rejects_checkout_sha_mismatch(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout, _revisions, _event_path = shallow_github_pull_request
+    monkeypatch.setenv("GITHUB_SHA", "f" * 40)
+
+    with pytest.raises(HarnessError, match="does not identify the checked-out commit"):
+        candidate_base_sha(checkout)
+
+
+def test_candidate_base_rejects_exact_base_fetch_failure(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+) -> None:
+    checkout, revisions, _event_path = shallow_github_pull_request
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "file:///nonexistent/harness.git"],
+        cwd=checkout,
+        check=True,
+    )
+
+    with pytest.raises(
+        HarnessError,
+        match=f"cannot fetch exact GitHub pull-request base {revisions['base']}",
+    ):
+        candidate_base_sha(checkout)
+
+
+def test_candidate_base_rejects_successful_fetch_without_commit_object(
+    shallow_github_pull_request: tuple[Path, dict[str, str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout, revisions, _event_path = shallow_github_pull_request
+    real_run = subprocess.run
+
+    def fake_successful_fetch(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        if isinstance(command, list) and command[:2] == ["git", "fetch"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return real_run(*args, **kwargs)  # type: ignore[call-overload,return-value]
+
+    monkeypatch.setattr(harness_core.subprocess, "run", fake_successful_fetch)
+
+    with pytest.raises(
+        HarnessError,
+        match=f"exact GitHub pull-request base {revisions['base']} is not a commit",
+    ):
         candidate_base_sha(checkout)
 
 
