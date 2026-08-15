@@ -194,7 +194,7 @@ def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
     assert policy.required_active_commit == ("d181fad24ef488a71ce5568cc40fb81309cb3817")
     assert policy.expected_counts.minimum_obligations == 63_610
     assert policy.expected_counts.pending == 0
-    assert policy.expected_counts.maximum_missing == 100
+    assert policy.expected_counts.maximum_missing == 256
     assert policy.expected_counts.failed == 5
     assert len(policy.targets) == 5
     assert {target.expected_failure_reason for target in policy.targets} == {
@@ -204,12 +204,213 @@ def test_checked_in_policy_uses_original_floor_and_exact_failure_set() -> None:
     assert policy.paused_consumer == PausedConsumerBaseline(
         subscriber_id="pipeline:pipeline:noise_filtering",
         consumer_version="20.0.0",
-        checkpoint_event_id="ev_01KZV3JKPE0000",
-        poison_event_id="ev_01KZV4FY0B0000",
+        checkpoint_event_id="ev_01KZP8DCKK0000",
+        poison_event_id="ev_01KZP8DCKX0000",
         consecutive_failures=5,
-        missing_event_type="messaging.received",
-        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+        missing_backlog=[
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 240,
+            },
+            {
+                "event_type": "messaging.sent",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 16,
+            },
+        ],
     )
+
+
+def test_policy_requires_unique_groups_and_an_exact_combined_ceiling() -> None:
+    base = _policy("ev_01POLICY0000001").model_dump(mode="json")
+    base["expected_counts"]["maximum_missing"] = 2
+    base["paused_consumer"] = {
+        "subscriber_id": "pipeline:pipeline:noise_filtering",
+        "consumer_version": "20.0.0",
+        "checkpoint_event_id": "ev_01POLICY0000002",
+        "poison_event_id": "ev_01POLICY0000003",
+        "consecutive_failures": 5,
+        "missing_backlog": [
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 1,
+            },
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 1,
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="unique event types"):
+        SourceAssessmentRepairPolicy.model_validate(base)
+
+    base["paused_consumer"]["missing_backlog"][1]["event_type"] = "messaging.sent"
+    base["expected_counts"]["maximum_missing"] = 3
+    with pytest.raises(ValueError, match="must equal the total"):
+        SourceAssessmentRepairPolicy.model_validate(base)
+
+
+def test_declared_baseline_accepts_independently_bounded_mixed_message_backlog() -> (
+    None
+):
+    failed_source_id = "ev_01MIXED00000001"
+    checkpoint_event_id = "ev_01MIXED00000002"
+    poison_event_id = "ev_01MIXED00000003"
+    received_ids = ["ev_01MIXED00000004", "ev_01MIXED00000005"]
+    sent_id = "ev_01MIXED00000006"
+    paused = PausedConsumerBaseline.model_validate(
+        {
+            "subscriber_id": "pipeline:pipeline:noise_filtering",
+            "consumer_version": "20.0.0",
+            "checkpoint_event_id": checkpoint_event_id,
+            "poison_event_id": poison_event_id,
+            "consecutive_failures": 5,
+            "missing_backlog": [
+                {
+                    "event_type": "messaging.received",
+                    "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                    "maximum_count": 3,
+                },
+                {
+                    "event_type": "messaging.sent",
+                    "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                    "maximum_count": 1,
+                },
+            ],
+        }
+    )
+    policy = _policy(failed_source_id).model_copy(
+        update={
+            "expected_counts": BaselineCounts(
+                minimum_obligations=4,
+                pending=0,
+                maximum_missing=4,
+                failed=1,
+            ),
+            "paused_consumer": paused,
+        }
+    )
+    diagnostics = _diagnostics(failed_source_id)
+    diagnostics["capabilities"]["pipeline:pipeline:noise_filtering"] = {
+        "state": "degraded",
+        "details": {
+            "version": "20.0.0",
+            "checkpoint_event_id": checkpoint_event_id,
+            "poison_event_id": poison_event_id,
+            "consecutive_failures": 5,
+        },
+    }
+    assurance = diagnostics["capabilities"]["policy:source-assurance"]["details"]
+    assurance["counts"] = {
+        "obligations": 4,
+        "accounted": 1,
+        "pending": 0,
+        "missing": 3,
+        "failed": 1,
+    }
+    assurance["missing"] = [
+        *[
+            {
+                "event_id": event_id,
+                "event_type": "messaging.received",
+                "mode": "candidate_assessment",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+            }
+            for event_id in received_ids
+        ],
+        {
+            "event_id": sent_id,
+            "event_type": "messaging.sent",
+            "mode": "candidate_assessment",
+            "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        },
+    ]
+    assurance["missing_summary"] = {
+        "contract": "source-assurance-missing-summary-v1",
+        "total_count": 3,
+        "detail_limit": 20,
+        "groups": [
+            {
+                "event_type": "messaging.received",
+                "mode": "candidate_assessment",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "count": 2,
+                "first_event_id": received_ids[0],
+                "last_event_id": received_ids[-1],
+            },
+            {
+                "event_type": "messaging.sent",
+                "mode": "candidate_assessment",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "count": 1,
+                "first_event_id": sent_id,
+                "last_event_id": sent_id,
+            },
+        ],
+        "content_exposed": False,
+    }
+    doctor = _doctor(source_derived_launch_status=True)
+    doctor["checks"].insert(
+        0, {"name": "required_reactive_pipeline_delivery", "ok": False}
+    )
+
+    snapshot = validate_declared_baseline(
+        policy,
+        active_commit=ACTIVE_COMMIT,
+        doctor=doctor,
+        diagnostics=diagnostics,
+    )
+    assert snapshot["counts"]["missing"] == 3
+    assert [
+        (group["event_type"], group["count"])
+        for group in snapshot["missing_summary"]["groups"]
+    ] == [("messaging.received", 2), ("messaging.sent", 1)]
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed_assurance = changed["capabilities"]["policy:source-assurance"]["details"]
+    changed_assurance["counts"]["obligations"] = 5
+    changed_assurance["counts"]["missing"] = 4
+    changed_assurance["missing"] = [
+        *changed_assurance["missing"][:2],
+        {
+            **changed_assurance["missing"][0],
+            "event_id": "ev_01MIXED00000006",
+        },
+        {
+            **changed_assurance["missing"][0],
+            "event_id": "ev_01MIXED00000007",
+        },
+    ]
+    received_group = changed_assurance["missing_summary"]["groups"][0]
+    received_group["count"] = 4
+    received_group["last_event_id"] = "ev_01MIXED00000007"
+    changed_assurance["missing_summary"]["groups"] = [received_group]
+    changed_assurance["missing_summary"]["total_count"] = 4
+    with pytest.raises(SourceAssessmentRepairError, match="backlog ceiling"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
+
+    changed = json.loads(json.dumps(diagnostics))
+    changed_assurance = changed["capabilities"]["policy:source-assurance"]["details"]
+    changed_assurance["missing"][-1]["event_type"] = "telephony.sms_received"
+    changed_assurance["missing_summary"]["groups"][-1]["event_type"] = (
+        "telephony.sms_received"
+    )
+    with pytest.raises(SourceAssessmentRepairError, match="paused-consumer backlog"):
+        validate_declared_baseline(
+            policy,
+            active_commit=ACTIVE_COMMIT,
+            doctor=doctor,
+            diagnostics=changed,
+        )
 
 
 async def _seed(log: EventLog) -> tuple[str, str]:
@@ -318,8 +519,13 @@ def test_declared_baseline_accepts_only_the_exact_bounded_paused_backlog() -> No
         checkpoint_event_id=checkpoint_event_id,
         poison_event_id=poison_event_id,
         consecutive_failures=5,
-        missing_event_type="messaging.received",
-        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+        missing_backlog=[
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 2,
+            }
+        ],
     )
     policy = _policy(failed_source_id).model_copy(
         update={
@@ -446,8 +652,13 @@ def test_declared_baseline_uses_complete_summary_beyond_detail_display_limit() -
         checkpoint_event_id=checkpoint_event_id,
         poison_event_id=poison_event_id,
         consecutive_failures=5,
-        missing_event_type="messaging.received",
-        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+        missing_backlog=[
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 100,
+            }
+        ],
     )
     policy = _policy(failed_source_id).model_copy(
         update={
@@ -731,7 +942,7 @@ def test_stopped_activation_rejects_post_validation_event_or_consumer_failure(
         )
 
 
-def test_stopped_activation_accepts_only_the_declared_poisoned_consumer(
+def test_stopped_activation_production_composition_accepts_declared_mixed_backlog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
@@ -756,19 +967,38 @@ def test_stopped_activation_accepts_only_the_declared_poisoned_consumer(
                 payload["native_message_id"] = (
                     f"release-repair-missing-source-{index:02d}"
                 )
-                missing_source_ids.append(
-                    await log.append(
-                        _source().model_copy(
-                            update={
-                                "event_at_ms": 1_786_420_000_002 + index,
-                                "idempotency_key": (
-                                    f"release-repair-missing-source-{index:02d}"
-                                ),
-                                "payload": payload,
-                            }
-                        )
-                    )
+                if index == 20:
+                    payload = {
+                        "source_channel": "gmail",
+                        "to_identifier": "recipient@example.invalid",
+                        "thread_id": "release-repair-sent-thread",
+                        "subject": "Fixture sent repair",
+                        "body_text": "Content must never enter updater evidence.",
+                        "sent_at": "2026-08-11T16:00:22Z",
+                        "delivery_status": "sent",
+                        "member_id": "member-release",
+                        "provider": "gmail",
+                        "provider_account_id": "fixture-account",
+                        "workspace": "personal",
+                        "native_message_id": "release-repair-missing-source-20",
+                        "in_reply_to_interaction_id": None,
+                        "rfc_message_id": None,
+                        "references": [],
+                        "in_reply_to": None,
+                    }
+                source = _source().model_copy(
+                    update={
+                        "event_at_ms": 1_786_420_000_002 + index,
+                        "type": (
+                            "messaging.sent" if index == 20 else "messaging.received"
+                        ),
+                        "idempotency_key": (
+                            f"release-repair-missing-source-{index:02d}"
+                        ),
+                        "payload": payload,
+                    }
                 )
+                missing_source_ids.append(await log.append(source))
             return failed_source_id, failed_assessment_id, missing_source_ids
         finally:
             await log.close()
@@ -798,15 +1028,25 @@ def test_stopped_activation_accepts_only_the_declared_poisoned_consumer(
         checkpoint_event_id=failed_source_id,
         poison_event_id=failed_source_id,
         consecutive_failures=5,
-        missing_event_type="messaging.received",
-        missing_reason="assessment_event_absent_after_checkpoint_or_grace",
+        missing_backlog=[
+            {
+                "event_type": "messaging.received",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 20,
+            },
+            {
+                "event_type": "messaging.sent",
+                "reason": "assessment_event_absent_after_checkpoint_or_grace",
+                "maximum_count": 1,
+            },
+        ],
     )
     policy = _policy(failed_source_id).model_copy(
         update={
             "expected_counts": BaselineCounts(
                 minimum_obligations=22,
                 pending=0,
-                maximum_missing=100,
+                maximum_missing=21,
                 failed=1,
             ),
             "paused_consumer": paused,
@@ -855,6 +1095,12 @@ def test_stopped_activation_accepts_only_the_declared_poisoned_consumer(
         ]["total_count"]
         == 21
     )
+    assert [
+        (group["event_type"], group["count"])
+        for group in diagnostics["capabilities"]["policy:source-assurance"]["details"][
+            "missing_summary"
+        ]["groups"]
+    ] == [("messaging.received", 20), ("messaging.sent", 1)]
 
     evidence = offline_validate_repair_baseline(
         paths,

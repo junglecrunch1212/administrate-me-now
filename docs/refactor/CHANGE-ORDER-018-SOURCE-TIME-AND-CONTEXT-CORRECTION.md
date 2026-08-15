@@ -1,15 +1,15 @@
 # Change Order 018 — Source-time and conservative context correction
 
 Status: PR #338 merged as `5b6c140`, but guarded activation rejected v21 and
-automatically restored `d181fad`. The release exposed a concurrent exact-skill-
-result append race that produced four terminal `language_seam_IdempotencyConflict`
-assessments. While that forward repair was being validated, the restored v20
-consumer reached another retained replay collision, poisoned at exact source
-`ev_01KZV4FY0B0000`, and accumulated a bounded post-checkpoint message
-backlog; one older allowlisted `language_seam_OpenClawUnreachable` assessment
-also remains current. A forward-only repair candidate is in progress;
-deployment remains incomplete and requires fresh independent review and
-exact-head authority.
+automatically restored `d181fad`. PR #339's forward repair is now on `main`,
+and PR #340 added the Outcome Harness, but neither has been activated on the
+family Mac. A 2026-08-15 content-free read-only diagnosis proved that restored
+v20 is durably poisoned at exact source `ev_01KZP8DCKX0000`, behind checkpoint
+`ev_01KZP8DCKK0000`, after five repeatable `IdempotencyConflict` deliveries.
+The paused backlog now contains both received and sent messages, which the
+single-type checked release exception on `main` cannot represent. A bounded
+forward-only policy amendment is in progress; deployment remains incomplete
+and requires fresh independent review and exact-head authority.
 
 Governing sources: event-source authority; D19, D26, and D28; ADR-0008 and
 ADR-0010; C002, C025, C034, C097, C106–C110, C114; AC-08, AC-09, AC-18,
@@ -107,11 +107,14 @@ source fact, sender identity, provider account, or household name is wrong.
   `d181fad` baseline, the four content-free release-created
   `language_seam_IdempotencyConflict` targets, and one exact allowlisted
   `language_seam_OpenClawUnreachable` target. It also binds the restored
-  v20 consumer's exact version, checkpoint, poison event, and five-failure
-  threshold. Up to 100 ordinary `messaging.received` obligations may remain
-  behind that exact poison while review proceeds; every such missing record
+  v20 consumer's actual version, checkpoint `ev_01KZP8DCKK0000`, poison event
+  `ev_01KZP8DCKX0000`, and five-failure threshold. The exception independently
+  bounds the only admitted post-poison groups: at most 240
+  `messaging.received` and 16 `messaging.sent` candidate-assessment
+  obligations, with a combined ceiling of 256. Every admitted missing record
   must be later than the poison and carry only the canonical
-  after-checkpoint/grace reason. Source assurance keeps its 20-row diagnostic
+  after-checkpoint/grace reason; telephony and every other type remain denied.
+  Source assurance keeps its 20-row diagnostic
   display bound and adds a content-free all-record count/range summary; when
   the predecessor does not emit that additive summary, the candidate
   controller recomputes it through a query-only encrypted-log connection at
@@ -135,7 +138,7 @@ source fact, sender identity, provider account, or household name is wrong.
 | Revision-bound system supersession v3 | HARDEN | Projection compare-and-apply makes append order authoritative when replay races a member enrichment or decision. |
 | Feedback aggregation narrowing | SUPERSEDE | No automatic suppression, confirmation, routing, canonical write, or provider effect. |
 | Pipeline v21 full replay | MODERNIZE | Existing events and member decisions are retained; only untouched stale proposals retire. An unchanged context-free fallback stays pending; a contextualized fallback with stale context is replaced under a distinct replay-versioned proposal identity so its deterministic core remains reviewable. |
-| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the five declared targets receive linked recovery requests. The exact restored-v20 poison and bounded later message backlog are admitted only for candidate v21 settlement, with complete content-free backlog proof beyond the 20-row display bound. |
+| Exact skill-result append race and release-scoped recovery | HARDEN | One durable result wins for an exact invocation; failed assessment history remains immutable and only the five declared targets receive linked recovery requests. The actual restored-v20 poison and independently bounded received/sent backlog are admitted only for candidate v21 settlement, with complete content-free backlog proof beyond the 20-row display bound. |
 
 No required function is deferred. The change adds no provider SDK, model
 router, central runtime, projection authority, canonical object, or provider

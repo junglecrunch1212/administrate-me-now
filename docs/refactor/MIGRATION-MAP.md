@@ -1,5 +1,19 @@
 # Migration map
 
+CO-018 mixed-backlog amendment (2026-08-15): current `origin/main` is
+`cd08b50`, including PR #339's forward repair and PR #340's Outcome Harness,
+while the active release remains `d181fad`. Content-free read-only diagnosis
+proved restored noise-filtering v20 is durably poisoned at
+`ev_01KZP8DCKX0000` behind checkpoint `ev_01KZP8DCKK0000`; five repeatable
+idempotency conflicts prevent checkpoint advance, leave five recovery commands
+pending behind the poison, and cause later received and sent source obligations
+to remain missing. This is a **PRESERVE/HARDEN LOCAL CANDIDATE**: the release
+exception now declares independent received/sent ceilings whose sum must equal
+the total ceiling, rejects undeclared source types and per-type overflow, and
+uses the actual persisted v20 poison coordinates. It does not change replay,
+recovery, source truth, runtime dependencies, observation, provider state, or
+the installed release.
+
 CO-018 release amendment (2026-08-13): PR #338 merged as `5b6c140`, but
 guarded activation rejected it and restored `d181fad`. Candidate replay
 appended four immutable `language_seam_IdempotencyConflict` assessments when

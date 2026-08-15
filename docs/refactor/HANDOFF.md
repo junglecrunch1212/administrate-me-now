@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_018_RELEASE_ROLLED_BACK_FORWARD_REPAIR_CANDIDATE
-verified_local_date: 2026-08-13
-verified_github_date: 2026-08-13
-branch: codex/co018-release-race-repair
-candidate_commit_resolution: amended_after_e22c66e_local_gates_passed_pending_publish_and_review
-pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/339
+gate_result: CO_018_MIXED_BACKLOG_REPAIR_LOCAL_CANDIDATE
+verified_local_date: 2026-08-15
+verified_github_date: pending
+branch: codex/co018-mixed-backlog-recovery
+candidate_commit_resolution: local_candidate_pending_immutable_head_gates_and_draft_pr
+pull_request_url: pending
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -16,6 +16,44 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
+
+## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
+
+Current `origin/main` is merge `cd08b50`; active release selection and both
+LaunchAgents still resolve to `d181fad`. A content-free read-only active-release
+Doctor failed only required reactive delivery, aggregate launchd/process state,
+and terminal source assurance. Observation remained active and untrusted, all
+15 projections were healthy, provider-called terminal claims were empty, and
+the supported active runtime remained Python 3.14.6, Node 24.19.0, npm 11.17.0,
+and OpenClaw 2026.7.2. No updater, backup, selector, candidate activation,
+provider/configuration write, or runtime migration occurred.
+
+At diagnostic watermark `ev_01M02Z9CK50003`, source assurance reported 63,902
+obligations, 63,800 accounted, 102 missing, five failed, and zero pending. The
+missing summary contained 101 `messaging.received` and one `messaging.sent`
+candidate assessments, all with the canonical
+`assessment_event_absent_after_checkpoint_or_grace` reason. Recovery accounting
+remained nine requested, four succeeded, five pending, zero failed, and zero
+refused. The active v20 worker was checkpointed at `ev_01KZP8DCKK0000` and
+poisoned at `ev_01KZP8DCKX0000` after five exact idempotency conflicts. Those
+failures leave the five recovery requests and subsequent ordinary source facts
+ordered behind a checkpoint that cannot advance; pending requests were not
+reported as success.
+
+The executable class is a repository code defect in the checked release-
+admission policy, not a runtime/dependency mismatch or a safe bounded v20
+operational recovery. Resetting v20 would redeliver the same poison; skipping
+it would drop obligations; the missing ordinary sources do not have failed
+assessments eligible for the recovery endpoint. Current v21 replay/recovery
+code is sufficient to settle them, but the single-`messaging.received`,
+100-obligation policy on `main` rejects the valid mixed backlog and names stale
+poison coordinates. The local candidate replaces that shape with unique,
+independently capped received/sent rules (240 and 16; 256 combined), retains the
+exact reason/order/content-free checks, and denies telephony or any unrelated
+type. Synthetic characterization and the real encrypted-log/stopped-consumer
+production composition prove mixed-group acceptance plus per-group and type
+fail-closed behavior. Release, merge, deployment, and live recovery remain
+unauthorized and unperformed.
 
 ## 2026-08-13 CO-018 guarded rollback and forward repair
 
