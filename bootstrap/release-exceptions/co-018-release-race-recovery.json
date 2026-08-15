@@ -5,7 +5,7 @@
   "expected_counts": {
     "minimum_obligations": 63610,
     "pending": 0,
-    "maximum_missing": 100,
+    "maximum_missing": 256,
     "failed": 5
   },
   "targets": [
@@ -33,11 +33,21 @@
   "paused_consumer": {
     "subscriber_id": "pipeline:pipeline:noise_filtering",
     "consumer_version": "20.0.0",
-    "checkpoint_event_id": "ev_01KZV3JKPE0000",
-    "poison_event_id": "ev_01KZV4FY0B0000",
+    "checkpoint_event_id": "ev_01KZP8DCKK0000",
+    "poison_event_id": "ev_01KZP8DCKX0000",
     "consecutive_failures": 5,
-    "missing_event_type": "messaging.received",
-    "missing_reason": "assessment_event_absent_after_checkpoint_or_grace"
+    "missing_backlog": [
+      {
+        "event_type": "messaging.received",
+        "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        "maximum_count": 240
+      },
+      {
+        "event_type": "messaging.sent",
+        "reason": "assessment_event_absent_after_checkpoint_or_grace",
+        "maximum_count": 16
+      }
+    ]
   },
   "expires_after_activation": true
 }

@@ -559,6 +559,17 @@ without canonical or provider effects. Revision-bound v3 projection proof keeps
 a raced member enrichment pending and suppresses the later replacement; the
 same proof keeps dismissal and confirmation terminal without reopening work.
 
+C113/C114 mixed-backlog amendment (2026-08-15): the current live v20 poison is
+bound to its actual checkpoint and poison IDs, and the only later missing
+groups admitted for a candidate settlement are independently capped
+`messaging.received` and `messaging.sent` candidate assessments with the exact
+canonical after-checkpoint/grace reason. The group ceilings must sum to the
+total ceiling; undeclared types, per-group overflow, reordered/pre-poison IDs,
+pending-as-success accounting, extra Doctor failures, and unrelated degraded
+capabilities still fail closed. This PRESERVE/HARDEN amendment changes no
+event, source, recovery, replay, privacy, observation, runtime, or provider
+authority.
+
 C113/C114 release-race amendment: an exact reviewed skill invocation now has
 one first-writer durable result even when concurrent callers both pass the
 initial absence check. The losing append reuses that result rather than

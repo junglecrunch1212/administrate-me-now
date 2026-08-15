@@ -1,8 +1,57 @@
 # CO-018 source-time and context-correction evidence
 
-Date: 2026-08-13
+Date: 2026-08-15
 
-Status: PR #338 merged at reviewed head `ebefb5c` as merge commit `5b6c140`.
+Status: PR #339's forward repair and PR #340's Outcome Harness are present on
+current `origin/main` merge `cd08b50`; the active family release remains
+`d181fad`. A new local-only PRESERVE/HARDEN amendment repairs the checked
+release exception so it can describe the content-free mixed received/sent
+backlog actually present behind the restored v20 poison. No merge, deployment,
+live recovery, observation change, provider/configuration write, runtime
+migration, or installed-release edit has occurred.
+
+## 2026-08-15 read-only diagnosis and local candidate
+
+- Active-release Doctor failed exactly required reactive pipeline delivery,
+  aggregate launchd/process state, and terminal source assurance. Runtime status
+  was degraded only through noise filtering and source assurance; all 15
+  projections were healthy. Observation was active and untrusted, and provider-
+  called terminal claims were empty.
+- At exact audit watermark `ev_01M02Z9CK50003`, the content-free counts were
+  63,902 obligations, 63,800 accounted, zero pending, 102 missing, and five
+  failed. The complete missing summary was 101 `messaging.received` plus one
+  `messaging.sent`, all candidate assessments with the canonical
+  after-checkpoint/grace reason. These are counts and identifiers only; no
+  member or provider content was copied into evidence.
+- The active v20 consumer persisted checkpoint `ev_01KZP8DCKK0000`, poison
+  `ev_01KZP8DCKX0000`, five consecutive failures, and no checkpoint advance.
+  Content-free runtime errors reproduced `IdempotencyConflict` on every poison
+  delivery. Nine recovery commands remained four succeeded and five pending;
+  the five pending commands are ordered after the poison and are not terminal
+  success.
+- The supported active toolchain is already Python 3.14.6, Node 24.19.0, npm
+  11.17.0, and OpenClaw 2026.7.2. The executable classification is therefore a
+  code defect in release admission, not a runtime mismatch. It is not a safe
+  v20 operational-recovery case: replay repeats the poison, checkpoint skipping
+  would discard obligations, and missing ordinary sources have no failed
+  assessment that authorizes exact recovery.
+- The checked policy now binds the actual poison coordinates and independently
+  caps received at 240 and sent at 16, with an exact combined ceiling of 256.
+  Each group retains the canonical mode, reason, post-poison ordering, complete
+  content-free summary, and stopped-log revalidation. Undeclared telephony or
+  other source types, duplicate declarations, per-type overflow, mismatched
+  total ceilings, extra degradation, and pending-as-success accounting remain
+  denied.
+- The regression failed before implementation because the policy schema
+  required one `messaging.received` group. The new characterization and the
+  encrypted-log/stopped-consumer production composition pass with independently
+  bounded received/sent groups and fail closed on overflow or undeclared type.
+  Complete candidate validation and publication receipts are recorded only
+  after they exist.
+
+## 2026-08-13 guarded activation and forward-repair history
+
+PR #338 merged at reviewed head `ebefb5c` as merge commit `5b6c140`.
 Guarded activation failed its post-switch Doctor and automatically restored
 active release `d181fad`. The merged release is not active. A forward-only
 repair candidate now has a failing-then-passing concurrency regression,

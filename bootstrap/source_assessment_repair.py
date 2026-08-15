@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.log import EventLog
 from adminme.source_assessment_recovery import (
@@ -55,7 +55,7 @@ class BaselineCounts(BaseModel):
 
     minimum_obligations: int = Field(ge=1)
     pending: Literal[0]
-    maximum_missing: int = Field(ge=0, le=100)
+    maximum_missing: int = Field(ge=0, le=256)
     failed: int = Field(ge=1, le=20)
 
 
@@ -70,6 +70,17 @@ class BaselineTarget(BaseModel):
     ]
 
 
+class PausedBacklogRule(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    event_type: Literal[
+        "messaging.received",
+        "messaging.sent",
+    ]
+    reason: Literal["assessment_event_absent_after_checkpoint_or_grace"]
+    maximum_count: int = Field(ge=1, le=256)
+
+
 class PausedConsumerBaseline(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -78,8 +89,14 @@ class PausedConsumerBaseline(BaseModel):
     checkpoint_event_id: str = Field(min_length=1, max_length=240)
     poison_event_id: str = Field(min_length=1, max_length=240)
     consecutive_failures: Literal[5]
-    missing_event_type: Literal["messaging.received"]
-    missing_reason: Literal["assessment_event_absent_after_checkpoint_or_grace"]
+    missing_backlog: list[PausedBacklogRule] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def require_unique_backlog_event_types(self) -> "PausedConsumerBaseline":
+        event_types = [rule.event_type for rule in self.missing_backlog]
+        if len(event_types) != len(set(event_types)):
+            raise ValueError("paused backlog rules must contain unique event types")
+        return self
 
 
 class SourceAssessmentRepairPolicy(BaseModel):
@@ -92,6 +109,23 @@ class SourceAssessmentRepairPolicy(BaseModel):
     targets: list[BaselineTarget] = Field(min_length=1, max_length=20)
     paused_consumer: PausedConsumerBaseline | None = None
     expires_after_activation: Literal[True]
+
+    @model_validator(mode="after")
+    def require_exact_missing_ceiling(self) -> "SourceAssessmentRepairPolicy":
+        if self.paused_consumer is None:
+            if self.expected_counts.maximum_missing != 0:
+                raise ValueError(
+                    "a nonzero missing ceiling requires a paused consumer declaration"
+                )
+            return self
+        rule_ceiling = sum(
+            rule.maximum_count for rule in self.paused_consumer.missing_backlog
+        )
+        if rule_ceiling != self.expected_counts.maximum_missing:
+            raise ValueError(
+                "paused backlog ceilings must equal the total missing ceiling"
+            )
+        return self
 
 
 class SourceAssessmentRepairError(RuntimeError):
@@ -289,29 +323,55 @@ def _validate_missing_backlog(
         return summary
 
     expected = policy.paused_consumer
-    if len(groups) != (1 if missing_count else 0):
+    rules_by_type: dict[str, PausedBacklogRule] = {
+        rule.event_type: rule for rule in expected.missing_backlog
+    }
+    if len(groups) > len(rules_by_type):
         raise SourceAssessmentRepairError("missing-source summary is invalid")
     detail_event_ids = [str(item.get("event_id") or "") for item in missing]
     if detail_event_ids != sorted(set(detail_event_ids)):
         raise SourceAssessmentRepairError("missing-source details are invalid")
+    groups_by_type: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        event_type = str(group.get("event_type") or "")
+        rule = rules_by_type.get(event_type)
+        if event_type in groups_by_type:
+            raise SourceAssessmentRepairError("missing-source summary is invalid")
+        if rule is None:
+            raise SourceAssessmentRepairError(
+                "missing sources differ from the declared paused-consumer backlog"
+            )
+        if int(group.get("count") or 0) > rule.maximum_count:
+            raise SourceAssessmentRepairError(
+                "declared paused-consumer backlog ceiling exceeded"
+            )
+        groups_by_type[event_type] = group
     for item in [*missing, *groups]:
         first_event_id = str(item.get("first_event_id") or item.get("event_id") or "")
         last_event_id = str(item.get("last_event_id") or first_event_id)
+        event_type = str(item.get("event_type") or "")
+        rule = rules_by_type.get(event_type)
         if (
-            item.get("event_type") != expected.missing_event_type
+            rule is None
             or item.get("mode") != "candidate_assessment"
-            or item.get("reason") != expected.missing_reason
+            or item.get("reason") != rule.reason
             or first_event_id <= expected.poison_event_id
             or last_event_id < first_event_id
         ):
             raise SourceAssessmentRepairError(
                 "missing sources differ from the declared paused-consumer backlog"
             )
-    if groups and missing:
-        group = groups[0]
-        if (
-            group["first_event_id"] != detail_event_ids[0]
-            or str(group["last_event_id"]) < detail_event_ids[-1]
+    detail_ids_by_type: dict[str, list[str]] = {}
+    for item in missing:
+        detail_ids_by_type.setdefault(str(item["event_type"]), []).append(
+            str(item["event_id"])
+        )
+    for event_type, event_ids in detail_ids_by_type.items():
+        group = groups_by_type.get(event_type)
+        if group is None or (
+            str(group["first_event_id"]) != event_ids[0]
+            or str(group["last_event_id"]) < event_ids[-1]
+            or int(group["count"]) < len(event_ids)
         ):
             raise SourceAssessmentRepairError(
                 "missing-source summary differs from displayed details"
@@ -903,6 +963,8 @@ def offline_validate_repair_baseline(
 
 __all__ = [
     "POLICY_RELATIVE_PATH",
+    "PausedBacklogRule",
+    "PausedConsumerBaseline",
     "SourceAssessmentRepairError",
     "SourceAssessmentRepairPolicy",
     "hydrate_online_repair_diagnostics",
