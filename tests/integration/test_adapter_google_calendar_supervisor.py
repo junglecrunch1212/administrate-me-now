@@ -397,10 +397,14 @@ async def test_production_loader_supervisor_reports_running_after_poll_recovery(
 
     await supervisor.start()
     try:
+
         async def recovered() -> None:
             while True:
                 inventory = supervisor.inventory()
-                if attempts >= 2 and next(iter(inventory.values()))["state"] == "running":
+                if (
+                    attempts >= 2
+                    and next(iter(inventory.values()))["state"] == "running"
+                ):
                     return
                 await asyncio.sleep(0)
 
