@@ -92,7 +92,7 @@ jobs:
         run: |
           poetry run ruff check bootstrap tests/unit/bootstrap tests/acceptance/test_macos_bootstrap_operations.py
           poetry run mypy bootstrap --no-error-summary
-          git diff --check
+          PYTHONPATH=bridge poetry run python -m scripts.harness.cli diff-hygiene
           test -z "$(git status --porcelain)"
 
       - name: Whole-repository release-candidate suite

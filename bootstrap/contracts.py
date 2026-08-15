@@ -36,6 +36,32 @@ ADAPTER_CATEGORIES = (
     "outbound_action",
 )
 
+# The extension registry accepts all six constitutional pack kinds even when a
+# built-in kind is represented by runtime modules rather than a packs/ folder.
+PACK_KINDS = (
+    "adapter",
+    "pipeline",
+    "skill",
+    "projection",
+    "profile",
+    "persona",
+)
+
+BUILT_IN_PROFILES = (
+    "adhd_executive",
+    "ambient_entity",
+    "kid_scoreboard",
+    "minimalist_parent",
+    "power_user",
+)
+
+BUILT_IN_PERSONAS = (
+    "butler_classic",
+    "friendly_robot",
+    "poopsy",
+    "quiet_assistant",
+)
+
 SECTION_NAMES = (
     "environment_preflight",
     "assistant_persona",

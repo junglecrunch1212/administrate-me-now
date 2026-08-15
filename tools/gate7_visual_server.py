@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import sys
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
+from itertools import count
 from pathlib import Path
 
 import uvicorn
@@ -12,6 +17,7 @@ from fastapi import HTTPException
 
 from adminme.runtime.application import RuntimeSettings, create_application
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import _EventIdGenerator
 from adminme.lib.governance import GuardedWriteResult
 
 
@@ -19,17 +25,83 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTANCE = Path(os.environ["ADMINME_GATE7_VISUAL_INSTANCE"]).resolve()
 PORT = int(os.environ.get("ADMINME_GATE7_VISUAL_PORT", "3347"))
 MODEL_CONFIGURED = os.environ.get("ADMINME_GATE7_VISUAL_MODEL", "1") == "1"
+FIXED_NOW = datetime.fromisoformat(
+    os.environ.get("ADMINME_GATE7_VISUAL_NOW", "2026-08-13T14:00:00Z").replace(
+        "Z", "+00:00"
+    )
+).astimezone(timezone.utc)
+FIXTURE_CLOCK = [FIXED_NOW]
 
 PRINCIPAL = "visual_principal"
 ADULT = "visual_adult"
 CHILD = "visual_child"
 DEVICE = "visual_shared_screen"
+_ORIGINAL_EVENT_ID_MINT = _EventIdGenerator.mint
+
+
+class _FixtureDateTime(datetime):
+    """Clock used only by this credential-free subprocess fixture."""
+
+    @classmethod
+    def now(cls, tz=None):
+        value = FIXTURE_CLOCK[0]
+        return value if tz is None else value.astimezone(tz)
+
+
+class _FixtureTime:
+    """Wall clock proxy that preserves monotonic and sleep behavior."""
+
+    @staticmethod
+    def time() -> float:
+        return FIXTURE_CLOCK[0].timestamp()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def _install_determinism() -> None:
+    """Freeze already-imported AdministrateMe clocks and generated UUIDs."""
+
+    original_datetime = datetime
+    for name, module in tuple(sys.modules.items()):
+        if (
+            name.startswith("adminme")
+            and getattr(module, "datetime", None) is original_datetime
+        ):
+            setattr(module, "datetime", _FixtureDateTime)
+    import adminme.temporary_surfaces as temporary_surfaces
+
+    temporary_surfaces._now = fixture_now
+    sequence = count(1)
+    uuid.uuid4 = lambda: uuid.UUID(int=next(sequence) << 96)
+    _EventIdGenerator.mint = lambda generator, _now_ms: _ORIGINAL_EVENT_ID_MINT(
+        generator, int(FIXTURE_CLOCK[0].timestamp() * 1000)
+    )
+    for name in (
+        "adminme.lib.governance",
+        "adminme.lib.observation",
+        "adminme.products.commitment_service",
+        "adminme.products.member.main",
+        "adminme.runtime.application",
+    ):
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "time", None) is time:
+            setattr(module, "time", _FixtureTime())
+
+
+def fixture_now() -> datetime:
+    return FIXTURE_CLOCK[0]
 
 
 def build_app():
+    _install_determinism()
     INSTANCE.mkdir(parents=True, exist_ok=True)
     config = INSTANCE / "config"
     config.mkdir(exist_ok=True)
+    (config / "instance.yaml").write_text(
+        "tenant_id: tenant-gate7-visual\ntimezone: Etc/UTC\n",
+        encoding="utf-8",
+    )
     (config / "extensions-state.json").write_text(
         json.dumps(
             {
@@ -144,7 +216,7 @@ def build_app():
         """Seed synthetic scoped facts for rendered Calendar evidence only."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         common = {
             "event_at_ms": int(now.timestamp() * 1000),
@@ -324,12 +396,23 @@ def build_app():
         await runtime.wait_for_projection("calendars", last_event_id)
         return {"seeded": len(events), "last_event_id": last_event_id}
 
+    @app.post("/__gate7/advance-clock")
+    async def advance_clock():
+        """Advance only the deterministic credential-free fixture clock."""
+
+        FIXTURE_CLOCK[0] += timedelta(seconds=2)
+        expired = app.state.runtime.temporary_surfaces.expire_due()
+        return {
+            "now": FIXTURE_CLOCK[0].isoformat(),
+            "expired": [spec.stable_id for spec in expired],
+        }
+
     @app.post("/__gate7/seed-triage-task")
     async def seed_triage_task():
         """Seed one unconfirmed task proposal for structured-form evidence."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         event_id = await runtime.events.write(
             EventEnvelope(
                 event_at_ms=int(now.timestamp() * 1000),
@@ -363,7 +446,7 @@ def build_app():
         """Seed a routed Google Tasks proposal for capability-ceiling QA."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         common = {
             "event_at_ms": int(now.timestamp() * 1000),
             "tenant_id": runtime.settings.instance.tenant_id,
@@ -429,7 +512,7 @@ def build_app():
         """Seed queue-continuity and historical-receipt browser evidence."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         common = {
             "event_at_ms": int(now.timestamp() * 1000),
             "tenant_id": runtime.settings.instance.tenant_id,
@@ -506,6 +589,43 @@ def build_app():
         app.state.fail_next_task_materialization = True
         return {"armed": True}
 
+    @app.post("/__gate7/settle")
+    async def settle_fixture_bus():
+        """Wait until fixture-derived writes and every durable consumer settle."""
+
+        runtime = app.state.runtime
+        if runtime.bus is None or runtime.event_log is None:
+            raise HTTPException(503, "fixture runtime bus is unavailable")
+        deadline = time.monotonic() + 8.0
+        stable_event_id: str | None = None
+        stable_cycles = 0
+        while time.monotonic() < deadline:
+            # The fixture must cover every registered consumer, including
+            # projections, pipelines, and the central provider dispatcher.
+            subscriber_ids = sorted(runtime.bus._subscribers)  # noqa: SLF001
+            statuses = [
+                await runtime.bus.subscriber_status(subscriber_id)
+                for subscriber_id in subscriber_ids
+            ]
+            latest = await runtime.event_log.latest_event_id()
+            drained = all(
+                not status.get("degraded") and int(status.get("lag_count") or 0) == 0
+                for status in statuses
+            )
+            if drained and latest == stable_event_id:
+                stable_cycles += 1
+            else:
+                stable_event_id = latest
+                stable_cycles = 0
+            if stable_cycles >= 2:
+                return {
+                    "settled": True,
+                    "latest_event_id": latest,
+                    "subscriber_count": len(subscriber_ids),
+                }
+            await asyncio.sleep(0.01)
+        raise HTTPException(503, "fixture bus did not settle before timeout")
+
     @app.post("/__gate7/fail-next-intent-after-capture")
     async def fail_next_intent_after_capture():
         """Force one handler failure after exact intent text is durable."""
@@ -527,7 +647,7 @@ def build_app():
         """Seed one isolated adult Ready item for empty-queue browser proof."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         event_id = await runtime.events.write(
             EventEnvelope(
                 event_at_ms=int(now.timestamp() * 1000),
@@ -560,7 +680,7 @@ def build_app():
         """Seed synthetic owner-private Notes and one Triage link."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         common = {
             "event_at_ms": int(now.timestamp() * 1000),
             "tenant_id": runtime.settings.instance.tenant_id,
@@ -682,7 +802,7 @@ def build_app():
         """Seed synthetic Finance facts and planning inputs for browser QA."""
 
         runtime = app.state.runtime
-        now = datetime.now(timezone.utc)
+        now = fixture_now()
         private = {
             "event_at_ms": int(now.timestamp() * 1000),
             "tenant_id": runtime.settings.instance.tenant_id,
