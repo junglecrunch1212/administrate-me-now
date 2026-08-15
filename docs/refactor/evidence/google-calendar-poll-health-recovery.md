@@ -70,5 +70,13 @@ diagnosis, so obligation/missing counts advanced without any diagnostic write.
 - PASS with the two unchanged documented `UNDETERMINED` findings: generated
   constitutional consistency (`KNOWN-PRODUCT-COUNT` and
   `KNOWN-CO016-STATUS`).
-- Pending until recorded: aggregate local, hosted, and independent exact-head
-  review receipts.
+- PASS: committed-candidate breadth tier: 1,813 configured root tests and 63
+  strict acceptance tests; supported Ruff, MyPy, invariants, Poetry sync, and
+  pinned Node 24/npm 11 OpenClaw install/check/17-test suite.
+- The pre-commit root attempt recorded 1,791 passes and 22 expected Harness
+  self-test refusals because those synthetic runs deliberately reject ambient
+  dirty tracked files outside their own declared `scripts/harness` scope. The
+  same complete root suite passed from the clean committed candidate; this was
+  a workflow-order receipt, not a product exception or weakened test.
+- Pending until recorded: release-candidate aggregate, hosted, and independent
+  exact-head review receipts.
