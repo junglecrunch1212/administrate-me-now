@@ -881,6 +881,33 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
     cursor_store.close()
 
 
+async def test_poll_loop_recovers_current_health_after_transient_failure() -> None:
+    adapter = _make_adapter()
+    adapter._max_poll_cycles = 2
+    adapter._poll_interval_s = 0
+    event_log = _FakeEventLog()
+    ctx = _seed_ctx(adapter, event_log)
+    attempts = 0
+
+    async def poll_once(*, ctx: AdapterContext) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionResetError("fixture transient")
+        return 0
+
+    adapter._poll_once = poll_once
+
+    await adapter._poll_loop(ctx=ctx)
+
+    assert attempts == 2
+    assert adapter.status().state == "running"
+    errors = [call for call in event_log.calls if call["type"] == "adapter.error"]
+    assert len(errors) == 1
+    assert errors[0]["payload"]["severity"] == "transient"
+    assert errors[0]["payload"]["error_kind"] == "network"
+
+
 async def test_initial_sync_does_not_backfill_elapsed_outcomes() -> None:
     entry = {
         "id": "calendar-a",

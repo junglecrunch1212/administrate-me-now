@@ -436,6 +436,11 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     self._status.state = "crashed"
                     return
                 self._status.state = "backoff"
+            else:
+                # A transient provider failure is durable audit history, not a
+                # permanent current-health state. A later successful poll
+                # proves the configured instance is running again.
+                self._status.state = "running"
             cycles += 1
             try:
                 await asyncio.sleep(self._poll_interval_s)

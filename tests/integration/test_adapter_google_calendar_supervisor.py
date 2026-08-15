@@ -74,6 +74,8 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.loader import load_builtin_adapters
+from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.schemas.ingest import CalendarEventAddedV1
 from adminme.lib.adapters import (
     CommunicationAdapter,
@@ -348,3 +350,67 @@ def test_supervisor_inbound_poll_emits_calendar_event_added() -> None:
         c for c in event_log.calls if c["type"] == "calendar.event_added"
     ]
     assert len(added_calls_after) == 1
+
+
+async def test_production_loader_supervisor_reports_running_after_poll_recovery(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "adapter_supervisor_port": 0,
+        "adapters": [
+            {
+                "id": "calendar-recovery-fixture",
+                "kind": "calendaring-google-calendar",
+                "config": {
+                    "oauth_credentials_ref": "keychain://fixture/google-calendar",
+                    "calendar_id": "primary",
+                    "member_id": "member-fixture",
+                    "provider_account_id": "account-fixture",
+                    "poll_interval_s": 60,
+                },
+            }
+        ],
+    }
+    loaded = load_builtin_adapters(config, repository_root=REPO_ROOT)
+    assert len(loaded) == 1
+    adapter = loaded[0]
+    adapter._credentials_resolver = lambda _ref: "{}"
+    adapter._service_factory = lambda *_args: object()
+    adapter._poll_interval_s = 0
+    attempts = 0
+
+    async def poll_once(*, ctx: AdapterContext) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionResetError("fixture transient")
+        return 0
+
+    adapter._poll_once = poll_once
+    event_log = _IntegrationEventLog()
+    supervisor = AdapterSupervisor(
+        config_path=tmp_path / "unused.yaml",
+        config_data=config,
+        adapter_loader=lambda _config: loaded,
+        ctx_factory=lambda: _make_integration_ctx(event_log),
+    )
+
+    await supervisor.start()
+    try:
+        async def recovered() -> None:
+            while True:
+                inventory = supervisor.inventory()
+                if attempts >= 2 and next(iter(inventory.values()))["state"] == "running":
+                    return
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(recovered(), timeout=1)
+        instance = next(iter(supervisor.inventory().values()))
+        assert instance["adapter_name"] == "calendaring-google-calendar"
+        assert instance["state"] == "running"
+        assert instance["restart_count"] == 0
+        errors = [call for call in event_log.calls if call["type"] == "adapter.error"]
+        assert len(errors) == 1
+        assert errors[0]["payload"]["error_kind"] == "network"
+    finally:
+        await supervisor.stop()

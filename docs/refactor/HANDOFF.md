@@ -3,10 +3,10 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: CO_018_MIXED_BACKLOG_REPAIR_LOCAL_CANDIDATE
+gate_result: GOOGLE_CALENDAR_POLL_HEALTH_LOCAL_CANDIDATE
 verified_local_date: 2026-08-15
 verified_github_date: pending
-branch: codex/co018-mixed-backlog-recovery
+branch: codex/google-calendar-recovery-health
 candidate_commit_resolution: local_candidate_pending_immutable_head_gates_and_draft_pr
 pull_request_url: pending
 openclaw_version: 2026.7.2
@@ -16,6 +16,37 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 ---
 
 # Release handoff
+
+## 2026-08-15 Google Calendar current-health recovery candidate
+
+Current `origin/main` is merge `88bd571`; the active family release and both
+LaunchAgents remain on `d181fad`. A content-free census found three configured,
+enabled, guarded-admission-required provider instances. Gmail and Google Tasks
+are running in observation-only mode. Google Calendar alone reports degraded:
+its worker is retained in internal backoff after a transient network failure,
+with supervisor restart count zero and a closed durable circuit. Every other
+optional adapter is explicitly disabled as not configured rather than omitted.
+
+This is a **MODERNIZE code-defect candidate**, not an authorized runtime restart
+or provider repair. The active process recorded Google Calendar's transient
+failure at `2026-08-14T09:54:57Z`, then appended 72 calendar updates, 10
+deletions, and 15 outcomes on `2026-08-15`. Those content-free event counts
+prove later polls succeeded while current health remained latched in backoff.
+Google Tasks already restores `running` after the same transient-then-success
+sequence; Google Calendar lacked that transition. The candidate adds the same
+current-health correction, retaining the immutable `adapter.error` audit,
+cursor, event facts, member/account/calendar scope, observation guard, and
+fail-closed admission semantics. A failing-before/passing-after unit regression
+and production loader/supervisor composition test bind the repair.
+
+No live adapter restart, recovery, reauthentication, permission or configuration
+change, provider write, source-assurance action, deployment, merge, selector
+change, or observation change occurred. Noise-filtering v20 remains at checkpoint
+`ev_01KZP8DCKK0000`, poison `ev_01KZP8DCKX0000`, and five failures. Normal
+observation continued appending inbound facts during diagnosis; no assessment or
+recovery command was issued. Candidate publication, hosted checks, independent
+exact-head review, explicit G-001 authority, and a separately executed guarded
+release remain required.
 
 ## 2026-08-15 CO-018 mixed-backlog diagnosis and candidate repair
 
