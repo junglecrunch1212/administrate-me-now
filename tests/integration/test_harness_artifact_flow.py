@@ -810,9 +810,9 @@ def test_self_consistent_arbitrary_commands_cannot_replace_reviewed_checks(
             "utf-8",
         )
         receipts.append({**check, "receipt": receipt.name})
+    record_checks(run_dir, receipts)
     report_path = run_dir / "verification-report.json"
     report = json.loads(report_path.read_text("utf-8"))
-    report["checks"] = receipts
     report["status"] = "PASS"
     report["unresolved"] = []
     report_path.write_text(json.dumps(report), "utf-8")
