@@ -1,12 +1,17 @@
 # Release acceptance contract
 
-Google Calendar health amendment (2026-08-15): AC-10, AC-14, AC-27, and AC-42
-require a transient Calendar failure to remain durable audit history while a
-later successful poll restores current instance health to `running`. The
-production loader/supervisor composition must expose that recovered state with
-restart count zero; stopped required instances remain visible, unconfigured or
-disabled optional providers remain explicit, and guarded admission remains
-fail-closed for every currently unhealthy required component.
+Google Calendar health amendment (2026-08-16): AC-10, AC-14, AC-27, and AC-42
+require every fetched Calendar record to be durably accepted or to fail its
+poll with immutable error evidence and no token advance. Provider facts precede
+one lease-fenced durable token/circuit completion; only a matching closed
+circuit may publish `running`, pass readiness and Doctor, or admit a Calendar
+write. Open circuits require the governed half-open transition before provider
+work. Production composition must use the real synthetic Calendar protocol for
+transient, malformed, recovered, restart, replay, persistence, instance, and
+race cases. Desktop and narrow proof use the existing Settings Connections
+surface. Disabled/unconfigured optional providers remain explicit and
+nonblocking, observation-only remains active, and no provider effect is
+introduced.
 
 CO-017 amendment (2026-08-11): AC-42 proves that an exhausted terminal
 message assessment can be reassessed only through an authenticated,

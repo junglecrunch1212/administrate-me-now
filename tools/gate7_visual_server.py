@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from itertools import count
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import HTTPException
@@ -37,6 +38,68 @@ ADULT = "visual_adult"
 CHILD = "visual_child"
 DEVICE = "visual_shared_screen"
 _ORIGINAL_EVENT_ID_MINT = _EventIdGenerator.mint
+
+
+class _Gate7CalendarRequest:
+    def __init__(self, service: "_Gate7CalendarService") -> None:
+        self._service = service
+
+    def execute(self) -> dict[str, Any]:
+        self._service.list_calls += 1
+        if self._service.mode == "transient":
+            raise ConnectionResetError("credential-free Calendar transient")
+        if self._service.mode == "malformed":
+            return {
+                "items": [
+                    {
+                        "summary": "Malformed fixture record",
+                        "start": {"dateTime": "2026-08-13T15:00:00Z"},
+                        "end": {"dateTime": "2026-08-13T16:00:00Z"},
+                    }
+                ],
+                "nextSyncToken": "must-not-advance",
+            }
+        return {
+            "items": [
+                {
+                    "id": "gate7-calendar-recovered-event",
+                    "etag": "gate7-calendar-revision-1",
+                    "summary": "Credential-free recovered event",
+                    "start": {"dateTime": "2026-08-13T15:00:00Z"},
+                    "end": {"dateTime": "2026-08-13T16:00:00Z"},
+                    "updated": "2026-08-13T14:00:00Z",
+                },
+                {
+                    "id": "gate7-calendar-recovered-deletion",
+                    "etag": "gate7-calendar-revision-2",
+                    "status": "cancelled",
+                    "updated": "2026-08-13T14:01:00Z",
+                },
+            ],
+            "nextSyncToken": "gate7-calendar-sync-token",
+        }
+
+
+class _Gate7CalendarEvents:
+    def __init__(self, service: "_Gate7CalendarService") -> None:
+        self._service = service
+
+    def list(self, **_kwargs: Any) -> _Gate7CalendarRequest:
+        return _Gate7CalendarRequest(self._service)
+
+    def insert(self, **_kwargs: Any) -> Any:
+        self._service.write_calls += 1
+        raise AssertionError("Gate 7 Calendar fixture forbids provider writes")
+
+
+class _Gate7CalendarService:
+    def __init__(self) -> None:
+        self.mode = "transient"
+        self.list_calls = 0
+        self.write_calls = 0
+
+    def events(self) -> _Gate7CalendarEvents:
+        return _Gate7CalendarEvents(self)
 
 
 class _FixtureDateTime(datetime):
@@ -120,6 +183,7 @@ def build_app():
         ),
         encoding="utf-8",
     )
+    calendar_service = _Gate7CalendarService()
     settings = RuntimeSettings.credential_free(
         INSTANCE,
         encryption_key=b"v" * 32,
@@ -144,8 +208,87 @@ def build_app():
         member_chat_enabled_members=frozenset({PRINCIPAL, ADULT, CHILD}),
         child_chat_enabled_members=frozenset({CHILD}),
         deterministic_member_chat_fixture=True,
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "calendar-health-fixture",
+                    "kind": "calendaring-google-calendar",
+                    "config": {
+                        "oauth_credentials_ref": "keychain://fixture/calendar",
+                        "calendar_id": "primary",
+                        "calendar_name": "Personal calendar",
+                        "member_id": PRINCIPAL,
+                        "provider_account_id": "visual-calendar-account",
+                        "poll_interval_s": 60,
+                    },
+                }
+            ],
+        },
     )
+    import adminme.runtime.application as runtime_application
+
+    real_adapter_loader = runtime_application.load_builtin_adapters
+
+    def gate7_adapter_loader(
+        config: dict[str, Any], *, repository_root: Path
+    ) -> list[Any]:
+        adapters = real_adapter_loader(config, repository_root=repository_root)
+        for adapter in adapters:
+            if adapter.name != "calendaring-google-calendar":
+                continue
+            adapter._credentials_resolver = lambda _ref: {}
+            adapter._service_factory = lambda *_args: calendar_service
+            adapter._poll_interval_s = 0.1
+        return adapters
+
+    runtime_application.load_builtin_adapters = gate7_adapter_loader
     app = create_application(settings)
+
+    @app.post("/__gate7/calendar-health/{mode}")
+    async def set_calendar_health(mode: str):
+        """Drive only synthetic Calendar protocol states for rendered QA."""
+
+        if mode not in {"open", "malformed", "recovered"}:
+            raise HTTPException(400, "unsupported Calendar fixture mode")
+        runtime = app.state.runtime
+        if runtime.adapters is None or runtime.adapter_cursor_store is None:
+            raise HTTPException(503, "Calendar fixture runtime is unavailable")
+        managed = runtime.adapters._managed.get("calendar-health-fixture")  # noqa: SLF001
+        if managed is None:
+            raise HTTPException(503, "Calendar fixture adapter is unavailable")
+        store = runtime.adapter_cursor_store
+        cursor_id = "calendar-health-fixture"
+        if mode in {"open", "malformed"}:
+            calendar_service.mode = "transient" if mode == "open" else "malformed"
+            while store.get(cursor_id).error_count < 3:
+                store.record_error(cursor_id)
+            if mode == "malformed":
+                store.begin_recovery(cursor_id)
+        else:
+            calendar_service.mode = "recovered"
+            if store.get(cursor_id).circuit_state == "open":
+                store.begin_recovery(cursor_id)
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            cursor = store.get(cursor_id)
+            state = managed.adapter.status().state
+            expected = (
+                cursor.circuit_state == "closed" and state == "running"
+                if mode == "recovered"
+                else cursor.circuit_state == "open" and state != "running"
+            )
+            if expected:
+                return {
+                    "mode": mode,
+                    "state": state,
+                    "circuit_state": cursor.circuit_state,
+                    "cursor_present": cursor.provider_watermark is not None,
+                    "provider_writes": calendar_service.write_calls,
+                }
+            await asyncio.sleep(0.02)
+        raise HTTPException(503, "Calendar fixture state did not settle")
 
     def install_triage_failure_hooks() -> None:
         """Install opt-in, one-shot failures inside the production handlers."""

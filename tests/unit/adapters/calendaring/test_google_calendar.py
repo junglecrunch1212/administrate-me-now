@@ -73,6 +73,7 @@ def _load_google_calendar_adapter_module() -> Any:
 
 _adapter_mod: Any = _load_google_calendar_adapter_module()
 GoogleCalendarAdapter: Any = _adapter_mod.GoogleCalendarAdapter
+CalendarPollIncomplete: Any = _adapter_mod.CalendarPollIncomplete
 
 
 _FROZEN_NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -162,7 +163,7 @@ class _FakeCalendarService:
     def __init__(
         self,
         *,
-        list_pages: list[dict[str, Any]] | None = None,
+        list_pages: list[dict[str, Any] | BaseException] | None = None,
         calendar_list_pages: list[dict[str, Any]] | None = None,
         insert_response: dict[str, Any] | None = None,
         raises: BaseException | None = None,
@@ -222,7 +223,10 @@ class _FakeListRequest:
         if self._service._raises is not None:
             raise self._service._raises
         if self._service._list_pages:
-            return dict(self._service._list_pages.pop(0))
+            value = self._service._list_pages.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return dict(value)
         return {"items": []}
 
 
@@ -259,6 +263,27 @@ def _make_adapter(
     )
     if service is not None:
         adapter._service = service
+    return adapter
+
+
+def _make_member_adapter(
+    *,
+    service: _FakeCalendarService,
+    instance_name: str,
+    max_poll_cycles: int | None = 1,
+) -> Any:
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://fixture/google-calendar",
+            "calendar_id": "primary",
+            "member_id": "fixture-member",
+            "provider_account_id": "fixture-account",
+        },
+        max_poll_cycles=max_poll_cycles,
+    )
+    adapter.instance_name = instance_name
+    adapter._service = service
+    adapter._poll_interval_s = 0
     return adapter
 
 
@@ -825,7 +850,8 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
     }
     cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
     first_service = _FakeCalendarService(
-        calendar_list_pages=[{"items": [entry]}], list_pages=[{"items": []}]
+        calendar_list_pages=[{"items": [entry]}],
+        list_pages=[{"items": [], "nextSyncToken": "sync-a"}],
     )
     first = GoogleCalendarAdapter(config=config)
     first.instance_name = "google-calendar-primary"
@@ -855,7 +881,7 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
 
     restarted_service = _FakeCalendarService(
         calendar_list_pages=[{"items": [entry]}],
-        list_pages=[{"items": []}],
+        list_pages=[{"items": [], "nextSyncToken": "sync-b"}],
     )
     restarted = GoogleCalendarAdapter(config=config)
     restarted.instance_name = "google-calendar-primary"
@@ -872,7 +898,13 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
         )
         == 0
     )
-    assert restarted.status().extra["durable_cursor"]["provider_watermark"] is None
+    assert restarted.status().extra["durable_cursor"]["provider_watermark"] == "present"
+    assert restarted_service.list_calls[0]["syncToken"] == "sync-a"
+    tokens, initial = restarted._decode_poll_watermark(
+        cursor_store.get("google-calendar-primary").provider_watermark
+    )
+    assert tokens == {"calendar-a": "sync-b"}
+    assert initial == {"calendar-a"}
     assert not [
         call
         for call in restarted_log.calls
@@ -881,31 +913,554 @@ async def test_calendar_source_dedupe_survives_adapter_restart(
     cursor_store.close()
 
 
-async def test_poll_loop_recovers_current_health_after_transient_failure() -> None:
-    adapter = _make_adapter()
-    adapter._max_poll_cycles = 2
+async def test_malformed_event_without_id_cannot_advance_sync_or_report_running(
+    tmp_path: Path,
+) -> None:
+    """Regression for PR #342's rejected exact head.
+
+    A provider page is not complete merely because transport returned 200.  A
+    record without its stable provider id cannot be observed or deleted, so the
+    whole poll must fail without advancing either in-memory or durable sync
+    state and without publishing current health as running.
+    """
+
+    service = _FakeCalendarService(
+        list_pages=[
+            {
+                "items": [
+                    {
+                        "summary": "Missing provider identity",
+                        "start": {"dateTime": "2026-05-18T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-18T16:00:00Z"},
+                    }
+                ],
+                "nextSyncToken": "must-not-advance",
+            }
+        ]
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://fixture/google-calendar",
+            "calendar_id": "primary",
+            "member_id": "fixture-member",
+            "provider_account_id": "fixture-account",
+        },
+        max_poll_cycles=1,
+    )
+    adapter.instance_name = "calendar-malformed-fixture"
+    adapter._service = service
     adapter._poll_interval_s = 0
     event_log = _FakeEventLog()
-    ctx = _seed_ctx(adapter, event_log)
-    attempts = 0
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
 
-    async def poll_once(*, ctx: AdapterContext) -> int:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise ConnectionResetError("fixture transient")
-        return 0
+        assert adapter.status().state != "running"
+        assert adapter._sync_token is None
+        assert adapter._sync_tokens == {}
+        assert cursor_store.get(adapter.instance_name).provider_watermark is None
+        errors = [call for call in event_log.calls if call["type"] == "adapter.error"]
+        assert len(errors) == 1
+        assert errors[0]["payload"]["error_kind"] == "api_changed"
+    finally:
+        cursor_store.close()
 
-    adapter._poll_once = poll_once
 
-    await adapter._poll_loop(ctx=ctx)
+async def test_open_durable_circuit_cannot_report_running(
+    tmp_path: Path,
+) -> None:
+    """A matching open circuit blocks provider polling and current health.
 
-    assert attempts == 2
-    assert adapter.status().state == "running"
-    errors = [call for call in event_log.calls if call["type"] == "adapter.error"]
-    assert len(errors) == 1
-    assert errors[0]["payload"]["severity"] == "transient"
-    assert errors[0]["payload"]["error_kind"] == "network"
+    The rejected head could consume a provider page and publish ``running``
+    while the exact instance's durable circuit remained open.  Recovery must
+    first use the governed half-open transition; another successful return is
+    not permission to erase the open state.
+    """
+
+    service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "must-not-advance"}]
+    )
+    adapter = GoogleCalendarAdapter(
+        config={
+            "oauth_credentials_ref": "keychain://fixture/google-calendar",
+            "calendar_id": "primary",
+            "member_id": "fixture-member",
+            "provider_account_id": "fixture-account",
+        },
+        max_poll_cycles=1,
+    )
+    adapter.instance_name = "calendar-open-circuit-fixture"
+    adapter._service = service
+    adapter._poll_interval_s = 0
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        for _ in range(3):
+            cursor_store.record_error(adapter.instance_name)
+        assert cursor_store.get(adapter.instance_name).circuit_state == "open"
+
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+
+        assert service.list_calls == []
+        assert adapter.status().state != "running"
+        durable = cursor_store.get(adapter.instance_name)
+        assert durable.circuit_state == "open"
+        assert durable.provider_watermark is None
+    finally:
+        cursor_store.close()
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {
+            "id": 42,
+            "updated": "2026-05-18T14:00:00Z",
+            "start": {"dateTime": "2026-05-18T15:00:00Z"},
+            "end": {"dateTime": "2026-05-18T16:00:00Z"},
+        },
+        {
+            "id": "missing-start",
+            "updated": "2026-05-18T14:00:00Z",
+            "end": {"dateTime": "2026-05-18T16:00:00Z"},
+        },
+        {
+            "id": "unparseable-start",
+            "updated": "2026-05-18T14:00:00Z",
+            "start": {"dateTime": "not-a-date"},
+            "end": {"dateTime": "2026-05-18T16:00:00Z"},
+        },
+        {
+            "id": "unsupported-attendees",
+            "updated": "2026-05-18T14:00:00Z",
+            "start": {"dateTime": "2026-05-18T15:00:00Z"},
+            "end": {"dateTime": "2026-05-18T16:00:00Z"},
+            "attendees": {"email": "fixture@example.invalid"},
+        },
+        {
+            "id": "unsupported-reminders",
+            "updated": "2026-05-18T14:00:00Z",
+            "start": {"dateTime": "2026-05-18T15:00:00Z"},
+            "end": {"dateTime": "2026-05-18T16:00:00Z"},
+            "reminders": {"overrides": "ten minutes"},
+        },
+    ],
+    ids=[
+        "non-string-id",
+        "missing-required-start",
+        "parse-error",
+        "unsupported-collection",
+        "unsupported-nested-shape",
+    ],
+)
+async def test_malformed_required_fields_and_unsupported_shapes_preserve_cursor(
+    tmp_path: Path,
+    event: dict[str, Any],
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[{"items": [event], "nextSyncToken": "must-not-advance"}]
+    )
+    adapter = _make_member_adapter(
+        service=service, instance_name="calendar-malformed-shapes"
+    )
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        assert adapter.status().state == "backoff"
+        assert adapter._sync_tokens == {}
+        assert cursor_store.get(adapter.instance_name).provider_watermark is None
+        assert not [
+            call
+            for call in event_log.calls
+            if call["type"] in {"calendar.event_added", "calendar.event_updated"}
+        ]
+    finally:
+        cursor_store.close()
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        ConnectionResetError("second provider page failed"),
+        {"items": {"id": "not-a-list"}, "nextSyncToken": "bad"},
+        {"items": None, "nextSyncToken": "bad"},
+        {"items": "", "nextSyncToken": "bad"},
+        {"items": ["not-an-event"], "nextSyncToken": "bad"},
+    ],
+    ids=[
+        "page-failure",
+        "items-not-list",
+        "items-null",
+        "items-empty-string",
+        "item-not-object",
+    ],
+)
+async def test_page_and_item_failures_cannot_advance_cursor(
+    tmp_path: Path,
+    page: dict[str, Any] | BaseException,
+) -> None:
+    service = _FakeCalendarService(list_pages=[page])
+    adapter = _make_member_adapter(
+        service=service, instance_name="calendar-page-failure"
+    )
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        assert adapter.status().state == "backoff"
+        assert cursor_store.get(adapter.instance_name).provider_watermark is None
+    finally:
+        cursor_store.close()
+
+
+async def test_durable_append_failure_cannot_advance_or_hide_health(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[
+            {
+                "items": [_make_event(event_id="append-failure")],
+                "nextSyncToken": "must-not-advance",
+            }
+        ]
+    )
+    adapter = _make_member_adapter(
+        service=service, instance_name="calendar-append-failure"
+    )
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    with pytest.raises(RuntimeError, match="event log unavailable"):
+        await adapter._poll_loop(
+            ctx=_seed_ctx(
+                adapter,
+                _FailingEventLog(),
+                cursor_store=cursor_store,
+            )
+        )
+    try:
+        assert adapter.status().state == "backoff"
+        durable = cursor_store.get(adapter.instance_name)
+        assert durable.provider_watermark is None
+        assert durable.error_count == 1
+    finally:
+        cursor_store.close()
+
+
+async def test_half_open_success_closes_exact_circuit_after_cursor(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[{"items": [], "nextSyncToken": "recovered-token"}]
+    )
+    adapter = _make_member_adapter(
+        service=service, instance_name="calendar-half-open-success"
+    )
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        for _ in range(3):
+            cursor_store.record_error(adapter.instance_name)
+        cursor_store.begin_recovery(adapter.instance_name)
+        assert cursor_store.get(adapter.instance_name).circuit_state == "half_open"
+
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "running"
+        assert durable.circuit_state == "closed"
+        assert durable.error_count == 0
+        assert durable.provider_watermark is not None
+    finally:
+        cursor_store.close()
+
+
+async def test_half_open_failure_reopens_and_preserves_cursor(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[ConnectionResetError("half-open provider failure")]
+    )
+    adapter = _make_member_adapter(
+        service=service, instance_name="calendar-half-open-failure"
+    )
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        cursor_store.record_success(
+            adapter.instance_name,
+            provider_watermark=adapter._encode_poll_watermark(
+                {"primary": "prior-token"}, {"primary"}
+            ),
+        )
+        for _ in range(3):
+            cursor_store.record_error(adapter.instance_name)
+        cursor_store.begin_recovery(adapter.instance_name)
+
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "backoff"
+        assert durable.circuit_state == "open"
+        tokens, initial = adapter._decode_poll_watermark(durable.provider_watermark)
+        assert tokens == {"primary": "prior-token"}
+        assert initial == {"primary"}
+    finally:
+        cursor_store.close()
+
+
+async def test_repeated_transient_failures_open_circuit(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[
+            ConnectionResetError("transient one"),
+            ConnectionResetError("transient two"),
+            ConnectionResetError("transient three"),
+        ]
+    )
+    adapter = _make_member_adapter(
+        service=service,
+        instance_name="calendar-repeated-transient",
+        max_poll_cycles=3,
+    )
+    adapter._poll_interval_s = 0
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "backoff"
+        assert durable.error_count == 3
+        assert durable.circuit_state == "open"
+        assert (
+            len([call for call in event_log.calls if call["type"] == "adapter.error"])
+            == 3
+        )
+    finally:
+        cursor_store.close()
+
+
+async def test_success_recovery_followed_by_failure_returns_to_backoff(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[
+            ConnectionResetError("first transient"),
+            {"items": [], "nextSyncToken": "recovered-token"},
+            ConnectionResetError("later transient"),
+        ]
+    )
+    adapter = _make_member_adapter(
+        service=service,
+        instance_name="calendar-recover-then-fail",
+        max_poll_cycles=3,
+    )
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "backoff"
+        assert durable.provider_watermark is not None
+        assert durable.error_count == 1
+        assert (
+            len([call for call in event_log.calls if call["type"] == "adapter.error"])
+            == 2
+        )
+    finally:
+        cursor_store.close()
+
+
+async def test_other_instance_success_cannot_repair_open_circuit(
+    tmp_path: Path,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    instance_a = "calendar-member-a"
+    for _ in range(3):
+        cursor_store.record_error(instance_a)
+    adapter_b = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[{"items": [], "nextSyncToken": "member-b-token"}]
+        ),
+        instance_name="calendar-member-b",
+    )
+    try:
+        await adapter_b._poll_loop(
+            ctx=_seed_ctx(
+                adapter_b,
+                _FakeEventLog(),
+                cursor_store=cursor_store,
+            )
+        )
+        assert cursor_store.get(instance_a).circuit_state == "open"
+        assert cursor_store.get(instance_a).provider_watermark is None
+        assert cursor_store.get(adapter_b.instance_name).circuit_state == "closed"
+        assert adapter_b.status().state == "running"
+    finally:
+        cursor_store.close()
+
+
+async def test_racing_failure_invalidates_provider_success(
+    tmp_path: Path,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    instance_name = "calendar-racing-failure"
+
+    class RacingEventLog(_FakeEventLog):
+        async def write(self, envelope: Any, **kwargs: Any) -> str:
+            event_id = await super().write(envelope, **kwargs)
+            if envelope.type == "calendar.event_added":
+                cursor_store.record_error(instance_name, open_after=1)
+            return event_id
+
+    adapter = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[
+                {
+                    "items": [_make_event(event_id="racing-event")],
+                    "nextSyncToken": "must-not-advance",
+                }
+            ]
+        ),
+        instance_name=instance_name,
+    )
+    event_log = RacingEventLog()
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        durable = cursor_store.get(instance_name)
+        assert adapter.status().state == "backoff"
+        assert durable.circuit_state == "open"
+        assert durable.provider_watermark is None
+        assert (
+            len(
+                [
+                    call
+                    for call in event_log.calls
+                    if call["type"] == "calendar.event_added"
+                ]
+            )
+            == 1
+        )
+    finally:
+        cursor_store.close()
+
+
+async def test_persistence_failure_after_provider_success_stays_non_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    adapter = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[
+                {
+                    "items": [_make_event(event_id="persistence-failure")],
+                    "nextSyncToken": "must-not-advance",
+                }
+            ]
+        ),
+        instance_name="calendar-persistence-failure",
+    )
+    event_log = _FakeEventLog()
+
+    def fail_complete_poll(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("cursor persistence unavailable")
+
+    monkeypatch.setattr(cursor_store, "complete_poll", fail_complete_poll)
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "backoff"
+        assert adapter._sync_tokens == {}
+        assert durable.provider_watermark is None
+        assert durable.error_count == 1
+    finally:
+        cursor_store.close()
+
+
+async def test_circuit_persistence_failure_after_provider_success_is_audited(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    adapter = _make_member_adapter(
+        service=_FakeCalendarService(
+            list_pages=[
+                {
+                    "items": [_make_event(event_id="circuit-persistence-failure")],
+                    "nextSyncToken": "must-not-advance",
+                }
+            ]
+        ),
+        instance_name="calendar-circuit-persistence-failure",
+    )
+    event_log = _FakeEventLog()
+
+    def fail_complete_poll(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("cursor completion unavailable")
+
+    def fail_record_error(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("circuit persistence unavailable")
+
+    monkeypatch.setattr(cursor_store, "complete_poll", fail_complete_poll)
+    monkeypatch.setattr(cursor_store, "record_error", fail_record_error)
+    try:
+        with pytest.raises(CalendarPollIncomplete, match="durable circuit"):
+            await adapter._poll_loop(
+                ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+            )
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "backoff"
+        assert adapter._sync_tokens == {}
+        assert durable.provider_watermark is None
+        [error] = [call for call in event_log.calls if call["type"] == "adapter.error"]
+        assert error["payload"]["severity"] == "transient"
+        assert "cursor completion unavailable" in error["payload"]["error_message"]
+    finally:
+        cursor_store.close()
+
+
+async def test_fatal_poll_authentication_failure_never_advances_or_runs(
+    tmp_path: Path,
+) -> None:
+    service = _FakeCalendarService(
+        list_pages=[_FakeHttpError(resp=_FakeHttpResponse(status=401))]
+    )
+    adapter = _make_member_adapter(service=service, instance_name="calendar-fatal-auth")
+    event_log = _FakeEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    try:
+        await adapter._poll_loop(
+            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
+        )
+        durable = cursor_store.get(adapter.instance_name)
+        assert adapter.status().state == "crashed"
+        assert durable.provider_watermark is None
+        [error] = [call for call in event_log.calls if call["type"] == "adapter.error"]
+        assert error["payload"]["severity"] == "fatal"
+        assert error["payload"]["error_kind"] == "auth_failed"
+    finally:
+        cursor_store.close()
 
 
 async def test_initial_sync_does_not_backfill_elapsed_outcomes() -> None:

@@ -201,7 +201,16 @@ class AdapterSupervisor:
                 f"external write route expected one {provider} adapter for "
                 f"{member_id}/{provider_account_id}, found {len(candidates)}"
             )
-        result = await candidates[0].apply_write(operation)  # type: ignore[attr-defined]
+        candidate = candidates[0]
+        if getattr(candidate, "name", None) == "calendaring-google-calendar":
+            status = candidate.status()
+            durable = (status.extra or {}).get("durable_cursor") or {}
+            if status.state != "running" or durable.get("circuit_state") != "closed":
+                raise RuntimeError(
+                    "Google Calendar provider admission requires running health "
+                    "and a closed durable circuit"
+                )
+        result = await candidate.apply_write(operation)  # type: ignore[attr-defined]
         if not result.applied and not result.suppressed:
             raise RuntimeError("provider adapter is not ready to accept writes")
         return result

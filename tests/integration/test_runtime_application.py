@@ -6,6 +6,7 @@ import asyncio
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -75,6 +76,97 @@ def _bridge_envelope() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+class _CalendarListRequest:
+    def __init__(self, service: "_CalendarProtocolService") -> None:
+        self._service = service
+
+    def execute(self) -> dict[str, Any]:
+        if self._service.pages:
+            value = self._service.pages.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return dict(value)
+        return {"items": []}
+
+
+class _CalendarEventsResource:
+    def __init__(self, service: "_CalendarProtocolService") -> None:
+        self._service = service
+
+    def list(self, **kwargs: Any) -> _CalendarListRequest:
+        self._service.list_calls.append(dict(kwargs))
+        return _CalendarListRequest(self._service)
+
+
+class _CalendarProtocolService:
+    def __init__(self, pages: list[dict[str, Any] | BaseException]) -> None:
+        self.pages = list(pages)
+        self.list_calls: list[dict[str, Any]] = []
+
+    def events(self) -> _CalendarEventsResource:
+        return _CalendarEventsResource(self)
+
+
+def _calendar_runtime_settings(tmp_path: Path) -> RuntimeSettings:
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    return RuntimeSettings.credential_free(
+        instance_dir,
+        encryption_key=TEST_KEY,
+        repository_root=REPO_ROOT,
+        member_identities={"member-a.ts.net": "member-a"},
+        member_roles={"member-a": "principal"},
+        deterministic_openclaw_fixture=True,
+        fixture_member_id="member-a",
+        openclaw_enabled=True,
+        openclaw_shared_secret="calendar-fixture-secret-at-least-24-characters",
+        openclaw_model_configured=True,
+        member_chat_enabled_members={"member-a"},
+        deterministic_member_chat_fixture=True,
+        adapter_config={
+            "adapter_supervisor_port": 0,
+            "adapters": [
+                {
+                    "id": "calendar-runtime-fixture",
+                    "kind": "calendaring-google-calendar",
+                    "config": {
+                        "oauth_credentials_ref": "keychain://fixture/calendar",
+                        "calendar_id": "primary",
+                        "member_id": "member-a",
+                        "provider_account_id": "calendar-account-a",
+                        "calendar_name": "Personal calendar",
+                        "poll_interval_s": 60,
+                    },
+                }
+            ],
+        },
+    )
+
+
+def _install_calendar_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    service: _CalendarProtocolService,
+    *,
+    max_poll_cycles: int | None = None,
+) -> None:
+    from adminme.adapters.loader import load_builtin_adapters as real_loader
+
+    def fixture_loader(config: dict[str, Any], *, repository_root: Path) -> list[Any]:
+        loaded = real_loader(config, repository_root=repository_root)
+        for adapter in loaded:
+            if adapter.name != "calendaring-google-calendar":
+                continue
+            adapter._credentials_resolver = lambda _ref: {}
+            adapter._service_factory = lambda *_args: service
+            adapter._poll_interval_s = 0
+            adapter._max_poll_cycles = max_poll_cycles
+        return loaded
+
+    monkeypatch.setattr(
+        "adminme.runtime.application.load_builtin_adapters", fixture_loader
+    )
+
+
 def test_application_boots_with_complete_truthful_inventory_and_routes(
     tmp_path: Path,
 ) -> None:
@@ -142,6 +234,194 @@ def test_optional_unconfigured_chat_does_not_block_runtime_readiness(
         )
         assert ingest.status_code == 202, ingest.text
         assert ingest.json()["owner_scope"] == "private:member-a"
+
+
+def test_calendar_real_protocol_recovery_reaches_runtime_and_member_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _CalendarProtocolService(
+        [
+            ConnectionResetError("credential-free transient"),
+            {
+                "items": [
+                    {
+                        "id": "runtime-event",
+                        "etag": "runtime-revision-1",
+                        "summary": "Credential-free calendar event",
+                        "start": {"dateTime": "2026-05-28T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-28T16:00:00Z"},
+                        "updated": "2026-05-28T14:00:00Z",
+                    },
+                    {
+                        "id": "runtime-deletion",
+                        "etag": "runtime-revision-2",
+                        "status": "cancelled",
+                        "updated": "2026-05-28T14:01:00Z",
+                    },
+                ],
+                "nextSyncToken": "runtime-sync-token",
+            },
+        ]
+    )
+    _install_calendar_protocol(monkeypatch, service)
+    app = create_application(_calendar_runtime_settings(tmp_path))
+    with TestClient(app) as client:
+        deadline = time.monotonic() + 2
+        diagnostics: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            response = client.get("/api/system/ready")
+            diagnostics = response.json()
+            capability = diagnostics["capabilities"][
+                "adapter:calendaring-google-calendar"
+            ]
+            if response.status_code == 200 and capability["state"] in {
+                "healthy",
+                "observation_only",
+            }:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError(diagnostics)
+
+        runtime: AdministrateMeRuntime = app.state.runtime
+        durable = runtime.adapter_cursor_store.get("calendar-runtime-fixture")
+        assert durable.provider_watermark is not None
+        assert durable.circuit_state == "closed"
+        assert durable.error_count == 0
+        assert diagnostics["ready"] is True
+        assert diagnostics["configured_adapter_degradations"] == []
+        assert diagnostics["observation_active"] is True
+
+        settings = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        )
+        assert settings.status_code == 200, settings.text
+        [connection] = settings.json()["control"]["connections"]
+        assert connection["id"] == "calendar-runtime-fixture"
+        assert connection["runtime"] == "running"
+        assert connection["setup"] == "connected"
+        assert connection["safety"]["observation_only"] is True
+        rendered = settings.text
+        assert "Credential-free calendar event" not in rendered
+        assert "runtime-sync-token" not in rendered
+        assert "keychain://" not in rendered
+
+        async def calendar_facts() -> list[str]:
+            assert runtime.event_log is not None
+            return [
+                event["type"]
+                async for event in runtime.event_log.read_since(
+                    types=["calendar.event_added", "calendar.event_deleted"]
+                )
+            ]
+
+        facts = client.portal.call(calendar_facts)
+        assert facts.count("calendar.event_added") == 1
+        assert facts.count("calendar.event_deleted") == 1
+
+
+def test_calendar_malformed_protocol_fails_readiness_and_member_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _CalendarProtocolService(
+        [
+            {
+                "items": [
+                    {
+                        "summary": "No provider id",
+                        "start": {"dateTime": "2026-05-28T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-28T16:00:00Z"},
+                    }
+                ],
+                "nextSyncToken": "must-not-advance",
+            }
+        ]
+    )
+    _install_calendar_protocol(monkeypatch, service, max_poll_cycles=1)
+    app = create_application(_calendar_runtime_settings(tmp_path))
+    with TestClient(app) as client:
+        response = client.get("/api/system/ready")
+        assert response.status_code == 503
+        diagnostics = response.json()
+        assert diagnostics["ready"] is False
+        assert diagnostics["configured_adapter_degradations"] == [
+            "adapter:calendaring-google-calendar"
+        ]
+        capability = diagnostics["capabilities"]["adapter:calendaring-google-calendar"]
+        assert capability["state"] == "degraded"
+
+        runtime: AdministrateMeRuntime = app.state.runtime
+        durable = runtime.adapter_cursor_store.get("calendar-runtime-fixture")
+        assert durable.provider_watermark is None
+        assert durable.error_count == 1
+
+        settings = client.get(
+            "/api/member/v1/surfaces/settings",
+            headers={"Tailscale-User-Login": "member-a.ts.net"},
+        )
+        assert settings.status_code == 200
+        [connection] = settings.json()["control"]["connections"]
+        assert connection["runtime"] != "running"
+        assert connection["setup"] != "connected"
+
+
+def test_calendar_restart_replays_same_provider_page_without_duplicate_facts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = {
+        "id": "restart-event",
+        "etag": "restart-revision-1",
+        "summary": "Restart replay fixture",
+        "start": {"dateTime": "2026-05-28T15:00:00Z"},
+        "end": {"dateTime": "2026-05-28T16:00:00Z"},
+        "updated": "2026-05-28T14:00:00Z",
+    }
+    settings = _calendar_runtime_settings(tmp_path)
+
+    def fact_count(client: TestClient, runtime: AdministrateMeRuntime) -> int:
+        async def count() -> int:
+            assert runtime.event_log is not None
+            return len(
+                [
+                    row
+                    async for row in runtime.event_log.read_since(
+                        types=["calendar.event_added"]
+                    )
+                ]
+            )
+
+        return client.portal.call(count)
+
+    first_service = _CalendarProtocolService(
+        [{"items": [event], "nextSyncToken": "restart-token-a"}]
+    )
+    _install_calendar_protocol(monkeypatch, first_service)
+    first_app = create_application(settings)
+    with TestClient(first_app) as client:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if client.get("/api/system/ready").status_code == 200:
+                break
+            time.sleep(0.01)
+        assert fact_count(client, first_app.state.runtime) == 1
+
+    second_service = _CalendarProtocolService(
+        [{"items": [event], "nextSyncToken": "restart-token-b"}]
+    )
+    _install_calendar_protocol(monkeypatch, second_service)
+    second_app = create_application(settings)
+    with TestClient(second_app) as client:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if client.get("/api/system/ready").status_code == 200:
+                break
+            time.sleep(0.01)
+        assert second_service.list_calls[0]["syncToken"] == "restart-token-a"
+        assert fact_count(client, second_app.state.runtime) == 1
 
 
 def test_source_assurance_refresh_never_blocks_readiness(

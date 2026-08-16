@@ -176,6 +176,21 @@ async function settle(baseUrl) {
   }
 }
 
+async function setCalendarHealth(baseUrl, mode) {
+  const result = await jsonRequest(
+    baseUrl,
+    `/__gate7/calendar-health/${mode}`,
+    identities.principal,
+    "POST",
+  );
+  record(
+    `Calendar fixture reaches ${mode}`,
+    result.response.ok && result.value.mode === mode && result.value.provider_writes === 0,
+    JSON.stringify(result.value),
+  );
+  return result.value;
+}
+
 async function seed(baseUrl) {
   const message = await jsonRequest(
     baseUrl,
@@ -952,6 +967,28 @@ async function run() {
         record("Settings separates read identity from action identity", (await principal.page.locator(".settings-identity").textContent()).includes("Authenticated") && (await principal.page.locator(".settings-identity").textContent()).includes("Actions execute as"), await principal.page.locator(".settings-identity").textContent());
         await principal.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings connection truth explains independent axes", (await principal.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principal.page.locator("#surface").textContent());
+        const openCalendar = await setCalendarHealth(server.baseUrl, "open");
+        await principal.page.reload();
+        await principal.page.locator(".connection-card").waitFor();
+        let calendarCard = principal.page.locator(".connection-card").filter({ hasText: "Personal calendar" });
+        let calendarRuntime = calendarCard.locator(".connection-axis").filter({ hasText: "Runtime" }).locator("strong");
+        record("Settings shows an open Calendar circuit as degraded backoff", openCalendar.circuit_state === "open" && await calendarRuntime.textContent() === "Backoff", await calendarCard.textContent());
+        await screenshot(principal.page, "surface-settings-calendar-open-desktop.png");
+        const malformedCalendar = await setCalendarHealth(server.baseUrl, "malformed");
+        await principal.page.reload();
+        await principal.page.locator(".connection-card").waitFor();
+        calendarCard = principal.page.locator(".connection-card").filter({ hasText: "Personal calendar" });
+        calendarRuntime = calendarCard.locator(".connection-axis").filter({ hasText: "Runtime" }).locator("strong");
+        record("Settings never promotes malformed Calendar data to healthy", malformedCalendar.circuit_state === "open" && malformedCalendar.cursor_present === false && await calendarRuntime.textContent() === "Backoff", await calendarCard.textContent());
+        await screenshot(principal.page, "surface-settings-calendar-malformed-desktop.png");
+        const recoveredCalendar = await setCalendarHealth(server.baseUrl, "recovered");
+        await principal.page.reload();
+        await principal.page.locator(".connection-card").waitFor();
+        calendarCard = principal.page.locator(".connection-card").filter({ hasText: "Personal calendar" });
+        calendarRuntime = calendarCard.locator(".connection-axis").filter({ hasText: "Runtime" }).locator("strong");
+        record("Settings reports Calendar running only after durable recovery", recoveredCalendar.circuit_state === "closed" && recoveredCalendar.cursor_present === true && await calendarRuntime.textContent() === "Running", await calendarCard.textContent());
+        record("Calendar recovery preserves observation-only safety", (await calendarCard.textContent()).includes("Observation Only") && (await calendarCard.textContent()).includes("Observation mode suppresses provider changes"), await calendarCard.textContent());
+        await screenshot(principal.page, "surface-settings-calendar-recovered-desktop.png");
         await principal.page.reload();
         await principal.page.locator(".settings-nav").waitFor();
         record("Settings control area survives URL reload", await principal.page.getByRole("button", { name: "Connections", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
@@ -1093,6 +1130,19 @@ async function run() {
         record("Settings phone retains all control areas", await principalPhone.page.locator(".settings-nav button").count() === 9, await principalPhone.page.locator(".settings-nav").textContent());
         await principalPhone.page.getByRole("button", { name: "Connections", exact: true }).click();
         record("Settings phone retains connection truth", (await principalPhone.page.locator("#surface").textContent()).includes("Connection truth has four separate axes"), await principalPhone.page.locator("#surface").textContent());
+        const malformedCalendar = await setCalendarHealth(server.baseUrl, "malformed");
+        await principalPhone.page.reload();
+        await principalPhone.page.locator(".connection-card").waitFor();
+        let calendarCard = principalPhone.page.locator(".connection-card").filter({ hasText: "Personal calendar" });
+        let calendarRuntime = calendarCard.locator(".connection-axis").filter({ hasText: "Runtime" }).locator("strong");
+        record("Settings phone keeps malformed Calendar health degraded", malformedCalendar.circuit_state === "open" && await calendarRuntime.textContent() === "Backoff", await calendarCard.textContent());
+        await screenshot(principalPhone.page, "surface-settings-calendar-malformed-narrow.png");
+        const recoveredCalendar = await setCalendarHealth(server.baseUrl, "recovered");
+        await principalPhone.page.reload();
+        await principalPhone.page.locator(".connection-card").waitFor();
+        calendarCard = principalPhone.page.locator(".connection-card").filter({ hasText: "Personal calendar" });
+        calendarRuntime = calendarCard.locator(".connection-axis").filter({ hasText: "Runtime" }).locator("strong");
+        record("Settings phone shows fully durable Calendar recovery", recoveredCalendar.circuit_state === "closed" && recoveredCalendar.cursor_present === true && await calendarRuntime.textContent() === "Running", await calendarCard.textContent());
       }
       await auditAccessibility(principalPhone.page, `narrow ${surface}`);
       const screenshotName = surface === "comms" ? "surface-comms-focus-narrow.png" : surface === "settings" ? "surface-settings-connections-narrow.png" : `surface-${surface}-narrow.png`;

@@ -746,6 +746,38 @@ class Doctor:
             )
         )
         runtime_diagnostics = service_manager.runtime_diagnostics() or {}
+        runtime_capabilities = runtime_diagnostics.get("capabilities") or {}
+        configured_adapters = {
+            capability_id: capability
+            for capability_id, capability in runtime_capabilities.items()
+            if isinstance(capability_id, str)
+            and isinstance(capability, dict)
+            and capability.get("kind") == "adapter"
+            and isinstance(capability.get("details"), dict)
+            and capability["details"].get("production_loader") is True
+        }
+        unhealthy_adapters = sorted(
+            capability_id
+            for capability_id, capability in configured_adapters.items()
+            if capability.get("state") not in {"healthy", "observation_only"}
+        )
+        checks.append(
+            DoctorCheck(
+                "adapter_capability_health",
+                not unhealthy_adapters,
+                (
+                    f"{len(configured_adapters)}/{len(configured_adapters)} "
+                    "configured adapters healthy"
+                    if not unhealthy_adapters
+                    else f"{len(unhealthy_adapters)} configured adapters not running"
+                ),
+                "Repair the exact configured adapter and its durable circuit before release admission.",
+                {
+                    "configured": sorted(configured_adapters),
+                    "unhealthy": unhealthy_adapters,
+                },
+            )
+        )
         assurance_ok, assurance_evidence = source_assurance_terminal_evidence(
             runtime_diagnostics
         )

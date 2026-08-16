@@ -74,6 +74,18 @@ class AdapterCursorStore:
     def _now_ms() -> int:
         return int(time.time() * 1000)
 
+    @classmethod
+    def _next_updated_at_ms(cls, previous: int) -> int:
+        """Return a process-independent monotonic row version.
+
+        ``updated_at_ms`` is both public recency evidence and the existing
+        durable compare-and-swap token.  Advancing by at least one preserves
+        ordering when multiple transitions land inside the same wall-clock
+        millisecond without adding a schema migration to installed stores.
+        """
+
+        return max(cls._now_ms(), int(previous) + 1)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -111,7 +123,7 @@ class AdapterCursorStore:
             try:
                 self._ensure(adapter_id, now)
                 row = self._conn.execute(
-                    "SELECT lease_owner, lease_until_ms, circuit_state "
+                    "SELECT lease_owner, lease_until_ms, circuit_state, updated_at_ms "
                     "FROM adapter_cursors WHERE adapter_id=?",
                     (adapter_id,),
                 ).fetchone()
@@ -121,10 +133,11 @@ class AdapterCursorStore:
                     or int(row["lease_until_ms"] or 0) <= now
                 )
                 if available:
+                    updated_at = max(now, int(row["updated_at_ms"]) + 1)
                     self._conn.execute(
                         "UPDATE adapter_cursors SET lease_owner=?, lease_until_ms=?, "
                         "updated_at_ms=? WHERE adapter_id=?",
-                        (lease_owner, now + ttl_ms, now, adapter_id),
+                        (lease_owner, now + ttl_ms, updated_at, adapter_id),
                     )
                 self._conn.execute("COMMIT")
                 return available
@@ -133,14 +146,30 @@ class AdapterCursorStore:
                 raise
 
     def release(self, adapter_id: str, lease_owner: str) -> bool:
-        now = self._now_ms()
         with self._lock:
-            cur = self._conn.execute(
-                "UPDATE adapter_cursors SET lease_owner=NULL, lease_until_ms=NULL, "
-                "updated_at_ms=? WHERE adapter_id=? AND lease_owner=?",
-                (now, adapter_id, lease_owner),
-            )
-            return cur.rowcount == 1
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT updated_at_ms FROM adapter_cursors "
+                    "WHERE adapter_id=? AND lease_owner=?",
+                    (adapter_id, lease_owner),
+                ).fetchone()
+                if row is None:
+                    self._conn.execute("COMMIT")
+                    return False
+                previous = int(row[0])
+                now = self._next_updated_at_ms(previous)
+                cur = self._conn.execute(
+                    "UPDATE adapter_cursors SET lease_owner=NULL, "
+                    "lease_until_ms=NULL, updated_at_ms=? "
+                    "WHERE adapter_id=? AND lease_owner=? AND updated_at_ms=?",
+                    (now, adapter_id, lease_owner, previous),
+                )
+                self._conn.execute("COMMIT")
+                return cur.rowcount == 1
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
 
     def dedupe_event(
         self, adapter_id: str, external_id: str, fingerprint: str
@@ -174,11 +203,16 @@ class AdapterCursorStore:
         fingerprint: str | None = None,
         event_id: str | None = None,
     ) -> None:
-        now = self._now_ms()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                self._ensure(adapter_id, now)
+                self._ensure(adapter_id, self._now_ms())
+                row = self._conn.execute(
+                    "SELECT updated_at_ms FROM adapter_cursors WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                assert row is not None
+                now = self._next_updated_at_ms(int(row[0]))
                 self._conn.execute(
                     "UPDATE adapter_cursors SET provider_watermark=COALESCE(?, provider_watermark), "
                     "error_count=0, circuit_state='closed', updated_at_ms=? "
@@ -204,30 +238,152 @@ class AdapterCursorStore:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    def record_event(
+        self,
+        adapter_id: str,
+        *,
+        external_id: str,
+        fingerprint: str,
+        event_id: str,
+    ) -> None:
+        """Persist one idempotent fact identity without changing health.
+
+        Observing one record is not proof that the provider poll, its cursor,
+        or its circuit transition completed.  Calendar uses this narrower
+        operation so a durable source fact cannot prematurely erase an open or
+        half-open circuit.
+        """
+
+        now = self._now_ms()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure(adapter_id, now)
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO adapter_dedupe "
+                    "(adapter_id, external_id, fingerprint, event_id, seen_at_ms) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (adapter_id, external_id, fingerprint, event_id, now),
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def complete_poll(
+        self,
+        adapter_id: str,
+        *,
+        provider_watermark: str,
+        expected_updated_at_ms: int,
+        lease_owner: str,
+    ) -> AdapterCursor:
+        """Atomically persist a complete poll and close its exact circuit.
+
+        The caller captures ``expected_updated_at_ms`` after acquiring its
+        lease.  A newer failure, recovery transition, lease transfer, or other
+        durable state change invalidates that success instead of letting stale
+        work erase it.  Provider facts must already be durable before this
+        terminal metadata transaction is attempted.
+        """
+
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT updated_at_ms, lease_owner, circuit_state "
+                    "FROM adapter_cursors WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError("adapter cursor disappeared during poll")
+                if (
+                    int(row["updated_at_ms"]) != int(expected_updated_at_ms)
+                    or row["lease_owner"] != lease_owner
+                    or row["circuit_state"] not in {"closed", "half_open"}
+                ):
+                    raise RuntimeError(
+                        "adapter circuit changed while provider poll was in progress"
+                    )
+                now = self._next_updated_at_ms(int(row["updated_at_ms"]))
+                cursor_update = self._conn.execute(
+                    "UPDATE adapter_cursors SET provider_watermark=?, "
+                    "updated_at_ms=? WHERE adapter_id=? AND updated_at_ms=? "
+                    "AND lease_owner=?",
+                    (
+                        provider_watermark,
+                        now,
+                        adapter_id,
+                        expected_updated_at_ms,
+                        lease_owner,
+                    ),
+                )
+                if cursor_update.rowcount != 1:
+                    raise RuntimeError(
+                        "adapter cursor changed before provider watermark persisted"
+                    )
+                circuit_update = self._conn.execute(
+                    "UPDATE adapter_cursors SET error_count=0, "
+                    "circuit_state='closed' WHERE adapter_id=? AND updated_at_ms=? "
+                    "AND lease_owner=?",
+                    (adapter_id, now, lease_owner),
+                )
+                if circuit_update.rowcount != 1:
+                    raise RuntimeError(
+                        "adapter circuit could not close after cursor persistence"
+                    )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+        return self.get(adapter_id)
+
     def record_error(self, adapter_id: str, *, open_after: int = 3) -> AdapterCursor:
         if open_after <= 0:
             raise ValueError("open_after must be positive")
-        now = self._now_ms()
         with self._lock:
-            self._ensure(adapter_id, now)
-            self._conn.execute(
-                "UPDATE adapter_cursors SET error_count=error_count+1, "
-                "circuit_state=CASE WHEN error_count+1>=? THEN 'open' "
-                "ELSE circuit_state END, updated_at_ms=? WHERE adapter_id=?",
-                (open_after, now, adapter_id),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure(adapter_id, self._now_ms())
+                row = self._conn.execute(
+                    "SELECT updated_at_ms FROM adapter_cursors WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                assert row is not None
+                now = self._next_updated_at_ms(int(row[0]))
+                self._conn.execute(
+                    "UPDATE adapter_cursors SET error_count=error_count+1, "
+                    "circuit_state=CASE WHEN error_count+1>=? THEN 'open' "
+                    "ELSE circuit_state END, updated_at_ms=? WHERE adapter_id=?",
+                    (open_after, now, adapter_id),
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
         return self.get(adapter_id)
 
     def begin_recovery(self, adapter_id: str) -> AdapterCursor:
-        now = self._now_ms()
         with self._lock:
-            self._ensure(adapter_id, now)
-            self._conn.execute(
-                "UPDATE adapter_cursors SET circuit_state='half_open', "
-                "lease_owner=NULL, lease_until_ms=NULL, updated_at_ms=? "
-                "WHERE adapter_id=?",
-                (now, adapter_id),
-            )
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._ensure(adapter_id, self._now_ms())
+                row = self._conn.execute(
+                    "SELECT updated_at_ms FROM adapter_cursors WHERE adapter_id=?",
+                    (adapter_id,),
+                ).fetchone()
+                assert row is not None
+                now = self._next_updated_at_ms(int(row[0]))
+                self._conn.execute(
+                    "UPDATE adapter_cursors SET circuit_state='half_open', "
+                    "lease_owner=NULL, lease_until_ms=NULL, updated_at_ms=? "
+                    "WHERE adapter_id=?",
+                    (now, adapter_id),
+                )
+                self._conn.execute("COMMIT")
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
         return self.get(adapter_id)
 
 

@@ -74,6 +74,7 @@ from typing import Any
 import pytest
 
 from adminme.adapters.base import AdapterContext
+from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.adapters.loader import load_builtin_adapters
 from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.schemas.ingest import CalendarEventAddedV1
@@ -135,12 +136,17 @@ class _IntegrationEventLog:
         return f"event-{len(self.calls)}"
 
 
-def _make_integration_ctx(event_log: _IntegrationEventLog) -> AdapterContext:
+def _make_integration_ctx(
+    event_log: _IntegrationEventLog,
+    *,
+    cursor_store: AdapterCursorStore | None = None,
+) -> AdapterContext:
     return AdapterContext(
         event_sink=event_log,  # type: ignore[arg-type]
         config={},
         correlation_id_factory=lambda: "corr-integration-1",
         now_factory=lambda: _INTEGRATION_FROZEN_NOW,
+        cursor_store=cursor_store,
     )
 
 
@@ -149,7 +155,7 @@ class _IntegrationListRequest:
 
     def __init__(
         self,
-        pages: list[dict[str, Any]],
+        pages: list[dict[str, Any] | BaseException],
         call_log: list[dict[str, Any]],
     ) -> None:
         self._pages = pages
@@ -157,7 +163,10 @@ class _IntegrationListRequest:
 
     def execute(self) -> dict[str, Any]:
         if self._pages:
-            return dict(self._pages.pop(0))
+            value = self._pages.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return dict(value)
         return {"items": []}
 
 
@@ -184,7 +193,10 @@ class _IntegrationCalendarService:
     absent because the gate-rejection test (2) never reaches the impl
     and the inbound-emit test (3) does not write."""
 
-    def __init__(self, list_pages: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        list_pages: list[dict[str, Any] | BaseException] | None = None,
+    ) -> None:
         self._list_pages = list(list_pages or [])
         self.list_calls: list[dict[str, Any]] = []
         self.insert_calls: list[dict[str, Any]] = []
@@ -375,24 +387,39 @@ async def test_production_loader_supervisor_reports_running_after_poll_recovery(
     assert len(loaded) == 1
     adapter = loaded[0]
     adapter._credentials_resolver = lambda _ref: "{}"
-    adapter._service_factory = lambda *_args: object()
+    service = _IntegrationCalendarService(
+        list_pages=[
+            ConnectionResetError("fixture transient"),
+            {
+                "items": [
+                    {
+                        "id": "fixture-event",
+                        "etag": "fixture-revision-1",
+                        "summary": "Credential-free provider event",
+                        "start": {"dateTime": "2026-05-18T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-18T16:00:00Z"},
+                        "updated": "2026-05-18T14:00:00Z",
+                    },
+                    {
+                        "id": "fixture-deleted-event",
+                        "etag": "fixture-revision-2",
+                        "status": "cancelled",
+                        "updated": "2026-05-18T14:01:00Z",
+                    },
+                ],
+                "nextSyncToken": "fixture-sync-token",
+            },
+        ]
+    )
+    adapter._service_factory = lambda *_args: service
     adapter._poll_interval_s = 0
-    attempts = 0
-
-    async def poll_once(*, ctx: AdapterContext) -> int:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise ConnectionResetError("fixture transient")
-        return 0
-
-    adapter._poll_once = poll_once
     event_log = _IntegrationEventLog()
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
     supervisor = AdapterSupervisor(
         config_path=tmp_path / "unused.yaml",
         config_data=config,
         adapter_loader=lambda _config: loaded,
-        ctx_factory=lambda: _make_integration_ctx(event_log),
+        ctx_factory=lambda: _make_integration_ctx(event_log, cursor_store=cursor_store),
     )
 
     await supervisor.start()
@@ -402,7 +429,7 @@ async def test_production_loader_supervisor_reports_running_after_poll_recovery(
             while True:
                 inventory = supervisor.inventory()
                 if (
-                    attempts >= 2
+                    len(service.list_calls) >= 2
                     and next(iter(inventory.values()))["state"] == "running"
                 ):
                     return
@@ -413,8 +440,90 @@ async def test_production_loader_supervisor_reports_running_after_poll_recovery(
         assert instance["adapter_name"] == "calendaring-google-calendar"
         assert instance["state"] == "running"
         assert instance["restart_count"] == 0
+        durable = cursor_store.get("calendar-recovery-fixture")
+        assert durable.provider_watermark is not None
+        assert durable.circuit_state == "closed"
+        assert durable.error_count == 0
         errors = [call for call in event_log.calls if call["type"] == "adapter.error"]
         assert len(errors) == 1
         assert errors[0]["payload"]["error_kind"] == "network"
+        assert (
+            len(
+                [
+                    call
+                    for call in event_log.calls
+                    if call["type"] == "calendar.event_added"
+                ]
+            )
+            == 1
+        )
+        assert (
+            len(
+                [
+                    call
+                    for call in event_log.calls
+                    if call["type"] == "calendar.event_deleted"
+                ]
+            )
+            == 1
+        )
     finally:
         await supervisor.stop()
+        cursor_store.close()
+
+
+async def test_open_calendar_circuit_blocks_provider_write_admission(
+    tmp_path: Path,
+) -> None:
+    config = {
+        "adapter_supervisor_port": 0,
+        "adapters": [
+            {
+                "id": "calendar-admission-fixture",
+                "kind": "calendaring-google-calendar",
+                "config": {
+                    "oauth_credentials_ref": "keychain://fixture/google-calendar",
+                    "calendar_id": "primary",
+                    "member_id": "member-fixture",
+                    "provider_account_id": "account-fixture",
+                },
+            }
+        ],
+    }
+    [adapter] = load_builtin_adapters(config, repository_root=REPO_ROOT)
+    cursor_store = AdapterCursorStore(tmp_path / "calendar-cursors.sqlite3")
+    for _ in range(3):
+        cursor_store.record_error("calendar-admission-fixture")
+    adapter._cursor_store = cursor_store
+    adapter._cursor_id_value = "calendar-admission-fixture"
+    adapter._status.state = "running"
+    supervisor = AdapterSupervisor(
+        config_path=tmp_path / "unused.yaml",
+        config_data=config,
+        adapter_loader=lambda _config: [adapter],
+        ctx_factory=lambda: _make_integration_ctx(
+            _IntegrationEventLog(), cursor_store=cursor_store
+        ),
+    )
+    supervisor.prepare()
+    try:
+        with pytest.raises(RuntimeError, match="closed durable circuit"):
+            await supervisor.dispatch_write(
+                provider="google_calendar",
+                member_id="member-fixture",
+                provider_account_id="account-fixture",
+                operation=WriteOperation(
+                    kind="create_event",
+                    target_external_id=None,
+                    payload={
+                        "calendar_id": "primary",
+                        "summary": "Must not reach provider",
+                        "start": {"dateTime": "2026-05-18T15:00:00Z"},
+                        "end": {"dateTime": "2026-05-18T16:00:00Z"},
+                    },
+                ),
+            )
+        assert adapter.status().state == "backoff"
+        assert adapter._service is None
+    finally:
+        cursor_store.close()

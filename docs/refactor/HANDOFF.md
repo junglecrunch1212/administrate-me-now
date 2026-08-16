@@ -3,12 +3,12 @@ schema_version: 1
 current_phase: 8
 phase_name: production_activation
 gate: 8
-gate_result: GOOGLE_CALENDAR_POLL_HEALTH_LOCAL_CANDIDATE
-verified_local_date: 2026-08-15
+gate_result: GOOGLE_CALENDAR_POLL_HEALTH_REMEDIATION_CANDIDATE
+verified_local_date: 2026-08-16
 verified_github_date: pending
 branch: codex/google-calendar-recovery-health
-candidate_commit_resolution: local_candidate_pending_immutable_head_gates_and_draft_pr
-pull_request_url: pending
+candidate_commit_resolution: rejected_head_remediated_pending_new_immutable_head_gates
+pull_request_url: https://github.com/junglecrunch1212/administrate-me-now/pull/342
 openclaw_version: 2026.7.2
 openclaw_commit: ce67ffb70e83e5ebb56ea02e814e577153f84f61
 openclaw_archive_sha256: 3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577
@@ -17,7 +17,31 @@ next_phase: observation_review_and_candidate_signal_quality_iteration
 
 # Release handoff
 
-## 2026-08-15 Google Calendar current-health recovery candidate
+## 2026-08-16 Google Calendar poll-accounting and health remediation
+
+Draft PR #342 head `9d31d95b300cd38a4c9c6d012fe8aad9a07f3a5a` was rejected
+for three exact false-green paths: a missing provider event ID could be skipped
+while advancing the token, current health could become running while the exact
+durable circuit remained open, and the recovery proof replaced the real poll
+with a bare integer-return stub. The bounded **MODERNIZE** remediation fails an
+incomplete provider page without cursor advance, completes facts then the
+lease-fenced durable token and circuit transaction before publishing running,
+and makes readiness, Doctor, Calendar admission, and the existing member
+Settings connection card consume that same truth.
+
+Credential-free production composition now drives the real Calendar protocol
+through transient, malformed, open, half-open, recovered, restart, replay,
+multiple-instance, persistence-failure, and concurrency paths. Desktop and
+narrow Gate 7 assertions use the existing Connections card; no UI route, label,
+navigation, authorization, or experience mode was added. Gmail and Google Tasks
+retain their prior recovery behavior, disabled/unconfigured providers stay
+nonblocking, observation-only remains active, and PR #341's exact mixed-backlog
+guards remain unchanged. No schema/data migration or live operation is part of
+the candidate. A new immutable PR head, exact-bound Harness receipts, hosted
+checks, and independent review remain required before any G-001 authority could
+be considered.
+
+## 2026-08-15 Google Calendar current-health diagnosis
 
 Current `origin/main` is merge `88bd571`; the active family release and both
 LaunchAgents remain on `d181fad`. A content-free census found three configured,
@@ -27,7 +51,7 @@ its worker is retained in internal backoff after a transient network failure,
 with supervisor restart count zero and a closed durable circuit. Every other
 optional adapter is explicitly disabled as not configured rather than omitted.
 
-This is a **MODERNIZE code-defect candidate**, not an authorized runtime restart
+This is the original **MODERNIZE code-defect diagnosis**, not an authorized runtime restart
 or provider repair. The active process recorded Google Calendar's transient
 failure at `2026-08-14T09:54:57Z`, then appended 72 calendar updates, 10
 deletions, and 15 outcomes on `2026-08-15`. Those content-free event counts

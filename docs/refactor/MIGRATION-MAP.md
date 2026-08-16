@@ -1,16 +1,17 @@
 # Migration map
 
-Google Calendar current-health recovery (2026-08-15): the poll loop now treats a
-successful provider poll as current evidence that the configured instance is
-running, matching the existing Google Tasks and Gmail semantics. This is a
-**MODERNIZE, NO-MIGRATION LOCAL CANDIDATE**. The earlier transient
-`adapter.error`, all calendar/provider facts, cursor and dedupe state,
-projections, configuration, credential references, scopes, and observation
-state remain unchanged. Rebuild and restart continue to consume the same
-append-only facts. Rollback restores the former latched-backoff presentation but
-does not remove or rewrite any event. No provider refetch, reauthentication,
-permission change, runtime/dependency migration, or live repair is part of this
-candidate.
+Google Calendar poll-health recovery (2026-08-16) is a **MODERNIZE,
+NO-MIGRATION DRAFT CANDIDATE**. Existing `updated_at_ms` becomes the monotonic
+cursor-row fencing token; no table or event schema changes. A complete poll
+persists provider facts, then its per-calendar token map and matching circuit
+closure, before current health can run. Malformed/incomplete work preserves the
+prior token and append-only error history. Restart decodes the same metadata
+watermark and deterministic provider-revision identities, so replay remains
+idempotent. Existing facts, projections, credentials, configuration, scopes,
+observation, Gmail/Tasks semantics, and disabled-provider treatment are
+unchanged. Rollback restores the rejected health implementation without
+rewriting data. No provider refetch, reauthentication, permission change,
+runtime/dependency migration, or live repair belongs to this candidate.
 
 CO-018 mixed-backlog amendment (2026-08-15): current `origin/main` is
 `cd08b50`, including PR #339's forward repair and PR #340's Outcome Harness,

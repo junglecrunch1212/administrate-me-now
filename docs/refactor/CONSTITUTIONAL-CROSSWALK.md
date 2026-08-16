@@ -1,15 +1,17 @@
 # Constitutional crosswalk
 
-Google Calendar health amendment (2026-08-15): C100/C104/C113 are
-**PRESERVED/MODERNIZED** so a transient provider failure remains immutable audit
-history without becoming permanent current health after a later successful
-poll. Content-free live evidence proves post-error Calendar synchronization in
-the same process while readiness remained latched in backoff. The bounded
-candidate changes only the Google Calendar poll-loop state transition, matching
-the already reviewed Google Tasks behavior. Member/account/calendar isolation,
-provider facts, cursors, replay, observation, writes, disabled-provider
-semantics, and fail-closed guarded admission remain unchanged. AC-10, AC-14,
-AC-27, and AC-42 bind the correction; release status remains candidate-only.
+Google Calendar health amendment (2026-08-16): C100/C104/C113 are
+**PRESERVED/MODERNIZED** so immutable provider accounting, the exact durable
+cursor/circuit, and current admission cannot disagree. Malformed or incomplete
+pages fail without token advance; all facts precede one lease-fenced
+token-and-circuit completion; open circuits require a governed half-open trial;
+and only the matching closed circuit may publish `running`. Credential-free
+production, restart/replay/concurrency, Doctor/readiness/admission, and existing
+desktop/narrow Settings proofs bind the transition. Member/account/calendar
+isolation, provider authority, observation, immutable failure history, Gmail
+and Tasks semantics, disabled-provider treatment, and PR #341's mixed-backlog
+guards are preserved. AC-10, AC-14, AC-27, and AC-42 bind the candidate-only
+correction.
 
 CO-017 amendment (2026-08-11): C106/C107/C109 are **PRESERVED/HARDENED**
 by a typed terminal-assessment recovery boundary. An operator can select only

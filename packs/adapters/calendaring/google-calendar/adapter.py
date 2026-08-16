@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar, Literal
 
@@ -350,6 +351,9 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._seen_calendar_sources: dict[str, str] = {}
         self._known_events: dict[str, dict[str, Any]] = {}
         self._elapsed_outcomes: set[str] = set()
+        self._cursor_store: Any = None
+        self._cursor_id_value: str | None = None
+        self._lease_owner = f"google-calendar:{uuid.uuid4().hex}"
         # [§6.20, PM-27] observation seam slots; Phase A leaves unset.
         self._observation_session: Any = observation_session
         self._observation_manager: Any = observation_manager
@@ -400,7 +404,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._service = self._service_factory(creds_json, self.SCOPES, user_email)
         self._ctx = ctx
         self._status.started_at = ctx.now_factory()
-        self._status.state = "running"
+        self._status.state = "starting"
         # [D7, D8] adapter.authenticated v1; correlation_id from factory.
         await self._emit_authenticated(ctx=ctx, op_ref=op_ref)
         await self._poll_loop(ctx=ctx)
@@ -412,6 +416,20 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._status.state = "stopped"
 
     def status(self) -> AdapterStatus:
+        if self._cursor_store is not None and self._cursor_id_value is not None:
+            try:
+                durable = self._cursor_store.get(self._cursor_id_value)
+                self._status.extra.pop("durable_cursor_error", None)
+                self._status.extra["durable_cursor"] = self._public_cursor(durable)
+                if (
+                    durable.circuit_state != "closed"
+                    and self._status.state == "running"
+                ):
+                    self._status.state = "backoff"
+            except Exception as exc:  # noqa: BLE001 — status remains fail-closed
+                self._status.extra["durable_cursor_error"] = type(exc).__name__
+                if self._status.state == "running":
+                    self._status.state = "backoff"
         return self._status
 
     async def _poll_loop(self, *, ctx: AdapterContext) -> None:
@@ -425,22 +443,47 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 await self._poll_once(ctx=ctx)
             except BaseException as exc:  # noqa: BLE001 — classify & emit
                 severity, error_kind, retry_after_s = self._classify_calendar_error(exc)
-                await self._emit_error(
-                    ctx=ctx,
-                    severity=severity,
-                    error_kind=error_kind,
-                    error_message=str(exc) or type(exc).__name__,
-                    retry_after_s=retry_after_s,
-                )
+                self._status.state = "crashed" if severity == "fatal" else "backoff"
+                circuit_already_open = isinstance(exc, CalendarCircuitOpen)
+                cursor_failure: Exception | None = None
+                if ctx.cursor_store is not None and not circuit_already_open:
+                    try:
+                        cursor = ctx.cursor_store.record_error(self._cursor_id())
+                    except Exception as cursor_exc:  # durable health stays fail-closed
+                        cursor_failure = cursor_exc
+                        self._status.extra["durable_cursor_error"] = type(
+                            cursor_exc
+                        ).__name__
+                    else:
+                        self._status.extra.pop("durable_cursor_error", None)
+                        self._status.extra["durable_cursor"] = self._public_cursor(
+                            cursor
+                        )
+                if not circuit_already_open:
+                    await self._emit_error(
+                        ctx=ctx,
+                        severity=severity,
+                        error_kind=error_kind,
+                        error_message=str(exc) or type(exc).__name__,
+                        retry_after_s=retry_after_s,
+                    )
+                if cursor_failure is not None:
+                    raise CalendarPollIncomplete(
+                        "Google Calendar failure could not update its durable circuit"
+                    ) from cursor_failure
                 if severity == "fatal":
-                    self._status.state = "crashed"
                     return
-                self._status.state = "backoff"
             else:
-                # A transient provider failure is durable audit history, not a
-                # permanent current-health state. A later successful poll
-                # proves the configured instance is running again.
-                self._status.state = "running"
+                if ctx.cursor_store is not None:
+                    durable = ctx.cursor_store.get(self._cursor_id())
+                    self._status.extra.pop("durable_cursor_error", None)
+                    self._status.extra["durable_cursor"] = self._public_cursor(durable)
+                    if durable.circuit_state != "closed":
+                        self._status.state = "backoff"
+                    else:
+                        self._status.state = "running"
+                else:
+                    self._status.state = "running"
             cycles += 1
             try:
                 await asyncio.sleep(self._poll_interval_s)
@@ -448,8 +491,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                 return
 
     async def _poll_once(self, *, ctx: AdapterContext) -> int:
-        """Fetch + dedupe + emit. ``_seen_inbound`` is the dedupe gate
-        per F-3 — re-poll on the same event id is a no-op."""
+        """Complete one provider -> facts -> cursor -> circuit transaction."""
         if self._service is None:
             raise RuntimeError(
                 "Google Calendar service not initialized; call start() first"
@@ -459,33 +501,156 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         # member-bound and use durable incremental synchronization below.
         if not self._config.get("member_id"):
             return await self._poll_once_v1(ctx=ctx, calendar_id=calendar_id)
-        entries = (
-            self._fetch_calendar_entries()
-            if self._config.get("discover_calendars")
-            else [
-                {
-                    "id": calendar_id,
-                    "summary": self._config.get("calendar_name") or calendar_id,
-                    "accessRole": "owner",
-                    "primary": calendar_id == "primary",
-                    "selected": True,
-                    "hidden": False,
-                    "timeZone": self._config.get("timezone"),
-                    "defaultReminders": [],
-                }
-            ]
-        )
-        emitted = 0
-        for entry in entries:
-            await self._emit_calendar_source(ctx=ctx, entry=entry)
-            emitted += await self._poll_calendar_once(
-                ctx=ctx,
-                calendar_id=str(entry["id"]),
-                calendar_name=str(
-                    entry.get("summaryOverride") or entry.get("summary") or entry["id"]
-                ),
+
+        store = ctx.cursor_store
+        cursor_id = self._cursor_id()
+        self._cursor_store = store
+        self._cursor_id_value = cursor_id
+        lease_claimed = False
+        expected_updated_at_ms: int | None = None
+        sync_tokens = dict(self._sync_tokens)
+        initial_calendars = set(self._initial_sync_calendars)
+        if store is not None:
+            current = store.get(cursor_id)
+            self._status.extra["durable_cursor"] = self._public_cursor(current)
+            if current.circuit_state == "open":
+                raise CalendarCircuitOpen(
+                    "Google Calendar circuit is open; begin governed recovery first"
+                )
+            lease_claimed = store.claim(
+                cursor_id,
+                self._lease_owner,
+                ttl_ms=max(30_000, self._poll_interval_s * 2_000),
             )
-        return emitted
+            if not lease_claimed:
+                raise CalendarPollIncomplete(
+                    "Google Calendar poll lease is held by another runtime"
+                )
+            claimed = store.get(cursor_id)
+            expected_updated_at_ms = claimed.updated_at_ms
+            sync_tokens, initial_calendars = self._decode_poll_watermark(
+                claimed.provider_watermark
+            )
+
+        try:
+            entries = (
+                self._fetch_calendar_entries()
+                if self._config.get("discover_calendars")
+                else [
+                    {
+                        "id": calendar_id,
+                        "summary": self._config.get("calendar_name") or calendar_id,
+                        "accessRole": "owner",
+                        "primary": calendar_id == "primary",
+                        "selected": True,
+                        "hidden": False,
+                        "timeZone": self._config.get("timezone"),
+                        "defaultReminders": [],
+                    }
+                ]
+            )
+            emitted = 0
+            next_tokens = dict(sync_tokens)
+            next_initial = set(initial_calendars)
+            for entry in entries:
+                await self._emit_calendar_source(ctx=ctx, entry=entry)
+                entry_id = str(entry["id"])
+                entry_sync_token = sync_tokens.get(entry_id)
+                entry_emitted, next_sync_token = await self._poll_calendar_once(
+                    ctx=ctx,
+                    calendar_id=entry_id,
+                    calendar_name=str(
+                        entry.get("summaryOverride")
+                        or entry.get("summary")
+                        or entry["id"]
+                    ),
+                    sync_token=entry_sync_token,
+                    was_initial_sync_complete=entry_id in initial_calendars,
+                )
+                emitted += entry_emitted
+                if next_sync_token is None:
+                    next_tokens.pop(entry_id, None)
+                else:
+                    next_tokens[entry_id] = next_sync_token
+                next_initial.add(entry_id)
+
+            watermark = self._encode_poll_watermark(next_tokens, next_initial)
+            if store is not None:
+                assert expected_updated_at_ms is not None
+                durable = store.complete_poll(
+                    cursor_id,
+                    provider_watermark=watermark,
+                    expected_updated_at_ms=expected_updated_at_ms,
+                    lease_owner=self._lease_owner,
+                )
+                self._status.extra["durable_cursor"] = self._public_cursor(durable)
+
+            # In-memory state changes only after the exact durable completion.
+            self._sync_tokens = next_tokens
+            self._initial_sync_calendars = next_initial
+            if not self._config.get("discover_calendars"):
+                self._sync_token = next_tokens.get(calendar_id)
+                self._initial_sync_complete = calendar_id in next_initial
+            return emitted
+        finally:
+            if store is not None and lease_claimed:
+                store.release(cursor_id, self._lease_owner)
+
+    def _cursor_id(self) -> str:
+        return str(
+            getattr(self, "instance_name", None) or self._config.get("id") or self.name
+        )
+
+    @staticmethod
+    def _public_cursor(cursor: Any) -> dict[str, Any]:
+        durable = dict(cursor.public())
+        durable["provider_watermark"] = (
+            "present" if durable.get("provider_watermark") else None
+        )
+        return durable
+
+    @staticmethod
+    def _decode_poll_watermark(
+        watermark: str | None,
+    ) -> tuple[dict[str, str], set[str]]:
+        if watermark is None:
+            return {}, set()
+        try:
+            value = json.loads(watermark)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CalendarPollIncomplete(
+                "Google Calendar durable cursor is malformed"
+            ) from exc
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise CalendarPollIncomplete(
+                "Google Calendar durable cursor has an unsupported shape"
+            )
+        raw_tokens = value.get("sync_tokens")
+        raw_initial = value.get("initial_sync_calendars")
+        if not isinstance(raw_tokens, dict) or not isinstance(raw_initial, list):
+            raise CalendarPollIncomplete("Google Calendar durable cursor is incomplete")
+        if not all(
+            isinstance(key, str) and key and isinstance(token, str) and token
+            for key, token in raw_tokens.items()
+        ) or not all(isinstance(key, str) and key for key in raw_initial):
+            raise CalendarPollIncomplete(
+                "Google Calendar durable cursor contains invalid values"
+            )
+        return dict(raw_tokens), set(raw_initial)
+
+    @staticmethod
+    def _encode_poll_watermark(
+        sync_tokens: dict[str, str], initial_calendars: set[str]
+    ) -> str:
+        return json.dumps(
+            {
+                "version": 1,
+                "sync_tokens": dict(sorted(sync_tokens.items())),
+                "initial_sync_calendars": sorted(initial_calendars),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     def _fetch_calendar_entries(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -499,8 +664,33 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             if page_token:
                 params["pageToken"] = page_token
             response = self._service.calendarList().list(**params).execute()
-            records.extend(response.get("items") or [])
-            page_token = response.get("nextPageToken")
+            if not isinstance(response, dict):
+                raise MalformedCalendarRecord(
+                    "Google Calendar calendarList page is not an object"
+                )
+            items = response.get("items", [])
+            if not isinstance(items, list):
+                raise MalformedCalendarRecord(
+                    "Google Calendar calendarList items is not a list"
+                )
+            for index, entry in enumerate(items):
+                if (
+                    not isinstance(entry, dict)
+                    or not isinstance(entry.get("id"), str)
+                    or not entry["id"]
+                ):
+                    raise MalformedCalendarRecord(
+                        f"Google Calendar calendarList item {index} has no stable id"
+                    )
+            records.extend(items)
+            raw_page_token = response.get("nextPageToken")
+            if raw_page_token is not None and (
+                not isinstance(raw_page_token, str) or not raw_page_token
+            ):
+                raise MalformedCalendarRecord(
+                    "Google Calendar calendarList nextPageToken is invalid"
+                )
+            page_token = raw_page_token
             if not page_token:
                 break
         include = {
@@ -516,9 +706,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         return [
             entry
             for entry in records
-            if isinstance(entry.get("id"), str)
-            and entry["id"] not in exclude
-            and (not include or entry["id"] in include)
+            if entry["id"] not in exclude and (not include or entry["id"] in include)
         ]
 
     async def _emit_calendar_source(
@@ -594,7 +782,7 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             },
         )
         if cursor_store is not None:
-            cursor_store.record_success(
+            cursor_store.record_event(
                 cursor_id,
                 external_id=source_external_id,
                 fingerprint=fingerprint,
@@ -608,24 +796,24 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         self._seen_calendar_sources[calendar_id] = fingerprint
 
     async def _poll_calendar_once(
-        self, *, ctx: AdapterContext, calendar_id: str, calendar_name: str
-    ) -> int:
-        sync_token = self._sync_tokens.get(calendar_id)
-        if not self._config.get("discover_calendars") and self._sync_token:
-            sync_token = self._sync_token
+        self,
+        *,
+        ctx: AdapterContext,
+        calendar_id: str,
+        calendar_name: str,
+        sync_token: str | None,
+        was_initial_sync_complete: bool,
+    ) -> tuple[int, str | None]:
         events, next_sync_token, incremental = self._fetch_event_changes(
             calendar_id=calendar_id,
             now=ctx.now_factory(),
             sync_token=sync_token,
         )
+        for index, event in enumerate(events):
+            self._validate_provider_event(event, index=index)
         emitted = 0
-        was_initial_sync_complete = calendar_id in self._initial_sync_calendars
-        if not self._config.get("discover_calendars"):
-            was_initial_sync_complete = self._initial_sync_complete
         for event in events:
-            event_id = str(event.get("id") or "")
-            if not event_id:
-                continue
+            event_id = event["id"]
             event_key = f"{calendar_id}:{event_id}"
             if event.get("status") == "cancelled":
                 deleted_key = self._provider_event_idempotency_key(
@@ -721,13 +909,74 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
                     )
                     self._elapsed_outcomes.add(known_id)
                     emitted += 1
-        if next_sync_token:
-            self._sync_tokens[calendar_id] = next_sync_token
-        self._initial_sync_calendars.add(calendar_id)
-        if not self._config.get("discover_calendars"):
-            self._sync_token = next_sync_token
-            self._initial_sync_complete = True
-        return emitted
+        return emitted, next_sync_token
+
+    @staticmethod
+    def _validate_provider_event(event: Any, *, index: int) -> None:
+        if not isinstance(event, dict):
+            raise MalformedCalendarRecord(
+                f"Google Calendar event {index} is not an object"
+            )
+        event_id = event.get("id")
+        if not isinstance(event_id, str) or not event_id:
+            raise MalformedCalendarRecord(
+                f"Google Calendar event {index} has no stable id"
+            )
+        status = event.get("status", "confirmed")
+        if not isinstance(status, str) or not status:
+            raise MalformedCalendarRecord(
+                f"Google Calendar event {index} has an invalid status"
+            )
+        if status == "cancelled":
+            return
+        for field in ("start", "end"):
+            raw_when = event.get(field)
+            when = _extract_when(raw_when)
+            if not isinstance(raw_when, dict) or not when:
+                raise MalformedCalendarRecord(
+                    f"Google Calendar event {index} has an invalid {field}"
+                )
+            if _parse_google_when(when) is None:
+                raise MalformedCalendarRecord(
+                    f"Google Calendar event {index} has an unparseable {field}"
+                )
+        structured_shapes = {
+            "extendedProperties": dict,
+            "reminders": dict,
+            "organizer": dict,
+            "source": dict,
+            "conferenceData": dict,
+        }
+        for field, expected in structured_shapes.items():
+            value = event.get(field)
+            if value is not None and not isinstance(value, expected):
+                raise MalformedCalendarRecord(
+                    f"Google Calendar event {index} has an unsupported {field} shape"
+                )
+        collection_shapes = {
+            "attendees": dict,
+            "attachments": dict,
+            "recurrence": str,
+        }
+        for field, item_type in collection_shapes.items():
+            value = event.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(
+                isinstance(item, item_type) for item in value
+            ):
+                raise MalformedCalendarRecord(
+                    f"Google Calendar event {index} has an unsupported {field} shape"
+                )
+        reminders = event.get("reminders") or {}
+        overrides = reminders.get("overrides")
+        if overrides is not None and (
+            not isinstance(overrides, list)
+            or not all(isinstance(item, dict) for item in overrides)
+        ):
+            raise MalformedCalendarRecord(
+                f"Google Calendar event {index} has unsupported reminder overrides"
+            )
 
     async def _emit_calendar_outcome(
         self,
@@ -788,10 +1037,12 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
         time_min = ctx.now_factory().strftime("%Y-%m-%dT%H:%M:%SZ")
         events = self._fetch_events(calendar_id=calendar_id, time_min=time_min)
         emitted = 0
-        for event in events:
+        for index, event in enumerate(events):
             event_id = event.get("id")
             if not isinstance(event_id, str) or not event_id:
-                continue
+                raise MalformedCalendarRecord(
+                    f"Google Calendar legacy event {index} has no stable id"
+                )
             if event_id in self._seen_inbound:
                 continue
             await self._emit_calendar_event_added(
@@ -829,17 +1080,37 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             except BaseException as exc:
                 status = getattr(getattr(exc, "resp", None), "status", None)
                 if status == 410 and sync_token is not None:
-                    self._sync_tokens.pop(calendar_id, None)
-                    if not self._config.get("discover_calendars"):
-                        self._sync_token = None
                     return self._fetch_event_changes(
                         calendar_id=calendar_id, now=now, sync_token=None
                     )
                 raise
-            records.extend(response.get("items") or [])
-            page_token = response.get("nextPageToken")
+            if not isinstance(response, dict):
+                raise MalformedCalendarRecord(
+                    "Google Calendar events page is not an object"
+                )
+            items = response.get("items", [])
+            if not isinstance(items, list):
+                raise MalformedCalendarRecord(
+                    "Google Calendar events items is not a list"
+                )
+            records.extend(items)
+            raw_page_token = response.get("nextPageToken")
+            if raw_page_token is not None and (
+                not isinstance(raw_page_token, str) or not raw_page_token
+            ):
+                raise MalformedCalendarRecord(
+                    "Google Calendar events nextPageToken is invalid"
+                )
+            page_token = raw_page_token
             if not page_token:
-                next_sync_token = response.get("nextSyncToken") or next_sync_token
+                raw_sync_token = response.get("nextSyncToken")
+                if raw_sync_token is not None and (
+                    not isinstance(raw_sync_token, str) or not raw_sync_token
+                ):
+                    raise MalformedCalendarRecord(
+                        "Google Calendar nextSyncToken is invalid"
+                    )
+                next_sync_token = raw_sync_token or next_sync_token
                 break
         return records, next_sync_token, incremental
 
@@ -859,8 +1130,26 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             if page_token:
                 params["pageToken"] = page_token
             resp = self._service.events().list(**params).execute()
-            records.extend(resp.get("items") or [])
-            page_token = resp.get("nextPageToken")
+            if not isinstance(resp, dict):
+                raise MalformedCalendarRecord(
+                    "Google Calendar legacy events page is not an object"
+                )
+            items = resp.get("items", [])
+            if not isinstance(items, list) or not all(
+                isinstance(item, dict) for item in items
+            ):
+                raise MalformedCalendarRecord(
+                    "Google Calendar legacy events items has an unsupported shape"
+                )
+            records.extend(items)
+            raw_page_token = resp.get("nextPageToken")
+            if raw_page_token is not None and (
+                not isinstance(raw_page_token, str) or not raw_page_token
+            ):
+                raise MalformedCalendarRecord(
+                    "Google Calendar legacy nextPageToken is invalid"
+                )
+            page_token = raw_page_token
             if not page_token:
                 break
         return records
@@ -1015,9 +1304,18 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
     ) -> str | None:
         """Identify one immutable provider revision across process restarts."""
         event_id = str(event.get("id") or "")
-        revision = str(event.get("etag") or event.get("updated") or "")
-        if not event_id or not revision:
+        if not event_id:
             return None
+        revision = str(event.get("etag") or event.get("updated") or "")
+        if not revision:
+            revision = (
+                "content:"
+                + hashlib.sha256(
+                    json.dumps(
+                        event, sort_keys=True, separators=(",", ":"), default=str
+                    ).encode("utf-8")
+                ).hexdigest()
+            )
         provider_account_id = str(
             self._config.get("provider_account_id")
             or self._config.get("user_email")
@@ -1275,9 +1573,23 @@ class GoogleCalendarAdapter(ExternalStateMirrorAdapter):
             return ("transient", "network", retry_after)
         if status is not None and 400 <= status < 500:
             return ("transient", "api_changed", retry_after)
+        if isinstance(exc, MalformedCalendarRecord):
+            return ("transient", "api_changed", retry_after)
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return ("transient", "network", retry_after)
         return ("transient", "unknown", retry_after)
+
+
+class CalendarPollIncomplete(RuntimeError):
+    """A provider cycle did not reach its durable terminal boundary."""
+
+
+class CalendarCircuitOpen(CalendarPollIncomplete):
+    """The exact configured instance requires a governed recovery transition."""
+
+
+class MalformedCalendarRecord(CalendarPollIncomplete):
+    """A provider record cannot be mapped to a complete durable fact."""
 
 
 __all__ = [

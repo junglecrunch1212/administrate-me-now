@@ -1735,15 +1735,25 @@ class AdministrateMeRuntime:
         state = self.overall_state()
         if observation_active and state == "healthy":
             state = "observation_only"
+        configured_adapter_degradations = [
+            key
+            for key, capability in self.capabilities.items()
+            if capability.kind == "adapter"
+            and capability.details.get("production_loader") is True
+            and capability.state in {"degraded", "blocked"}
+        ]
         return {
             "status": state,
-            "ready": self.started and state != "blocked",
+            "ready": self.started
+            and state != "blocked"
+            and not configured_adapter_degradations,
             "accepting_writes": bool(self.events and self.events.accepting),
             "observation_active": observation_active,
             "capabilities": {
                 key: value.public() for key, value in sorted(self.capabilities.items())
             },
             "startup_error": self.startup_error,
+            "configured_adapter_degradations": sorted(configured_adapter_degradations),
             "member_portal": {
                 "health": "healthy" if self.started else "stopped",
                 "domain_views": "healthy"

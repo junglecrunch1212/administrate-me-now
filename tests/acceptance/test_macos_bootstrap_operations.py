@@ -568,6 +568,91 @@ def test_doctor_fails_when_required_triage_pipeline_is_poisoned(
     assert check["evidence"]["unhealthy"] == ["pipeline:pipeline:noise_filtering"]
 
 
+def test_doctor_fails_when_configured_calendar_adapter_is_not_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    paths = DeploymentPaths.from_root(tmp_path / "deployment-adapter-degraded")
+    BootstrapWizard(
+        paths,
+        root=REPO_ROOT,
+        fixture="two-adult-one-child",
+        test_mode=True,
+        dry_run=True,
+        preflight_overrides={
+            "system": "Darwin",
+            "machine": "arm64",
+            "macos_version": "26.0",
+        },
+    ).run()
+    manager = ServiceManager(paths, test_mode=True)
+    manager.start()
+    diagnostics = manager.runtime_diagnostics()
+    assert diagnostics is not None
+    diagnostics = json.loads(json.dumps(diagnostics))
+    diagnostics["ready"] = False
+    diagnostics["capabilities"]["adapter:calendaring-google-calendar"] = {
+        "name": "calendaring-google-calendar",
+        "kind": "adapter",
+        "state": "degraded",
+        "reason": "configured adapter is not running",
+        "details": {
+            "production_loader": True,
+            "provider_health": "degraded",
+        },
+    }
+    diagnostics["capabilities"]["adapter:optional-disabled-fixture"] = {
+        "name": "optional-disabled-fixture",
+        "kind": "adapter",
+        "state": "disabled",
+        "reason": "optional provider is not configured",
+        "details": {
+            "production_loader": False,
+            "provider_health": "not_configured",
+        },
+    }
+
+    monkeypatch.setattr(
+        ServiceManager,
+        "runtime_diagnostics",
+        lambda _self: diagnostics,
+    )
+    report = Doctor(paths, root=REPO_ROOT, test_mode=True).run(
+        include_synthetic_proof=False
+    )
+    assert report["status"] == "failed"
+    check = next(
+        item for item in report["checks"] if item["name"] == "adapter_capability_health"
+    )
+    assert check["ok"] is False
+    assert check["evidence"]["unhealthy"] == ["adapter:calendaring-google-calendar"]
+
+    diagnostics["ready"] = True
+    diagnostics["capabilities"]["adapter:calendaring-google-calendar"]["state"] = (
+        "observation_only"
+    )
+    diagnostics["capabilities"]["adapter:calendaring-google-calendar"]["reason"] = (
+        "inbound sync is running; outbound writes are observation-only"
+    )
+    diagnostics["capabilities"]["adapter:calendaring-google-calendar"]["details"][
+        "provider_health"
+    ] = "observation_only"
+    recovered = Doctor(paths, root=REPO_ROOT, test_mode=True).run(
+        include_synthetic_proof=False
+    )
+    recovered_check = next(
+        item
+        for item in recovered["checks"]
+        if item["name"] == "adapter_capability_health"
+    )
+    assert recovered_check["ok"] is True
+    assert recovered_check["evidence"]["configured"] == [
+        "adapter:calendaring-google-calendar"
+    ]
+    assert recovered_check["evidence"]["unhealthy"] == []
+
+
 def test_member_bridge_export_accept_finalize_uses_production_ingest_composition(
     tmp_path: Path,
     monkeypatch,

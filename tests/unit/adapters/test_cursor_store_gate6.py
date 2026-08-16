@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from adminme.adapters.cursor_store import AdapterCursorStore
 
 
@@ -66,3 +68,79 @@ def test_cursor_success_requires_complete_dedupe_identity(tmp_path: Path) -> Non
             raise AssertionError("partial dedupe identity was accepted")
     finally:
         store.close()
+
+
+def test_poll_completion_is_fenced_from_newer_failure(tmp_path: Path) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor.db")
+    try:
+        assert store.claim("calendar", "worker-a", ttl_ms=30_000)
+        claimed = store.get("calendar")
+        store.record_event(
+            "calendar",
+            external_id="calendar-source:fixture",
+            fingerprint="fixture-fingerprint",
+            event_id="event-1",
+        )
+        unchanged = store.get("calendar")
+        assert unchanged.updated_at_ms == claimed.updated_at_ms
+        assert unchanged.circuit_state == "closed"
+
+        raced = store.record_error("calendar", open_after=1)
+        assert raced.circuit_state == "open"
+        with pytest.raises(RuntimeError, match="circuit changed"):
+            store.complete_poll(
+                "calendar",
+                provider_watermark='{"version":1}',
+                expected_updated_at_ms=claimed.updated_at_ms,
+                lease_owner="worker-a",
+            )
+        durable = store.get("calendar")
+        assert durable.provider_watermark is None
+        assert durable.circuit_state == "open"
+    finally:
+        store.close()
+
+
+def test_half_open_poll_closes_only_after_watermark_persists(tmp_path: Path) -> None:
+    store = AdapterCursorStore(tmp_path / "cursor.db")
+    try:
+        for _ in range(3):
+            store.record_error("calendar")
+        store.begin_recovery("calendar")
+        assert store.claim("calendar", "worker-a", ttl_ms=30_000)
+        claimed = store.get("calendar")
+
+        completed = store.complete_poll(
+            "calendar",
+            provider_watermark='{"version":1}',
+            expected_updated_at_ms=claimed.updated_at_ms,
+            lease_owner="worker-a",
+        )
+        assert completed.provider_watermark == '{"version":1}'
+        assert completed.circuit_state == "closed"
+        assert completed.error_count == 0
+    finally:
+        store.close()
+
+
+def test_release_preserves_a_newer_cross_process_circuit_transition(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "cursor.db"
+    poller = AdapterCursorStore(path)
+    recovery = AdapterCursorStore(path)
+    try:
+        assert poller.claim("calendar", "worker-a", ttl_ms=30_000)
+        claimed = poller.get("calendar")
+        opened = recovery.record_error("calendar", open_after=1)
+        assert opened.updated_at_ms > claimed.updated_at_ms
+
+        assert poller.release("calendar", "worker-a")
+        durable = recovery.get("calendar")
+        assert durable.updated_at_ms > opened.updated_at_ms
+        assert durable.circuit_state == "open"
+        assert durable.error_count == 1
+        assert durable.lease_owner is None
+    finally:
+        recovery.close()
+        poller.close()
