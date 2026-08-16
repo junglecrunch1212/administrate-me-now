@@ -1111,8 +1111,7 @@ def _validate_attempt_history(
             )
 
     summaries = {
-        (check["tier"], check["check_id"]): check
-        for check in verification["checks"]
+        (check["tier"], check["check_id"]): check for check in verification["checks"]
     }
     if len(summaries) != len(verification["checks"]):
         raise HarnessError("canonical check summary contains duplicate identities")
@@ -1153,7 +1152,9 @@ def _validate_attempt_history(
             if directory.is_dir()
             else set()
         )
-        if actual != {path for path in declared if path.startswith(f"{directory_name}/")}:
+        if actual != {
+            path for path in declared if path.startswith(f"{directory_name}/")
+        }:
             raise HarnessError(
                 f"unlisted or missing canonical {directory_name}: "
                 f"actual={sorted(actual)} declared={sorted(declared)}"
@@ -1180,9 +1181,10 @@ def _validate_check_receipt(
         ) from exc
     if not receipt_path.is_file():
         raise HarnessError(f"missing check receipt: {check['receipt']}")
-    if expected_receipt_sha256 is not None and sha256_file(
-        receipt_path
-    ) != expected_receipt_sha256:
+    if (
+        expected_receipt_sha256 is not None
+        and sha256_file(receipt_path) != expected_receipt_sha256
+    ):
         raise HarnessError(f"check receipt hash mismatch: {check['receipt']}")
     receipt = load_json(receipt_path)
     if receipt.get("binding") != canonical_binding:
@@ -1191,7 +1193,9 @@ def _validate_check_receipt(
     if receipt.get("check") != expected_check:
         raise HarnessError(f"check receipt contradicts report: {check['receipt']}")
     if expected_attempt is not None and receipt.get("attempt") != expected_attempt:
-        raise HarnessError(f"check attempt receipt metadata changed: {check['receipt']}")
+        raise HarnessError(
+            f"check attempt receipt metadata changed: {check['receipt']}"
+        )
     if check["status"] == "PASS" and check["exit_code"] != 0:
         raise HarnessError(f"PASS check has nonzero exit: {check['check_id']}")
     if check["status"] == "FAIL" and check["exit_code"] in {0, None}:

@@ -754,9 +754,7 @@ async def test_rejected_head_lease_loser_is_coordination_only(
     winner_log = _BarrierEventLog("calendar.source_observed")
     loser_log = _FakeEventLog()
     winner_task = asyncio.create_task(
-        winner._poll_once(
-            ctx=_seed_ctx(winner, winner_log, cursor_store=winner_store)
-        )
+        winner._poll_once(ctx=_seed_ctx(winner, winner_log, cursor_store=winner_store))
     )
     try:
         await winner_log.entered.wait()
@@ -774,7 +772,9 @@ async def test_rejected_head_lease_loser_is_coordination_only(
 
         assert loser_service.list_calls == []
         assert after == before
-        assert [call for call in loser_log.calls if call["type"] == "adapter.error"] == []
+        assert [
+            call for call in loser_log.calls if call["type"] == "adapter.error"
+        ] == []
         assert scheduled_sleeps == []
         assert loser.status().state != "running"
     finally:
@@ -811,9 +811,7 @@ async def test_different_calendar_instances_poll_concurrently_without_contention
     )
     first_log = _BarrierEventLog("calendar.source_observed")
     first_task = asyncio.create_task(
-        first._poll_once(
-            ctx=_seed_ctx(first, first_log, cursor_store=first_store)
-        )
+        first._poll_once(ctx=_seed_ctx(first, first_log, cursor_store=first_store))
     )
     try:
         await first_log.entered.wait()
@@ -857,9 +855,7 @@ async def test_rejected_head_append_cancellation_propagates_without_failure(
     adapter._poll_interval_s = 60
     event_log = _BarrierEventLog("calendar.event_added")
     task = asyncio.create_task(
-        adapter._poll_loop(
-            ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store)
-        )
+        adapter._poll_loop(ctx=_seed_ctx(adapter, event_log, cursor_store=cursor_store))
     )
     try:
         await event_log.entered.wait()
@@ -877,7 +873,9 @@ async def test_rejected_head_append_cancellation_propagates_without_failure(
         assert durable.error_count == 0
         assert durable.circuit_state == "closed"
         assert adapter.status().state not in {"backoff", "running"}
-        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+        assert [
+            call for call in event_log.calls if call["type"] == "adapter.error"
+        ] == []
     finally:
         if not task.done():
             task.cancel()
@@ -954,7 +952,9 @@ async def test_poll_phase_cancellation_is_never_provider_failure(
         assert durable.circuit_state == "closed"
         assert adapter._sync_tokens == {}
         assert adapter.status().state not in {"backoff", "running"}
-        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+        assert [
+            call for call in event_log.calls if call["type"] == "adapter.error"
+        ] == []
     finally:
         cursor_store.close()
 
@@ -965,7 +965,9 @@ async def test_cancellation_after_durable_fact_replays_without_duplicate(
 ) -> None:
     path = tmp_path / "calendar-cancel-replay.sqlite3"
     cursor_store = AdapterCursorStore(path)
-    event = _make_event(event_id="durable-before-cancel", updated="2026-05-18T14:00:00Z")
+    event = _make_event(
+        event_id="durable-before-cancel", updated="2026-05-18T14:00:00Z"
+    )
     first_service = _FakeCalendarService(
         list_pages=[{"items": [event], "nextSyncToken": "replay-token"}]
     )
@@ -984,7 +986,9 @@ async def test_cancellation_after_durable_fact_replays_without_duplicate(
             ctx=_seed_ctx(first, event_log, cursor_store=cursor_store)
         )
     assert (
-        len([call for call in event_log.calls if call["type"] == "calendar.event_added"])
+        len(
+            [call for call in event_log.calls if call["type"] == "calendar.event_added"]
+        )
         == 1
     )
     assert cursor_store.get("calendar-cancel-replay").provider_watermark is None
@@ -1002,7 +1006,11 @@ async def test_cancellation_after_durable_fact_replays_without_duplicate(
         )
         assert (
             len(
-                [call for call in event_log.calls if call["type"] == "calendar.event_added"]
+                [
+                    call
+                    for call in event_log.calls
+                    if call["type"] == "calendar.event_added"
+                ]
             )
             == 1
         )

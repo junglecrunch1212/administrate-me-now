@@ -483,7 +483,10 @@ _CHECK_FIELDS = (
 
 
 def _check_summary(attempt: dict[str, Any]) -> dict[str, Any]:
-    return {**{field: attempt[field] for field in _CHECK_FIELDS}, "receipt": attempt["receipt"]}
+    return {
+        **{field: attempt[field] for field in _CHECK_FIELDS},
+        "receipt": attempt["receipt"],
+    }
 
 
 def _canonical_attempt(
@@ -495,8 +498,7 @@ def _canonical_attempt(
 
     key = (candidate["tier"], candidate["check_id"])
     order = 1 + sum(
-        (attempt["tier"], attempt["check_id"]) == key
-        for attempt in existing_attempts
+        (attempt["tier"], attempt["check_id"]) == key for attempt in existing_attempts
     )
     receipt_path = run_dir / candidate["receipt"]
     receipt = load_json(receipt_path)

@@ -270,9 +270,7 @@ def run_check(
     receipt_path.parent.mkdir(exist_ok=True)
     log_path = logs / f"{attempt_id}.log"
     if receipt_path.exists() or log_path.exists():
-        raise HarnessError(
-            f"immutable check attempt path already exists: {attempt_id}"
-        )
+        raise HarnessError(f"immutable check attempt path already exists: {attempt_id}")
     started = utc_now()
     begin = time.monotonic()
     process = subprocess.run(

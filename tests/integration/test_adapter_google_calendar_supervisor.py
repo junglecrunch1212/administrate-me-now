@@ -547,7 +547,9 @@ async def test_production_supervisor_shutdown_cancels_inflight_calendar_promptly
         assert durable.provider_watermark is None
         assert durable.error_count == 0
         assert durable.circuit_state == "closed"
-        assert [call for call in event_log.calls if call["type"] == "adapter.error"] == []
+        assert [
+            call for call in event_log.calls if call["type"] == "adapter.error"
+        ] == []
         assert adapter.status().state == "stopped"
         assert all(
             managed.task is None or managed.task.done()
@@ -629,14 +631,19 @@ async def test_two_production_supervisors_fence_calendar_lease_loser(
 
         assert after == before
         assert loser_service.list_calls == []
-        assert [call for call in loser_log.calls if call["type"] == "adapter.error"] == []
+        assert [
+            call for call in loser_log.calls if call["type"] == "adapter.error"
+        ] == []
         assert loser_adapter.status().state != "running"
         assert next(iter(loser_supervisor.inventory().values()))["state"] != "running"
 
         winner_log.release.set()
 
         async def winner_finished() -> None:
-            while winner_store.get("calendar-contended-fixture").provider_watermark is None:
+            while (
+                winner_store.get("calendar-contended-fixture").provider_watermark
+                is None
+            ):
                 await asyncio.sleep(0)
 
         await asyncio.wait_for(winner_finished(), timeout=1)

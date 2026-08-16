@@ -1064,9 +1064,7 @@ def test_path_mapping_accepts_task_owned_directory_roots() -> None:
 
 
 def test_calendar_path_mapping_requires_production_composition_journey() -> None:
-    checks = journey_checks(
-        ["packs/adapters/calendaring/google-calendar/adapter.py"]
-    )
+    checks = journey_checks(["packs/adapters/calendaring/google-calendar/adapter.py"])
 
     assert {check.check_id for check in checks} == {
         "navigation-production-composition",
